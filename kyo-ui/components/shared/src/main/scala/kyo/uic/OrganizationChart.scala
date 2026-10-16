@@ -52,8 +52,8 @@ final case class OrganizationChart private (
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
-    onNodeToggleF: Maybe[String => Any < Async] = Absent,
-    onNodeClickF: Maybe[String => Any < Async] = Absent
+    onNodeToggleF: Maybe[String => UI.Action] = Absent,
+    onNodeClickF: Maybe[String => UI.Action] = Absent
 ) extends Node:
     type Self = OrganizationChart
 
@@ -77,10 +77,10 @@ final case class OrganizationChart private (
     def selectionMode(v: SelectionMode): OrganizationChart = copy(selectionModeV = v)
 
     /** Fired with the node id after a toggle press (after the collapse write). */
-    def onNodeToggle(f: String => Any < Async): OrganizationChart = copy(onNodeToggleF = Present(f))
+    def onNodeToggle(f: String => UI.Action)(using Frame): OrganizationChart = copy(onNodeToggleF = Present(Callback.of(f)))
 
     /** Fired with the node id after a node-box click (after the selection write). */
-    def onNodeClick(f: String => Any < Async): OrganizationChart = copy(onNodeClickF = Present(f))
+    def onNodeClick(f: String => UI.Action)(using Frame): OrganizationChart = copy(onNodeClickF = Present(Callback.of(f)))
 
     private def selectable: Boolean =
         selectionModeV != SelectionMode.None || onNodeClickF.isDefined
@@ -187,11 +187,11 @@ final case class OrganizationChart private (
     /** A toggle press flips the node in the bound `expanded` set, then fires
       * `onNodeToggle`.
       */
-    private def toggleNode(id: String)(using Frame): Any < Async =
-        val write: Any < Async = expandedRef match
+    private def toggleNode(id: String)(using Frame): UI.Action =
+        val write: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
-        val fire: Any < Async = onNodeToggleF match
+        val fire: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         for
@@ -204,14 +204,14 @@ final case class OrganizationChart private (
     /** A node-box click updates the bound selection per the mode, then fires
       * `onNodeClick`.
       */
-    private def clickNode(id: String)(using Frame): Any < Async =
-        val write: Any < Async = (selectedRef, selectionModeV) match
+    private def clickNode(id: String)(using Frame): UI.Action =
+        val write: UI.Action = (selectedRef, selectionModeV) match
             case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
                 ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
             case (Present(ref), SelectionMode.Multiple | SelectionMode.Checkbox) =>
                 ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case _ => ()
-        val fire: Any < Async = onNodeClickF match
+        val fire: UI.Action = onNodeClickF match
             case Present(f) => f(id)
             case Absent     => ()
         for

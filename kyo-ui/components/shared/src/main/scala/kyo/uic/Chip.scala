@@ -23,7 +23,7 @@ final case class Chip private (
     imageV: Maybe[String] = Absent,
     removableFlag: Boolean = false,
     removeIconV: Maybe[IconGlyph] = Absent,
-    onRemoveEff: Maybe[Any < Async] = Absent,
+    onRemoveEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil,
     extraClassesV: List[String] = Nil
 ) extends Node:
@@ -51,8 +51,8 @@ final case class Chip private (
     /** Runs `action` when the remove affordance is activated (implies nothing
       * about visibility — hide the chip from your own state if you want it gone).
       */
-    def onRemove(action: => Any < Async)(using Frame): Chip =
-        copy(onRemoveEff = Present(Sync.defer(action)))
+    def onRemove(action: => UI.Action)(using Frame): Chip =
+        copy(onRemoveEff = Present(Callback(action)))
 
     /** Adds default-slot children after the label. */
     def apply(cs: UI*): Chip = copy(kids = kids ++ cs)

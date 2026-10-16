@@ -62,7 +62,7 @@ final case class Galleria private (
     showIndicatorsFlag: Boolean = false,
     showItemNavigatorsFlag: Boolean = false,
     showThumbnailNavigatorsFlag: Boolean = true,
-    onItemChangeF: Maybe[Int => Any < Async] = Absent
+    onItemChangeF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Galleria
 
@@ -100,7 +100,7 @@ final case class Galleria private (
     def showThumbnailNavigators(v: Boolean): Galleria = copy(showThumbnailNavigatorsFlag = v)
 
     /** Fired with the new index after any navigation write. */
-    def onItemChange(f: Int => Any < Async): Galleria = copy(onItemChangeF = Present(f))
+    def onItemChange(f: Int => UI.Action)(using Frame): Galleria = copy(onItemChangeF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         UI.mounted {
@@ -113,13 +113,13 @@ final case class Galleria private (
       * show: no mount has run, so there is nothing to move focus with and the strips stay as they
       * were, which is a gallery whose dots and thumbnails are reachable by clicking.
       */
-    private def shown(base: String, focus: String => Any < Async)(using Frame): UI =
+    private def shown(base: String, focus: String => UI.Action)(using Frame): UI =
         activeRef match
             case Present(r) => r.render(i => body(i, base, focus))
             case Absent     => body(0, base, focus)
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(base: String, focus: String => Any < Async)(using Frame): UI = shown(base, focus)
+    private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI = shown(base, focus)
 
     /** One id per indicator dot and per thumbnail, derived from the one minted id. */
     private def dotId(base: String, i: Int): String   = s"$base-d$i"
@@ -135,7 +135,7 @@ final case class Galleria private (
         base: String,
         idAt: (String, Int) => String,
         i: Int,
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): Ast.Button =
         if base.isEmpty then el
         else el.id(idAt(base, i)).onKeyDown(stripMove(base, idAt, i, focus))
@@ -147,9 +147,9 @@ final case class Galleria private (
       * away, which is any way at all of reaching the other buttons. Both strips lie horizontally,
       * so both take the horizontal arrows.
       */
-    private def stripMove(base: String, idAt: (String, Int) => String, self: Int, focus: String => Any < Async)(using
+    private def stripMove(base: String, idAt: (String, Int) => String, self: Int, focus: String => UI.Action)(using
         Frame
-    ): KeyboardEvent => Any < Async = e =>
+    ): KeyboardEvent => UI.Action = e =>
         val navigable = itemList.indices.toList
         ListNav.onKey(navigable, self, e.key, wrap = circularFlag, ListNav.Orientation.Horizontal) match
             case Present(step) if step.focus != self && navigable.contains(step.focus) =>
@@ -158,7 +158,7 @@ final case class Galleria private (
         end match
     end stripMove
 
-    private def body(rawIndex: Int, base: String, focus: String => Any < Async)(using Frame): UI =
+    private def body(rawIndex: Int, base: String, focus: String => UI.Action)(using Frame): UI =
         if itemList.isEmpty then div.cssClass("p-galleria").cssClass("p-component")()
         else
             val active  = math.min(math.max(rawIndex, 0), itemList.size - 1)
@@ -341,16 +341,16 @@ final case class Galleria private (
     /** A navigator/thumbnail/indicator click writes the (wrapped, clamped) index,
       * then fires `onItemChange`.
       */
-    private def setActive(target: Int)(using Frame): Any < Async =
+    private def setActive(target: Int)(using Frame): UI.Action =
         val n    = itemList.size
         val next =
             if n == 0 then 0
             else if circularFlag then ((target % n) + n) % n
             else math.min(math.max(target, 0), n - 1)
-        val write: Any < Async = activeRef match
+        val write: UI.Action = activeRef match
             case Present(ref) => ref.set(next)
             case Absent       => ()
-        val fire: Any < Async = onItemChangeF match
+        val fire: UI.Action = onItemChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         for

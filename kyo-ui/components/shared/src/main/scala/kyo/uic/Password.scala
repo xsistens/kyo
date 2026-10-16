@@ -45,9 +45,9 @@ final case class Password private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
-    onChangeSF: Maybe[String => Any < Async] = Absent,
-    onInputSF: Maybe[String => Any < Async] = Absent,
-    onBlurSF: Maybe[String => Any < Async] = Absent
+    onChangeSF: Maybe[String => UI.Action] = Absent,
+    onInputSF: Maybe[String => UI.Action] = Absent,
+    onBlurSF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = Password
 
@@ -123,14 +123,14 @@ final case class Password private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    def onChange(f: String => Any < Async): Password = copy(onChangeSF = Present(f))
-    def onInput(f: String => Any < Async): Password  = copy(onInputSF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)))
+    def onInput(f: String => UI.Action)(using Frame): Password  = copy(onInputSF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current value — unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => Any < Async): Password = copy(onBlurSF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         if !toggleMaskFlag then withValue(Absent)
@@ -187,7 +187,7 @@ final case class Password private (
         valueBinding match
             case Present(Input.Value.Ref(r)) if feedbackFlag =>
                 in = in.onInput { s =>
-                    val user: Any < Async = onInputSF match
+                    val user: UI.Action = onInputSF match
                         case Present(f) => f(s)
                         case Absent     => ()
                     for
@@ -227,7 +227,7 @@ final case class Password private (
                 .tabIndex(0)
                 .aria("label", if isRevealed then "Hide password" else "Show password")
             if !disabledFlag then
-                val flip: Any < Async = ref.set(!isRevealed)
+                val flip: UI.Action = ref.set(!isRevealed)
                 t = t.onClick(flip).onKeyDown { e =>
                     e.key match
                         case Keyboard.Enter | Keyboard.Space => flip

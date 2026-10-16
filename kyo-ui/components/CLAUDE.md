@@ -211,7 +211,12 @@ hatch for the two things a render diff cannot express: imperative DOM commands
   with `.id(id)` on your own element, then drive `focusId(id)` /
   `scrollIntoViewId(id)` / `requestMeasureById(id)`. `freshId` mints
   session-unique `kyo-uic-N` deterministically.
-- **Handlers take `Any < Async`**, on `uic.Button` and on a raw kyo element alike.
+- **Handlers take `UI.Action` (`Any < (Async & Abort[Any])`)**, on `uic.Button` and on a raw kyo element alike.
+  A failure a handler leaves unhandled goes to the `onFailure` rules around it.
+  A setter that takes an app's callback stores it as a `Callback` (`Callback.of(f)`,
+  `Callback(action)`): the callback's failure goes to those rules right where it ran,
+  and the component's own work after it (closing a panel, ending an edit, clearing a
+  busy flag) still happens. A new setter does the same.
   `UI.commands` works inside a handler, but capturing `cmds` once in the outer
   mount and passing it down keeps the inner code free of the lookup.
 - **A self-command MUST fire AFTER the element is inserted.** The client resolves
@@ -264,7 +269,7 @@ golden test calls it to assert the anatomy the placeholder cannot show (stamped
 ids, pointer handlers, focus wiring).
 
 - **Keep the wired seam Commands-free** so `kyo.uic.test` can drive it: pass id
-  lists plus a plain `String => Any < Async` scroll/focus function, not a
+  lists plus a plain `String => UI.Action` scroll/focus function, not a
   `UI.Commands` (`Commands.init` is `private[kyo]`, unreachable from the test).
   Production wires `id => cmds.focusId(id)`; the test wires `_ => ()`. See
   `InputOtp.wired`, `Terminal.wired`, `Carousel.wired`.
@@ -508,6 +513,6 @@ carried through.
 
 An untyped `match` with `Unit < Async` and `Unit` branches infers `Any`: the
 effect lands inert in a by-name handler and silently does nothing (a "dead"
-button). Type handler-effect branches explicitly (`val eff: Any < Async = ...`).
+button). Type handler-effect branches explicitly (`val eff: UI.Action = ...`).
 The build runs `-Werror`, so a stray `@nowarn` that no longer suppresses anything
 fails it.

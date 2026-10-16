@@ -63,8 +63,8 @@ final case class Tree private (
     nodeList: List[TreeNode] = Nil,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    onNodeToggleF: Maybe[String => Any < Async] = Absent,
-    onItemClickF: Maybe[String => Any < Async] = Absent,
+    onNodeToggleF: Maybe[String => UI.Action] = Absent,
+    onItemClickF: Maybe[String => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     emptyContentV: Maybe[EmptyContent] = Absent,
@@ -81,10 +81,10 @@ final case class Tree private (
     /** Binds selection two-way to `ref`: clicking a node updates the set, ref changes re-render selection. */
     def selected(ref: SignalRef[Set[String]]): Tree = copy(selectedRef = Present(ref))
 
-    def onNodeToggle(f: String => Any < Async): Tree = copy(onNodeToggleF = Present(f))
+    def onNodeToggle(f: String => UI.Action)(using Frame): Tree = copy(onNodeToggleF = Present(Callback.of(f)))
 
     /** Fired with the node id after a content click (after the selection write). */
-    def onItemClick(f: String => Any < Async): Tree = copy(onItemClickF = Present(f))
+    def onItemClick(f: String => UI.Action)(using Frame): Tree = copy(onItemClickF = Present(Callback.of(f)))
 
     /** Selection semantics: `None` (default — nodes inert unless `onItemClick` is
       * set), `Single` (clicking replaces the selection; re-clicking clears it),
@@ -178,7 +178,7 @@ final case class Tree private (
         // which is Prime's look), so a tree with focus and no focused node would look
         // untouched, and a highlighted node with the focus gone elsewhere would lie.
         roving.foreach { r =>
-            val seedFocus: Any < Async =
+            val seedFocus: UI.Action =
                 if focus < 0 && rows.nonEmpty then
                     val selectedRow = rows.indexWhere(row => sel.contains(row.key))
                     r.ref.set(if selectedRow >= 0 then selectedRow else 0)
@@ -221,7 +221,7 @@ final case class Tree private (
       * reaches a handler further down, so the panel wears the same handler through
       * `Overlay.onPanelKeyDown`. One handler either way, so the two keyboards cannot drift.
       */
-    private[uic] def keyHandler(exp: Set[String], roving: Roving)(using Frame): KeyboardEvent => Any < Async =
+    private[uic] def keyHandler(exp: Set[String], roving: Roving)(using Frame): KeyboardEvent => UI.Action =
         val rows  = Tree.visibleRows(nodeList, exp)
         val focus = if roving.focus >= 0 && roving.focus < rows.size then roving.focus else -1
         e =>
@@ -230,11 +230,11 @@ final case class Tree private (
                     // Expand is only produced for a closed row and Collapse for an open one, so
                     // the toggle the mouse uses is the right write for both, and `onNodeToggle`
                     // fires the same way it does for a click.
-                    val open: Any < Async = step.op match
+                    val open: UI.Action = step.op match
                         case TreeNav.Op.Expand(key)   => toggleNode(key)
                         case TreeNav.Op.Collapse(key) => toggleNode(key)
                         case TreeNav.Op.Keep          => ()
-                    val pick: Any < Async =
+                    val pick: UI.Action =
                         if step.activate && rows.isDefinedAt(step.focus) then selectNode(rows(step.focus).key)
                         else ()
                     roving.ref.set(step.focus).andThen(open).andThen(pick)
@@ -330,11 +330,11 @@ final case class Tree private (
     end renderNode
 
     /** Toggling a node flips its id in the bound `expanded` set, then fires `onNodeToggle`. */
-    private def toggleNode(id: String)(using Frame): Any < Async =
-        val setExpanded: Any < Async = expandedRef match
+    private def toggleNode(id: String)(using Frame): UI.Action =
+        val setExpanded: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
-        val fireToggle: Any < Async = onNodeToggleF match
+        val fireToggle: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         for
@@ -347,8 +347,8 @@ final case class Tree private (
     /** Clicking a node's content updates the bound `selected` set per the selection
       * mode, then fires `onItemClick`.
       */
-    private def selectNode(id: String, meta: Boolean = false)(using Frame): Any < Async =
-        val setSelection: Any < Async = (selectedRef, selectionModeV) match
+    private def selectNode(id: String, meta: Boolean = false)(using Frame): UI.Action =
+        val setSelection: UI.Action = (selectedRef, selectionModeV) match
             // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
             // this mode does not go through the shared one.
             case (Present(ref), SelectionMode.Checkbox) =>
@@ -356,7 +356,7 @@ final case class Tree private (
             case (Present(ref), m) if m != SelectionMode.None =>
                 ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
             case _ => ()
-        val fireClick: Any < Async = onItemClickF match
+        val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)
             case Absent     => ()
         for

@@ -17,7 +17,7 @@ final case class MenuItem private (
     iconV: Maybe[IconGlyph] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     urlV: Maybe[String] = Absent,
-    actionV: Maybe[Any < Async] = Absent,
+    actionV: Maybe[UI.Action] = Absent,
     itemsV: List[MenuItem] = Nil,
     separatorFlag: Boolean = false,
     currentFlag: Maybe[BoolValue] = Absent
@@ -81,8 +81,8 @@ final case class MenuItem private (
     /** Runs `action` (any kyo `Async` effect) when the item is selected; the
       * hosting menu closes afterwards.
       */
-    def onSelect(action: => Any < Async)(using Frame): MenuItem =
-        copy(actionV = Present(Sync.defer(action)))
+    def onSelect(action: => UI.Action)(using Frame): MenuItem =
+        copy(actionV = Present(Callback(action)))
 
     /** Nested items: a labelled flat section in the plain Menu, a nested floating
       * submenu in Menubar/TieredMenu.
@@ -90,7 +90,7 @@ final case class MenuItem private (
     def items(is: MenuItem*): MenuItem = copy(itemsV = itemsV ++ is.toList)
 
     /** Package-internal: hosts (MegaMenu) carry an already-deferred effect over. */
-    private[uic] def withAction(eff: Maybe[Any < Async]): MenuItem = copy(actionV = eff)
+    private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = copy(actionV = eff)
 
     /** Package-internal: [[MenuRender.resolveDisabled]] pins the resolved slot back in.
       * A writer rather than `copy`, because the constructor is private and `MenuRender`
@@ -281,24 +281,24 @@ private[uic] object MenuRender:
         focusRef: SignalRef[List[Int]],
         popupRef: Maybe[SignalRef[Boolean]],
         step: MenuNav.Step
-    )(using Frame): Any < Async =
-        val finish                                   = step.activate || step.dismiss
-        def openTo(t: Maybe[List[Int]]): Any < Async =
+    )(using Frame): UI.Action =
+        val finish                                 = step.activate || step.dismiss
+        def openTo(t: Maybe[List[Int]]): UI.Action =
             refs match
                 case Present(rs) => openExactly(rs, t)
                 case Absent      => ()
-        val applyOpen: Any < Async =
+        val applyOpen: UI.Action =
             step.open match
                 case MenuNav.OpenOp.Keep      => ()
                 case MenuNav.OpenOp.Close     => openTo(Absent)
                 case MenuNav.OpenOp.OpenTo(p) => openTo(Present(p))
-        val runActivate: Any < Async =
+        val runActivate: UI.Action =
             if !step.activate then ()
             else
                 MenuNav.itemAt(items, step.focus).flatMap(_.actionV) match
                     case Present(eff) => eff
                     case _            => ()
-        val closePopup: Any < Async =
+        val closePopup: UI.Action =
             if !finish then ()
             else
                 popupRef match
@@ -307,7 +307,7 @@ private[uic] object MenuRender:
         for
             _ <- applyOpen
             _ <- runActivate
-            _ <- if finish then openTo(Absent) else (): Any < Async
+            _ <- if finish then openTo(Absent) else (): UI.Action
             _ <- closePopup
             _ <- focusRef.set(if finish then Nil else step.focus)
         yield ()
@@ -332,7 +332,7 @@ private[uic] object MenuRender:
     def itemContent(
         prefix: String,
         it: MenuItem,
-        activate: Maybe[Any < Async],
+        activate: Maybe[UI.Action],
         submenuIcon: Maybe[IconGlyph],
         roving: Boolean = false
     )(using Frame): UI =

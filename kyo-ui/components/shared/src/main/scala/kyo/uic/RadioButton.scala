@@ -26,8 +26,8 @@ final case class RadioButton private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Boolean => Any < Async] = Absent,
-    onBlurF: Maybe[Boolean => Any < Async] = Absent,
+    onChangeF: Maybe[Boolean => UI.Action] = Absent,
+    onBlurF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = RadioButton
@@ -78,12 +78,12 @@ final case class RadioButton private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): RadioButton = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): RadioButton = copy(accNameRefV = v)
 
-    def onChange(f: Boolean => Any < Async): RadioButton = copy(onChangeF = Present(f))
+    def onChange(f: Boolean => UI.Action)(using Frame): RadioButton = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the button's current checked state — unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => Any < Async): RadioButton = copy(onBlurF = Present(f))
+    def onBlur(f: Boolean => UI.Action)(using Frame): RadioButton = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
@@ -98,7 +98,7 @@ final case class RadioButton private (
             case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF)
             case Absent                             => body(false, onChangeF)
 
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => Any < Async =
+    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
         nb =>
             onChangeF match
                 case Present(f) =>
@@ -108,7 +108,7 @@ final case class RadioButton private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => Any < Async])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
 
         var box = radio.cssClass("p-radiobutton-input").checked(isChecked)

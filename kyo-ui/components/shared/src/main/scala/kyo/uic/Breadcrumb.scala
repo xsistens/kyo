@@ -46,7 +46,7 @@ final case class Breadcrumb private (
     itemsV: List[BreadcrumbItem] = Nil,
     separatorV: Maybe[IconGlyph] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
-    onItemClickF: Maybe[String => Any < Async] = Absent
+    onItemClickF: Maybe[String => UI.Action] = Absent
 ) extends Node, HasAccessibleName:
     type Self = Breadcrumb
 
@@ -75,7 +75,7 @@ final case class Breadcrumb private (
     /** Fired with the item's href (or its text when hrefless) on click, in addition
       * to the anchor's native navigation.
       */
-    def onItemClick(f: String => Any < Async): Breadcrumb = copy(onItemClickF = Present(f))
+    def onItemClick(f: String => UI.Action)(using Frame): Breadcrumb = copy(onItemClickF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         val sepGlyph                                  = separatorV.getOrElse(Icons.chevronRight)

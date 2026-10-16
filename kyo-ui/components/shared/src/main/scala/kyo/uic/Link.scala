@@ -30,7 +30,7 @@ final case class Link private (
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
     accessibleDescriptionV: Maybe[TextValue] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent,
+    onClickEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Link
@@ -65,8 +65,8 @@ final case class Link private (
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = copy(accessibleDescriptionV = v)
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
-    def onClick(action: => Any < Async)(using Frame): Link =
-        copy(onClickEff = Present(Sync.defer(action)))
+    def onClick(action: => UI.Action)(using Frame): Link =
+        copy(onClickEff = Present(Callback(action)))
 
     /** Adds default-slot children (typically the link text). */
     def apply(cs: UI*): Link = copy(kids = kids ++ cs)

@@ -75,7 +75,7 @@ final case class Accordion private (
     panelList: List[AccordionPanel] = Nil,
     singleRef: Maybe[SignalRef[String]] = Absent,
     multiRef: Maybe[SignalRef[Set[String]]] = Absent,
-    onToggleF: Maybe[String => Any < Async] = Absent
+    onToggleF: Maybe[String => UI.Action] = Absent
 ) extends Node:
     type Self = Accordion
 
@@ -102,7 +102,7 @@ final case class Accordion private (
     def value(ref: SignalRef[Set[String]]): Accordion = copy(multiRef = Present(ref))
 
     /** Fired with the panel id after a header click (after the value write). */
-    def onToggle(f: String => Any < Async): Accordion = copy(onToggleF = Present(f))
+    def onToggle(f: String => UI.Action)(using Frame): Accordion = copy(onToggleF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (singleRef, multiRef) match
@@ -196,7 +196,7 @@ final case class Accordion private (
       */
     private def headerMove(cmds: UI.Commands, headerIds: List[String], navigable: List[Int], self: Int)(using
         Frame
-    ): KeyboardEvent => Any < Async = e =>
+    ): KeyboardEvent => UI.Action = e =>
         // Prime's accordion cycles, so ArrowDown on the last header comes back to the first.
         ListNav.onKey(navigable, self, e.key, wrap = true) match
             case Present(step) if step.focus != self && headerIds.isDefinedAt(step.focus) =>
@@ -210,7 +210,7 @@ final case class Accordion private (
         headerId: String,
         active0: Boolean,
         active: Signal[Boolean],
-        onHeaderKey: Maybe[KeyboardEvent => Any < Async] = Absent
+        onHeaderKey: Maybe[KeyboardEvent => UI.Action] = Absent
     )(using Frame): UI =
         var shell = div.cssClass("p-accordionpanel").id(shellId)
         if active0 then shell = shell.cssClass("p-accordionpanel-active")
@@ -307,13 +307,13 @@ final case class Accordion private (
     /** A header click writes the bound value ref (per the mode the ref type
       * selected), then fires `onToggle`.
       */
-    private def toggle(id: String)(using Frame): Any < Async =
-        val write: Any < Async = (singleRef, multiRef) match
+    private def toggle(id: String)(using Frame): UI.Action =
+        val write: UI.Action = (singleRef, multiRef) match
             case (Present(ref), _)      => ref.getAndUpdate(cur => if cur == id then "" else id)
             case (Absent, Present(ref)) =>
                 ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case _ => ()
-        val fire: Any < Async = onToggleF match
+        val fire: UI.Action = onToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         for
