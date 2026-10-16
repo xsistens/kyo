@@ -172,7 +172,8 @@ class QueryHandle[D] private[apollo] (
       * [[networkStatus]] reading [[NetworkStatus.Poll]] per tick) and binds its
       * interruption to the enclosing `Scope`: polling stops automatically when the
       * `Scope` closes — there is no mutable cell and nothing to remember to stop. A
-      * failed tick is swallowed (the loop keeps polling), like `startPolling`.
+      * failed tick goes to the `onFailure` rules around the call as a notice where
+      * none matches, and the loop keeps polling, like `startPolling`.
       * Scope polling composes naturally — poll for the lifetime of exactly the
       * block you want:
       *
@@ -183,11 +184,7 @@ class QueryHandle[D] private[apollo] (
       */
     def polling(interval: Duration)(using Frame): Unit < (Async & Scope) =
         def loop: Unit < Async =
-            Async.sleep(interval).andThen {
-                Abort
-                    .run[ApolloException](withActivity(NetworkStatus.Poll)(networkFetch))
-                    .andThen(loop)
-            }
+            Async.sleep(interval).andThen(ApolloSignal.pollTick(withActivity(NetworkStatus.Poll)(networkFetch))).andThen(loop)
         Fiber.initUnscoped(loop).map(f => Scope.ensure(f.interrupt.unit))
     end polling
 
@@ -201,8 +198,9 @@ class QueryHandle[D] private[apollo] (
       * re-emitting [[state]]), with [[networkStatus]] reading [[NetworkStatus.Poll]]
       * during each tick. A prior poll loop is stopped first, so calling this again
       * with a new `interval` just changes the cadence. Runs until [[stopPolling]] or
-      * the handle's enclosing `Scope` closes. A failed tick is swallowed (the loop
-      * keeps polling), mirroring react-apollo's resilient polling.
+      * the handle's enclosing `Scope` closes. A failed tick goes to the `onFailure`
+      * rules around the call as a notice where none matches, and the loop keeps
+      * polling, mirroring react-apollo's resilient polling.
       *
       * Available on every handle: because it drives [[refetch]]'s own `networkFetch`,
       * it works on a [[mapData]]-projected handle too (polling the underlying
@@ -213,11 +211,7 @@ class QueryHandle[D] private[apollo] (
     def startPolling(interval: Duration)(using Frame): Unit < Async =
         stopPolling.andThen {
             def loop: Unit < Async =
-                Async.sleep(interval).andThen {
-                    Abort
-                        .run[ApolloException](withActivity(NetworkStatus.Poll)(networkFetch))
-                        .andThen(loop)
-                }
+                Async.sleep(interval).andThen(ApolloSignal.pollTick(withActivity(NetworkStatus.Poll)(networkFetch))).andThen(loop)
             Fiber.initUnscoped(loop).map(f => pollFiberCell = Present(f))
         }
 
