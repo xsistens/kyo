@@ -680,7 +680,9 @@ object Apollo:
 
     /** [[watchSignal]] that additionally **polls** the network every `interval` — the
       * react-apollo `pollInterval` shape. The poll's write-back lands in the cache, so
-      * the watcher re-emits the fresh [[QueryState]]. A failed tick is swallowed.
+      * the watcher re-emits the fresh [[QueryState]]. A failed tick goes to the
+      * `onFailure` rules around the call as a notice where none matches, and the poll
+      * goes on.
       */
     def pollingSignal[D](call: ApolloCall[D], interval: Duration)(using
         Frame,
@@ -689,11 +691,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         watchSignal(call).map { signal =>
             def pollLoop: Unit < Async =
-                Async.sleep(interval).andThen {
-                    Abort
-                        .run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data)
-                        .andThen(pollLoop)
-                }
+                Async.sleep(interval).andThen(ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data)).andThen(pollLoop)
             UI.fork(pollLoop).andThen(signal)
         }
 
@@ -715,10 +713,7 @@ object Apollo:
                 Async.sleep(interval).andThen {
                     skip.current.map {
                         case true  => pollLoop // paused: skip the network poll, keep the timer loop alive
-                        case false =>
-                            Abort
-                                .run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data)
-                                .andThen(pollLoop)
+                        case false => ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data).andThen(pollLoop)
                     }
                 }
             UI.fork(pollLoop).andThen(signal)

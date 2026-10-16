@@ -68,7 +68,7 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
             for
                 src          <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
                 (rec, marks) <- recording("value:1", "kyo-mount-error")
-                effect = src.dataSignal(UpdateFailure.Escalate).map(sig => UI.span(sig.map(n => s"value:$n")).id("content"): UI)
+                effect = src.dataSignal.map(sig => UI.span(sig.map(n => s"value:$n")).id("content"): UI)
                 _ <- run(UI.div(UI.mounted(effect).keyed("apollo")), rec)
                 _ <- marks("value:1").get
                 _ <- src.set(QueryState.Failure(DefaultApolloException("socket died")))

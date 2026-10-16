@@ -33,6 +33,24 @@ import kyo.apollo.json.Json
 sealed abstract class ApolloException(val message: String, cause: String | Throwable = "")(using Frame)
     extends KyoException(message, cause)
 
+object ApolloException:
+
+    /** Matches a failure that means the caller is not signed in: an HTTP 401, or GraphQL `errors` one of which has the
+      * `extensions.code` `UNAUTHENTICATED`. It takes `Any`, so it fits an `onFailure` rule:
+      *
+      * {{{
+      * UI.boundary.onFailure { case ApolloException.Unauthenticated(_) => UI.Reaction.Run(router.go(Login)) }(app)
+      * }}}
+      */
+    object Unauthenticated:
+        def unapply(failure: Any): Option[ApolloException] =
+            failure match
+                case http: ApolloHttpException if http.statusCode == 401                                     => Some(http)
+                case gql: ApolloGraphQLException if gql.errors.exists(_.code.exists(_ == "UNAUTHENTICATED")) => Some(gql)
+                case _                                                                                       => None
+    end Unauthenticated
+end ApolloException
+
 /** The failures of executing an operation (network, HTTP status, parse, GraphQL errors). */
 sealed trait ApolloExecuteFailure extends ApolloException
 
