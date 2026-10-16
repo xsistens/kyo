@@ -21,6 +21,47 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             discard(dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic].dispatchEvent(event))
         }
 
+    // Regression: the HTML parser drops one line break right after `<textarea>`, so a value that starts with one
+    // reached the field without it, on the first render and on every repaint.
+    "a textarea value that starts with a line break keeps it" in {
+        for
+            text <- Signal.initRef("\nsecond line")
+            ui    = UI.div(UI.textarea.id("lead").value(text))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("lead") != null))
+            first <- Sync.defer(dom.document.getElementById("lead").asInstanceOf[scalajs.Dynamic].value.asInstanceOf[String])
+            // Each repaint writes a new value and reads the field back. A browser normalizes CR LF and a lone CR to
+            // LF in a textarea's value, so the expected reading is the normalized form. The repaint has landed once
+            // the content matches apart from leading line breaks, the ones the bug drops.
+            repainted <- Kyo.foreach(LineBreakValues) { (written, expected) =>
+                text.set(written)
+                    .andThen(assertEventually(Sync.defer(
+                        dom.document.getElementById("lead").asInstanceOf[scalajs.Dynamic].defaultValue.asInstanceOf[String]
+                            .dropWhile(_ == '\n') == expected.dropWhile(_ == '\n')
+                    )))
+                    .andThen(Sync.defer(
+                        (expected, dom.document.getElementById("lead").asInstanceOf[scalajs.Dynamic].value.asInstanceOf[String])
+                    ))
+            }
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield
+            assert(first == "\nsecond line", s"the first render shows '${first.replace("\n", "\\n")}'")
+            repainted.foreach((expected, shown) =>
+                assert(shown == expected, s"a repaint shows '${shown.replace("\n", "\\n")}'")
+            )
+    }
+
+    /** Values whose line breaks a renderer could drop, double or leave unnormalized, with what the field reads back. */
+    private val LineBreakValues = Chunk(
+        "\n\nthird line"      -> "\n\nthird line",
+        "ends with a break\n" -> "ends with a break\n",
+        "a\n\n\nb"            -> "a\n\n\nb",
+        "\r\nwindows"         -> "\nwindows",
+        "a\rb"                -> "a\nb"
+    )
+
     "local unchanged range retains its live button on an ordinary update" in {
         for
             version <- Signal.initRef(0)

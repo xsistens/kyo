@@ -155,8 +155,33 @@ class TextareaTest extends UITest:
 
     "value initial assertValue" in {
         withUI(UI.div(UI.textarea.id("t").value("initial"))) {
-            Browser.assertVisible(Selector.id("t")).unit
+            Browser.value(Selector.id("t")).map(v => assert(v == "initial", s"textarea shows '$v'"))
         }
+    }
+
+    // Regression: the HTML parser drops one line break right after `<textarea>`, so a value that starts with one
+    // reached the field without it.
+    "a value that starts with a line break keeps it" in {
+        withUI(UI.div(UI.textarea.id("t").value("\nsecond line"))) {
+            Browser.value(Selector.id("t")).map(v =>
+                assert(v == "\nsecond line", s"textarea shows '${v.replace("\n", "\\n")}'")
+            )
+        }
+    }
+
+    "line breaks arrive as written, CR LF and a lone CR as the LF a browser normalizes them to" in {
+        val cases = Chunk(
+            "\n\nthird line"      -> "\n\nthird line",
+            "ends with a break\n" -> "ends with a break\n",
+            "a\n\n\nb"            -> "a\n\n\nb",
+            "\r\nwindows"         -> "\nwindows",
+            "a\rb"                -> "a\nb"
+        )
+        Kyo.foreach(cases) { (written, expected) =>
+            withUI(UI.div(UI.textarea.id("t").value(written))) {
+                Browser.value(Selector.id("t")).map(v => (expected, v))
+            }
+        }.map(_.foreach((expected, v) => assert(v == expected, s"textarea shows '${v.replace("\n", "\\n")}'")))
     }
 
     "onInput and onChange both fire" in {
