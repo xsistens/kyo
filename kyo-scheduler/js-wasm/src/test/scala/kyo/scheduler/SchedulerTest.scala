@@ -25,6 +25,58 @@ class SchedulerTest extends AsyncFreeSpec with NonImplicitAssertions {
             kv.substring(0, i) -> kv.substring(i + 1)
         }.toMap
 
+    private def post(body: () => Unit): Unit =
+        org.scalajs.macrotaskexecutor.MacrotaskExecutor.execute(new Runnable { def run(): Unit = body() })
+
+    "run queue" - {
+        "a task scheduled from inside a running task runs in the same turn" in {
+            // The sentinel is posted as a macrotask before the inner schedule. If the inner task joins the drain in progress, it runs
+            // before the sentinel; if it needed a macrotask of its own, the sentinel's turn would come first.
+            val scheduler        = new Scheduler
+            var sentinelRan      = false
+            val innerSawSentinel = Promise[Boolean]()
+            scheduler.schedule(task { () =>
+                post(() => sentinelRan = true)
+                scheduler.schedule(task { () =>
+                    innerSawSentinel.success(sentinelRan)
+                    Task.Done
+                })
+                Task.Done
+            })
+            innerSawSentinel.future.map(seen => assert(!seen))
+        }
+
+        "a throwing task leaves the rest of the queue running" in {
+            val scheduler = new Scheduler
+            val ran       = Promise[Boolean]()
+            scheduler.schedule(task(() => throw new RuntimeException("deliberate") with scala.util.control.NoStackTrace))
+            scheduler.schedule(task { () =>
+                ran.success(true)
+                Task.Done
+            })
+            ran.future.map(v => assert(v))
+        }
+
+        "every task starts before its deadline, however long the tasks ahead of it ran" in {
+            val scheduler = new Scheduler
+            val tasks     = 12
+            val left      = new js.Array[Long]()
+            val done      = Promise[Unit]()
+            (1 to tasks).foreach { _ =>
+                scheduler.schedule(new Task {
+                    def run(startMillis: Long, clock: InternalClock, deadline: Long): Task.Result = {
+                        left.push(deadline - InternalClock.monotonicMillis())
+                        val busyUntil = System.nanoTime() + 1000000L
+                        while (System.nanoTime() < busyUntil) {}
+                        if (left.length == tasks) done.success(())
+                        Task.Done
+                    }
+                })
+            }
+            done.future.map(_ => assert(left.forall(_ > 0), s"time left at start, per task: ${left.mkString(", ")}"))
+        }
+    }
+
     "status line" - {
         "counts scheduled, run, and preempted slices" in {
             val clock     = new ManualClock
