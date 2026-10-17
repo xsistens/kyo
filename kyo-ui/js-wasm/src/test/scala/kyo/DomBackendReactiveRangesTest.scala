@@ -503,6 +503,67 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         yield assert(focused == "right-field")
     }
 
+    private def element(id: String)(using Frame): scalajs.Dynamic < Sync =
+        Sync.defer(dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic])
+
+    /** Picks `value` in the select `id` the way a reader does: the property moves, then `change` fires. */
+    private def choose(id: String, value: String)(using Frame): Unit < Sync =
+        element(id).map { select =>
+            select.value = value
+            val change = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].Event)(
+                "change",
+                scalajs.Dynamic.literal(bubbles = true)
+            )
+            discard(select.dispatchEvent(change))
+        }
+
+    // Regression: a select has no `value` attribute in HTML, so a bound select rendered as `<select value="b">`
+    // showed its first option, on the first render and after every ref write.
+    "a bound select shows its value on the first render and after a ref write" in {
+        for
+            picked <- Signal.initRef("b")
+            ui = UI.div(
+                UI.select(UI.option("A").value("a"), UI.option("B").value("b"), UI.option("C").value("c"))
+                    .id("pick")
+                    .value(picked),
+                picked.map(v => UI.span(s"picked=$v").id("pick-status"))
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("pick") != null))
+            first <- element("pick").map(_.value.asInstanceOf[String])
+            _     <- choose("pick", "c")
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("pick-status").textContent == "picked=c"))
+            _     <- picked.set("a")
+            // The select's own paint has landed once its rendered value names a.
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("pick").getAttribute("value") == "a"))
+            after <- element("pick").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(first == "b", s"the select shows '$first' on its first render")
+            assert(after == "a", s"the select shows '$after' after its ref was set to a")
+    }
+
+    "a bound select keeps its value when its options arrive later" in {
+        for
+            options <- Signal.initRef(Chunk.empty[String])
+            picked  <- Signal.initRef("b")
+            ui = UI.div(
+                UI.select(options.foreach(v => UI.option(v.toUpperCase).value(v))).id("late").value(picked),
+                options.map(o => UI.span(s"n=${o.size}").id("late-status"))
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("late") != null))
+            _     <- options.set(Chunk("a", "b", "c"))
+            _     <- assertEventually(Sync.defer(dom.document.querySelectorAll("#late > option").length == 3))
+            shown <- element("late").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(shown == "b", s"the select shows '$shown' once its options arrived")
+    }
+
     "range replacement applies JS properties on a top-level element" in {
         for
             state <- Signal.initRef(false)
