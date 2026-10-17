@@ -40,7 +40,8 @@ class FormDiagnosticsTest extends UicTest:
             arrays,
             focusInvalidOnSubmit = true,
             () => counter.incrementAndGet.map(n => s"minted$n"),
-            _ => Kyo.unit
+            _ => Kyo.unit,
+            ownsSubmit = true
         )
 
     /** The cards a form would render for this tree, flattened to one string. */

@@ -45,7 +45,8 @@ class FormValidationTest extends UicTest:
             arrays,
             focusInvalidOnSubmit = true,
             () => counter.incrementAndGet.map(n => s"id$n"), // distinct ids (field domIds + array row keys)
-            _ => Kyo.unit                                    // focus is a no-op off-DOM
+            _ => Kyo.unit,                                   // focus is a no-op off-DOM
+            ownsSubmit = true
         )
 
     /** A standalone typed field with a caller-held value ref, so the test can simulate
@@ -60,6 +61,7 @@ class FormValidationTest extends UicTest:
             clientErr  <- Signal.initRef(Absent: Maybe[FieldError])
             serverErr  <- Signal.initRef(Absent: Maybe[ServerError[A]])
             epoch      <- AtomicInt.init(0)
+            resetWrite <- AtomicRef.init(Maybe.empty[A])
             count      <- Signal.initRef(0)
         yield (
             new FormField[A](
@@ -72,6 +74,7 @@ class FormValidationTest extends UicTest:
                 clientErr,
                 serverErr,
                 epoch,
+                resetWrite,
                 rules,
                 Set[Activation.Field](Activation.Submit),
                 Duration.Zero,
@@ -106,7 +109,8 @@ class FormValidationTest extends UicTest:
             arrays,
             focusInvalidOnSubmit = focus,
             () => counter.incrementAndGet.map(n => s"f$n"),
-            id => focused.updateAndGet(_ :+ id).unit
+            id => focused.updateAndGet(_ :+ id).unit,
+            ownsSubmit = true
         )
 
     "submit focuses the first invalid field in declaration order" in {
@@ -655,6 +659,91 @@ class FormValidationTest extends UicTest:
             assert(!hiddenPreSubmit, "Reveal.OnSubmit invariant is hidden before submit")
             assert(shownPostSubmit, "Reveal.OnSubmit invariant is shown after submit")
             assert(immediateShown, "Reveal.Immediate invariant is shown as soon as it fails")
+    }
+
+    "reset after a successful submit leaves the form as it loaded: no error shown on the emptied field" in {
+        for
+            (count, shown, entries, value) <-
+                for
+                    form    <- mkForm
+                    f       <- form.field.rules(Validator.required() and Validator.minLength(3)).declare
+                    _       <- f.valueRef.set("a comment")
+                    _       <- form.submit(form.reset) // the valid submit runs onValid, which empties the form
+                    count   <- form.submitCount.current
+                    shown   <- f.visibleError.current
+                    es      <- form.errorEntries
+                    entries <- es.current
+                    value   <- f.valueRef.get
+                yield (count, shown, entries, value)
+        yield
+            assert(value == "", "reset empties the field")
+            assert(count == 0, s"reset closes the submit reveal, submitCount is $count")
+            assert(shown.isEmpty, s"the emptied field shows no error before anyone touches or submits it: $shown")
+            assert(entries.isEmpty, s"the error summary shows nothing either: $entries")
+    }
+
+    "reset does not count as an edit: a field that validates on change stays untouched and quiet" in {
+        Scope.run {
+            for
+                form <- mkForm
+                f    <- form.field.rules(Validator.required() and Validator.minLength(3)).declare // Blur + Change, the default
+                _    <- f.wireChange                                                              // as Form.mountedWith does
+                _    <- f.error.streamChanges.filter(_.nonEmpty).take(1).run                      // its silent first check ran
+                _    <- f.valueRef.set("a comment")                                               // the reader types
+                _    <- f.touched.streamChanges.filter(identity).take(1).run                      // the observer saw the edit
+                _    <- form.submit(form.reset)
+                // The observer validates the value the reset wrote: the raw error is back, and nothing may show it.
+                _       <- f.error.streamChanges.filter(_.exists(_.code == "required")).take(1).run
+                touched <- f.touched.current
+                shown   <- f.visibleError.current
+                // Submitting the emptied form again is refused and shows the error, as on a fresh form.
+                ran    <- AtomicBoolean.init(false)
+                _      <- form.submit(ran.set(true))
+                ranV   <- ran.get
+                again  <- form.submitCount.current
+                shown2 <- f.visibleError.current
+            yield
+                assert(!touched, "the value reset wrote is not the reader's edit, so the field is not touched")
+                assert(shown.isEmpty, s"the emptied field shows no error: $shown")
+                assert(!ranV, "the emptied form does not submit")
+                assert(again == 1, s"the refused submit opens the gate again, submitCount is $again")
+                assert(shown2.exists(_.code == "required"), s"and the field shows its error: $shown2")
+        }
+    }
+
+    "a reset no observer saw does not swallow the reader's next edit" in {
+        Scope.run {
+            for
+                form <- mkForm
+                f    <- form.field.rules(Validator.required() and Validator.minLength(3)).declare
+                _    <- f.valueRef.set("a comment")
+                _    <- form.reset // no change observer is wired yet, as before the field is mounted
+                _    <- f.wireChange
+                _     <- f.error.streamChanges.filter(_.nonEmpty).take(1).run // its silent first check ran
+                _     <- f.valueRef.set("ok")                                 // the reader types
+                _     <- f.touched.streamChanges.filter(identity).take(1).run // the edit marks the field touched
+                _     <- f.error.streamChanges.filter(_.exists(_.code == "min-length")).take(1).run
+                shown <- f.visibleError.current
+            yield assert(shown.exists(_.code == "min-length"), s"the reader's short comment shows its error: $shown")
+        }
+    }
+
+    "reset on a sub-form after a failed submit leaves the rest of the form showing what the submit found" in {
+        for
+            (count, shown) <-
+                for
+                    form  <- mkForm
+                    name  <- form.field.rules(Validator.required()).declare
+                    sub   <- form.child()
+                    _     <- sub.field.rules(Validator.required()).declare
+                    _     <- form.submit(Kyo.unit) // both empty: fails and opens the gate
+                    _     <- sub.reset
+                    count <- form.submitCount.current
+                    shown <- name.visibleError.current
+                yield (count, shown)
+        yield
+            assert(count == 1, s"a sub-form's reset keeps the gate open, submitCount is $count")
+            assert(shown.exists(_.code == "required"), s"the root's empty field still shows its error: $shown")
     }
 
     "a server error is value-scoped: shown while the value is unchanged, hidden after an edit" in {

@@ -45,6 +45,7 @@ final class FormField[A] private[form] (
     clientErrorRef: SignalRef[Maybe[FieldError]],
     serverErrorRef: SignalRef[Maybe[ServerError[A]]],
     epoch: AtomicInt,
+    resetWrite: AtomicRef[Maybe[A]],
     private var rules: Validator[A],
     triggers: Set[Activation.Field],
     debounce: Duration,
@@ -208,7 +209,15 @@ final class FormField[A] private[form] (
       * without flagging an untouched field), every later one goes through [[onEvent]].
       */
     private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
-        value.observe(v => seen.getAndIncrement.map(n => if n == 0 then revalidate else onEvent(v)))
+        value.observe { v =>
+            // Every emission spends a pending reset write, so one this observer never saw cannot be
+            // taken for a later edit; and only the value the reset wrote counts as the reset's.
+            resetWrite.getAndSet(Absent).map { written =>
+                seen.getAndIncrement.map { n =>
+                    if n == 0 || written.contains(v) then revalidate else onEvent(v)
+                }
+            }
+        }
 
     /** An id the control already carried when [[bind]] stamped this field's own over it.
       *
@@ -272,13 +281,24 @@ final class FormField[A] private[form] (
 
     /** Revert value to the live baseline (the last [[rebase]], else [[initialValue]]),
       * and clear touched, error (client + server), and validating (form reset).
+      *
+      * The change observer would read the value the reset writes as the reader's edit and mark
+      * the field touched, which shows the error of a field a successful submit just emptied. So
+      * the reset records the value it writes, and the observer validates an emission of exactly
+      * that value silently. Only a write that changes the value is recorded, since an unchanged
+      * value emits nothing, and only on a field that observes its changes at all.
       */
     private[form] def resetField(using Frame): Unit < Sync =
-        baselineRef.get.map(valueRef.set)
-            .andThen(touchedRef.set(false))
-            .andThen(clientErrorRef.set(Absent))
-            .andThen(serverErrorRef.set(Absent))
-            .andThen(validatingRef.set(false))
+        for
+            base    <- baselineRef.get
+            current <- valueRef.get
+            _       <- if current == base then Kyo.unit
+            else (if wantsChange then resetWrite.set(Present(base)) else Kyo.unit).andThen(valueRef.set(base))
+            _ <- touchedRef.set(false)
+            _ <- clientErrorRef.set(Absent)
+            _ <- serverErrorRef.set(Absent)
+            _ <- validatingRef.set(false)
+        yield ()
 
 end FormField
 
