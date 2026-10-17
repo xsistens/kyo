@@ -45,6 +45,9 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
+    /** The attribute prefix a rendered JS property travels under (see [[applyJsPropsSync]]). */
+    private val JsPropPrefix = "data-kyo-prop-"
+
     // ---- Range morph ---------------------------------------------------------------------------------------
     //
     // Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node identity
@@ -104,9 +107,13 @@ private[kyo] object DomBackend:
         val activeInput = (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
         // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries the
         // client-set value, so reconciling would clobber it. Twin of the `own` shield in `__kyoMorphAttrs`.
-        val owned   = ownedAttrs(fromEl)
-        val toAttrs = toEl.attributes
-        var i       = 0
+        val owned = ownedAttrs(fromEl)
+        // Read before the walk below moves the attribute: whether the previous render had the control on.
+        val toggle   = toggleAttr(tag)
+        val toggled  = toggle != null && !owned.exists(_.contains(toggle))
+        val renderOn = toggled && fromEl.hasAttribute(toggle)
+        val toAttrs  = toEl.attributes
+        var i        = 0
         while i < toAttrs.length do
             val attribute = toAttrs(i)
             val name      = attribute.name
@@ -137,6 +144,15 @@ private[kyo] object DomBackend:
             if !owned.exists(_.contains(name)) && !toEl.hasAttribute(name) then fromEl.removeAttribute(name)
             j -= 1
         end while
+        // A checkbox, a radio and an option show their PROPERTY once the reader has toggled them, and the property
+        // no longer follows the attribute, so a render that turns the control on or off has to write the property.
+        // Only a change of the rendered state is written: a bound control that is off renders no attribute, exactly
+        // like an unbound one, so writing on every pass would take the reader's tick from every unbound box in a
+        // repainted region.
+        if toggled then
+            val on = toEl.hasAttribute(toggle)
+            if on != renderOn then fromEl.asInstanceOf[js.Dynamic].updateDynamic(toggle)(on)
+        restoreJsProps(fromEl, toEl)
         // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
         // focused field's live `.value` (its caret) with its own echo (the value already matches); assign only a
         // genuine external change (a submit-clear, a programmatic update).
@@ -711,6 +727,54 @@ private[kyo] object DomBackend:
             val dyn = el.asInstanceOf[js.Dynamic]
             if dyn.value.asInstanceOf[String] != value then dyn.value = value
     end syncFieldProperty
+
+    /** The attribute that turns an element's toggle on (`checked` for an input, `selected` for an option), or null
+      * for an element with none. An input that is neither a checkbox nor a radio ignores `checked`, so the name
+      * applies to every input.
+      */
+    private def toggleAttr(tag: String): String =
+        if tag == "INPUT" then "checked" else if tag == "OPTION" then "selected" else null
+
+    /** Give back every JS property a previous render set on `el` and the incoming one no longer carries.
+      *
+      * [[applyJsPropsSync]] removes the `data-kyo-prop-*` attribute once it has assigned the property, so the
+      * attribute walk cannot see a property leave. The value the element had before the first assignment is kept
+      * on the element (`__kyoProps`) and assigned back here, which is how a checkbox that leaves the mixed state
+      * loses its dash. Mirrors `__kyoRestoreProps` in HtmlRenderer.reactiveRangesJs.
+      */
+    private def restoreJsProps(el: dom.Element, incoming: dom.Element): Unit =
+        val d = el.asInstanceOf[js.Dynamic]
+        if !js.isUndefined(d.__kyoProps) then
+            val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
+            props.keys.toSeq.foreach { name =>
+                if !incoming.hasAttribute(JsPropPrefix + name) then
+                    d.updateDynamic(name)(props(name).base)
+                    discard(props.remove(name))
+            }
+        end if
+    end restoreJsProps
+
+    /** Assign a select's bound value again after the options inside it were painted.
+      *
+      * A select chooses among the options it holds when its value is assigned, so a value assigned before its
+      * options arrive (a list that loads later) selects nothing, and the options' paint never reaches the select.
+      */
+    private def reassertEnclosingSelect(root: dom.Element): Unit =
+        val parent = root.parentNode
+        if parent != null && parent.nodeType == dom.Node.ELEMENT_NODE then
+            val select = parent.asInstanceOf[dom.Element].closest("select")
+            if select != null then
+                val d = select.asInstanceOf[js.Dynamic]
+                if !js.isUndefined(d.__kyoProps) then
+                    val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
+                    props.get("value").foreach { record =>
+                        val value = record.value.asInstanceOf[String]
+                        if d.value.asInstanceOf[String] != value then d.value = value
+                    }
+                end if
+            end if
+        end if
+    end reassertEnclosingSelect
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
@@ -1557,7 +1621,6 @@ private[kyo] object DomBackend:
 
     private def applyJsPropsSync(root: dom.Element): Unit =
         if !saw(Marker.JsProp) then return
-        val propPrefix = "data-kyo-prop-"
         // CSS has no attribute-name-prefix selector, so `[data-kyo-prop-*]` is not a valid selector and
         // throws SyntaxError. Visit the root and every descendant, reading property names directly from
         // the live attribute map.
@@ -1565,10 +1628,16 @@ private[kyo] object DomBackend:
             var i = el.attributes.length - 1
             while i >= 0 do
                 val attrName = el.attributes(i).name
-                if attrName.startsWith(propPrefix) then
-                    val propName = attrName.stripPrefix(propPrefix)
+                if attrName.startsWith(JsPropPrefix) then
+                    val propName = attrName.stripPrefix(JsPropPrefix)
                     val value    = el.getAttribute(attrName)
-                    el.asInstanceOf[scalajs.js.Dynamic].updateDynamic(propName)(value)
+                    val d        = el.asInstanceOf[scalajs.js.Dynamic]
+                    // The first assignment keeps what the element had before, for restoreJsProps to give back.
+                    if js.isUndefined(d.__kyoProps) then d.__kyoProps = js.Dictionary.empty[js.Dynamic].asInstanceOf[js.Any]
+                    val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
+                    val base  = props.get(propName).fold(d.selectDynamic(propName).asInstanceOf[js.Any])(_.base.asInstanceOf[js.Any])
+                    props(propName) = js.Dynamic.literal(base = base, value = value)
+                    d.updateDynamic(propName)(value)
                     el.removeAttribute(attrName)
                 end if
                 i -= 1
@@ -1582,6 +1651,7 @@ private[kyo] object DomBackend:
             applyElement(elements(i).asInstanceOf[dom.Element])
             i += 1
         end while
+        reassertEnclosingSelect(root)
     end applyJsPropsSync
 
     /** Start every freshly-inserted SMIL animation under `root`.

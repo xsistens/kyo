@@ -393,6 +393,209 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(shown == "kept", s"the unbound textarea shows '$shown' after a repaint around it")
     }
 
+    private def element(id: String)(using Frame): scalajs.Dynamic < Sync =
+        Sync.defer(dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic])
+
+    /** Picks `value` in the select `id` the way a reader does: the property moves, then `change` fires. */
+    private def choose(id: String, value: String)(using Frame): Unit < Sync =
+        element(id).map { select =>
+            select.value = value
+            val change = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].Event)(
+                "change",
+                scalajs.Dynamic.literal(bubbles = true)
+            )
+            discard(select.dispatchEvent(change))
+        }
+
+    // Regression: after the first click a checkbox shows its `checked` PROPERTY, which no longer follows the
+    // attribute, and the morph wrote only the attribute. A list's "Clear" emptied the selection, the `checked`
+    // attributes went, and every row the reader had ticked stayed ticked.
+    "a render that unchecks a checkbox the reader ticked clears the tick" in {
+        for
+            on <- Signal.initRef(false)
+            ui    = UI.div(on.map(v => UI.checkbox.id("tick").checked(v).onChange(on.set(_))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("tick") != null))
+            box   <- element("tick")
+            _     <- Sync.defer(discard(box.click()))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("tick").hasAttribute("checked")))
+            _     <- on.set(false)
+            _     <- assertEventually(Sync.defer(!dom.document.getElementById("tick").hasAttribute("checked")))
+            shown <- element("tick").map(_.checked.asInstanceOf[Boolean])
+            same  <- element("tick").map(_ eq box)
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(!shown, "the checkbox still shows the tick the app took back")
+    }
+
+    "a ref write unchecks a two-way bound checkbox the reader ticked" in {
+        for
+            on <- Signal.initRef(false)
+            ui    = UI.div(UI.checkbox.id("bound-tick").checked(on), on.map(v => UI.span(s"on=$v").id("bound-status")))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("bound-tick") != null))
+            _     <- element("bound-tick").map(box => discard(box.click()))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("bound-status").textContent == "on=true"))
+            _     <- on.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("bound-status").textContent == "on=false"))
+            _     <- assertEventually(Sync.defer(!dom.document.getElementById("bound-tick").hasAttribute("checked")))
+            shown <- element("bound-tick").map(_.checked.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(!shown, "the two-way bound checkbox still shows the tick its ref took back")
+    }
+
+    "a render that moves a radio group back to the first choice checks it again" in {
+        for
+            choice <- Signal.initRef("a")
+            ui = UI.div(choice.map(c =>
+                UI.div(
+                    UI.radio.id("radio-a").name("g").checked(c == "a").onChange(on => if on then choice.set("a") else Kyo.unit),
+                    UI.radio.id("radio-b").name("g").checked(c == "b").onChange(on => if on then choice.set("b") else Kyo.unit)
+                )
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("radio-b") != null))
+            // The reader goes to b, back to a and to b again, so both radios have been toggled by hand.
+            _ <- Kyo.foreachDiscard(Seq("b", "a", "b")) { c =>
+                element(s"radio-$c").map(radio => discard(radio.click()))
+                    .andThen(assertEventually(Sync.defer(dom.document.getElementById(s"radio-$c").hasAttribute("checked"))))
+            }
+            _ <- choice.set("a")
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("radio-a").hasAttribute("checked")))
+            a <- element("radio-a").map(_.checked.asInstanceOf[Boolean])
+            b <- element("radio-b").map(_.checked.asInstanceOf[Boolean])
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert((a, b) == (true, false), s"the group shows a=$a b=$b after the app chose a")
+    }
+
+    // Guard for the fix above: an unbound checkbox renders no `checked` on every pass, so a repaint of the region
+    // around it must leave the reader's tick alone, as it leaves an unbound field's text.
+    "a repaint around an unbound checkbox keeps the reader's tick" in {
+        for
+            outer <- Signal.initRef(0)
+            ui    = UI.div(outer.map(o => UI.div(UI.checkbox.id("free-tick"), UI.span(s"o=$o").id("free-tick-status"))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("free-tick") != null))
+            box   <- element("free-tick")
+            _     <- Sync.defer(discard(box.click()))
+            _     <- outer.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("free-tick-status").textContent == "o=1"))
+            same  <- element("free-tick").map(_ eq box)
+            shown <- element("free-tick").map(_.checked.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(shown, "the unbound checkbox lost the reader's tick in a repaint around it")
+    }
+
+    // Regression: a select has no `value` attribute in HTML, so a bound select rendered as `<select value="b">`
+    // showed its first option, on the first render and after every ref write.
+    "a bound select shows its value on the first render and after a ref write" in {
+        for
+            picked <- Signal.initRef("b")
+            ui = UI.div(
+                UI.select(UI.option("A").value("a"), UI.option("B").value("b"), UI.option("C").value("c"))
+                    .id("pick")
+                    .value(picked),
+                picked.map(v => UI.span(s"picked=$v").id("pick-status"))
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("pick") != null))
+            first <- element("pick").map(_.value.asInstanceOf[String])
+            _     <- choose("pick", "c")
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("pick-status").textContent == "picked=c"))
+            _     <- picked.set("a")
+            // The select's own paint has landed once its rendered value names a.
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("pick").getAttribute("value") == "a"))
+            after <- element("pick").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(first == "b", s"the select shows '$first' on its first render")
+            assert(after == "a", s"the select shows '$after' after its ref was set to a")
+    }
+
+    "a bound select keeps its value when its options arrive later" in {
+        for
+            options <- Signal.initRef(Chunk.empty[String])
+            picked  <- Signal.initRef("b")
+            ui = UI.div(
+                UI.select(options.foreach(v => UI.option(v.toUpperCase).value(v))).id("late").value(picked),
+                options.map(o => UI.span(s"n=${o.size}").id("late-status"))
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("late") != null))
+            _     <- options.set(Chunk("a", "b", "c"))
+            _     <- assertEventually(Sync.defer(dom.document.querySelectorAll("#late > option").length == 3))
+            shown <- element("late").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(shown == "b", s"the select shows '$shown' once its options arrived")
+    }
+
+    "a render that selects an option the reader moved away from selects it again" in {
+        for
+            chosen <- Signal.initRef("a")
+            ui = UI.div(chosen.map(c =>
+                UI.select(
+                    UI.option("A").value("a").selected(c == "a"),
+                    UI.option("B").value("b").selected(c == "b"),
+                    UI.option("C").value("c").selected(c == "c")
+                ).id("opts")
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("opts") != null))
+            // The reader visits B and comes back to A; the app follows neither, its choice is still a.
+            _     <- choose("opts", "b")
+            _     <- choose("opts", "a")
+            _     <- chosen.set("b")
+            _     <- assertEventually(Sync.defer(dom.document.querySelector("#opts > option[value='b']").hasAttribute("selected")))
+            shown <- element("opts").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(shown == "b", s"the select shows '$shown' after the app selected b")
+    }
+
+    // Regression: `indeterminate` exists only as a property, set through a JS property that nothing ever set back,
+    // so a checkbox that left the mixed state kept its dash.
+    "a checkbox that leaves the mixed state loses its dash" in {
+        for
+            mixed <- Signal.initRef(true)
+            // One region paints the box and its status, so a status that moved says the box was painted too.
+            ui = UI.div(mixed.map(m =>
+                UI.div(UI.checkbox.id("mixed").indeterminate(m), UI.span(s"m=$m").id("mixed-status"))
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("mixed") != null))
+            first <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- mixed.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=false"))
+            _     <- mixed.set(true)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=true"))
+            again <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- mixed.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=false"))
+            shown <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(first && again)
+            assert(!shown, "the checkbox still shows the mixed dash after leaving the mixed state")
+    }
+
     /** Edge whitespace, a line break and every character HTML escapes. */
     private val TextareaTricky = "  a\n<b> & \"c\" 'd'  "
 

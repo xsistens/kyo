@@ -1054,9 +1054,15 @@ private[kyo] object HtmlRenderer:
                 ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case sel: Select =>
                 boolAttr(sb, "disabled", sel.disabled)
+                // A select has no `value` attribute in HTML: the browser ignores it and shows the first option. The
+                // attribute stays for readers of the markup; the choice travels as the `value` PROPERTY, which the
+                // client assigns after every paint, once the options are there.
+                def bound(s: String): Unit =
+                    w(sb, s""" value="${esc(s)}"""")
+                    if !sel.attrs.jsProps.contains("value") then w(sb, s""" data-kyo-prop-value="${esc(s)}"""")
                 sel.value match
-                    case Present(Bound.Const(s)) => w(sb, s""" value="${esc(s)}"""")
-                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(SignalNow(ref))}"""")
+                    case Present(Bound.Const(s)) => bound(s)
+                    case Present(Bound.Ref(ref)) => bound(SignalNow(ref))
                     case _                       =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
@@ -1498,12 +1504,29 @@ private[kyo] object HtmlRenderer:
           |  if(!((from===document.activeElement)&&from.hasAttribute("contenteditable")))
           |    __kyoMorphRun(from,from.firstChild,null,to.firstChild,null);
           |}
+          |// Give back every JS property a previous render set and the incoming element no longer carries. applyJsProps
+          |// removes the data-kyo-prop-* attribute once applied, so the attribute walk cannot see a property leave; the
+          |// value before the first assignment waits in __kyoProps. Twin of restoreJsProps in DomBackend.
+          |function __kyoRestoreProps(from,to){var ps=from.__kyoProps;if(!ps)return;
+          |  for(var n in ps){if(!to.hasAttribute("data-kyo-prop-"+n)){from[n]=ps[n].base;delete ps[n];}}
+          |}
+          |// A select chooses among the options it holds when its value is assigned, so a value assigned before its
+          |// options arrived selects nothing: assign it again once options inside it were painted. applyJsProps calls
+          |// it after each paint. Twin of reassertEnclosingSelect in DomBackend.
+          |function __kyoReassertSelect(root){var pn=root.parentNode;if(!pn||pn.nodeType!==1)return;
+          |  var s=pn.closest("select");if(s&&s.__kyoProps&&s.__kyoProps.value&&s.value!==s.__kyoProps.value.value)
+          |    s.value=s.__kyoProps.value.value;
+          |}
           |function __kyoMorphAttrs(from,to){
           |  var tag=from.tagName;
           |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
           |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
           |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
           |  var own=from.__kyoOwn||{};
+          |  // Read before the walk moves the attribute: whether the previous render had the toggle on.
+          |  var tg=tag==="INPUT"?"checked":(tag==="OPTION"?"selected":null);
+          |  if(tg&&own[tg])tg=null;
+          |  var wasOn=!!tg&&from.hasAttribute(tg);
           |  // A field renders its value PROPERTY, and the property stops tracking the attribute the first time the
           |  // user types, so writing the attribute alone is invisible on any field that has been typed into. The
           |  // attribute may even be unchanged (both empty) when a ref write clears it, so the property is written on
@@ -1519,6 +1542,11 @@ private[kyo] object HtmlRenderer:
           |  if(!activeInput&&tag==="TEXTAREA"&&from.textContent!==to.textContent)__kyoSyncField(from,"value",to.textContent);
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
           |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
+          |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
+          |  // turns the control on or off writes it. Only a change is written: a bound control that is off renders no
+          |  // attribute, like an unbound one, whose tick a repaint must keep. Twin of morphAttrs in DomBackend.
+          |  if(tg){var on=to.hasAttribute(tg);if(on!==wasOn)from[tg]=on;}
+          |  __kyoRestoreProps(from,to);
           |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
           |  if(activeInput){var v=tag==="TEXTAREA"?to.textContent:(to.getAttribute("value")||"");
@@ -2207,12 +2235,15 @@ private[kyo] object HtmlRenderer:
            |}
            |// Apply data-kyo-prop-* HTML attributes as JS DOM properties then remove the attr.
            |// Mirrors DomBackend.applyJsPropsSync for the HTTP/JVM rendering path.
+           |// The first assignment keeps what the element had before, for __kyoRestoreProps to give back.
            |function applyJsPropsElement(el,pfx){for(var i=el.attributes.length-1;i>=0;i--){var n=el.attributes[i].name;
-           |  if(n.indexOf(pfx)===0){el[n.slice(pfx.length)]=el.getAttribute(n);el.removeAttribute(n);}}
+           |  if(n.indexOf(pfx)===0){var p=n.slice(pfx.length),v=el.getAttribute(n),ps=el.__kyoProps||(el.__kyoProps={});
+           |    ps[p]={base:ps[p]?ps[p].base:el[p],value:v};el[p]=v;el.removeAttribute(n);}}
            |}
            |function applyJsProps(root){
            |  var pfx="data-kyo-prop-";applyJsPropsElement(root,pfx);var els=root.querySelectorAll("*");
            |  for(var i=0;i<els.length;i++)applyJsPropsElement(els[i],pfx);
+           |  __kyoReassertSelect(root);
            |}
            |// Start freshly-inserted SMIL animations. Chart transition <animate> elements use
            |// begin="indefinite" so they do not auto-play against the shared document timeline (which would

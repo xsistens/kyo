@@ -89,6 +89,44 @@ class BoundTest extends UITest:
         }
     }
 
+    // Regression: after the first click a checkbox shows its `checked` PROPERTY, which no longer follows the
+    // attribute, and the morph wrote only the attribute, so a ref write never took a reader's tick back.
+    "checkbox checked signalRef external clear unchecks a box the user ticked" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef(false)
+            yield UI.div(
+                UI.checkbox.id("c").checked(ref),
+                UI.button("Clear").id("b").onClick(ref.set(false)),
+                ref.map(v => UI.span(s"sig:$v").id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("c"))
+                _ <- Browser.assertText(Selector.id("v"), "sig:true")
+                _ <- Browser.click(Selector.id("b"))
+                _ <- Browser.assertText(Selector.id("v"), "sig:false")
+                _ <- Browser.assertNoAttribute(Selector.id("c"), "checked")
+                _ <- Browser.assertNotChecked(Selector.id("c"))
+            yield ()
+        }
+    }
+
+    // Regression: a select has no `value` attribute in HTML, so `<select value="b">` showed its first option.
+    "select value signalRef shows its value on the first render" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("b")
+            yield UI.div(
+                UI.select(UI.option("A").value("a"), UI.option("B").value("b")).id("s").value(ref),
+                ref.map(v => UI.span(s"sig:$v").id("v"))
+            )
+        withUI(app) {
+            for
+                _     <- Browser.assertText(Selector.id("v"), "sig:b")
+                shown <- Browser.eval("document.getElementById('s').value")
+            yield assert(shown == "b", s"the select shows '$shown'")
+        }
+    }
+
     "select value signalRef selecting auto updates" in {
         val app: UI < Async =
             for ref <- Signal.initRef("a")
@@ -115,9 +153,13 @@ class BoundTest extends UITest:
             )
         withUI(app) {
             for
+                _ <- Browser.select(Selector.id("s"), "a")
                 _ <- Browser.click(Selector.id("b"))
                 _ <- Browser.assertText(Selector.id("v"), "sig:b")
-            yield ()
+                // The select's own paint has landed once its rendered value names b; the claim is what it SHOWS.
+                _     <- Browser.assertAttribute(Selector.id("s"), "value", "b")
+                shown <- Browser.eval("document.getElementById('s').value")
+            yield assert(shown == "b", s"the select shows '$shown' after its ref was set to b")
         }
     }
 

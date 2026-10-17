@@ -18,7 +18,9 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function kyoEnterSeed(root){__kyoLifecycle.push("enter:"+root.id);}
           |function applyJsProps(root){var all=[root],desc=root.querySelectorAll("*");for(var i=0;i<desc.length;i++)all.push(desc[i]);
           |  for(var i=0;i<all.length;i++){var names=all[i].getAttributeNames();for(var j=0;j<names.length;j++){var name=names[j];
-          |    if(name.indexOf("data-kyo-prop-")===0){all[i][name.slice(14)]=all[i].getAttribute(name);all[i].removeAttribute(name);}}}}
+          |    if(name.indexOf("data-kyo-prop-")===0){var el=all[i],p=name.slice(14),v=el.getAttribute(name),ps=el.__kyoProps||(el.__kyoProps={});
+          |      ps[p]={base:ps[p]?ps[p].base:el[p],value:v};el[p]=v;el.removeAttribute(name);}}}
+          |  if(typeof __kyoReassertSelect==="function")__kyoReassertSelect(root);}
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
@@ -168,6 +170,66 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         val property = dom.document.getElementById("nested-property")
         assert(property.asInstanceOf[scalajs.Dynamic].indeterminate.asInstanceOf[Boolean])
         assert(!property.hasAttribute("data-kyo-prop-indeterminate"))
+    }
+
+    private def replace(id: String, html: String): Unit =
+        discard(scalajs.Dynamic.global.eval(s"kyoRangeReplace('$id',\"$html\")"))
+
+    private def live(id: String): scalajs.Dynamic = dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic]
+
+    "embedded morph unchecks a checkbox the reader ticked when the render takes the tick back" in {
+        val id = "r.1"
+        install(s"<!--kyo-rs:$id--><input id='tick' type='checkbox'><!--kyo-re:$id-->")
+        val box = live("tick")
+        discard(box.click())
+        replace(id, "<input id='tick' type='checkbox' checked>")
+        replace(id, "<input id='tick' type='checkbox'>")
+        assert(live("tick") eq box)
+        assert(!box.checked.asInstanceOf[Boolean], "the checkbox still shows the tick the render took back")
+    }
+
+    "embedded morph leaves the reader's tick on an unbound checkbox" in {
+        val id = "r.1"
+        install(s"<!--kyo-rs:$id--><input id='free' type='checkbox'><span>0</span><!--kyo-re:$id-->")
+        val box = live("free")
+        discard(box.click())
+        replace(id, "<input id='free' type='checkbox'><span>1</span>")
+        assert(live("free") eq box)
+        assert(box.checked.asInstanceOf[Boolean], "a repaint took the reader's tick from an unbound checkbox")
+    }
+
+    "embedded morph selects the option the render selects after the reader moved away" in {
+        val id                       = "r.1"
+        def select(selected: String) =
+            Seq("a", "b", "c").map(v => s"<option value='$v'${if v == selected then " selected" else ""}>$v</option>").mkString
+        install(s"<!--kyo-rs:$id--><select id='opts'>${select("a")}</select><!--kyo-re:$id-->")
+        val opts = live("opts")
+        opts.value = "b"
+        opts.value = "a"
+        replace(id, s"<select id='opts'>${select("b")}</select>")
+        assert(live("opts") eq opts)
+        assert(opts.value.asInstanceOf[String] == "b", s"the select shows ${opts.value} after the render selected b")
+    }
+
+    "embedded morph gives back a JS property the render no longer sets" in {
+        val id = "r.1"
+        install(s"<!--kyo-rs:$id--><!--kyo-re:$id-->")
+        replace(id, "<input id='mixed' type='checkbox' data-kyo-prop-indeterminate='true'>")
+        val box = live("mixed")
+        assert(box.indeterminate.asInstanceOf[Boolean])
+        replace(id, "<input id='mixed' type='checkbox'>")
+        assert(live("mixed") eq box)
+        assert(!box.indeterminate.asInstanceOf[Boolean], "the checkbox kept the mixed dash the render dropped")
+        replace(id, "<input id='mixed' type='checkbox' data-kyo-prop-indeterminate='true'>")
+        assert(box.indeterminate.asInstanceOf[Boolean])
+    }
+
+    "embedded paint of options inside a bound select selects its value" in {
+        val id = "r.1"
+        install(s"<select id='late' data-kyo-prop-value='b'><!--kyo-rs:$id--><!--kyo-re:$id--></select>")
+        discard(scalajs.Dynamic.global.eval("applyJsProps(document.body)"))
+        replace(id, "<option value='a'>a</option><option value='b'>b</option><option value='c'>c</option>")
+        assert(live("late").value.asInstanceOf[String] == "b", s"the select shows ${live("late").value} once its options arrived")
     }
 
     "embedded registry preserves every exposed restricted parent and keyed range" in {
