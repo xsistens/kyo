@@ -516,7 +516,6 @@ private[kyo] object DomBackend:
         Sync.defer(applyJsPropsSync(root))
 
     private def applyJsPropsSync(root: dom.Element): Unit =
-        val propPrefix = "data-kyo-prop-"
         // CSS has no attribute-name-prefix selector, so `[data-kyo-prop-*]` is not a valid selector and
         // throws SyntaxError. Visit the root and every descendant, reading property names directly from
         // the live attribute map.
@@ -524,10 +523,14 @@ private[kyo] object DomBackend:
             var i = el.attributes.length - 1
             while i >= 0 do
                 val attrName = el.attributes(i).name
-                if attrName.startsWith(propPrefix) then
-                    val propName = attrName.stripPrefix(propPrefix)
+                if attrName.startsWith(JsPropPrefix) then
+                    val propName = attrName.stripPrefix(JsPropPrefix)
                     val value    = el.getAttribute(attrName)
-                    el.asInstanceOf[scalajs.js.Dynamic].updateDynamic(propName)(value)
+                    val d        = el.asInstanceOf[scalajs.js.Dynamic]
+                    // Each assignment is kept on the element, for reassertEnclosingSelect to assign again.
+                    if js.isUndefined(d.__kyoProps) then d.__kyoProps = js.Dictionary.empty[js.Dynamic].asInstanceOf[js.Any]
+                    d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]](propName) = js.Dynamic.literal(value = value)
+                    d.updateDynamic(propName)(value)
                     el.removeAttribute(attrName)
                 end if
                 i -= 1
@@ -541,7 +544,34 @@ private[kyo] object DomBackend:
             applyElement(elements(i).asInstanceOf[dom.Element])
             i += 1
         end while
+        reassertEnclosingSelect(root)
     end applyJsPropsSync
+
+    /** The attribute prefix a rendered JS property travels under (see [[applyJsPropsSync]]). */
+    private val JsPropPrefix = "data-kyo-prop-"
+
+    /** Assign a select's bound value again after the options inside it were painted.
+      *
+      * A select chooses among the options it holds when its value is assigned, so a value assigned before its
+      * options arrive (a list that loads later) selects nothing, and the options' paint never reaches the select.
+      * Mirrors `__kyoReassertSelect` in HtmlRenderer.reactiveRangesJs.
+      */
+    private def reassertEnclosingSelect(root: dom.Element): Unit =
+        val parent = root.parentNode
+        if parent != null && parent.nodeType == dom.Node.ELEMENT_NODE then
+            val select = parent.asInstanceOf[dom.Element].closest("select")
+            if select != null then
+                val d = select.asInstanceOf[js.Dynamic]
+                if !js.isUndefined(d.__kyoProps) then
+                    val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
+                    props.get("value").foreach { record =>
+                        val value = record.value.asInstanceOf[String]
+                        if d.value.asInstanceOf[String] != value then d.value = value
+                    }
+                end if
+            end if
+        end if
+    end reassertEnclosingSelect
 
     /** Start every freshly-inserted SMIL animation under `root`.
       *
