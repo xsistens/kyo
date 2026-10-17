@@ -18,7 +18,9 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function kyoEnterSeed(root){__kyoLifecycle.push("enter:"+root.id);}
           |function applyJsProps(root){var all=[root],desc=root.querySelectorAll("*");for(var i=0;i<desc.length;i++)all.push(desc[i]);
           |  for(var i=0;i<all.length;i++){var names=all[i].getAttributeNames();for(var j=0;j<names.length;j++){var name=names[j];
-          |    if(name.indexOf("data-kyo-prop-")===0){all[i][name.slice(14)]=all[i].getAttribute(name);all[i].removeAttribute(name);}}}}
+          |    if(name.indexOf("data-kyo-prop-")===0){var el=all[i],p=name.slice(14),v=el.getAttribute(name),ps=el.__kyoProps||(el.__kyoProps={});
+          |      ps[p]={value:v};el[p]=v;el.removeAttribute(name);}}}
+          |  if(typeof __kyoReassertSelect==="function")__kyoReassertSelect(root);}
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
@@ -195,6 +197,17 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         ))
         assert(dom.document.activeElement.id == "raw-table")
         assert(dom.document.activeElement.asInstanceOf[scalajs.Dynamic].selectionStart.asInstanceOf[Int] == 1)
+    }
+
+    "embedded paint of options inside a bound select selects its value" in {
+        val id = "r"
+        install(s"<select id='late' data-kyo-prop-value='b'><!--kyo-rs:$id--><!--kyo-re:$id--></select>")
+        discard(scalajs.Dynamic.global.eval("applyJsProps(document.body)"))
+        discard(scalajs.Dynamic.global.eval(
+            s"kyoRangeReplace('$id',\"<option value='a'>a</option><option value='b'>b</option><option value='c'>c</option>\")"
+        ))
+        val shown = dom.document.getElementById("late").asInstanceOf[scalajs.Dynamic].value.asInstanceOf[String]
+        assert(shown == "b", s"the select shows $shown once its options arrived")
     }
 
     "embedded range replacement applies JS properties to a top-level element" in {

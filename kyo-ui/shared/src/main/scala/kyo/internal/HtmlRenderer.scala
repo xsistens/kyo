@@ -796,12 +796,16 @@ private[kyo] object HtmlRenderer:
                 ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case sel: Select =>
                 boolAttr(sb, "disabled", sel.disabled)
+                // A select has no `value` attribute in HTML: the browser ignores it and shows the first option. The
+                // attribute stays for readers of the markup; the choice travels as the `value` PROPERTY, which the
+                // client assigns after every paint, once the options are there.
+                def bound(s: String): Unit =
+                    w(sb, s""" value="${esc(s)}"""")
+                    if !sel.attrs.jsProps.contains("value") then w(sb, s""" data-kyo-prop-value="${esc(s)}"""")
                 val selValue: Unit < Sync = sel.value match
-                    case Present(Bound.Const(s)) => w(sb, s""" value="${esc(s)}"""")
-                    case Present(Bound.Ref(ref)) =>
-                        for s <- ref.get
-                        yield w(sb, s""" value="${esc(s)}"""")
-                    case _ =>
+                    case Present(Bound.Const(s)) => bound(s)
+                    case Present(Bound.Ref(ref)) => ref.get.map(bound)
+                    case _                       =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
                             case opt: Opt if opt.selected == Present(true) =>
@@ -1160,6 +1164,13 @@ private[kyo] object HtmlRenderer:
           |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
           |  applyJsProps(active);return true;
           |}
+          |// A select chooses among the options it holds when its value is assigned, so a value assigned before its
+          |// options arrived selects nothing: assign it again once options inside it were painted. applyJsProps calls
+          |// it after each paint. Twin of reassertEnclosingSelect in DomBackend.
+          |function __kyoReassertSelect(root){var pn=root.parentNode;if(!pn||pn.nodeType!==1)return;
+          |  var s=pn.closest("select");if(s&&s.__kyoProps&&s.__kyoProps.value&&s.value!==s.__kyoProps.value.value)
+          |    s.value=s.__kyoProps.value.value;
+          |}
           |// Markup equality alone misses dirty form properties. An unapplied property carrier still needs the insertion hooks.
           |function kyoRangeSameElementState(a,b){
           |  for(var i=0;i<a.attributes.length;i++)if(a.attributes[i].name.indexOf("data-kyo-prop-")===0)return false;
@@ -1398,12 +1409,15 @@ private[kyo] object HtmlRenderer:
            |}
            |// Apply data-kyo-prop-* HTML attributes as JS DOM properties then remove the attr.
            |// Mirrors DomBackend.applyJsPropsSync for the HTTP/JVM rendering path.
+           |// Each assignment is kept on the element (__kyoProps), for __kyoReassertSelect to assign again.
            |function applyJsPropsElement(el,pfx){for(var i=el.attributes.length-1;i>=0;i--){var n=el.attributes[i].name;
-           |  if(n.indexOf(pfx)===0){el[n.slice(pfx.length)]=el.getAttribute(n);el.removeAttribute(n);}}
+           |  if(n.indexOf(pfx)===0){var p=n.slice(pfx.length),v=el.getAttribute(n),ps=el.__kyoProps||(el.__kyoProps={});
+           |    ps[p]={value:v};el[p]=v;el.removeAttribute(n);}}
            |}
            |function applyJsProps(root){
            |  var pfx="data-kyo-prop-";applyJsPropsElement(root,pfx);var els=root.querySelectorAll("*");
            |  for(var i=0;i<els.length;i++)applyJsPropsElement(els[i],pfx);
+           |  __kyoReassertSelect(root);
            |}
            |// Start freshly-inserted SMIL animations. Chart transition <animate> elements use
            |// begin="indefinite" so they do not auto-play against the shared document timeline (which would
