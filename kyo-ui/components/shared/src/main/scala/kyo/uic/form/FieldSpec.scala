@@ -114,6 +114,7 @@ final case class FieldSpec[A] private[form] (
             clientErrRef  <- Signal.initRef(Absent: Maybe[FieldError])
             serverErrRef  <- Signal.initRef(Absent: Maybe[ServerError[A]])
             epoch         <- AtomicInt.init(0)
+            resetWrite    <- AtomicRef.init(Maybe.empty[A])
             f = new FormField[A](
                 valueRef,
                 initialV,
@@ -124,6 +125,7 @@ final case class FieldSpec[A] private[form] (
                 clientErrRef,
                 serverErrRef,
                 epoch,
+                resetWrite,
                 rulesV,
                 onV,
                 debounceV,

@@ -20,7 +20,8 @@ final class Form private[form] (
     arraysRef: AtomicRef[Chunk[FieldArray[?]]],
     focusInvalidOnSubmit: Boolean,
     private[form] val mintId: () => String < Sync,
-    focusField: String => Unit < Async
+    focusField: String => Unit < Async,
+    ownsSubmit: Boolean
 ):
 
     /** Declare a typed field in this scope, starting from `initial` (which is also the reset
@@ -105,7 +106,8 @@ final class Form private[form] (
             arraysR,
             focusInvalidOnSubmit,
             mintId,
-            focusField
+            focusField,
+            ownsSubmit = false
         )
 
     /** Declare a dynamic array of repeated rows. Each row is its own sub-form scope built
@@ -248,7 +250,7 @@ final class Form private[form] (
             if parts.isEmpty then Signal.initConst(true)
             else Signal.combineLatestAll(parts).map(_.forall(identity))
 
-    /** How many times submit has run — drives the display gate (`> 0` opens it). */
+    /** How many times submit has run since the form loaded or was last [[reset]]: drives the display gate (`> 0` opens it). */
     val submitCount: Signal[Int] = submitCountRef
 
     /** True while a submit is validating/running. */
@@ -378,10 +380,15 @@ final class Form private[form] (
         yield r
 
     /** Revert values to their live baselines (last [[markPristine]], else each field's
-      * initial), and clear errors + touched state across the subtree.
+      * initial), and clear errors + touched state across the subtree. Reset on the form
+      * itself also closes the display gate a submit opened, so the form is as it loaded:
+      * a field a successful submit empties does not show its `required` error at once.
+      * Reset on a sub-scope leaves the gate alone, since the rest of the form still
+      * shows what the last submit found.
       */
     def reset(using Frame): Unit < Sync =
         for
+            _      <- if ownsSubmit then submitCountRef.set(0) else Kyo.unit
             fields <- fieldsRef.get
             _      <- Kyo.foreach(fields)(_.resetField)
             _      <- formErrorsRef.set(Chunk.empty)
@@ -593,7 +600,8 @@ object Form:
             arraysR,
             focusInvalidOnSubmit,
             () => cmds.freshId,
-            id => cmds.scrollIntoViewId(id).andThen(cmds.focusId(id))
+            id => cmds.scrollIntoViewId(id).andThen(cmds.focusId(id)),
+            ownsSubmit = true
         )
 
     /** A displayable error paired with the id of the field it belongs to — `Absent` for a
