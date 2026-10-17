@@ -89,6 +89,22 @@ class BoundTest extends UITest:
         }
     }
 
+    // Regression: a select has no `value` attribute in HTML, so `<select value="b">` showed its first option.
+    "select value signalRef shows its value on the first render" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("b")
+            yield UI.div(
+                UI.select(UI.option("A").value("a"), UI.option("B").value("b")).id("s").value(ref),
+                ref.map(v => UI.span(s"sig:$v").id("v"))
+            )
+        withUI(app) {
+            for
+                _     <- Browser.assertText(Selector.id("v"), "sig:b")
+                shown <- Browser.eval("document.getElementById('s').value")
+            yield assert(shown == "b", s"the select shows '$shown'")
+        }
+    }
+
     "select value signalRef selecting auto updates" in {
         val app: UI < Async =
             for ref <- Signal.initRef("a")
@@ -115,9 +131,13 @@ class BoundTest extends UITest:
             )
         withUI(app) {
             for
+                _ <- Browser.select(Selector.id("s"), "a")
                 _ <- Browser.click(Selector.id("b"))
                 _ <- Browser.assertText(Selector.id("v"), "sig:b")
-            yield ()
+                // The select's own paint has landed once its rendered value names b; the claim is what it SHOWS.
+                _     <- Browser.assertAttribute(Selector.id("s"), "value", "b")
+                shown <- Browser.eval("document.getElementById('s').value")
+            yield assert(shown == "b", s"the select shows '$shown' after its ref was set to b")
         }
     }
 
