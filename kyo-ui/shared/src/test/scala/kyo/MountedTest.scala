@@ -69,6 +69,11 @@ class MountedTest extends kyo.test.Test[Any]:
         def paintsAt(path: Seq[String])(using Frame): Int < Sync =
             Sync.Unsafe.defer(paints.get()).map(_.count((p, _) => p == path))
 
+        def paintCount(using Frame): Int < Sync = Sync.Unsafe.defer(paints.get().size)
+
+        /** Every paint after the first `n`, oldest first. */
+        def paintsAfter(n: Int)(using Frame): Chunk[(Seq[String], String)] < Sync = Sync.Unsafe.defer(paints.get().drop(n))
+
         def paintsEndingWith(suffix: Seq[String])(using Frame): Int < Sync =
             Sync.Unsafe.defer(paints.get()).map(_.count((p, _) => p.endsWith(suffix)))
     end Recorder
@@ -737,6 +742,28 @@ class MountedTest extends kyo.test.Test[Any]:
                     _       <- assertEventually(recorder.holds.map(_.map(_._2) == Chunk(true, false)))
                     all     <- recorder.holds
                 yield assert(all.map(_._1).distinct == Chunk(whileIn.head._1), s"held and released different ranges: $all")
+            }
+        yield succeed
+    }
+
+    "a key change under KeepLatest paints the snapshot and then the new content, never an empty slot" in {
+        for
+            key  <- Signal.initRef("a")
+            gate <- Promise.init[Unit, Any]
+            effect = (k: String) => if k == "a" then Kyo.lift(span("old")) else gate.get.andThen(span("new"))
+            ui     = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "old")
+                    before <- recorder.paintCount
+                    _      <- key.set("b")
+                    _      <- assertEventually(recorder.paintsAfter(before).map(_.nonEmpty))
+                    _      <- gate.completeUnitDiscard
+                    _      <- showsEventually(recorder, Seq("0", "0"), "new")
+                    after  <- recorder.paintsAfter(before)
+                yield
+                    val empty = after.filterNot((_, html) => html.contains("old") || html.contains("new"))
+                    assert(empty.isEmpty, s"a paint showed neither the old content nor the new: $empty")
             }
         yield succeed
     }
