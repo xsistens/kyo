@@ -3376,8 +3376,13 @@ private[kyo] object ReactiveUI:
             _ <- first match
                 case MountState.Pending(Absent) => Kyo.unit
                 case state                      => paint(UI.RenderCause.Created, Absent, state.content(spec), exchange)
+            // A snapshot takes no events, so its range is held while it shows: nothing in it looks like a field the reader can use.
+            _ <- if showsSnapshot(first) then exchange.onHold(rui.region, true) else Kyo.unit
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
-            painted     = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
+            painted = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
+            _ <- Scope.ensure(Sync.Unsafe.defer(painted.get()).map(last =>
+                if showsSnapshot(last) then exchange.onHold(rui.region, false) else Kyo.unit
+            ))
             renderState = (state: MountState, through: UIExchange) =>
                 val content = state.content(spec)
                 for
@@ -3388,6 +3393,10 @@ private[kyo] object ReactiveUI:
                             Clock.now.map(signalChangeTime.set).andThen(
                                 paint(UI.RenderCause.Signal, Present(previous.content(spec)), content, through)
                             )
+                    _ <- (showsSnapshot(previous), showsSnapshot(state)) match
+                        case (false, true) => through.onHold(rui.region, true)
+                        case (true, false) => through.onHold(rui.region, false)
+                        case _             => Kyo.unit
                     _ <- state match
                         case MountState.Pending(Present(_)) => Kyo.unit
                         case _                              =>
@@ -3464,6 +3473,12 @@ private[kyo] object ReactiveUI:
         yield ()
         end for
     end subscribeMountContent
+
+    /** Whether a mount in `state` shows the inert snapshot of the instance before it. */
+    private def showsSnapshot(state: MountState): Boolean =
+        state match
+            case MountState.Pending(Present(_)) => true
+            case _                              => false
 
     // ---- Shared UI tree utilities (used by both backends) ----
 
