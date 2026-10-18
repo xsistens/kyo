@@ -320,6 +320,51 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(live)
     }
 
+    /** What the page shows while the mount inside a new instance of `outer` loads: the outer mount shows a shell and an
+      * inner mount, which answers at once for "a" and waits for a gate for "b".
+      */
+    private def whileInnerLoads(outer: (String, UI) => UI)(using Frame, kyo.test.AssertScope): (String, String) < (Async & Abort[Any]) =
+        for
+            key     <- Signal.initRef("a")
+            started <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            inner = (k: String) =>
+                if k == "a" then Kyo.lift(UI.span("old part"))
+                else started.completeUnitDiscard.andThen(gate.get).andThen(UI.span("new part"))
+            ui    = UI.div(key.map(k => UI.div(outer(k, UI.div(UI.span(s"shell $k"), UI.mounted(inner(k))))))).id("page")
+            ready = new DomTestEnv.MountReady
+            fiber   <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _       <- assertEventually(Sync.defer(ready.installed && dom.document.body.textContent.contains("old part")))
+            _       <- key.set("b")
+            _       <- started.get
+            _       <- assertEventually(Sync.defer(dom.document.getElementById("page").textContent.contains("shell b")))
+            waiting <- Sync.defer(dom.document.getElementById("page").textContent)
+            _       <- gate.completeUnitDiscard
+            _       <- assertEventually(Sync.defer(dom.document.getElementById("page").textContent.contains("new part")))
+            after   <- Sync.defer(dom.document.getElementById("page").textContent)
+            _       <- fiber.interrupt
+            _       <- fiber.getResult
+        yield (waiting, after)
+
+    // Regression: a mount's slot is opaque to the morph once the client adopted it, and two keyless slots count as the
+    // same instance. A keyed mount whose key changed is a new instance, and so is every mount inside it; the morph
+    // reset the outer slot and kept the inner one, which showed the content of an instance that had gone.
+    "the mounts inside a keyed mount whose key changed show nothing of the instances before them" in {
+        whileInnerLoads((k, content) => UI.mounted(Kyo.lift(content)).keyed(k)).map { (waiting, after) =>
+            assert(waiting == "shell b", s"while the inner mount loads: $waiting")
+            assert(after == "shell bnew part")
+        }
+    }
+
+    // Regression: a keyless mount is a new instance at every emission around it, and its first content was morphed
+    // into a range whose inner slots the instance before it had adopted, so they kept that instance's content.
+    "the mounts inside a keyless mount started again show nothing of the instances before them" in {
+        whileInnerLoads((_, content) => UI.mounted(Kyo.lift(content))).map { (waiting, after) =>
+            assert(waiting == "shell b", s"while the inner mount loads: $waiting")
+            assert(after == "shell bnew part")
+        }
+    }
+
     // Regression: a textarea carries its value as content, not as a `value` attribute, so the morph's
     // attribute walk never mirrored a ref write onto the PROPERTY the field renders. A comment box cleared
     // after a click on its submit button (focus on the button, not the field) kept showing the typed text.

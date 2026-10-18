@@ -19,6 +19,57 @@ final private[kyo] class DomReactiveRegions private (
       */
     private val fingerprints = mutable.HashMap.empty[String, Long]
 
+    /** Marks the elements of the range inert and busy while it keeps showing old content as its new content loads, taking focus out of
+      * them, since nothing they would send reaches the engine; or takes the marks back. Only the marks this set are taken back, so an
+      * `inert` the page set stays. The same marking as the server-push client's.
+      */
+    def hold(regionId: String, held: Boolean)(using Frame): Unit < Sync =
+        Sync.defer {
+            if open then
+                ranges.get(regionId).foreach { endpoints =>
+                    val page   = document.asInstanceOf[dom.html.Document]
+                    val active = page.activeElement
+                    elementsBetween(endpoints).foreach { element =>
+                        if held then
+                            if !element.hasAttribute("inert") then
+                                element.setAttribute("inert", "")
+                                element.setAttribute("aria-busy", "true")
+                                element.setAttribute("data-kyo-held", "")
+                                if active != null && (active ne page.body) && element.contains(active) then
+                                    active.asInstanceOf[dom.html.Element].blur()
+                            end if
+                        else unmark(element)
+                    }
+                }
+        }
+
+    /** Makes every mount slot inside the range `regionId` one no instance has adopted, for a new instance about to paint it: the slots
+      * belong to the instances that showed there before, and a repaint leaves an adopted slot as it is (see `DomBackend.patchLogical`).
+      */
+    def releaseSlots(regionId: String)(using Frame): Unit < Sync =
+        Sync.defer {
+            if open then
+                ranges.get(regionId).foreach { endpoints =>
+                    var current = DomReactiveRegions.next(endpoints.start)
+                    while current.nonEmpty && (current.get ne endpoints.end) do
+                        DomReactiveRegions.releaseSlotsUnder(document, current.get)
+                        current = DomReactiveRegions.next(current.get)
+                    end while
+                }
+        }
+
+    /** Takes back the marks of every held range, for a mount that ends while a range waits and leaves its markup on the page. */
+    def releaseHolds(using Frame): Unit < Sync =
+        Sync.defer {
+            if open then ranges.iterator.foreach((_, endpoints) => elementsBetween(endpoints).foreach(unmark))
+        }
+
+    private def unmark(element: dom.Element): Unit =
+        if element.hasAttribute("data-kyo-held") then
+            element.removeAttribute("inert")
+            element.removeAttribute("aria-busy")
+            element.removeAttribute("data-kyo-held")
+
     /** The fingerprint of range `regionId`'s latest observed paint, if one is recorded. */
     private[kyo] def fingerprint(regionId: String): Maybe[Long] = Maybe.fromOption(fingerprints.get(regionId))
 
@@ -790,6 +841,21 @@ private[kyo] object DomReactiveRegions:
     private def ownerDocument(node: dom.Node): dom.Document =
         val value = node.ownerDocument
         if value == null then dom.document else value
+
+    /** Drops the adoption flags (`m`, `s`) of `node` and of every slot marker under it, keeping each marker's id and key. */
+    private[kyo] def releaseSlotsUnder(document: dom.Document, node: dom.Node): Unit =
+        releaseSlot(node)
+        if node.nodeType == dom.Node.ELEMENT_NODE then
+            val walker = commentWalker(document, node)
+            while walker.nextNode() != null do releaseSlot(walker.currentNode)
+    end releaseSlotsUnder
+
+    private def releaseSlot(node: dom.Node): Unit =
+        startMarkerId(node).foreach { id =>
+            val flags = markerFlags(node).split(' ').filter(_.nonEmpty)
+            val kept  = flags.filterNot(flag => flag == "m" || flag == "s")
+            if kept.length != flags.length then node.asInstanceOf[dom.Comment].data = openMarkerData(id, kept.map(" " + _).mkString)
+        }
 
     private def commentWalker(document: dom.Document, root: dom.Node): dom.TreeWalker =
         document.createTreeWalker(root, 128, null, false)
