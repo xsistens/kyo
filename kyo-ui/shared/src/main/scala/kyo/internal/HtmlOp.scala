@@ -75,6 +75,11 @@ private[kyo] object HtmlOp:
       */
     case class HoldRange(regionId: String, held: Boolean) extends HtmlOp derives Schema
 
+    /** A new mount instance paints the range `regionId` next: the mount slots in it belong to no instance any more, so the client drops
+      * their adoption and the paint resets them (see `UIExchange.onFreshInstance`).
+      */
+    case class ReleaseSlots(regionId: String) extends HtmlOp derives Schema
+
     // --- Drag operations ---
 
     /** Requests a bounded byte range from a dropped browser file. */

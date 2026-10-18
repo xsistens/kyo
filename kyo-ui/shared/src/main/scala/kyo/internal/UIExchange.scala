@@ -96,6 +96,12 @@ private[kyo] trait UIExchange:
       */
     def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async = Kyo.unit
 
+    /** A new mount instance is about to paint `region` for the first time. The mount slots the range still holds are the slots of the
+      * instances that showed there before it, which are gone, and so are theirs. A backend that leaves an adopted slot as it is across
+      * repaints makes them slots no instance owns, so this paint resets them; one that keeps nothing between paints ignores this.
+      */
+    def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async = Kyo.unit
+
     /** The waiting boundary this exchange belongs to, which counts the passes and mounts inside it; none for the page itself. */
     private[kyo] def gate: Maybe[BoundaryHold] = Absent
 end UIExchange

@@ -187,6 +187,8 @@ sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange
         forward(_.onBoolAttrPatch(path, name, value))
     override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
         forward(_.onClassPatch(path, name, on))
+    override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
+        forward(_.onFreshInstance(region))
 
     /** A pass that is due now and ends with [[BoundaryPass.end]]. */
     def pass(using Frame): BoundaryPass < Sync =

@@ -1844,6 +1844,23 @@ private[kyo] object HtmlRenderer:
           |    el=el.parentNode;}
           |  return false;
           |}
+          |// A new mount instance paints this range next: every mount slot in it loses its adoption (`m`, `s`), keeping its id and key,
+          |// so the paint resets the slots of the instances that showed there before. Twin of DomReactiveRegions.releaseSlots.
+          |function kyoRangeRelease(id){
+          |  var endpoints=__kyoRanges&&__kyoRanges.get(id);if(!endpoints)return;
+          |  for(var n=endpoints.start.nextSibling;n&&n!==endpoints.end;n=n.nextSibling)__kyoReleaseSlotsUnder(n);
+          |}
+          |function __kyoReleaseSlotsUnder(node){
+          |  __kyoReleaseSlot(node);
+          |  if(node.nodeType===1){var w=document.createTreeWalker(node,128,null,false);while(w.nextNode())__kyoReleaseSlot(w.currentNode);}
+          |}
+          |function __kyoReleaseSlot(node){
+          |  if(node.nodeType!==8||node.data.indexOf("kyo-rs:")!==0)return;
+          |  var space=node.data.indexOf(" ");if(space<0)return;
+          |  var flags=node.data.substring(space+1).split(" "),kept=[],dropped=false;
+          |  for(var i=0;i<flags.length;i++){var f=flags[i];if(f==="m"||f==="s")dropped=true;else if(f)kept.push(f);}
+          |  if(dropped)node.data=node.data.substring(0,space)+(kept.length?" "+kept.join(" "):"");
+          |}
           |// A range that keeps showing old content while its new content loads: its elements turn inert and busy and focus leaves them,
           |// since the server drops what they would send. Only the marks this function set are removed again.
           |function kyoRangeHold(id,held){
@@ -2039,6 +2056,8 @@ private[kyo] object HtmlRenderer:
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
            |  }else if(op.HoldRange){
            |    try{kyoRangeHold(op.HoldRange.regionId,op.HoldRange.held);}catch(error){kyoClientError(error);}
+           |  }else if(op.ReleaseSlots){
+           |    try{kyoRangeRelease(op.ReleaseSlots.regionId);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");
            |    var el=document.querySelector(__kyoPathSel(p));

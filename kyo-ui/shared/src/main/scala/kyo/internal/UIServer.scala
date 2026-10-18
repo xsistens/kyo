@@ -315,6 +315,12 @@ private[kyo] object UIServer:
                     case ReactiveRegion.HtmlRange(id) => send(HtmlOp.HoldRange(id, held), Seq.empty)
                     case _: ReactiveRegion.SvgElement => Kyo.unit
 
+            // An SVG region is replaced whole on every paint, so it keeps no slot from one paint to the next.
+            override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
+                region match
+                    case ReactiveRegion.HtmlRange(id) => send(HtmlOp.ReleaseSlots(id), Seq.empty)
+                    case _: ReactiveRegion.SvgElement => Kyo.unit
+
             /** Render and send the whole region. The region kind picks the op: an HTML region replaces the
               * content between its comment anchors (`ReplaceRange`), so the replacement parses in its actual
               * parent context; an SVG region replaces its own `<g>` boundary at its path. A descendant sent by

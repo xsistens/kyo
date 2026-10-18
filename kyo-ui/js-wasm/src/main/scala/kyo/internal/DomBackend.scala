@@ -1071,6 +1071,16 @@ private[kyo] object DomBackend:
                         case _: ReactiveRegion.SvgElement       => Kyo.unit
             }
 
+        // An SVG region is replaced whole on every paint, so it keeps no slot from one paint to the next.
+        override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
+            Sync.defer(open).flatMap { isOpen =>
+                if !isOpen then Kyo.unit
+                else
+                    region match
+                        case ReactiveRegion.HtmlRange(regionId) => regions.releaseSlots(regionId)
+                        case _: ReactiveRegion.SvgElement       => Kyo.unit
+            }
+
         /** Fingerprint of the HTML each region painted last, kept only while a devtools sink is observing.
           *
           * The server transport learns "this render changed nothing" for free, because it compares rendered

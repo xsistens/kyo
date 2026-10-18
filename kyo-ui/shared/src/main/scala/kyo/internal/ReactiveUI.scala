@@ -2940,6 +2940,15 @@ private[kyo] object ReactiveUI:
     ):
         // Unsafe: written as a subscription showing the instance ends, read when the instance leaves its snapshot after it.
         private val lastShown = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
+        // Unsafe: set once, by the first paint of this instance that reaches the page, whichever subscription makes it.
+        private val painted = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
+
+        /** Whether the instance has not shown its own content yet, before a paint of `state`, which counts as that first showing unless it
+          * is the snapshot of the instance before it. Until then the slots in its range belong to no instance: the snapshot's slots are
+          * copies of the slots of the instance that left it. A kept instance a later subscription shows again is not new there.
+          */
+        def beforeOwnContent(state: MountState)(using Frame): Boolean < Sync =
+            Sync.Unsafe.defer(if showsSnapshot(state) then !painted.get() else painted.compareAndSet(false, true))
 
         /** Keeps what a subscription showed as it ends, the content of the mounts nested in it resolved while they are still there. */
         def keepShown(ui: UI)(using Frame): Unit < Sync = Sync.Unsafe.defer(lastShown.set(Present(ui)))
@@ -3428,15 +3437,28 @@ private[kyo] object ReactiveUI:
             first <- instance.cell.current
             // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
             // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
-            paint = (cause: UI.RenderCause, previous: Maybe[UI], content: UI, through: UIExchange) =>
+            // Until a new instance shows its own content, each paint tells the page that the slots in its range are no one's: they were
+            // the slots of the instance before it, gone with it, and an adopted slot the page kept would show that instance's mounts. A
+            // snapshot paint does not end this, since the slots it brings are the old instance's again.
+            paint = (cause: UI.RenderCause, previous: Maybe[UI], state: MountState, through: UIExchange) =>
                 for
-                    _ <- deliverMeasured(rui, cause, through)(
-                        _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, content)
+                    _ <- deliverMeasured(rui, cause, through)(exchange =>
+                        instance.beforeOwnContent(state).map(fresh => if fresh then exchange.onFreshInstance(rui.region) else Kyo.unit)
+                            .andThen(
+                                exchange.onChange(
+                                    rui.region,
+                                    rui.path,
+                                    rui.contentContext,
+                                    rui.parentContext,
+                                    previous,
+                                    state.content(spec)
+                                )
+                            )
                     )
                 yield ()
             _ <- first match
                 case MountState.Pending(Absent) => Kyo.unit
-                case state                      => paint(UI.RenderCause.Created, Absent, state.content(spec), exchange)
+                case state                      => paint(UI.RenderCause.Created, Absent, state, exchange)
             // A snapshot takes no events, so its range is held while it shows: nothing in it looks like a field the reader can use.
             _ <- if showsSnapshot(first) then exchange.onHold(rui.region, true) else Kyo.unit
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
@@ -3452,7 +3474,7 @@ private[kyo] object ReactiveUI:
                         if previous eq state then Kyo.unit
                         else
                             Clock.now.map(signalChangeTime.set).andThen(
-                                paint(UI.RenderCause.Signal, Present(previous.content(spec)), content, through)
+                                paint(UI.RenderCause.Signal, Present(previous.content(spec)), state, through)
                             )
                     _ <- (showsSnapshot(previous), showsSnapshot(state)) match
                         case (false, true) => through.onHold(rui.region, true)
