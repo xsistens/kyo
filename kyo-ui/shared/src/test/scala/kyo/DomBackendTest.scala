@@ -362,6 +362,26 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "a mount with a placeholder whose content is a mount with a placeholder, made under one frame, shows it, and its handler runs" in {
+        // A helper taking a `Frame` makes both mounts under its caller's, as a component library's do, so the call site does not
+        // tell them apart either.
+        def nested(clicks: SignalRef[Int])(using Frame): UI =
+            UI.mounted(Kyo.lift[UI, Async](
+                UI.mounted(Kyo.lift[UI, Async](UI.button("inner").id("framed-inner").onClick(clicks.getAndUpdate(_ + 1).unit)))
+                    .placeholder(UI.span("inner skeleton"))
+            )).keyed("k").placeholder(UI.span("outer skeleton"))
+        val app: UI < Async =
+            for clicks <- Signal.initRef(0)
+            yield UI.div(nested(clicks), clicks.map(n => UI.span(s"clicks=$n").id("framed-clicks")))
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("framed-inner"), "inner")
+                _ <- Browser.click(Selector.id("framed-inner"))
+                _ <- Browser.assertText(Selector.id("framed-clicks"), "clicks=1")
+            yield succeed
+        }
+    }
+
     "a mount from another call site under the same key still resets its slot" in {
         // A mount is identified by its call site as well as its key, so the mount below replaces the one above even
         // though both name the slot "same". The slot must not stay opaque for the new instance: node identity must
