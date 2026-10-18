@@ -22,18 +22,18 @@ private[kyo] object Boundaries:
     /** Whether `ui`, as it renders now, holds a mount that a waiting boundary around it catches: one that no waiting boundary inside
       * `ui`, its own included, catches first.
       */
-    def catches(ui: UI)(using Frame): Boolean < Sync = Sync.Unsafe.defer(catchesNow(ui))
+    def catches(ui: UI)(using Frame): Boolean < Sync = SignalNow.Locals.take(Sync.Unsafe.defer(catchesNow(ui)))
 
     /** [[catches]] for a pass that already holds the thread (see [[SignalNow]]). */
-    def catchesNow(ui: UI)(using AllowUnsafe, Frame): Boolean =
+    def catchesNow(ui: UI)(using AllowUnsafe, Frame, SignalNow.Locals): Boolean =
         ui match
-            case m: Mounted                   => implicitOf(m).isEmpty
-            case b: Bounded                   => if b.settings.waits then false else catchesNow(b.child)
-            case r: Reactive[?]               => catchesNow(SignalNow(r.signal)(using summon[AllowUnsafe], r.frame))
+            case m: Mounted     => implicitOf(m).isEmpty
+            case b: Bounded     => if b.settings.waits then false else catchesNow(b.child)
+            case r: Reactive[?] => catchesNow(SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe]))
             case fe: Foreach[?, ?] @unchecked =>
                 fe.applyTyped {
                     [T] => (signal, _, render) =>
-                        val items = SignalNow(signal)(using summon[AllowUnsafe], fe.frame)
+                        val items = SignalNow(signal)(using fe.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                         items.toSeq.iterator.zipWithIndex.exists((item, i) => catchesNow(render(i, item)))
                 }
             case e: Element       => e.children.exists(catchesNow)

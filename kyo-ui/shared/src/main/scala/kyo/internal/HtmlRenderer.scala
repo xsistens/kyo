@@ -42,11 +42,12 @@ private[kyo] object HtmlRenderer:
       * A tree that binds no signal renders where the effect is built: an attribute the renderer rejects (an
       * oversized drag config, say) then fails at the call rather than at the run, which is what a caller of
       * `render` expects. Reading such a tree is pure, so the `AllowUnsafe` handed to the pass is never spent on
-      * an effect. A tree that binds a signal renders when the effect runs.
+      * an effect, and it needs no locals to read with. A tree that binds a signal renders when the effect runs,
+      * reading with the locals of the fiber that runs it.
       */
-    private inline def pass[A](ui: UI)(inline body: AllowUnsafe ?=> A)(using Frame): A < Sync =
-        if bindsSignal(ui) then Sync.Unsafe.defer(body)
-        else body(using AllowUnsafe.embrace.danger)
+    private inline def pass[A](ui: UI)(inline body: (SignalNow.Locals, AllowUnsafe) ?=> A)(using Frame): A < Sync =
+        if bindsSignal(ui) then SignalNow.Locals.take(Sync.Unsafe.defer(body))
+        else body(using SignalNow.Locals.none, AllowUnsafe.embrace.danger)
 
     /** The rows a list patch changed, rendered into one string under one effect. */
     private[kyo] def renderRows(
@@ -55,13 +56,13 @@ private[kyo] object HtmlRenderer:
         context: ReactiveRegion.RegionIdentity,
         host: ReactiveRegion.RenderHost
     )(using Frame): String < Sync =
-        Sync.Unsafe.defer {
+        SignalNow.Locals.take(Sync.Unsafe.defer {
             val sb = new StringBuilder
             rows.foreach { row =>
                 if row.changed then renderRowInto(sb, row.ui, path :+ row.key, context.child(row.key), host, Absent)
             }
             sb.toString
-        }
+        })
 
     /** Whether rendering `ui` reads a signal anywhere: the reactive nodes, an element with a reactive
       * attribute, bool-attribute or class channel, and a control bound to a ref. Mirrors every read
@@ -155,7 +156,7 @@ private[kyo] object HtmlRenderer:
         context: ReactiveRegion.RegionIdentity,
         host: ReactiveRegion.RenderHost,
         cssRules: Maybe[CssCollector]
-    )(using AllowUnsafe, Frame): Unit =
+    )(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         val (namespace, parentContext) = host match
             case _: ReactiveRegion.RenderHost.HtmlTableBody =>
                 (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
@@ -263,7 +264,7 @@ private[kyo] object HtmlRenderer:
         host: ReactiveRegion.RenderHost,
         boundaryMode: ReactiveRegion.BoundaryMode,
         cssRules: Maybe[CssCollector] = Absent
-    )(using AllowUnsafe, Frame): Unit =
+    )(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         host match
             case ReactiveRegion.RenderHost.HtmlTableBody(id) =>
                 w(sb, s"<tbody data-kyo-range-host=\"$id\">")
@@ -395,7 +396,7 @@ private[kyo] object HtmlRenderer:
         parentContext: ReactiveRegion.ParentContext,
         boundaryMode: ReactiveRegion.BoundaryMode,
         keyedRoot: Boolean = false
-    )(using AllowUnsafe, Frame): Unit =
+    )(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         ui match
             case dd: Dropdown =>
                 renderBoundElementBoundary(sb, dd, context, namespace, parentContext, boundaryMode) {
@@ -505,7 +506,7 @@ private[kyo] object HtmlRenderer:
 
             case r: Reactive[?] =>
                 val region  = ReactiveRegion.from(context, namespace)
-                val current = SignalNow(r.signal)(using summon[AllowUnsafe], r.frame)
+                val current = SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                 val host    = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
                 openInitialHost(sb, host)
                 renderTo(
@@ -524,7 +525,7 @@ private[kyo] object HtmlRenderer:
                 val region = ReactiveRegion.from(context, namespace)
                 fe.applyTyped {
                     [T] => (signal, keyFn, renderFn) =>
-                        val items    = SignalNow(signal)(using summon[AllowUnsafe], fe.frame)
+                        val items    = SignalNow(signal)(using fe.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                         val rendered = items.toSeq.zipWithIndex.map { (item, i) =>
                             val key = keyFn match
                                 case Present(f) => f(item)
@@ -640,7 +641,7 @@ private[kyo] object HtmlRenderer:
             case ReactiveRegion.RenderHost.HtmlTableBody(id)   => w(sb, s"<!--kyo-re:$id--></tbody>")
             case _: ReactiveRegion.RenderHost.SvgGroup         => w(sb, "</g>")
 
-    private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame): Unit =
+    private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         ta.value match
             case Present(Bound.Const(s)) => w(sb, esc(masked(ta.inputMask, s)))
             case Present(Bound.Ref(ref)) => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
@@ -650,7 +651,8 @@ private[kyo] object HtmlRenderer:
 
     private def renderDropdown(sb: StringBuilder, dd: Dropdown, path: Seq[String], cssRules: Maybe[CssCollector])(using
         AllowUnsafe,
-        Frame
+        Frame,
+        SignalNow.Locals
     ): Unit =
         val baseId = dd.attrs.identifier.getOrElse("")
         // Read current selected value for initial highlight
@@ -915,7 +917,7 @@ private[kyo] object HtmlRenderer:
     /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
       * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
       */
-    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame): Unit =
+    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         if attrs.reactiveAttrs.nonEmpty then
             attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
                 w(sb, s""" $name="${esc(SignalNow(sig))}"""")
@@ -924,7 +926,7 @@ private[kyo] object HtmlRenderer:
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
       */
-    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame): Unit =
+    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         if attrs.reactiveBoolAttrs.nonEmpty then
             attrs.reactiveBoolAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
                 if SignalNow(sig) then w(sb, s" $name")
@@ -933,11 +935,11 @@ private[kyo] object HtmlRenderer:
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
       */
-    private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame): Seq[String] =
+    private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
         if attrs.reactiveClasses.isEmpty then Seq.empty
         else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
 
-    private def renderElementAttrs(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame): Unit =
+    private def renderElementAttrs(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole
         // method, so a static value is dropped for any name a `Signal`-typed setter also bound. This is not a
         // preference: it is what the client already does at runtime: the channel patches its attribute on
@@ -1109,7 +1111,7 @@ private[kyo] object HtmlRenderer:
     private def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
         value.foreach(v => if v then w(sb, s" $name"))
 
-    private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame): Unit =
+    private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         value match
             case Present(Bound.Const(b)) => if b then w(sb, " checked")
             case Present(Bound.Ref(ref)) => if SignalNow(ref) then w(sb, " checked")
@@ -1132,14 +1134,15 @@ private[kyo] object HtmlRenderer:
 
     private def renderValueAttr(sb: StringBuilder, value: Maybe[Bound[String]], mask: Maybe[String] = Absent)(using
         AllowUnsafe,
-        Frame
+        Frame,
+        SignalNow.Locals
     ): Unit =
         value match
             case Present(Bound.Const(s)) => w(sb, s""" value="${esc(masked(mask, s))}"""")
             case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
             case _                       => ()
 
-    private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame): Unit =
+    private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         boolAttr(sb, "disabled", pi.disabled)
         renderValueAttr(sb, pi.value)
 

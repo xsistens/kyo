@@ -220,7 +220,7 @@ private[kyo] object ReactiveUI:
         // The walk is one Sync effect, not one per node: its only effects are signal reads and atomic cells, so it runs as a
         // direct recursion under a single defer and reads through SignalNow. A suspension per read would cost a keyed list a
         // continuation per enclosing frame for every row.
-        Sync.Unsafe.defer {
+        SignalNow.Locals.take(Sync.Unsafe.defer {
             val dispatch = MountDispatch.initNow()
             val root     = normalizeAt(
                 ui,
@@ -233,7 +233,7 @@ private[kyo] object ReactiveUI:
                 deepRows = Nil
             )
             root.copy(mountDispatch = Present(dispatch))
-        }
+        })
     end normalize
 
     /** The same tree without its render-time snapshots, for a normalize that painted nothing.
@@ -277,7 +277,7 @@ private[kyo] object ReactiveUI:
         cells: MountDispatch,
         rows: Long,
         deepRows: List[Int]
-    )(using AllowUnsafe): ReactiveUI =
+    )(using AllowUnsafe, SignalNow.Locals): ReactiveUI =
         given Frame = ui.frame
         ui match
             case ui: Reactive[?] =>
@@ -596,7 +596,7 @@ private[kyo] object ReactiveUI:
         context: ReactiveRegion.RegionIdentity,
         parentContext: ReactiveRegion.ParentContext,
         cells: MountDispatch
-    )(using AllowUnsafe, Frame): (Seq[ReactiveUI], Handler) =
+    )(using AllowUnsafe, Frame, SignalNow.Locals): (Seq[ReactiveUI], Handler) =
         val depth    = rowPath.size - 1
         val rows     = if depth < 63 then 1L << depth else 0L
         val deepRows = if depth < 63 then Nil else List(depth)
@@ -632,7 +632,7 @@ private[kyo] object ReactiveUI:
     /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
       * map answers without a loop.
       */
-    private def currentValues[A](channels: Map[String, Signal[A]])(using AllowUnsafe, Frame): Map[String, A] =
+    private def currentValues[A](channels: Map[String, Signal[A]])(using AllowUnsafe, Frame, SignalNow.Locals): Map[String, A] =
         if channels.isEmpty then Map.empty[String, A]
         else
             val b = Map.newBuilder[String, A]
@@ -650,7 +650,7 @@ private[kyo] object ReactiveUI:
         rows: Long,
         deepRows: List[Int],
         discoverRootBound: Boolean = true
-    )(using AllowUnsafe, Frame): (Seq[ReactiveUI], Handler) =
+    )(using AllowUnsafe, Frame, SignalNow.Locals): (Seq[ReactiveUI], Handler) =
         ui match
             case elem: Element if discoverRootBound && collectSignalRef(elem).nonEmpty =>
                 val rui = normalizeAt(elem, basePath, svg, context, parentContext, cells, rows, deepRows)
@@ -2229,7 +2229,7 @@ private[kyo] object ReactiveUI:
                 svgContext = rui.region match
                     case _: ReactiveRegion.HtmlRange  => false
                     case _: ReactiveRegion.SvgElement => true
-                (newKids, _) <- Sync.Unsafe.defer(walkStatic(
+                (newKids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
                     current,
                     rui.path,
                     svgContext,
@@ -2239,7 +2239,7 @@ private[kyo] object ReactiveUI:
                     rows = 0L,
                     deepRows = Nil,
                     discoverRootBound = rui.discoverContentRootBound
-                ))
+                )))
                 keys = RegionKeys(newKids)
                 // The pass is opened before the paint, so a mount that starts from the snapshot of the instance before it is painted
                 // with that snapshot: one paint, where painting first showed an empty slot until the new instance painted its own.
@@ -2734,7 +2734,7 @@ private[kyo] object ReactiveUI:
                                     else Kyo.unit
                                 _ <- rows.evictExcept(plan.isRetained) // removed and changed rows close before the paint
                                 // One synchronous pass over the rebuilt rows (see SignalNow), not an effect loop that suspends per row.
-                                _ <- Sync.Unsafe.defer {
+                                _ <- SignalNow.Locals.take(Sync.Unsafe.defer {
                                     plan.rebuilt.foreach { i =>
                                         val key         = plan.keys(i)
                                         val item        = plan.items(i)
@@ -2749,7 +2749,7 @@ private[kyo] object ReactiveUI:
                                         )
                                         plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
                                     }
-                                }
+                                })
                                 // The pass's kids are only read when the region has a mount table, so a plain keyed list does not build them.
                                 pass = RegionKeys(plan.allKids)
                                 _ <- regionMounts.beginWalk(plan.allKids, pass)
@@ -3484,7 +3484,7 @@ private[kyo] object ReactiveUI:
                         case MountState.Pending(Present(_)) => Kyo.unit
                         case _                              =>
                             for
-                                (kids, _) <- Sync.Unsafe.defer(walkStatic(
+                                (kids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
                                     content,
                                     rui.path,
                                     svgContext,
@@ -3493,7 +3493,7 @@ private[kyo] object ReactiveUI:
                                     dispatch,
                                     rows = 0L,
                                     deepRows = Nil
-                                ))
+                                )))
                                 keys = RegionKeys(kids)
                                 _ <- instance.children.beginWalk(kids, keys)
                                 _ <- forkRootChannels(rui.path, content, through)

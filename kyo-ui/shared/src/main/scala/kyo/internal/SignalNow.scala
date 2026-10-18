@@ -13,12 +13,28 @@ import kyo.*
   * effectful read evaluated in place for anything else. Both produce the value `current` would have
   * produced at that point of the same pass; the defer around the pass is what keeps the pass a `Sync`
   * effect to its caller.
+  *
+  * An effect evaluated in place runs outside any fiber, where no `Local` is bound, while a signal such as
+  * `Signal.withLocal` chooses its value by one. So a pass takes the locals of the fiber it runs for once,
+  * as it starts ([[Locals.take]]), and the in-place read runs with them bound.
   */
 private[kyo] object SignalNow:
 
-    def apply[A](signal: Signal[A])(using AllowUnsafe, Frame): A =
+    /** The locals of the fiber a pass runs for, taken as the pass starts. */
+    opaque type Locals = Map[Local[?], AnyRef]
+
+    object Locals:
+        /** Runs `f` with the locals of the current fiber at hand for the reads of the pass it starts. */
+        def take[B, S](f: Locals ?=> B < S)(using Frame): B < S =
+            Local.snapshotWith(locals => f(using locals))
+
+        /** For a pass that reads no signal, so has nothing to read with. */
+        val none: Locals = Map.empty
+    end Locals
+
+    def apply[A](signal: Signal[A])(using Frame, Locals, AllowUnsafe): A =
         signal.unsafeCurrent() match
             case Present(v) => v
-            case Absent     => Sync.Unsafe.evalOrThrow(signal.current)
+            case Absent     => Sync.Unsafe.evalOrThrow(Local.restore(summon[Locals])(signal.current))
 
 end SignalNow
