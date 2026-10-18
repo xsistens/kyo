@@ -303,6 +303,39 @@ class HandlerFailureTest extends UIScreen:
         yield assert(got == ApiError(5), s"the sink received: $got")
     }
 
+    // A helper that takes a Frame makes every node in it under its caller's, so the two mounts below share one frame and one path.
+    private def nestedUnderOneFrame(sink: Throwable => Unit < Async)(using Frame): UI =
+        UI.mounted(Kyo.lift(UI.boundary.onNotice(sink)(UI.mounted(Kyo.lift(button("save").onClick(Abort.fail(ApiError(409))))))))
+
+    private def keyedUnderOneFrame(reload: Signal[Int], config: Signal[String], sink: Throwable => Unit < Async)(using Frame): UI =
+        reload.render(r =>
+            UI.mounted(Kyo.lift(UI.boundary.onNotice(sink)(
+                config.render(c => UI.mounted(Kyo.lift(button(s"save $c").onClick(Abort.fail(ApiError(409))))).keyed(c))
+            ))).keyed(r)
+        )
+
+    "a boundary that is a mount's content reaches the handlers of the mount it holds, both made under one frame" in {
+        for
+            n <- notices
+            ui = div(nestedUnderOneFrame(n.sink))
+            got <- mountWith(ui)((screen, handle) =>
+                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0"))).andThen(n.next)
+            )
+        yield assert(got == ApiError(409), s"the sink received: $got")
+    }
+
+    "a boundary in a keyed mount of a region reaches the keyed mounts of the region it holds, all made under one frame" in {
+        for
+            n      <- notices
+            reload <- Signal.initRef(0)
+            config <- Signal.initRef("a")
+            ui = div(keyedUnderOneFrame(reload, config, n.sink))
+            got <- mountWith(ui)((screen, handle) =>
+                screen.await("save a")(_.contains("save a")).andThen(click(handle, Seq("0"))).andThen(n.next)
+            )
+        yield assert(got == ApiError(409), s"the sink received: $got")
+    }
+
     "UI.background lets the handler return at once, and its failure meets the rules around the handler" in {
         for
             gate <- Promise.init[Unit, Any]
