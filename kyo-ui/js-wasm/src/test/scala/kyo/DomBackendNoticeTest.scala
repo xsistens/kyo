@@ -30,10 +30,10 @@ class DomBackendNoticeTest extends kyo.test.Test[Any]:
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
             _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("go") != null))
             _     <- click("go")
-            got   <- Abort.run[Timeout](Async.timeout(5.seconds)(seen.get)).map(_.toMaybe)
+            got   <- seen.get
             _     <- fiber.interrupt
             _     <- fiber.getResult
-        yield assert(got == Present("click failed"), s"the sink received: $got")
+        yield assert(got == "click failed", s"the sink received: $got")
     }
 
 end DomBackendNoticeTest
