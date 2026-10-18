@@ -44,6 +44,12 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
         def changedKeys: Seq[String] = patches.get.last.filter(_.changed).map(_.key)
     end Recording
 
+    /** Waits until the list region waits on `rows` again, which it does only once it has handled the value before: the first
+      * time, once it has adopted the rows the initial paint put on screen.
+      */
+    private def parked(rows: Signal.SignalRef[?])(using Frame, kyo.test.AssertScope): Unit < Async =
+        assertEventually(rows.waiters.map(_ == 1))
+
     /** Drive one keyed list through `mutate` and hand back what the region emitted. The initial paint is
       * already on screen (the region seeds from it), so any patch recorded here describes a real change.
       */
@@ -58,7 +64,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
             ui  = UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))
             root <- ReactiveUI.normalize(ui, Seq.empty)
             _    <- ReactiveUI.subscribe(root, rec.exchange)
-            _    <- Async.sleep(100.millis)
+            _    <- parked(rows)
             _    <- mutate(rows)
             _    <- assertEventually(Sync.defer(rec.count >= 1))
         yield rec
@@ -96,7 +102,8 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
         Scope.run {
             for
                 rec <- run(Seq("a", "b"))(rows =>
-                    rows.set(Chunk("a")).andThen(Async.sleep(50.millis)).andThen(rows.set(Chunk("a", "b")))
+                    // Two emissions, not one: a signal is state, so the second set must wait until the first is handled.
+                    rows.set(Chunk("a")).andThen(parked(rows)).andThen(rows.set(Chunk("a", "b")))
                 )
                 _ <- assertEventually(Sync.defer(rec.count >= 2))
             // Its RowInstance was torn down on the way out, so the returning row owns no live DOM and must
@@ -113,7 +120,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
                 ui  = UI.ul(rows.foreachKeyed(_._1)((_, label) => UI.li(label)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows)
                 _    <- rows.set(Chunk(("1", "one"), ("2", "TWO"), ("3", "three")))
                 _    <- assertEventually(Sync.defer(rec.count >= 1))
             // Same key, different item: the key survived but the paint did not, which is the one case where
@@ -130,7 +137,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
                 ui  = UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows)
                 _    <- rows.set(Chunk("a", "a"))
                 _    <- assertEventually(Sync.defer(rec.fragments.get >= 1))
             // A key names a slot, so two rows sharing one key cannot be addressed structurally at all. The
@@ -158,7 +165,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
                 ui = UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows)
                 _    <- rows.getAndUpdate(_.append("c"))
                 _    <- assertEventually(Sync.defer(seen.get.isDefined))
                 keys = seen.get.map {

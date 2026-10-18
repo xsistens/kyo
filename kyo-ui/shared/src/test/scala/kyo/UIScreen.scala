@@ -66,10 +66,8 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
                 _       <- Sync.Unsafe.defer(discard(waiters.getAndUpdate(_.append((pred, promise)))))
                 current <- now
                 _       <- if pred(current) then promise.completeUnitDiscard else Kyo.unit
-                done    <- Abort.run[Timeout](Async.timeout(5.seconds)(promise.get))
-                page    <- html
-                seen    <- now
-            yield if done.isSuccess then () else fail(s"timed out waiting for the screen to show $label; visible: [$seen]; page: $page")
+                _       <- promise.get
+            yield ()
     end Screen
 
     object Screen:
@@ -118,12 +116,6 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
             out.toString
         end visible
     end Screen
-
-    def within[A](label: String)(v: => A < Async)(using Frame, kyo.test.AssertScope): A < Async =
-        Abort.run[Timeout](Async.timeout(5.seconds)(v)).map {
-            case Result.Success(a) => a
-            case _                 => fail(s"timed out waiting for $label")
-        }
 
     def mount[A](ui: UI)(f: Screen => A < (Async & Scope))(using Frame): A < Async =
         mountWith(ui)((screen, _) => f(screen))

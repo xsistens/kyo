@@ -60,27 +60,37 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
                 if textSink then Present((_, _) => ()) else Absent
     end Recording
 
-    /** Mount `ui` under a devtools sink and run `body` inside it.
+    /** Mount `ui` under a devtools sink and run `body` inside it, once `ready` holds.
       *
       * Everything a test does belongs inside this block. The sink rides an inheritable `Local`, so it reaches
-      * the region fibers precisely because they are forked from here.
+      * the region fibers precisely because they are forked from here. `ready` says when the mount is through, so
+      * that what `body` changes is a later emission and not the first one: see [[parkedOn]].
       */
-    private def observed[A](rec: Recording, ui: UI)(body: => A < Async)(using Frame): A < (Async & Scope) =
+    private def observed[A](rec: Recording, ui: UI, ready: => Boolean < Sync)(body: => A < Async)(using
+        Frame,
+        kyo.test.AssertScope
+    ): A < (Async & Scope) =
         UI.devtools(rec.record) {
             for
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 _      <- ReactiveUI.subscribe(root, rec.exchange)
-                _      <- Async.sleep(100.millis)
+                _      <- assertEventually(ready)
                 result <- body
             yield result
         }
+
+    /** Whether one observer waits on each of `refs`. An observer waits on its signal again only once it has handled the value
+      * before, so for a region just subscribed this is the point where its first emission, the one it skips, is through.
+      */
+    private def parkedOn(refs: Signal.SignalRef[?]*)(using Frame): Boolean < Sync =
+        Kyo.foreach(refs)(_.waiters).map(_.forall(_ == 1))
 
     "a mount is not a render, and every later emission is one" in {
         Scope.run {
             for
                 ref <- Signal.initRef(0)
                 rec = new Recording
-                events <- observed(rec, UI.div(ref.render(n => UI.span(n.toString)))) {
+                events <- observed(rec, UI.div(ref.render(n => UI.span(n.toString))), parkedOn(ref)) {
                     // Each change is awaited before the next is made, and that is not test hygiene but the
                     // subject: a signal is state, not a queue. Two sets landing before the region fiber wakes
                     // produce one render of the latest value, so a test that fired both and expected two
@@ -116,7 +126,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
                 inner <- Signal.initRef("a")
                 rec = new Recording
                 ui  = UI.div(outer.render(n => UI.section(UI.span(n.toString), inner.render(s => UI.p(s)))))
-                after <- observed(rec, ui) {
+                after <- observed(rec, ui, parkedOn(outer, inner)) {
                     for
                         mounted <- Sync.defer(rec.all.size)
                         _       <- outer.set(1)
@@ -142,7 +152,8 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
                 gate <- Promise.init[Unit, Any]
                 rec = new Recording(paint = Present((7, false)))
                 ui  = UI.div(UI.mounted(gate.get.andThen(UI.span("ready"))).placeholder(UI.span("loading")))
-                events <- observed(rec, ui) {
+                // The mount waits on the gate once its subscription is through.
+                events <- observed(rec, ui, gate.waiters.map(_ == 1)) {
                     for
                         before <- Sync.defer(rec.all.size)
                         _      <- gate.completeUnitDiscard
@@ -207,7 +218,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             for
                 ref <- Signal.initRef("a")
                 rec = new Recording
-                names <- observed(rec, UI.div(UI.span("x").title(ref: Signal[String]))) {
+                names <- observed(rec, UI.div(UI.span("x").title(ref: Signal[String])), parkedOn(ref)) {
                     for
                         _ <- ref.set("b")
                         _ <- assertEventually(Sync.defer(rec.kinds.exists {
@@ -233,7 +244,8 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             for
                 ref <- Signal.initRef("a")
                 rec = new Recording(textSink = true)
-                _ <- observed(rec, UI.div(ref: Signal[String])) {
+                // A synchronous text sink binds inside `subscribe` itself, so there is nothing to wait for.
+                _ <- observed(rec, UI.div(ref: Signal[String]), true) {
                     ref.set("b").andThen(assertEventually(Sync.defer(rec.kinds.contains(UI.RenderKind.Text))))
                 }
             yield
@@ -250,7 +262,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             for
                 rows <- Signal.initRef(Chunk("a", "b", "c"))
                 rec = new Recording
-                patches <- observed(rec, UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))) {
+                patches <- observed(rec, UI.ul(rows.foreachKeyed(identity)(item => UI.li(item))), parkedOn(rows)) {
                     for
                         _ <- rows.getAndUpdate(_.append("d"))
                         _ <- assertEventually(Sync.defer(rec.signalled.nonEmpty))
@@ -268,7 +280,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             for
                 rows <- Signal.initRef(Chunk("a", "b", "c"))
                 rec = new Recording
-                moved <- observed(rec, UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))) {
+                moved <- observed(rec, UI.ul(rows.foreachKeyed(identity)(item => UI.li(item))), parkedOn(rows)) {
                     for
                         _ <- rows.getAndUpdate(c => Chunk.from(c.toSeq.reverse))
                         _ <- assertEventually(Sync.defer(rec.signalled.nonEmpty))
@@ -291,7 +303,7 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
             for
                 ref <- Signal.initRef(0)
                 rec = new Recording(paint = Present((123, true)))
-                painted <- observed(rec, UI.div(ref.render(n => UI.span(n.toString)))) {
+                painted <- observed(rec, UI.div(ref.render(n => UI.span(n.toString))), parkedOn(ref)) {
                     ref.set(1).andThen(assertEventually(Sync.defer(rec.signalled.nonEmpty))).andThen(rec.signalled)
                 }
             yield

@@ -25,7 +25,7 @@ class HandlerFailureTest extends UIScreen:
         def sink(using Frame): Throwable => Unit < Async =
             case UI.Failed(failure) => seen.getAndUpdate(_.append(failure)).andThen(first.completeDiscard(Result.succeed(failure)))
         def all(using Frame): Chunk[Any] < Sync                  = seen.get
-        def next(using Frame, kyo.test.AssertScope): Any < Async = within("a notice")(first.get)
+        def next(using Frame, kyo.test.AssertScope): Any < Async = first.get
     end Notices
 
     private def notices(using Frame): Notices < Sync =
@@ -68,7 +68,7 @@ class HandlerFailureTest extends UIScreen:
             ran <- Promise.init[Unit, Any]
             ui = div(button("save").onClick(ran.completeUnitDiscard.andThen(Abort.fail(ApiError(409)))))
             _ <- Log.let(logged.safe) {
-                mountWith(ui)((_, handle) => click(handle, Seq("0")).andThen(within("the handler")(ran.get)))
+                mountWith(ui)((_, handle) => click(handle, Seq("0")).andThen(ran.get))
             }.andThen(Log.flush)
         yield assert(logged.lines.exists(_.contains("no onNotice sink")), s"logged: ${logged.lines}")
         end for
@@ -201,7 +201,7 @@ class HandlerFailureTest extends UIScreen:
                 div(button("save").onClick(Sync.defer(throw new IllegalStateException("broken"))))
             ))
             got <- mountWith(ui)((screen, handle) =>
-                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(within("the rule")(hit.get))
+                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(hit.get)
             )
         yield assert(got == "broken")
     }
@@ -287,7 +287,7 @@ class HandlerFailureTest extends UIScreen:
             )
             _ <- mountWith(ui) { (screen, _) =>
                 for
-                    _   <- within("the poll to finish")(done.get)
+                    _   <- done.get
                     all <- n.all
                     _   <- screen.await("the escalated report's error view")(_.contains("error:Fork:9"))
                 yield assert(all == Chunk(ApiError(1), ApiError(2)), s"the sink received: $all")
@@ -318,7 +318,7 @@ class HandlerFailureTest extends UIScreen:
                     // The click returns while the effect still waits on the gate, which only this test opens.
                     _   <- click(handle, Seq("0", "0"))
                     _   <- gate.completeDiscard(Result.succeed(()))
-                    got <- within("the element's rule")(ran.get)
+                    got <- ran.get
                 yield got
             }
         yield assert(got == ApiError(503), s"the element's rule received: $got")

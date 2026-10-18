@@ -37,7 +37,10 @@ class ReactiveSubscribeSkipTest extends kyo.test.Test[Any]:
                 ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").cssClass("hot", on))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(150.millis)
+                // Each observer waits on its signal again only once it has handled the first value, the one it skips: whatever
+                // that handling paints or patches has happened by then.
+                _ <- assertEventually(items.waiters.map(_ == 1))
+                _ <- assertEventually(on.waiters.map(_ == 1))
                 silentChanges = rec.changes.get
                 silentClasses = rec.classPatches.get
                 _ <- items.set(Chunk("a", "b", "c"))

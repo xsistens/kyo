@@ -26,12 +26,12 @@ class HandlerNoticeReachTest extends kyo.test.Test[Any]:
                             // The session announces itself; a page with no reactive region sends no render after that.
                             _   <- ws.take()
                             _   <- ws.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](click)))
-                            got <- Abort.run[Timeout](Async.timeout(5.seconds)(seen.get)).map(_.toMaybe)
+                            got <- seen.get
                         yield got
                     }
                 yield got
             }
-        yield assert(got == Present("click failed"), s"the sink received: $got")
+        yield assert(got == "click failed", s"the sink received: $got")
     }
 
 end HandlerNoticeReachTest

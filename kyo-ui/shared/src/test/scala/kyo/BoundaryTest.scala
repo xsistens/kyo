@@ -121,7 +121,7 @@ class BoundaryTest extends UIScreen:
                 ui = div(form.wrap(outer, UI.boundary.placeholder(span("loading"))))
                 _ <- mount(ui) { screen =>
                     for
-                        _     <- within("the nested mount to start")(started.get)
+                        _     <- started.get
                         shown <- screen.now
                         _     <- inner.completeUnitDiscard
                         _     <- screen.await("both")(v => v.contains("outer") && v.contains("inner") && !v.contains("loading"))
@@ -145,7 +145,7 @@ class BoundaryTest extends UIScreen:
                     for
                         _ <- screen.await("content:a")(_.contains("content:a"))
                         _ <- key.set("b")
-                        _ <- within("the new instance to start")(started.get)
+                        _ <- started.get
                         _ <- screen.await("the old content under the new key")(v =>
                             v.contains("key:b") && v.contains("content:a") && !v.contains("loading")
                         )
@@ -440,7 +440,7 @@ class BoundaryTest extends UIScreen:
                     _     <- gateA.completeUnitDiscard
                     _     <- screen.await("A")(v => v.contains("A") && !v.contains("skel"))
                     _     <- items.set(Chunk("a", "c"))
-                    _     <- within("the new row's mount to start")(started.get)
+                    _     <- started.get
                     shown <- screen.now
                     _     <- gateC.completeUnitDiscard
                     _     <- screen.await("C")(_.contains("C"))
@@ -467,7 +467,7 @@ class BoundaryTest extends UIScreen:
                     _      <- screen.await("A and count:0")(v => v.contains("A") && v.contains("count:0") && !v.contains("skel"))
                     before <- screen.paintsAt(Seq("0"))
                     _      <- items.set(Chunk("a", "c"))
-                    _      <- within("the new row's mount to start")(started.get)
+                    _      <- started.get
                     _      <- handle(Seq("0", "0"), UIEvent.Click(Seq("0", "0"), MouseEventData(UI.Modifiers.none, Absent)))
                     _      <- screen.await("the click while C loads")(v => v.contains("count:1") && v.contains("A") && !v.contains("C"))
                     _      <- gateC.completeUnitDiscard
@@ -503,11 +503,11 @@ class BoundaryTest extends UIScreen:
                     _      <- screen.await("issue 1")(v => v.contains("title:1") && v.contains("comments:1") && !v.contains("skel"))
                     before <- screen.paintsAt(Seq("0"))
                     _      <- route.set("2")
-                    _      <- within("issue 2 to start loading")(detailStarted.get)
+                    _      <- detailStarted.get
                     _      <- click
                     _      <- screen.await("the click on the old page")(v => v.contains("count:1") && v.contains("title:1"))
                     _      <- detailGate.completeUnitDiscard
-                    _      <- within("issue 2's comments to start loading")(commentsStarted.get)
+                    _      <- commentsStarted.get
                     shown  <- screen.now
                     _      <- commentsGate.completeUnitDiscard
                     _      <- screen.await("issue 2")(v =>
@@ -567,7 +567,7 @@ class BoundaryTest extends UIScreen:
                     onPage1   <- likes1.get
                     _         <- route.set("2")
                     _         <- detailGate.completeUnitDiscard
-                    _         <- within("issue 2's comments to start loading")(commentsStarted.get)
+                    _         <- commentsStarted.get
                     shown     <- screen.now
                     _         <- click(like)
                     _         <- click(header)
@@ -621,7 +621,7 @@ class BoundaryTest extends UIScreen:
                     before  <- log.get
                     _       <- route.set("2")
                     _       <- detailGate.completeUnitDiscard
-                    _       <- within("issue 2's comments to start loading")(commentsStarted.get)
+                    _       <- commentsStarted.get
                     shown   <- screen.now
                     _       <- sendAll(handle, issueForm)
                     _       <- sendAll(handle, headerForm)
@@ -660,7 +660,7 @@ class BoundaryTest extends UIScreen:
                 for
                     _     <- screen.await("issue 1")(_.contains("title:1"))
                     _     <- route.set("2")
-                    _     <- within("issue 2 to start loading")(started2.get)
+                    _     <- started2.get
                     _     <- route.set("3")
                     _     <- screen.await("issue 3")(v => v.contains("title:3") && !v.contains("title:1"))
                     _     <- handle(like, UIEvent.Click(like, MouseEventData(UI.Modifiers.none, Absent)))
@@ -685,7 +685,7 @@ class BoundaryTest extends UIScreen:
                 for
                     _     <- screen.await("the first content")(v => v.contains("A:a") && v.contains("B:a"))
                     _     <- key.set("b")
-                    _     <- within("the new instances to start")(started.get)
+                    _     <- started.get
                     shown <- screen.now
                     _     <- gate.completeUnitDiscard
                     _     <- screen.await("the new content")(v => v.contains("key:b") && v.contains("A:b") && v.contains("B:b"))

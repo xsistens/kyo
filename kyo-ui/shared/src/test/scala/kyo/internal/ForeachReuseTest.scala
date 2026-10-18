@@ -41,6 +41,12 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 }
     end Recording
 
+    /** Waits until `n` observers wait on `ref`. An observer parks on its signal again only once it has handled the value before,
+      * so this is the point where everything it does for that value is done: a list region has adopted or patched its rows.
+      */
+    private def parked(ref: Signal.SignalRef[?], n: Int)(using Frame, kyo.test.AssertScope): Unit < Async =
+        assertEventually(ref.waiters.map(_ == n))
+
     "appending re-renders only the added row" in {
         Scope.run {
             for
@@ -53,7 +59,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(_.append("d"))
                 _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
@@ -75,7 +81,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(c => Chunk.from(c.toSeq.reverse))
                 _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
@@ -98,15 +104,17 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
+                _    <- parked(selected, 3)
                 _    <- rows.getAndUpdate(_.filter(_ != "b"))
                 _    <- assertEventually(Sync.defer(rec.changes.get >= 1))
-                // b's observer is dead (evicted and awaited before the paint). The surviving rows' mapped
-                // signals re-emit their unchanged `false` on the source change (mapped observe re-emits equal
-                // images for distinct source values), so the discriminator is the patched value: only a live
-                // b observer could patch `on = true` for selected == "b".
+                // b's observer is gone: only a's and c's still wait on `selected`. A live one would keep waiting there.
+                _ <- parked(selected, 2)
+                // The surviving rows' mapped signals re-emit their unchanged `false` on the source change (mapped observe
+                // re-emits equal images for distinct source values), so the discriminator is the patched value: only a live
+                // b observer could patch `on = true` for selected == "b". Both survivors have handled it once they wait again.
                 _ <- selected.set("b")
-                _ <- Async.sleep(100.millis)
+                _ <- parked(selected, 2)
                 deadTrueOns = rec.trueClassOns.get
                 // A surviving row still patches true in place.
                 _ <- selected.set("a")
@@ -128,7 +136,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
                 _    <- rows.getAndUpdate(_.append("c"))
                 _    <- assertEventually(Sync.defer(rec.changes.get >= 1))
                 _    <- selected.set("c")
@@ -155,12 +163,11 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
                 // One emission so "r10" carries a cached handler; r0-r9 stay seeded (no cached handler).
                 _ <- rows.getAndUpdate(_.append("r10"))
-                _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
-                // The registry is updated after the paint notification; give it its beat before dispatching.
-                _ <- Async.sleep(100.millis)
+                // The registry is updated after the paint notification; the region waits on the list again once it has.
+                _ <- parked(rows, 1)
                 base = renders.get
                 _ <- root.handle(Seq("0", "r10"), UIEvent.Click(Seq("0", "r10"), MouseEventData(UI.Modifiers.none, Absent)))
                 _ <- root.handle(Seq("0", "r5"), UIEvent.Click(Seq("0", "r5"), MouseEventData(UI.Modifiers.none, Absent)))
@@ -198,15 +205,18 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
+                _    <- parked(inner, 3)
                 _    <- rows.getAndUpdate(_.filter(_ != "b"))
-                _    <- Async.sleep(100.millis)
-                _    <- Sync.defer { aHits.set(0); bHits.set(0) }
-                _    <- inner.set("y")
+                _    <- parked(rows, 1)
+                // b's nested region is stopped: only a's and c's still wait on `inner`. A live one would keep waiting there.
+                _ <- parked(inner, 2)
+                _ <- Sync.defer { aHits.set(0); bHits.set(0) }
+                _ <- inner.set("y")
                 // A surviving row's nested region repaints, which is what proves the emission was delivered
-                // at all before the removed row's silence is read as evidence.
+                // at all before the removed row's silence is read as evidence; both survivors have handled it once they wait again.
                 _ <- assertEventually(Sync.defer(aHits.get >= 1))
-                _ <- Async.sleep(100.millis)
+                _ <- parked(inner, 2)
             yield assert(bHits.get == 0, s"expected the removed row's nested region to be dead, got ${bHits.get} repaints")
         }
     }
@@ -223,7 +233,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                _    <- Async.sleep(100.millis)
+                _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(c => Chunk.from(c.toSeq.map(s => if s.startsWith("b") then "b:2" else s)))
                 _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
@@ -253,13 +263,15 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- assertEventually(Sync.defer(runs.get == 3))
+                _    <- parked(rows, 1)
                 _    <- rows.getAndUpdate(_.append("d"))
                 _    <- assertEventually(Sync.defer(runs.get == 4))
-                _    <- Async.sleep(100.millis)
+                // The emission is through, and with it every eviction it makes, once the region waits on the list again.
+                _ <- parked(rows, 1)
                 afterAppend = released.get
                 _ <- rows.getAndUpdate(_.filter(_ != "b"))
                 _ <- assertEventually(Sync.defer(released.get == afterAppend + 1))
-                _ <- Async.sleep(100.millis)
+                _ <- parked(rows, 1)
             yield
                 assert(afterAppend == 0, s"expected no instance released by appending a row, got $afterAppend")
                 assert(runs.get == 4, s"expected the retained rows' instances to be kept, got ${runs.get} runs")
