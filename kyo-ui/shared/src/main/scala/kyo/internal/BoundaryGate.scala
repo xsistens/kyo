@@ -45,34 +45,34 @@ private[kyo] object Boundaries:
       * shows, while regions and mounts keep their ranges, so a static rendering of the result is the live screen and later updates
       * still find where they land.
       */
-    def resolveLive(ui: UI, path: Seq[String], dispatch: MountDispatch)(using Frame): UI < Sync =
+    def resolveLive(ui: UI, path: Seq[String], at: ReactiveRegion.RegionIdentity, dispatch: MountDispatch)(using Frame): UI < Sync =
         ui match
             case m: Mounted =>
                 implicitOf(m) match
-                    case Present(b) => resolveLive(b, path, dispatch)
+                    case Present(b) => resolveLive(b, path, at, dispatch)
                     case Absent     =>
-                        dispatch.lookup(path, m.frame).map {
+                        dispatch.lookup(at.transparent).map {
                             case Absent        => m
                             case Present(cell) =>
                                 cell.current.map {
                                     case ReactiveUI.MountState.Pending(Present(snapshot)) =>
                                         m.copy(placeholderUI = Present(snapshot))(using m.frame)
                                     case state =>
-                                        resolveLive(state.content(MountedSpec(m, path, Nil)), path, dispatch)
+                                        resolveLive(state.content(MountedSpec(m, path, Nil)), path, at.transparent, dispatch)
                                             .map(c => m.copy(placeholderUI = Present(c))(using m.frame))
                                 }
                         }
             case b: Bounded =>
                 val shown: UI < Sync =
-                    if !b.settings.waits then resolveLive(b.child, path, dispatch).map(ownContent(b, _))
+                    if !b.settings.waits then resolveLive(b.child, path, at.transparent, dispatch).map(ownContent(b, _))
                     else
-                        dispatch.boundary(path, b.frame).map {
+                        dispatch.boundary(at.transparent).map {
                             case Present(gate) => gate.displayed
                             case Absent        => b.display.getOrElse(b.settings.placeholderView.getOrElse(b.child))
                         }
                 shown.map(d => b.copy(display = Present(d))(using b.frame))
             case r: Reactive[?] =>
-                r.signal.current(using r.frame).map(c => resolveLive(c, path, dispatch)).map(c =>
+                r.signal.current(using r.frame).map(c => resolveLive(c, path, at.transparent, dispatch)).map(c =>
                     Reactive[UI](Signal.initConst(c))(using r.frame)
                 )
             case fe: Foreach[?, ?] @unchecked =>
@@ -83,7 +83,7 @@ private[kyo] object Boundaries:
                                 val key = keyFn match
                                     case Present(f) => f(item)
                                     case Absent     => i.toString
-                                resolveLive(render(i, item), path :+ key, dispatch)
+                                resolveLive(render(i, item), path :+ key, at.child(key), dispatch)
                             }.map { rows =>
                                 val resolved = Chunk.from(rows)
                                 Foreach[T, UI](
@@ -95,16 +95,18 @@ private[kyo] object Boundaries:
                         }
                 }
             case e: Element =>
-                Kyo.foreach(e.children.toSeq.zipWithIndex)((c, i) => resolveLive(c, path :+ i.toString, dispatch))
+                Kyo.foreach(e.children.toSeq.zipWithIndex)((c, i) => resolveLive(c, path :+ i.toString, at.child(i.toString), dispatch))
                     .map(cs => ReactiveUI.rebuildElement(e, Chunk.from(cs)))
             case f: Fragment[?] =>
                 Kyo.foreach(f.children.toSeq.zipWithIndex) { (c, i) =>
                     c match
                         case kc: KeyedChild[?] =>
-                            resolveLive(kc.child, path :+ kc.key, dispatch).map(r => KeyedChild[UI](kc.key, r)(using kc.frame): UI)
-                        case _ => resolveLive(c, path :+ i.toString, dispatch)
+                            resolveLive(kc.child, path :+ kc.key, at.child(kc.key), dispatch).map(r =>
+                                KeyedChild[UI](kc.key, r)(using kc.frame): UI
+                            )
+                        case _ => resolveLive(c, path :+ i.toString, at.child(i.toString), dispatch)
                 }.map(cs => Fragment[UI](Chunk.from(cs))(using f.frame))
-            case KeyedChild(k, c) => resolveLive(c, path, dispatch).map(r => KeyedChild[UI](k, r))
+            case KeyedChild(k, c) => resolveLive(c, path, at, dispatch).map(r => KeyedChild[UI](k, r))
             case other            => other
 
     /** What boundary `b` shows when it shows its content, given that content as [[resolveLive]] resolved it.
@@ -299,7 +301,7 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
                     if waited then
                         range match
                             case Present(r) =>
-                                Boundaries.resolveLive(r.content, r.path, root.dispatch).map(ui =>
+                                Boundaries.resolveLive(r.content, r.path, r.contentContext, root.dispatch).map(ui =>
                                     ReactiveUI.deliverMeasured(r.origin, UI.RenderCause.Signal, parent)(
                                         _.onChange(r.region, r.path, r.contentContext, r.parentContext, Absent, ui)
                                     )
@@ -341,11 +343,6 @@ final private[kyo] class BoundaryGate(
     import AllowUnsafe.embrace.danger
 
     def root: BoundaryGate = this
-
-    /** The call site of the boundary node, a mount's own for an implicit one: what [[MountDispatch.boundary]] tells gates at one path
-      * apart by.
-      */
-    def site: Frame = node.frame
 
     private val rewaits                    = AtomicInt.Unsafe.init(0)
     @volatile private var revealed         = initiallyRevealed
@@ -397,7 +394,7 @@ final private[kyo] class BoundaryGate(
 
     /** The content as the boundary shows it once revealed, see [[Boundaries.ownContent]]. */
     private def displayedContent(using Frame): UI < Sync =
-        Boundaries.resolveLive(node.child, rui.path, dispatch).map(Boundaries.ownContent(node, _))
+        Boundaries.resolveLive(node.child, rui.path, rui.contentContext, dispatch).map(Boundaries.ownContent(node, _))
 
     /** A pass below ended with mounts loading after the boundary revealed. */
     private[internal] def rewaitBegan(using Frame): Unit < Async =

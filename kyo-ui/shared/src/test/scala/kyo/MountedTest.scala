@@ -322,34 +322,40 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             dispatch <- MountDispatch.init
             path = Seq("0", "1")
+            at   = ReactiveRegion.RegionIdentity(path, 1)
             node = UI.mounted(Kyo.lift(UI.empty))
             instance <- ReactiveUI.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil)
-            _        <- dispatch.register(path, node.frame, instance)
-            _        <- dispatch.register(path, node.frame, instance)
-            _        <- dispatch.unregister(path, instance)
-            found    <- dispatch.instance(path, node.frame)
+            _        <- dispatch.register(at, instance)
+            _        <- dispatch.register(at, instance)
+            _        <- dispatch.unregister(at, instance)
+            found    <- dispatch.instance(at)
             _        <- instance.teardown
         yield assert(found.exists(_ eq instance))
     }
 
-    "two mounts at one path, one the content of the other, are each found by their own call site" in {
+    "two mounts at one path, one the content of the other, made under one frame, are each found by their own content" in {
+        // A helper taking a `Frame` makes both under its caller's, so only how deep each one's content sits at the path tells them apart.
+        def nested(using Frame)    = (UI.mounted(Kyo.lift(UI.empty)), UI.mounted(Kyo.lift(UI.empty)))
+        val (outerNode, innerNode) = nested
+        val path                   = Seq("0")
+        val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
+        val innerAt                = ReactiveRegion.RegionIdentity(path, 3)
         for
             dispatch <- MountDispatch.init
-            path      = Seq("0")
-            outerNode = UI.mounted(Kyo.lift(UI.empty))
-            innerNode = UI.mounted(Kyo.lift(UI.empty))
-            outer  <- ReactiveUI.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil)
-            inner  <- ReactiveUI.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil)
-            _      <- dispatch.register(path, outerNode.frame, outer)
-            before <- dispatch.instance(path, innerNode.frame)
-            _      <- dispatch.register(path, innerNode.frame, inner)
-            o      <- dispatch.instance(path, outerNode.frame)
-            i      <- dispatch.instance(path, innerNode.frame)
-            _      <- inner.teardown
-            _      <- outer.teardown
+            outer    <- ReactiveUI.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil)
+            inner    <- ReactiveUI.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil)
+            _        <- dispatch.register(outerAt, outer)
+            before   <- dispatch.instance(innerAt)
+            _        <- dispatch.register(innerAt, inner)
+            o        <- dispatch.instance(outerAt)
+            i        <- dispatch.instance(innerAt)
+            _        <- inner.teardown
+            _        <- outer.teardown
         yield
+            assert(outerNode.frame == innerNode.frame)
             assert(before.isEmpty, "the inner mount found the outer one's instance before its own registered")
             assert(o.exists(_ eq outer) && i.exists(_ eq inner))
+        end for
     }
 
     "siblings appearing before a keyed node do not change its identity" in {

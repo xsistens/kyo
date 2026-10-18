@@ -25,6 +25,8 @@ class DomBackendBoundaryTest extends kyo.test.Test[Any]:
 
     private def el(id: String): dom.Element = dom.document.getElementById(id)
 
+    private def text(): String = dom.document.body.textContent
+
     "a page that waits is inert and busy, the field in it loses focus, and the marks go with the reveal" in {
         for
             route   <- Signal.initRef("1")
@@ -176,6 +178,40 @@ class DomBackendBoundaryTest extends kyo.test.Test[Any]:
             _     <- fiber.interrupt
             _     <- fiber.getResult
         yield assert(n == 2)
+    }
+
+    /** A loading mount with a placeholder whose content is a mount with a placeholder, directly or through a region, both made in one
+      * helper: a helper taking a `Frame` makes every node in it under its caller's, as a component library's do.
+      */
+    private def nestedUnderOneFrame(gate: Promise[Unit, Any], selected: SignalRef[String], throughRegion: Boolean)(using Frame): UI =
+        def inner: UI =
+            UI.mounted(Sync.defer(UI.span("picked").id("picked")))
+                .placeholder(selected.render(v => UI.span(s"inner skeleton $v")))
+        UI.mounted(gate.get.andThen(if throughRegion then selected.render(_ => inner) else inner))
+            .keyed("k")
+            .placeholder(UI.span("outer skeleton"))
+    end nestedUnderOneFrame
+
+    private def showsNestedUnderOneFrame(throughRegion: Boolean)(using Frame, kyo.test.AssertScope) =
+        for
+            gate     <- Promise.init[Unit, Any]
+            selected <- Signal.initRef("a")
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div(nestedUnderOneFrame(gate, selected, throughRegion)), ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text().contains("outer skeleton")))
+            _     <- gate.completeUnitDiscard
+            _     <- assertEventually(Sync.defer(el("picked") != null))
+            shown = text()
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(!shown.contains("skeleton"), shown)
+
+    "a mount with a placeholder whose content is a mount with a placeholder, made under one frame, shows it" in {
+        showsNestedUnderOneFrame(throughRegion = false)
+    }
+
+    "a mount with a placeholder whose content renders a mount with a region for its placeholder, made under one frame, shows it" in {
+        showsNestedUnderOneFrame(throughRegion = true)
     }
 
 end DomBackendBoundaryTest

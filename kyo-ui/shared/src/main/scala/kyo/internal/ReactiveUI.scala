@@ -64,17 +64,19 @@ end ForeachSpec
 /** Where event dispatch finds a mounted node's live content.
   *
   * Dispatch re-derives handler chains from the current UI on every event, so the `Mounted` node it meets is a fresh value that cannot
-  * carry the instance. The instance registers its content cell here by path while it is subscribed, and the dispatch-time handler of
-  * whatever node occupies that path reads it. One table per normalized root.
+  * carry the instance. The instance registers its content cell here while it is subscribed, and the dispatch-time handler of whatever
+  * node occupies that place reads it. One table per normalized root.
   *
   * A path alone does not name one node: a mount's content sits at the mount's own path, so a mount whose content is directly another
-  * mount, or a boundary around one, puts two of them there. Every entry therefore carries the call site of the node it belongs to,
-  * and every lookup names the one it means. By path alone, the inner mount's boundary found the outer one before the inner instance
-  * had registered, the outer showed its content, which held the inner boundary again, and resolution recursed without end.
+  * mount, or a boundary around one, puts two of them there. Nor does the call site, since a helper that takes a `Frame` makes every
+  * node in it under the caller's. An entry is therefore filed under the identity of the content it owns, the path plus how many
+  * mounts, boundaries and regions enclose it there, which is the identity its range has on the page. By path alone, the inner
+  * mount's boundary found the outer one before the inner instance had registered, the outer showed its content, which held the inner
+  * boundary again, and resolution recursed without end.
   */
 final private[kyo] class MountDispatch(
-    cells: AtomicRef[Dict[Seq[String], Chunk[(Frame, ReactiveUI.MountInstance)]]],
-    gates: AtomicRef[Dict[Seq[String], Chunk[BoundaryGate]]],
+    cells: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[ReactiveUI.MountInstance]]],
+    gates: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]],
     holds: AtomicRef[Chunk[Seq[String]]]
 ):
     /** A range a boundary keeps showing old content in while its new content loads: no event may reach the new content through it. */
@@ -89,46 +91,47 @@ final private[kyo] class MountDispatch(
     /** Whether `target` lies in a range that is held. */
     def held(target: Seq[String])(using Frame): Boolean < Sync = holds.get.map(_.exists(target.startsWith(_)))
 
-    def registerBoundary(path: Seq[String], gate: BoundaryGate)(using Frame): Unit < Sync =
-        gates.getAndUpdate(m => m.update(path, m.get(path).getOrElse(Chunk.empty).append(gate))).unit
+    /** Registers `gate` of the boundary whose content has identity `at`. */
+    def registerBoundary(at: ReactiveRegion.RegionIdentity, gate: BoundaryGate)(using Frame): Unit < Sync =
+        gates.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(gate))).unit
 
-    def unregisterBoundary(path: Seq[String], gate: BoundaryGate)(using Frame): Unit < Sync =
+    def unregisterBoundary(at: ReactiveRegion.RegionIdentity, gate: BoundaryGate)(using Frame): Unit < Sync =
         gates.getAndUpdate { m =>
-            m.get(path) match
+            m.get(at) match
                 case Absent        => m
                 case Present(held) =>
                     val left = held.filterNot(_ eq gate)
-                    if left.isEmpty then m.remove(path) else m.update(path, left)
+                    if left.isEmpty then m.remove(at) else m.update(at, left)
         }.unit
 
-    /** The waiting boundary from call site `site` registered last at `path`. */
-    def boundary(path: Seq[String], site: Frame)(using Frame): Maybe[BoundaryGate] < Sync =
-        gates.get.map(_.get(path).flatMap(held => Maybe.fromOption(held.reverseIterator.find(_.site == site))))
+    /** The gate registered last for the boundary whose content has identity `at`. */
+    def boundary(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[BoundaryGate] < Sync =
+        gates.get.map(_.get(at).flatMap(_.lastMaybe))
 
-    /** Registers `instance` of the mount written at `site` at `path`. */
-    def register(path: Seq[String], site: Frame, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
-        cells.getAndUpdate(m => m.update(path, m.get(path).getOrElse(Chunk.empty).append((site, instance)))).unit
+    /** Registers `instance` of the mount whose content has identity `at`. */
+    def register(at: ReactiveRegion.RegionIdentity, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
+        cells.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(instance))).unit
 
     /** Removes this registration only. Two subscriptions can hold one path for a moment, an old one still ending and its successor,
       * in either order; the other keeps its entry.
       */
-    def unregister(path: Seq[String], instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
+    def unregister(at: ReactiveRegion.RegionIdentity, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
         cells.getAndUpdate { m =>
-            m.get(path) match
+            m.get(at) match
                 case Absent        => m
                 case Present(held) =>
-                    val at   = held.lastIndexWhere(_._2 eq instance)
-                    val left = if at < 0 then held else held.take(at).concat(held.drop(at + 1))
-                    if left.isEmpty then m.remove(path) else m.update(path, left)
+                    val i    = held.lastIndexWhere(_ eq instance)
+                    val left = if i < 0 then held else held.take(i).concat(held.drop(i + 1))
+                    if left.isEmpty then m.remove(at) else m.update(at, left)
         }.unit
 
-    /** The cell of the instance of the mount written at `site` registered last at `path`. */
-    def lookup(path: Seq[String], site: Frame)(using Frame): Maybe[Signal[ReactiveUI.MountState]] < Sync =
-        instance(path, site).map(_.map(_.cell))
+    /** The cell of the instance registered last for the mount whose content has identity `at`. */
+    def lookup(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[Signal[ReactiveUI.MountState]] < Sync =
+        instance(at).map(_.map(_.cell))
 
-    /** The instance of the mount written at `site` registered last at `path`. */
-    def instance(path: Seq[String], site: Frame)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
-        cells.get.map(_.get(path).flatMap(held => Maybe.fromOption(held.reverseIterator.find(_._1 == site).map(_._2))))
+    /** The instance registered last for the mount whose content has identity `at`. */
+    def instance(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
+        cells.get.map(_.get(at).flatMap(_.lastMaybe))
 end MountDispatch
 
 private[kyo] object MountDispatch:
@@ -137,8 +140,8 @@ private[kyo] object MountDispatch:
     /** The table for a pass that already holds the thread (see [[SignalNow]]). */
     def initNow()(using AllowUnsafe): MountDispatch =
         new MountDispatch(
-            AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[(Frame, ReactiveUI.MountInstance)]]).safe,
-            AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[BoundaryGate]]).safe,
+            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[ReactiveUI.MountInstance]]).safe,
+            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]).safe,
             AtomicRef.Unsafe.init(Chunk.empty[Seq[String]]).safe
         )
 end MountDispatch
@@ -437,7 +440,7 @@ private[kyo] object ReactiveUI:
                 // and a range that keeps showing old content while its new content loads takes no event, which would otherwise land
                 // in the new content.
                 val handle: Handler = (targetPath, event) =>
-                    Failures.within(FailureFrame.Boundary(b.settings))(cells.boundary(path, b.frame).map {
+                    Failures.within(FailureFrame.Boundary(b.settings))(cells.boundary(contentContext).map {
                         case Present(gate) if !gate.isRevealed =>
                             gate.livePlaceholder match
                                 case Present(ph) =>
@@ -479,7 +482,7 @@ private[kyo] object ReactiveUI:
                 val contentContext = regionIdentity.transparent
                 // The node value is fresh on every dispatch, so the handler finds the live instance through the dispatch table.
                 val handle: Handler = (targetPath, event) =>
-                    cells.instance(path, ui.frame).map {
+                    cells.instance(contentContext).map {
                         case Absent           => true
                         case Present(running) =>
                             running.cell.current.map {
@@ -686,7 +689,7 @@ private[kyo] object ReactiveUI:
                 val reactiveChildren: Seq[ReactiveUI]   = kids.result()
                 val staticHandlers: Seq[(Int, Handler)] = handlers.result()
                 val handle: Handler                     = (targetPath, event) =>
-                    dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers, cells)
+                    dispatch(elem, basePath, context, targetPath, event, reactiveChildren, staticHandlers, cells)
                 (reactiveChildren, handle)
 
             case Fragment(children) =>
@@ -763,6 +766,7 @@ private[kyo] object ReactiveUI:
     private def dispatch(
         elem: Element,
         myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
         targetPath: Seq[String],
         event: UIEvent,
         reactiveChildren: Seq[ReactiveUI],
@@ -773,18 +777,20 @@ private[kyo] object ReactiveUI:
             case Present(rules) => Failures.within(FailureFrame.Rules(rules))(dispatchThrough(
                     elem,
                     myPath,
+                    at,
                     targetPath,
                     event,
                     reactiveChildren,
                     staticHandlers,
                     mounts
                 ))
-            case Absent => dispatchThrough(elem, myPath, targetPath, event, reactiveChildren, staticHandlers, mounts)
+            case Absent => dispatchThrough(elem, myPath, at, targetPath, event, reactiveChildren, staticHandlers, mounts)
 
     /** [[dispatch]] with the element's `onFailure` rules in effect. A handler's failure goes to the rules and the dispatch goes on. */
     private def dispatchThrough(
         elem: Element,
         myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
         targetPath: Seq[String],
         event: UIEvent,
         reactiveChildren: Seq[ReactiveUI],
@@ -817,7 +823,7 @@ private[kyo] object ReactiveUI:
                 // not hide it. All four come out of one resolution: they are four questions about one
                 // element, not four searches for it.
                 facts <-
-                    if isClick || isKeyDown then targetFacts(elem, myPath, targetPath, mounts)
+                    if isClick || isKeyDown then targetFacts(elem, myPath, at, targetPath, mounts)
                     else Kyo.lift(TargetFacts.none)
                 // "Is it disabled" is a question about the current value behind a channel, not about a
                 // field (see boolAttrNow), so it is read from the resolved element rather than carried.
@@ -1080,6 +1086,7 @@ private[kyo] object ReactiveUI:
     private def resolveTarget(
         node: UI,
         nodePath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
         targetPath: Seq[String],
         rootDepth: Int,
         controlBelow: Boolean,
@@ -1092,17 +1099,19 @@ private[kyo] object ReactiveUI:
         def unresolved(seen: Boolean): TargetFacts = TargetFacts(Absent, seen)
         node match
             case kc: KeyedChild[?] =>
-                resolveTarget(kc.child, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                resolveTarget(kc.child, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
             case r: Reactive[?] =>
                 // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
-                r.signal.current(using r.frame).map(cur => resolveTarget(cur, nodePath, targetPath, rootDepth, controlBelow, mounts))
+                r.signal.current(using r.frame).map(cur =>
+                    resolveTarget(cur, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                )
             case Fragment(children) =>
                 if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < children.size =>
-                            resolveTarget(children(i), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                            resolveTarget(children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, controlBelow, mounts)
                         case _ => unresolved(controlBelow)
                     end match
             case fe: Foreach[?, ?] @unchecked =>
@@ -1116,8 +1125,17 @@ private[kyo] object ReactiveUI:
                                     case Present(f) => items.indexWhere(it => f(it) == seg)
                                     case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                 if idx >= 0 && idx < items.size then
-                                    resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                                    resolveTarget(
+                                        renderFn(idx, items(idx)),
+                                        nodePath :+ seg,
+                                        at.child(seg),
+                                        targetPath,
+                                        rootDepth,
+                                        controlBelow,
+                                        mounts
+                                    )
                                 else unresolved(controlBelow)
+                                end if
                             }
                     }
             case e: Element =>
@@ -1127,7 +1145,7 @@ private[kyo] object ReactiveUI:
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < e.children.size =>
-                            resolveTarget(e.children(i), nodePath :+ seg, targetPath, rootDepth, seen, mounts)
+                            resolveTarget(e.children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, seen, mounts)
                         case _ => unresolved(seen)
                     end match
                 end if
@@ -1137,39 +1155,45 @@ private[kyo] object ReactiveUI:
             // A mount's content lives with its instance, found through the dispatch table like the node's handler finds it, and
             // occupies the node's path. An inert snapshot resolves to nothing, since no event reaches it.
             case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
-                resolveTarget(Boundaries.implicitOf(m).get, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                resolveTarget(Boundaries.implicitOf(m).get, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
             case m: Mounted =>
-                mounts.lookup(nodePath, m.frame).map {
+                mounts.lookup(at.transparent).map {
                     case Absent        => unresolved(controlBelow)
                     case Present(cell) =>
                         cell.current.map {
                             case MountState.Pending(Present(_)) => unresolved(controlBelow)
                             case state                          =>
                                 val content = state.content(MountedSpec(m, nodePath, Nil))
-                                resolveTarget(content, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                                resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                         }
                 }
             // Held-back content is not on the page; once revealed it occupies the boundary's path.
             case b: Bounded =>
-                mounts.boundary(nodePath, b.frame).map {
+                mounts.boundary(at.transparent).map {
                     case Present(gate) if !gate.isRevealed =>
                         gate.livePlaceholder.fold(Kyo.lift(unresolved(controlBelow)))(ph =>
-                            resolveTarget(ph, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                            resolveTarget(ph, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                         )
                     case _ =>
                         mounts.held(targetPath).map(held =>
                             if held then unresolved(controlBelow)
-                            else resolveTarget(b.child, nodePath, targetPath, rootDepth, controlBelow, mounts)
+                            else resolveTarget(b.child, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                         )
                 }
         end match
     end resolveTarget
 
     /** The facts a bubbling dispatch reads about its target, in a single resolution. */
-    private def targetFacts(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
+    private def targetFacts(
+        elem: Element,
+        myPath: Seq[String],
+        at: ReactiveRegion.RegionIdentity,
+        targetPath: Seq[String],
+        mounts: MountDispatch
+    )(using
         Frame
     ): TargetFacts < Sync =
-        resolveTarget(elem, myPath, targetPath, myPath.size, false, mounts)
+        resolveTarget(elem, myPath, at, targetPath, myPath.size, false, mounts)
 
     /** Whether an element is a control in its own right, something the reader operates directly, as
       * opposed to markup an ancestor made clickable.
@@ -2007,8 +2031,8 @@ private[kyo] object ReactiveUI:
                 seed  <- mounts.left(rui.path)
                 mutex <- Meter.initMutex(reentrant = true)
                 gate = new BoundaryGate(exchange, rui, node, dispatch, mutex, seed, initiallyRevealed = !holds)
-                _ <- dispatch.registerBoundary(rui.path, gate)
-                _ <- Scope.ensure(gate.close.andThen(dispatch.unregisterBoundary(rui.path, gate)))
+                _ <- dispatch.registerBoundary(rui.contentContext, gate)
+                _ <- Scope.ensure(gate.close.andThen(dispatch.unregisterBoundary(rui.contentContext, gate)))
                 _ <- subscribeContent(gate)
                 // Registered after the content, so it runs before the content's own release and still sees it live.
                 _ <- Scope.ensure(gate.displayed.map(shown => mounts.leave(rui.path, shown)))
@@ -3328,8 +3352,8 @@ private[kyo] object ReactiveUI:
             case _: ReactiveRegion.HtmlRange  => false
             case _: ReactiveRegion.SvgElement => true
         for
-            _     <- dispatch.register(rui.path, spec.node.frame, instance)
-            _     <- Scope.ensure(dispatch.unregister(rui.path, instance))
+            _     <- dispatch.register(rui.contentContext, instance)
+            _     <- Scope.ensure(dispatch.unregister(rui.contentContext, instance))
             first <- instance.cell.current
             // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
             // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
