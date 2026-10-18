@@ -681,6 +681,37 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    "while a new instance is pending, the KeepLatest snapshot shows what the nested mounts showed" in {
+        // A detail view whose thread is a mount of its own: the snapshot is the whole old view, thread included, not the
+        // view with an empty hole where the thread was.
+        for
+            key  <- Signal.initRef("a")
+            gate <- Promise.init[Unit, Any]
+            effect = (k: String) =>
+                if k == "a" then
+                    Kyo.lift(div(
+                        span("old"),
+                        UI.mounted(Kyo.lift(span("keyless:a"))),
+                        UI.mounted(Kyo.lift(span("thread:a"))).keyed("thread-a")
+                    ))
+                else gate.get.andThen(span("new"))
+            ui = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "2"), "thread:a")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1"), "keyless:a")
+                    before <- recorder.paintsAt(Seq("0"))
+                    _      <- key.set("b")
+                    _      <- assertEventually(recorder.paintsAt(Seq("0")).map(_ > before))
+                    _      <- showsEventually(recorder, Seq("0", "0"), "old")
+                    held   <- recorder.shown(Seq("0", "0"))
+                    _      <- gate.completeUnitDiscard
+                    _      <- showsEventually(recorder, Seq("0", "0"), "new")
+                yield assert(held.contains("keyless:a") && held.contains("thread:a"), s"the snapshot lost a nested mount: $held")
+            }
+        yield succeed
+    }
+
     "while a new instance is pending, Placeholder shows the placeholder" in {
         for
             key  <- Signal.initRef("a")

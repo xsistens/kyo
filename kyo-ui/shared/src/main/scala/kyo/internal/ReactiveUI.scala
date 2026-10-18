@@ -2930,12 +2930,22 @@ private[kyo] object ReactiveUI:
         runner: Fiber[Unit, Any],
         scope: Scope.Finalizer
     ):
-        /** What the slot keeps showing under `KeepLatest` once this instance is gone. */
+        // Unsafe: written as a subscription showing the instance ends, read when the instance leaves its snapshot after it.
+        private val lastShown = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
+
+        /** Keeps what a subscription showed as it ends, the content of the mounts nested in it resolved while they are still there. */
+        def keepShown(ui: UI)(using Frame): Unit < Sync = Sync.Unsafe.defer(lastShown.set(Present(ui)))
+
+        /** What the slot keeps showing under `KeepLatest` once this instance is gone: what it showed last, nested mounts included,
+          * which as bare nodes would show only their placeholders. An instance no subscription has shown resolves its regions only.
+          */
         def snapshot(using Frame): Maybe[UI] < Sync =
             cell.current.map {
                 case MountState.Pending(snapshot) => snapshot
-                case MountState.Ready(ui)         => resolveReactives(ui).map(Present(_))
-                case MountState.Failed(ui)        => resolveReactives(ui).map(Present(_))
+                case MountState.Ready(ui)         =>
+                    Sync.Unsafe.defer(lastShown.get()).map(_.fold(resolveReactives(ui).map(Present(_)))(Present(_)))
+                case MountState.Failed(ui) =>
+                    Sync.Unsafe.defer(lastShown.get()).map(_.fold(resolveReactives(ui).map(Present(_)))(Present(_)))
             }
 
         /** Stops the effect if it still runs, then releases nested mounts and everything the effect acquired, waiting for all of it.
@@ -3443,6 +3453,14 @@ private[kyo] object ReactiveUI:
                     )
                 }
             )
+            // Registered after the fiber, so it runs before the fiber's interrupt: the nested mounts are still registered, and a
+            // snapshot of this instance shows their content rather than their placeholders.
+            _ <- Scope.ensure(instance.cell.current.map {
+                case MountState.Pending(_) => Kyo.unit
+                case state                 =>
+                    Boundaries.resolveLive(state.content(spec), rui.path, rui.contentContext, dispatch)
+                        .map(resolveReactives).map(instance.keepShown)
+            })
         yield ()
         end for
     end subscribeMountContent
