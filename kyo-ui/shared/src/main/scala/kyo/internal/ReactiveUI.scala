@@ -2226,9 +2226,6 @@ private[kyo] object ReactiveUI:
                 now      <- Clock.now
                 _        <- signalChangeTime.set(now)
                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                _        <- deliverMeasured(rui, cause, through)(
-                    _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
-                )
                 svgContext = rui.region match
                     case _: ReactiveRegion.HtmlRange  => false
                     case _: ReactiveRegion.SvgElement => true
@@ -2243,8 +2240,19 @@ private[kyo] object ReactiveUI:
                     deepRows = Nil,
                     discoverRootBound = rui.discoverContentRootBound
                 ))
+                keys = RegionKeys(newKids)
+                // The pass is opened before the paint, so a mount that starts from the snapshot of the instance before it is painted
+                // with that snapshot: one paint, where painting first showed an empty slot until the new instance painted its own.
+                release <- regionMounts.openWalk(newKids, keys)
+                _       <- Scope.ensure(release())
+                painted <- regionMounts.withSeeds(current, rui.path, newKids)
+                _       <- deliverMeasured(rui, cause, through)(
+                    _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
+                )
+                _ <- release()
                 _ <- forkRootChannels(rui.path, current, through)
-                _ <- subscribeKids(newKids, through)
+                _ <- Kyo.foreachDiscard(newKids)(subscribeScoped(_, through, signalChangeTime, regionMounts, dispatch, keys))
+                _ <- regionMounts.endWalk
             yield ()
 
         def onValue(current: UI, isFirst: Boolean, through: UIExchange): Unit < (Async & Scope) =
@@ -3117,6 +3125,29 @@ private[kyo] object ReactiveUI:
                 case Present(table) => table.evictExcept(kids, pass)
             }
 
+        /** [[beginWalk]] in two steps: the slots and the snapshots now, the release of what the pass no longer shows when the caller
+          * runs the answer, which it does before any new instance starts.
+          */
+        def openWalk(kids: Seq[ReactiveUI], pass: RegionKeys)(using Frame): (() => Unit < Async) < Sync =
+            Sync.Unsafe.defer(owned).map {
+                case Absent         => Kyo.lift(MountTable.nothingToRelease)
+                case Present(table) => table.openWalk(kids, pass)
+            }
+
+        /** `ui` as this pass paints it, rooted at `path`: a mount among `kids` that starts from the snapshot of the instance before it
+          * shows that snapshot in its slot already, as the instance will once it starts, rather than an empty slot until then.
+          */
+        def withSeeds(ui: UI, path: Seq[String], kids: Seq[ReactiveUI])(using Frame): UI < Sync =
+            Sync.Unsafe.defer {
+                owned match
+                    case Absent         => ui
+                    case Present(table) =>
+                        val seeds = kids.foldLeft(Map.empty[Seq[String], UI]) { (acc, kid) =>
+                            kid.mounted.flatMap(spec => table.seedFor(kid, spec)).fold(acc)(seed => acc.updated(kid.path, seed))
+                        }
+                        if seeds.isEmpty then ui else showingSeeds(ui, path, seeds)
+            }
+
         def endWalk(using Frame): Unit < Sync =
             Sync.Unsafe.defer(owned.foreach(_.endWalk()))
 
@@ -3243,15 +3274,24 @@ private[kyo] object ReactiveUI:
 
         /** Tears down `instance` and leaves its snapshot at `path` for this pass's successor. */
         def retire(instance: MountInstance, path: Seq[String])(using Frame): Unit < Async =
-            instance.snapshot.map { snapshot =>
-                Sync.Unsafe.defer(snapshot.foreach(ui => discard(handoff.getAndUpdate(_.update(path, ui)))))
-            }.andThen(instance.teardown)
+            leaveSnapshot(instance, path).andThen(instance.teardown)
+
+        private def leaveSnapshot(instance: MountInstance, path: Seq[String])(using Frame): Unit < Sync =
+            instance.snapshot.map(snapshot => Sync.Unsafe.defer(snapshot.foreach(ui => discard(handoff.getAndUpdate(_.update(path, ui))))))
 
         /** Opens a render pass over `kids`: releases every keyed instance and every region table the pass no longer shows, and waits
-          * for all of it. The instances leave the table before they are released, so the release runs out of reach of an interrupt: an
-          * outer re-render that interrupts this region's loop ends the wait, not the release.
+          * for all of it.
           */
         def evictExcept(kids: Seq[ReactiveUI], pass: RegionKeys)(using Frame): Unit < Async =
+            openWalk(kids, pass).map(release => release())
+
+        /** Opens a render pass over `kids`: gives each keyed node its slot, and leaves the snapshot of every keyed instance the pass no
+          * longer shows for a `KeepLatest` successor at its place, so the paint of the pass can already show it. Answers the release
+          * of those instances and of the region tables the pass no longer shows, which the caller runs, and waits for, before any new
+          * instance starts. The instances leave the table before they are released, and the release runs once and out of reach of an
+          * interrupt: an outer re-render that interrupts this region's loop ends the wait, not the release.
+          */
+        def openWalk(kids: Seq[ReactiveUI], pass: RegionKeys)(using Frame): (() => Unit < Async) < Sync =
             Sync.Unsafe.defer {
                 // The pass's keyed nodes by identity, each group in walk order.
                 val groups = new java.util.HashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
@@ -3290,15 +3330,33 @@ private[kyo] object ReactiveUI:
                 val goneRegions     = previousRegions.foldLeft(Chunk.empty[MountTable]) { (acc, key, table) =>
                     if keepRegions.contains(key) then acc else acc.append(table)
                 }
-                if goneRegions.isEmpty && goneSlots.isEmpty then Kyo.unit
+                if goneRegions.isEmpty && goneSlots.isEmpty then Kyo.lift(MountTable.nothingToRelease)
                 else
-                    Async.uninterruptible {
-                        Kyo.foreachDiscard(goneRegions)(_.evictAll)
-                            .andThen(Kyo.foreachDiscard(goneSlots)(slot => slot.instance.fold(Kyo.unit)(retire(_, slot.path))))
+                    Kyo.foreachDiscard(goneSlots)(slot => slot.instance.fold(Kyo.unit)(leaveSnapshot(_, slot.path))).andThen {
+                        val released = AtomicBoolean.Unsafe.init(false)
+                        () =>
+                            Sync.Unsafe.defer {
+                                if !released.compareAndSet(false, true) then Kyo.unit
+                                else
+                                    Async.uninterruptible {
+                                        Kyo.foreachDiscard(goneRegions)(_.evictAll)
+                                            .andThen(Kyo.foreachDiscard(goneSlots)(_.instance.fold(Kyo.unit)(_.teardown)))
+                                    }
+                            }
                     }
                 end if
             }
-        end evictExcept
+        end openWalk
+
+        /** The snapshot a node starting a new instance shows until that instance publishes: what the instance before it at its place
+          * left, when the node keeps the latest content and this pass gives it no running instance.
+          */
+        def seedFor(rui: ReactiveUI, spec: MountedSpec): Maybe[UI] =
+            spec.node.pendingPolicy match
+                case UI.PendingPolicy.Placeholder => Absent
+                case UI.PendingPolicy.KeepLatest  =>
+                    val starts = spec.identity.isEmpty || assigned.get().flatMap(slots => Maybe(slots.get(rui))).forall(_.instance.isEmpty)
+                    if starts then handoff.get().get(spec.path) else Absent
 
         /** The slots of `old` for the nodes of one identity, in the nodes' order: a slot last shown at a node's path goes to that node,
           * the others in order, and nodes left over get new slots. Also answers the slots no node took.
@@ -3327,6 +3385,9 @@ private[kyo] object ReactiveUI:
         def endWalk(): Unit =
             handoff.set(Dict.empty)
     end MountTable
+
+    private[kyo] object MountTable:
+        val nothingToRelease: () => Unit < Async = () => Kyo.unit
 
     /** Subscribes a mounted node in the current scope. A keyed node adopts or creates its instance in the enclosing region's table; a
       * keyless node gets a new instance that ends with the current scope, which for a node inside a region is the region's current
@@ -3473,6 +3534,32 @@ private[kyo] object ReactiveUI:
         yield ()
         end for
     end subscribeMountContent
+
+    /** `ui` rooted at `path` with each mount at a path of `seeds` shown as its slot holding that snapshot. Only the static part of `ui`
+      * is walked: the mounts inside a region, a boundary or a mount are painted by those.
+      */
+    private def showingSeeds(ui: UI, path: Seq[String], seeds: Map[Seq[String], UI]): UI =
+        ui match
+            case m: Mounted =>
+                seeds.get(path) match
+                    // A boundary around one mount renders as that mount's slot, here showing the snapshot.
+                    case Some(seed) if Boundaries.implicitOf(m).isEmpty =>
+                        Bounded(UI.Boundary(Absent, Absent, Absent), m, Present(seed))(using m.frame)
+                    case _ => m
+            case e: Element =>
+                val children = e.children.toSeq
+                val shown    = children.zipWithIndex.map((c, i) => showingSeeds(c, path :+ i.toString, seeds))
+                if shown.corresponds(children)(_ eq _) then e else rebuildElement(e, Chunk.from(shown))
+            case f: Fragment[?] =>
+                val children = f.children.toSeq
+                val shown    = children.zipWithIndex.map {
+                    case (kc: KeyedChild[?], _) =>
+                        val inner = showingSeeds(kc.child, path :+ kc.key, seeds)
+                        if inner eq kc.child then kc else KeyedChild[UI](kc.key, inner)(using kc.frame)
+                    case (c, i) => showingSeeds(c, path :+ i.toString, seeds)
+                }
+                if shown.corresponds(children)(_ eq _) then f else Fragment[UI](Chunk.from(shown))(using f.frame)
+            case _ => ui
 
     /** Whether a mount in `state` shows the inert snapshot of the instance before it. */
     private def showsSnapshot(state: MountState): Boolean =
