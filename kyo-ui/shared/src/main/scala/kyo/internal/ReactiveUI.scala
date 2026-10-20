@@ -3242,6 +3242,7 @@ private[kyo] object ReactiveUI:
     final private[kyo] class RegionWatch(scope: MountScope) extends Signal.PassWatch:
         private val starts                         = new java.util.concurrent.atomic.AtomicLong()
         private val planned                        = new java.util.concurrent.atomic.AtomicLong()
+        private val rests                          = new java.util.concurrent.atomic.AtomicLong()
         private val ended                          = new java.util.concurrent.atomic.AtomicBoolean()
         @volatile private var probe: () => Boolean = () => false
 
@@ -3249,7 +3250,9 @@ private[kyo] object ReactiveUI:
             probe = behind
             discard(starts.incrementAndGet())
 
-        def rested(): Unit = scope.table.recheck()
+        def rested(): Unit =
+            discard(rests.incrementAndGet())
+            scope.table.recheck()
 
         /** The pass that started last has recorded its walk. */
         def recorded(): Unit =
@@ -3262,10 +3265,16 @@ private[kyo] object ReactiveUI:
 
         def started: Long = starts.get()
 
-        def caughtUp(at: Long): Boolean =
+        def restedSoFar: Long = rests.get()
+
+        /** Whether the region has seen every write up to a cut taken when it had started `at` passes and rested `restsAt` times: a pass
+          * started since has recorded its walk, or its latest pass has, and its probe says nothing landed since, or it re-read and found
+          * its value unchanged since. The last is what catches up a region whose probe cannot tell (a signal without an exact read).
+          */
+        def caughtUp(at: Long, restsAt: Long): Boolean =
             ended.get() || !scope.followed || {
                 val p = planned.get()
-                p > at || (p == starts.get() && !probe())
+                p > at || (p == starts.get() && (!probe() || rests.get() > restsAt))
             }
     end RegionWatch
 
@@ -3280,7 +3289,9 @@ private[kyo] object ReactiveUI:
       * one the first still shows waits, showing what its node's `PendingPolicy` says. A new instance waits to start while anything is in
       * transit, so what is released is released before it starts. When the change ends (the pass itself, or the [[kyo.UI.batch]] blocks of
       * the session it falls into), the table records where every region's passes stand; the cut is reached once each has seen every write
-      * so far. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several places is reported at
+      * so far. A region over a signal without an exact read (one built with `Signal.initRaw`, or a combinator over one) cannot tell whether
+      * a write reached it, so it counts as behind until its next re-read, which its repair timer brings within one repair interval
+      * (`Signal.defaultRepairInterval`): a cut in a table that holds such a region can wait that long. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several places is reported at
       * all of them. The decision depends on what the regions show once they all saw the writes, never on the order they rendered them in.
       * An event handler is no change of its own: it may wait for what its writes cause, a release or a new instance's content, and a
       * change that stayed open while it waits would never end.
@@ -3299,7 +3310,7 @@ private[kyo] object ReactiveUI:
 
         private val state   = AtomicRef.Unsafe.init(TableState.empty)
         private val watches = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
-        private val cut     = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long)]])
+        private val cut     = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
         private val wake    = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
         private val running = new java.util.concurrent.atomic.AtomicBoolean()
         private val closed  = new java.util.concurrent.atomic.AtomicBoolean()
@@ -3354,7 +3365,7 @@ private[kyo] object ReactiveUI:
         def closeEpoch(): Unit =
             if state.get().waiting.nonEmpty then
                 val all = watches.get()
-                cut.set(Present(Chunk.from(all.iterator.map(w => (w, w.started)))))
+                cut.set(Present(Chunk.from(all.iterator.map(w => (w, w.started, w.restedSoFar)))))
                 discard(session.counters.cuts.incrementAndGet())
                 recheck()
         end closeEpoch
@@ -3372,7 +3383,7 @@ private[kyo] object ReactiveUI:
                 case Absent       => false
                 case Present(all) =>
                     discard(session.counters.scanned.addAndGet(all.size))
-                    all.forall((w, at) => w.caughtUp(at))
+                    all.forall((w, at, restsAt) => w.caughtUp(at, restsAt))
 
         /** Settles the table, cut after cut, while anything waits. */
         private def settling(using Frame): Unit < Async =
