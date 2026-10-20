@@ -284,9 +284,16 @@ object UI:
       *   - `Fork`: the node had published content, and a fiber the effect started with [[kyo.UI.fork]] died afterwards. What was on
       *     screen came from a feed that no longer runs.
       *   - `Handler`: an event handler in the node's content failed, and an `onFailure` rule escalated it.
+      *   - `Duplicate`: one render pass showed the node's identity (its `.keyed` call, key and list rows) in more than one place. None
+      *     of those places gets an instance and the effect does not run; the message names every place.
       */
     enum MountErrorSource derives CanEqual:
-        case Effect, Panic, Fork, Handler
+        case Effect, Panic, Fork, Handler, Duplicate
+
+    /** The failure each place of a keyed identity shown more than once in one render pass reports, see
+      * [[kyo.UI.MountErrorSource.Duplicate]]. The message names the places and the `UI.mounted` call.
+      */
+    final class DuplicateMountException(message: String) extends Exception(message) with scala.util.control.NoStackTrace
 
     /** The effect row of every event handler: it may suspend, and it may fail. A failure it leaves unhandled goes to the
       * [[kyo.UI.Reaction]] the nearest `onFailure` rule picks for it.
@@ -533,11 +540,13 @@ object UI:
         extension (m: Mounted)
             /** Keeps the node's instance (its `Scope`, resources and content) across re-renders of the reactive regions around it.
               *
-              * The instance lives as long as each re-render shows this node from the same `.keyed` call, in the same row of any
-              * enclosing keyed list, with an equal key; otherwise it is torn down before the new instance starts. Siblings that appear
-              * or disappear around the node, or around the regions it sits in, do not affect it. When one render shows several nodes
-              * with the same call, key and rows, each gets an instance of its own, and their positions tell them apart from one render
-              * to the next.
+              * The instance is found by its identity: the `.keyed` call, the key, and the rows of the enclosing lists, up to the
+              * enclosing mount instance or the session root. It lives as long as a region of that content shows the identity, and is
+              * torn down, before any new instance starts, once none does. Its position, its siblings, the regions around it and the
+              * `Frame` they were built under are not part of it: it survives siblings and regions appearing or disappearing around it,
+              * and a move from one region to another when one render pass covers both. When one render pass shows the same identity in
+              * more than one place, none of them gets an instance: each shows a [[kyo.UI.MountErrorSource.Duplicate]] error naming
+              * all of them, since only the data can say which instance belongs where.
               *
               * Inputs that should update a live instance belong in `Signal` parameters. A plain value the effect captures belongs in the
               * key, or the instance keeps the value it was created with.

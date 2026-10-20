@@ -293,40 +293,48 @@ class MountedTest extends kyo.test.Test[Any]:
         Chunk.from(rui.mounted.fold(Seq.empty[ReactiveUI])(_ => Seq(rui)) ++ rui.children.flatMap(mountedNodes))
 
     // An outer re-render stops the old subscription of a region only once the outer value's scope has drained, while the new
-    // subscription of that region already works on the same table. The table follows the newest subscription; the older one, still
-    // running a pass, must neither release nor record anything in it.
-    "a region's newer subscription owns its mount table, and an older one still running leaves the table alone" in {
+    // subscription of that region already works on the same table. The table follows the subscription born in the pass that last
+    // covered the region; the older one, still running a pass, must neither release nor record anything in it.
+    "a region's newer subscription owns its entry in the mount table, and an older one still running leaves the table alone" in {
         Scope.run {
             for
                 released <- AtomicBoolean.init(false)
-                root <- ReactiveUI.normalize(div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")), Seq.empty)
+                tick     <- Signal.initRef(0)
+                root     <- ReactiveUI.normalize(
+                    div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                    Seq.empty
+                )
+                region   = root.children.head
                 node     = mountedNodes(root).head
                 spec     = node.mounted.get
                 identity = spec.identity.get
-                outer    = ReactiveUI.MountTableRef.init()
-                pass     = ReactiveUI.RegionKeys(Seq(root))
-                older    = outer.child(pass, root)
-                _     <- older.beginWalk(Seq(node), ReactiveUI.RegionKeys(Seq(node)))
-                first <- older.claim(node, identity, spec)
-                _     <- older.endWalk
-                _     <- assertEventually(first.cell.current.map(_.isInstanceOf[ReactiveUI.MountState.Ready]))
-                newer = outer.child(pass, root)
-                _     <- newer.beginWalk(Seq(node), ReactiveUI.RegionKeys(Seq(node)))
-                kept  <- newer.claim(node, identity, spec)
-                _     <- older.beginWalk(Seq.empty, ReactiveUI.RegionKeys.empty)
-                _     <- older.endWalk
-                stale <- older.claim(node, identity, spec)
-                _     <- newer.endWalk
-                gone  <- released.get
-                _     <- newer.beginWalk(Seq(node), ReactiveUI.RegionKeys(Seq(node)))
-                again <- newer.claim(node, identity, spec)
-                _     <- newer.endWalk
-                _     <- outer.evictAll
+                (table, top) <- ReactiveUI.MountTable.root(Seq.empty)
+                outerFirst   <- top.beginWalk(Seq(root))
+                older = top.child(outerFirst, region)
+                olderPass <- older.beginWalk(region.children)
+                first     <- older.claim(node, identity, spec, olderPass)
+                _         <- older.endWalk
+                _         <- assertEventually(first.cell.current.map(_.isInstanceOf[ReactiveUI.MountState.Ready]))
+                outerNext <- top.beginWalk(Seq(root))
+                newer = top.child(outerNext, region)
+                newerPass <- newer.beginWalk(region.children)
+                kept      <- newer.claim(node, identity, spec, newerPass)
+                _         <- older.beginWalk(Seq.empty)
+                _         <- older.endWalk
+                stale     <- older.claim(node, identity, spec, olderPass)
+                _         <- newer.endWalk
+                gone      <- released.get
+                againPass <- newer.beginWalk(region.children)
+                again     <- newer.claim(node, identity, spec, againPass)
+                _         <- newer.endWalk
+                _         <- table.evictAll
+                after     <- released.get
             yield
                 assert(kept eq first, "the newer subscription did not find the kept instance")
                 assert(!gone, "the older subscription released the instance the newer one shows")
                 assert(stale eq first, "the older subscription's claim did not reuse the live instance")
                 assert(again eq first, "the table lost the instance after the older subscription's pass")
+                assert(after, "evicting the table did not release the instance")
         }
     }
 
@@ -445,7 +453,7 @@ class MountedTest extends kyo.test.Test[Any]:
     private def tile(ref: String, runs: AtomicInt, released: AtomicInt)(using Frame): UI =
         UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n")))).keyed(ref)
 
-    "the same keyed tile shown twice in one region gives each slot its own instance" in {
+    "the same keyed tile shown twice in one region is reported at both places, and a tile shown once keeps its instance" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -453,24 +461,23 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(tick.render(_ => UI.Ast.Div(children = Chunk("x", "y", "x").map(tile(_, runs, released)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _       <- assertEventually(runs.get.map(_ == 3))
-                    _       <- showsEventually(recorder, Seq("0", "0"), "x:")
-                    _       <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    _       <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
                     first   <- recorder.shown(Seq("0", "0"))
-                    second  <- recorder.shown(Seq("0", "2"))
                     _       <- afterRepaint(recorder, Seq("0"))(tick.set(1))
-                    _       <- showsEventually(recorder, Seq("0", "0"), first)
-                    _       <- showsEventually(recorder, Seq("0", "2"), second)
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
                     total   <- runs.get
                     dropped <- released.get
                 yield
-                    assert(first != second, s"both slots show $first")
-                    assert(total == 3 && dropped == 0, s"runs: $total, released: $dropped")
+                    assert(first.contains("shown in 2 places") && first.contains("0.0") && first.contains("0.2"), first)
+                    assert(total == 1 && dropped == 0, s"runs: $total, released: $dropped")
             }
         yield succeed
     }
 
-    "a duplicate that goes away leaves the other instances where they are" in {
+    "when one place of a duplicated identity goes away, the other one gets an instance" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -482,20 +489,19 @@ class MountedTest extends kyo.test.Test[Any]:
             })
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- assertEventually(runs.get.map(_ == 3))
-                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    before <- recorder.shown(Seq("0", "2"))
-                    _      <- afterRepaint(recorder, Seq("0"))(show.set(false))
-                    _      <- assertEventually(released.get.map(_ == 1))
-                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    after  <- recorder.shown(Seq("0", "2"))
-                    total  <- runs.get
-                yield assert(after == before && total == 3, s"before: $before, after: $after, runs: $total")
+                    _       <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    _       <- afterRepaint(recorder, Seq("0"))(show.set(false))
+                    _       <- showsEventually(recorder, Seq("0", "2"), "x:2")
+                    _       <- showsEventually(recorder, Seq("0", "1"), "y:1")
+                    total   <- runs.get
+                    dropped <- released.get
+                yield assert(total == 2 && dropped == 0, s"runs: $total, released: $dropped")
             }
         yield succeed
     }
 
-    "duplicates whose places all shift keep their instances" in {
+    "duplicates whose places all shift stay reported, and run nothing" in {
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -506,13 +512,12 @@ class MountedTest extends kyo.test.Test[Any]:
             })
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _       <- assertEventually(runs.get.map(_ == 2))
-                    _       <- afterRepaint(recorder, Seq("0"))(lead.set(true))
-                    _       <- showsEventually(recorder, Seq("0", "1"), "x:")
-                    _       <- showsEventually(recorder, Seq("0", "2"), "x:")
-                    total   <- runs.get
-                    dropped <- released.get
-                yield assert(total == 2 && dropped == 0, s"runs: $total, released: $dropped")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _     <- afterRepaint(recorder, Seq("0"))(lead.set(true))
+                    _     <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _     <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                    total <- runs.get
+                yield assert(total == 0, s"runs: $total")
             }
         yield succeed
     }
@@ -587,7 +592,7 @@ class MountedTest extends kyo.test.Test[Any]:
         rowsKeepTheirInstances(keepsRows = true)
     }
 
-    "the same call site shown twice with one key inside a list row gives each slot its own instance" in {
+    "the same call site shown twice with one key inside a list row is reported in that row" in {
         for
             runs  <- AtomicInt.init(0)
             items <- Signal.initRef(Chunk("a"))
@@ -598,19 +603,18 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(items.foreachKeyed(identity)(row))
             _ <- mount(ui, keepsRows = true) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "kyo-mount-error")
                     _      <- items.set(Chunk("b", "a"))
-                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "runs:")
-                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "runs:")
-                    first  <- recorder.shown(Seq("0", "b", "0"))
+                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "kyo-mount-error")
+                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "kyo-mount-error")
                     second <- recorder.shown(Seq("0", "b", "1"))
-                yield assert(first != second, s"both slots show $first")
+                yield assert(second.contains("0.b.0") && second.contains("0.b.1") && !second.contains("0.a."), second)
             }
             total <- runs.get
-        yield assert(total == 4, s"runs: $total")
+        yield assert(total == 0, s"runs: $total")
     }
 
-    "the same call site shown twice with one key gives each slot its own instance" in {
+    "the same call site shown twice with one key outside any region is reported at both places" in {
         for
             runs <- AtomicInt.init(0)
             ui = UI.Ast.Div(children =
@@ -618,14 +622,12 @@ class MountedTest extends kyo.test.Test[Any]:
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0"), "runs:")
-                    _      <- showsEventually(recorder, Seq("1"), "runs:")
-                    first  <- recorder.shown(Seq("0"))
-                    second <- recorder.shown(Seq("1"))
-                yield assert(first != second, s"both slots show $first")
+                    _ <- showsEventually(recorder, Seq("0"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("1"), "kyo-mount-error")
+                yield ()
             }
             total <- runs.get
-        yield assert(total == 2)
+        yield assert(total == 0, s"runs: $total")
     }
 
     "a key change releases the old instance completely before the new effect starts" in {
@@ -1301,6 +1303,98 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             counts <- runs.get
         yield assert(counts.isEmpty, s"a duplicated identity ran its effect: $counts")
+    }
+
+    "an unkeyed foreach puts the row index into the identity, so a data-keyed mount restarts when its row shifts" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("B"))
+            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed(id))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "B:1")
+                    _ <- items.set(Chunk("A", "B"))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "B:2")
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "A:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("A" -> 1, "B" -> 2), s"runs: $counts")
+    }
+
+    "a keyed mount inside a keyless one restarts with it, inside a keyed one it is kept" in {
+        for
+            runs <- AtomicRef.init(Map.empty[String, Int])
+            tick <- Signal.initRef(0)
+            inner = (name: String) => UI.mounted(counted(runs, name)).keyed("inner")
+            ui    = div(tick.render(n =>
+                div(
+                    span(s"tick:$n"),
+                    UI.mounted(Kyo.lift(div(inner("in-keyless")))),
+                    UI.mounted(Kyo.lift(div(inner("in-keyed")))).keyed("outer")
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "in-keyless:1")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "in-keyed:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "in-keyless:2")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "in-keyed:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("in-keyless" -> 2, "in-keyed" -> 1), s"runs: $counts")
+    }
+
+    "a row of nested keyed lists is identified with its group: moving groups restarts it, two groups at once are not a duplicate" in {
+        for
+            runs   <- AtomicRef.init(Map.empty[String, Int])
+            groups <- Signal.initRef(Chunk(("open", Chunk("X")), ("done", Chunk.empty[String])))
+            ui = div(groups.foreachKeyed(_._1)((group, ids) =>
+                div(
+                    span(group),
+                    Signal.initConst(ids).foreachKeyed(identity)(id => div(UI.mounted(counted(runs, s"$id@$group")).keyed("row")))
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "open", "1", "X", "0"), "X@open:1")
+                    _ <- groups.set(Chunk(("open", Chunk.empty[String]), ("done", Chunk("X"))))
+                    _ <- showsEventually(recorder, Seq("0", "done", "1", "X", "0"), "X@done:1")
+                    _ <- groups.set(Chunk(("open", Chunk("X")), ("done", Chunk("X"))))
+                    _ <- showsEventually(recorder, Seq("0", "open", "1", "X", "0"), "X@open:2")
+                    _ <- showsEventually(recorder, Seq("0", "done", "1", "X", "0"), "X@done:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("X@open" -> 2, "X@done" -> 1), s"runs: $counts")
+    }
+
+    // Two regions over signals of their own: no pass covers both, so the engine cannot tell a move in progress from a duplicate. The
+    // region that shows the identity second shares the live instance, and a warning names it.
+    "two regions that render independently share the instance of an identity they both show" in {
+        for
+            runs  <- AtomicInt.init(0)
+            showA <- Signal.initRef(true)
+            showB <- Signal.initRef(false)
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("shared")
+            ui   = div(
+                showA.render(a => if a then div(node) else div(span("no a"))),
+                showB.render(b => if b then div(node) else div(span("no b")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "runs:1")
+                    _ <- showB.set(true)
+                    _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                    _ <- showA.set(false)
+                    _ <- showsEventually(recorder, Seq("0"), "no a")
+                    _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 1, s"runs: $total")
     }
 
 end MountedTest
