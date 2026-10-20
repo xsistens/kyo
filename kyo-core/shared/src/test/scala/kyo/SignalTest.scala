@@ -2019,6 +2019,31 @@ class SignalTest extends kyo.test.Test[Any]:
             revertsWhileClosing(ref => ref)
         }
 
+        // An observation through the repairing loop of a signal without a suspension-free read cannot tell whether a write landed: it
+        // counts as behind, and its re-reads (each pass, each rest after the repair timer) are what the watch hears.
+        "an observation that cannot tell whether a write landed counts as behind and reports its re-reads" in {
+            val ri = Signal.defaultRepairInterval
+            Clock.withTimeControl { control =>
+                Scope.run {
+                    for
+                        _   <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                        ref <- Signal.initRef(0)
+                        raw = Signal.initRaw[Int](
+                            [B, S] => (f: Int => B < S) => ref.currentWith(f),
+                            [B, S] => (f: Int => B < S) => ref.nextWith(f)
+                        )
+                        watch = new Watch
+                        fiber  <- Fiber.init(Signal.passWatch.let(Present(watch))(raw.observe(_ => Kyo.unit)))
+                        _      <- assertEventually(Sync.defer(watch.starts.get == 1))
+                        behind <- Sync.defer(watch.probe())
+                        rests  <- Sync.defer(watch.rests.get)
+                        _      <- assertEventually(Sync.defer(watch.rests.get > rests))
+                        _      <- fiber.interrupt
+                    yield assert(behind, "an observation that cannot tell said it was current")
+                }
+            }
+        }
+
         "an exact combinator observation whose value comes back while its pass closes is current again" in {
             Signal.initRef(0).map(other => revertsWhileClosing(ref => ref.combineLatest(other).map(_._1)))
         }
