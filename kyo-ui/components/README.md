@@ -1694,7 +1694,7 @@ val layoutChrome: UI =
 
 Validation is a separate, opt-in layer in `kyo.uic.form`. Nothing above this section knows it exists: the controls already carry `invalid` and `invalidMessage`, and the form layer is a thing that computes them for you and coordinates submit. Four ideas carry it. Errors are data, never text. *When a rule re-computes* and *when its failure is shown* are independent knobs. A field is declared by a spec with a default for every slot, so the common declaration says nothing but the starting value. And binding a field onto a control preserves the control's concrete type, so the form layer never hands you back an opaque wrapper.
 
-A form is a mount region: `Form.mountedWith` allocates the state, runs your builder with the live `Form` scope, and returns an ordinary `UI`.
+A form is a mount region: `Form.mountedWith` allocates the state, runs your builder with the live `Form` scope, and returns the `UI.mounted` node that holds it. The form's state lives as long as that node's instance, so a mount's settings apply to the form itself: `.keyed(issueId)` gives every issue a form of its own, and `.placeholder` and `.onError` cover its loading and its failure.
 
 `scope.field(initial)` returns a `FieldSpec`, and `.declare` turns it into the live handle. Everything decided at declaration lives on that spec — `rules`, `on`, `domId`, `debounce`, `revealWhen`, `focusable` — each with the default most fields want, so `scope.field(true).declare` is a complete declaration. What stays on the handle is what can only be done afterwards: `addRule` and `matches`, which need a second field that does not exist yet when the first is declared.
 
@@ -1712,7 +1712,7 @@ val nameForm: UI =
     }
 ```
 
-`Form.mounted` and `Form.mountedWith` differ only in where the `ErrorTranslator` comes from. `mountedWith(translator)` takes it directly and returns a plain `UI`, which is the no-i18n path; `mounted()` resolves it from `Env` at build time and returns `UI < Env[ErrorTranslator]`, so an i18n-aware app installs one translator at the root and every form downstream picks it up.
+`Form.mounted` and `Form.mountedWith` differ only in where the `ErrorTranslator` comes from. `mountedWith(translator)` takes it directly, which is the no-i18n path; `mounted()` resolves it from `Env` at build time and returns the mount under `Env[ErrorTranslator]`, so an i18n-aware app installs one translator at the root and every form downstream picks it up.
 
 ```scala
 val translated: UI < Env[ErrorTranslator] =

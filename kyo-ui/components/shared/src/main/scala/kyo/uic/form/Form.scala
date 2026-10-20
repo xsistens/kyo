@@ -553,9 +553,12 @@ object Form:
 
     /** Root form; resolves the [[ErrorTranslator]] from `Env` at build time (mirrors
       * `ToastService`). Install a translator once at the app root. `focusInvalidOnSubmit`
-      * defaults on (opt-out): a failed submit focuses the first invalid field.
+      * defaults on (opt-out): a failed submit focuses the first invalid field. The form is a
+      * mount, see [[mountedWith]].
       */
-    def mounted(focusInvalidOnSubmit: Boolean = true)(build: Form => UI < (Async & Scope))(using Frame): UI < Env[ErrorTranslator] =
+    def mounted(focusInvalidOnSubmit: Boolean = true)(build: Form => UI < (Async & Scope))(using
+        Frame
+    ): UI.Ast.Mounted < Env[ErrorTranslator] =
         Env.get[ErrorTranslator].map(tr => mountedWith(tr, focusInvalidOnSubmit)(build))
 
     /** Root form with an explicit translator — no `Env` wiring needed. Use
@@ -563,10 +566,14 @@ object Form:
       * defaults on (opt-out): a failed submit moves focus (and scroll) to the first invalid
       * field in declaration order; pass `false` to disable, or exclude a single field with
       * [[FormField.focusable]]`(false)`.
+      *
+      * The form is a mount, and its state lives as long as the mount's instance, so everything
+      * a `UI.mounted` takes applies to it directly: `.keyed(issueId)` gives each issue a form of
+      * its own, and `.placeholder` and `.onError` show while it loads and when it fails.
       */
     def mountedWith(translator: ErrorTranslator, focusInvalidOnSubmit: Boolean = true)(build: Form => UI < (Async & Scope))(using
         Frame
-    ): UI =
+    ): UI.Ast.Mounted =
         UI.mounted {
             for
                 // The session's imperative channel — captured once so the form's field-id
