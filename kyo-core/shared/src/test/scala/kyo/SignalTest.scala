@@ -1991,6 +1991,37 @@ class SignalTest extends kyo.test.Test[Any]:
         "an exact combinator observation reports its passes and whether a write landed since its read" in {
             Signal.initRef(0).map(other => reportsPasses(ref => ref.combineLatest(other).map(_._1)))
         }
+
+        // A write that lands after the hold saw a new value, while the pass's scope closes, can take the value back to the one the
+        // pass delivered: the loop then reads that value again and runs no pass. The probe must answer for that read, or the
+        // observation looks behind for good.
+        def revertsWhileClosing(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
+            for
+                ref      <- Signal.initRef(0)
+                armed    <- AtomicBoolean.init(false)
+                reverted <- Latch.init(1)
+                watch = new Watch
+                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe { v =>
+                    Scope.ensure(armed.compareAndSet(true, false).map(go =>
+                        if go && v == 0 then ref.set(0).andThen(reverted.release) else Kyo.unit
+                    ))
+                }))
+                _      <- assertEventually(Sync.defer(watch.starts.get == 1))
+                _      <- armed.set(true)
+                _      <- ref.set(1)
+                _      <- reverted.await
+                _      <- assertEventually(Sync.defer(!watch.probe()))
+                starts <- Sync.defer(watch.starts.get)
+                _      <- fiber.interrupt
+            yield assert(starts == 1, s"a value that came back to the delivered one ran a pass: $starts starts")
+
+        "a SignalRef observation whose value comes back while its pass closes is current again" in {
+            revertsWhileClosing(ref => ref)
+        }
+
+        "an exact combinator observation whose value comes back while its pass closes is current again" in {
+            Signal.initRef(0).map(other => revertsWhileClosing(ref => ref.combineLatest(other).map(_._1)))
+        }
     }
 
 end SignalTest
