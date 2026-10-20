@@ -282,7 +282,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             def repairing(last: Maybe[B]): Unit < (S & Async) =
                 currentWith { cur =>
                     val b = image(cur)
-                    if last.exists(_ == b) then await.andThen(loop(last))
+                    if last.exists(_ == b) then
+                        // The value came back to the one delivered last: current again without a pass.
+                        if probe != null then
+                            probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
+                            watch.get.rested()
+                        await.andThen(loop(last))
                     else
                         startRepairing(b)
                         Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
@@ -296,7 +301,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         readExact(read, wakesOnAnyInput) match
                             case Present(cur) =>
                                 val b = image(cur)
-                                if last.exists(_ == b) then read.awaitChange.andThen(loop(last))
+                                if last.exists(_ == b) then
+                                    // The value came back to the one delivered last: current again, with this read, without a pass.
+                                    if probe != null then
+                                        probe.exact(read)
+                                        watch.get.rested()
+                                    read.awaitChange.andThen(loop(last))
                                 else
                                     if probe != null then
                                         probe.exact(read)
@@ -1285,7 +1295,12 @@ object Signal:
                             Sync.Unsafe.defer {
                                 val v0 = _unsafe.version()
                                 val b  = image(_unsafe.get())
-                                if last.exists(_ == b) then nextSince(v0).andThen(loop(last))
+                                if last.exists(_ == b) then
+                                    // The value came back to the one delivered last: current again, at this version, without a pass.
+                                    if watch.nonEmpty then
+                                        seen.set(v0)
+                                        watch.get.rested()
+                                    nextSince(v0).andThen(loop(last))
                                 else
                                     if watch.nonEmpty then
                                         seen.set(v0)
