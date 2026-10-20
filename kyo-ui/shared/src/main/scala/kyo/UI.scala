@@ -396,6 +396,10 @@ object UI:
       * a feed, a timer. Without it the first write is decided on its own, so the instance is released and the second write starts it
       * again.
       *
+      * The decision waits for every region of the page to have seen the writes. A region over a signal without an exact read (one built
+      * with `Signal.initRaw`, or a combinator over one) cannot tell, and is waited for until it reads again, which its repair timer brings
+      * within one repair interval, so on such a page a move or a release can take that long to be decided.
+      *
       * A `batch` must not wait for a release its own writes cause, such as a keyed node it hides going away: what its writes drop is
       * released only once it has ended, so the wait never returns. Write inside the `batch` and wait after it. Outside a mounted page
       * `batch` is `v`.
