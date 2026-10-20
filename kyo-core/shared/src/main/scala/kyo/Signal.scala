@@ -252,10 +252,17 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         holdUntilChanged(b)
                     else (): Unit < (S & Async)
                 }
-            // The repairing loop records no read: the probe compares the suspension-free current value, where there is one.
+            // The repairing loop records no read: the probe compares the suspension-free current value, where there is one. Where
+            // there is none it cannot tell, and counts as behind: the watch hears the observation's next re-read, its pass or the rest
+            // after the repair timer, at the latest one repair interval later.
+            def repairingBehind(b: B): () => Boolean =
+                () =>
+                    unsafeCurrent()(using AllowUnsafe.embrace.danger) match
+                        case Present(c) => proj(c) != b
+                        case Absent     => true
             def startRepairing(b: B): Unit =
                 if probe != null then
-                    probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
+                    probe.repairing(repairingBehind(b))
                     watch.get.started(probe.behind)
             // Cleared by the first read that is not exact, after which the observation stays on the repairing loop: without that
             // a signal over `initRaw` would run its exact parts twice per wakeup, once for the attempt and once for `currentWith`.
@@ -275,7 +282,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         case Absent =>
                             exact = false
                             if probe != null then
-                                probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
+                                probe.repairing(repairingBehind(b))
                             recheck(b)
                     end match
                 })
@@ -285,7 +292,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     if last.exists(_ == b) then
                         // The value came back to the one delivered last: current again without a pass.
                         if probe != null then
-                            probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
+                            probe.repairing(repairingBehind(b))
                             watch.get.rested()
                         await.andThen(loop(last))
                     else
@@ -574,7 +581,8 @@ object Signal:
     private[kyo] trait PassWatch:
         /** A pass for a new value starts. `behind` answers, from any thread and without suspending, whether a write landed since the
           * pass read its value. For a signal observed through the repairing loop it compares the projection of the suspension-free
-          * current value where there is one, and answers `false` where there is none.
+          * current value where there is one, and answers `true` where there is none, since it cannot tell: such an observation counts as
+          * behind, and only its re-reads ([[started]] and [[rested]], the latter at least once per repair interval) say it has caught up.
           */
         def started(behind: () => Boolean): Unit
 
