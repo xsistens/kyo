@@ -384,6 +384,22 @@ object UI:
       */
     type MountSite = kyo.internal.MountSites.MountSite
 
+    /** Runs `v` as one change for the keyed mounts of the page it runs in: whatever its writes move between regions is decided once it has
+      * ended, as for the writes of one event handler.
+      *
+      * A keyed instance that moves from one region to another keeps itself when the regions have seen every write of the change; the page
+      * decides only then whether it moved, went away, or is shown in two places. An event handler is one change already, and so is a
+      * write on its own. Writes made elsewhere that belong together need `batch`: a fiber a mount effect forked, a feed, a timer that sets
+      * two signals one after the other. Without it each write is a change of its own, and a region may render between the two (on the JVM
+      * one can run on another thread while the fiber is between its writes), so the instance is released by the first and started again
+      * by the second. Outside a mounted page `batch` is `v`.
+      */
+    def batch[A, S](v: => A < S)(using Frame): A < (S & Sync) =
+        kyo.internal.ReactiveUI.MountSession.current.use {
+            case Present(session) => session.within(v)
+            case Absent           => v
+        }
+
     /** Forks a fiber whose failure the enclosing [[kyo.UI.mounted]] node reports: the `Fiber.init` to use inside a mount effect.
       *
       * A mount effect returns once it has set things up, so a feed it forked keeps running after the node shows its content. Forked with
