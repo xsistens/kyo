@@ -1669,8 +1669,8 @@ private[kyo] object ReactiveUI:
             // button that stops working rather than one that works twice.
             activating = activatingHandle(rui.handle)
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
-            // Every handler is one change: the moves its writes cause are decided once it has ended (see MountTable).
-            validatedHandle: ValidatedHandler = (path, event) => session.within(dragging(path, event))
+            // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
+            validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
         yield Subscription(
             (path, event) =>
                 DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
@@ -3199,8 +3199,8 @@ private[kyo] object ReactiveUI:
         val scanned      = new java.util.concurrent.atomic.AtomicLong()
     end MountCounters
 
-    /** One mount session: the open handlers and [[kyo.UI.batch]] blocks, which together form one change, and the tables waiting for that
-      * change to end before they can take a cut.
+    /** One mount session: the open [[kyo.UI.batch]] blocks, which together form one change, and the tables waiting for that change to end
+      * before they can take a cut.
       */
     final private[kyo] class MountSession:
         import AllowUnsafe.embrace.danger
@@ -3213,7 +3213,7 @@ private[kyo] object ReactiveUI:
 
         def enter(): Unit = discard(open.incrementAndGet())
 
-        /** Ends one handler or batch; the last one to end lets every waiting table take its cut. */
+        /** Ends one batch; the last one to end lets every waiting table take its cut. */
         def exit(): Unit =
             if open.decrementAndGet() == 0 then pending.getAndSet(Set.empty).foreach(_.closeEpoch())
 
@@ -3229,8 +3229,11 @@ private[kyo] object ReactiveUI:
     end MountSession
 
     private[kyo] object MountSession:
-        /** The session of the handler or mount effect that is running, inherited by the fibers they fork. */
+        /** The session of the handler or mount effect that is running, inherited by the fibers they fork: where [[kyo.UI.batch]] opens its
+          * change.
+          */
         val current: Local[Maybe[MountSession]] = Local.init(Maybe.empty[MountSession])
+    end MountSession
 
     /** The passes of one region subscription as its observation reports them (see `Signal.PassWatch`): how many started, which of them
       * last recorded its walk in the table, and whether a write landed since the latest read. A cut waits for a region until it has seen
@@ -3275,11 +3278,12 @@ private[kyo] object ReactiveUI:
       * Between regions that render separately the table decides nothing in a pass: release, move and duplicate are decided at a cut. An
       * instance no region shows any more stays in transit, alive, and a region that shows it next adopts it. A second region that claims
       * one the first still shows waits, showing what its node's `PendingPolicy` says. A new instance waits to start while anything is in
-      * transit, so what is released is released before it starts. When the change ends (the handlers and [[kyo.UI.batch]] blocks of the
-      * session, or the pass itself outside them), the table records where every region's passes stand; the cut is reached once each has
-      * seen every write of the change. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several
-      * places is reported at all of them. The decision depends on what the regions show once they all saw the change, never on the order
-      * they rendered it in.
+      * transit, so what is released is released before it starts. When the change ends (the pass itself, or the [[kyo.UI.batch]] blocks of
+      * the session it falls into), the table records where every region's passes stand; the cut is reached once each has seen every write
+      * so far. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several places is reported at
+      * all of them. The decision depends on what the regions show once they all saw the writes, never on the order they rendered them in.
+      * An event handler is no change of its own: it may wait for what its writes cause, a release or a new instance's content, and a
+      * change that stayed open while it waits would never end.
       *
       * An identity shown more than once by one pass is reported at once: that pass is a cut of its own.
       *

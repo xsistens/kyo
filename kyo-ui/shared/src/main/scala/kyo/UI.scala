@@ -385,14 +385,20 @@ object UI:
     type MountSite = kyo.internal.MountSites.MountSite
 
     /** Runs `v` as one change for the keyed mounts of the page it runs in: whatever its writes move between regions is decided once it has
-      * ended, as for the writes of one event handler.
+      * ended.
       *
       * A keyed instance that moves from one region to another keeps itself when the regions have seen every write of the change; the page
-      * decides only then whether it moved, went away, or is shown in two places. An event handler is one change already, and so is a
-      * write on its own. Writes made elsewhere that belong together need `batch`: a fiber a mount effect forked, a feed, a timer that sets
-      * two signals one after the other. Without it each write is a change of its own, and a region may render between the two (on the JVM
-      * one can run on another thread while the fiber is between its writes), so the instance is released by the first and started again
-      * by the second. Outside a mounted page `batch` is `v`.
+      * decides only then whether it moved, went away, or is shown in two places. Without `batch` a change is what the regions have not
+      * seen yet: a region that is behind on a write is waited for, so writes that land before the regions run belong together. In the
+      * browser that covers a handler's writes up to its first suspension, since no region runs while the handler does. On the JVM a
+      * region can run on another thread between two writes of one handler, so a handler that writes more than once to move something
+      * needs `batch`, and so does any code that writes on both sides of a suspension, on either platform: a fiber a mount effect forked,
+      * a feed, a timer. Without it the first write is decided on its own, so the instance is released and the second write starts it
+      * again.
+      *
+      * A `batch` must not wait for a release its own writes cause, such as a keyed node it hides going away: what its writes drop is
+      * released only once it has ended, so the wait never returns. Write inside the `batch` and wait after it. Outside a mounted page
+      * `batch` is `v`.
       */
     def batch[A, S](v: => A < S)(using Frame): A < (S & Sync) =
         kyo.internal.ReactiveUI.MountSession.current.use {
