@@ -1433,7 +1433,8 @@ class MountedTest extends kyo.test.Test[Any]:
             node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
                 .keyed("docked")
             ui = div(
-                button("move").onClick(left.getAndUpdate(p => (false, p._2)).andThen(right.getAndUpdate(p => (true, p._2))).unit),
+                // Two writes on the JVM: one change only inside UI.batch.
+                button("move").onClick(UI.batch(left.getAndUpdate(p => (false, p._2)).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
                 left.render(p => if p._1 then div(node) else div(span("empty-left"))),
                 right.render(p => if p._1 then div(node) else div(span("empty-right"))),
                 tick.render(n => span(s"tick:$n"))
@@ -1605,7 +1606,7 @@ class MountedTest extends kyo.test.Test[Any]:
             gate    <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("1"), entered, gate)
             ui       = div(
-                button("move").onClick(left.getAndUpdate(p => (false, p._2)).andThen(right.set(true)).unit),
+                button("move").onClick(UI.batch(left.getAndUpdate(p => (false, p._2)).andThen(right.set(true))).unit),
                 left.render(p => if p._1 then div(errorBox("left", fail)) else div(span("empty-left"))),
                 right.render(r => if r then div(errorBox("right", fail)) else div(span("empty-right")))
             )
