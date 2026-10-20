@@ -323,24 +323,20 @@ extension [D](handle: QueryHandle[D] < (Async & Scope))
     def mapData[B](f: D => B < Abort[ApolloException])(using Frame, CanEqual[B, B]): QueryHandle[B] < (Async & Scope) =
         handle.map(_.mapData(f))
 
-/** Build a [[RawQueryHandle]] over a reactive `state` source: subscribe it, then mint
-  * the private `activity` overlay cell the handle's `networkStatus` / `refetch`
-  * (and the imperative operations) drive.
+/** Build a [[RawQueryHandle]]: mint the private `activity` overlay cell the handle's
+  * `networkStatus` / `refetch` (and the imperative operations) drive, then open the
+  * `state` source with it. The source is a watcher that enters the client's
+  * [[ActiveQueryRegistry]] with the cell, so a refetch through the registry shows
+  * on the handle as one through `refetch` does.
   */
 private[apollo] def buildQueryHandle[D](
     call: ApolloCall[D],
-    stateEff: Signal[QueryState[D]] < (Async & Scope)
+    stateEff: Signal.SignalRef[Maybe[NetworkStatus]] => Signal[QueryState[D]] < (Async & Scope)
 )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]], CanEqual[D, D]): RawQueryHandle[D] < (Async & Scope) =
     for
-        state    <- stateEff
         activity <- Signal.initRef[Maybe[NetworkStatus]](Absent)
+        state    <- stateEff(activity)
         handle = new RawQueryHandle(state, call, activity)
-        // Register this live query so `client.refetchQueries` / `client.resetStore`
-        // can force a network refetch of it; the registration ends with this Scope.
-        // The registry takes the execute row only: a NetworkOnly refetch fails with
-        // nothing else, and `asExecuteFailure` states that in the type.
-        _ <- call.apolloClient.activeQueries
-            .register(call.requestBuilder.operation.name, ApolloEffect.asExecuteFailure(handle.refetch.unit))
         // Tie any running poll loop to this handle's Scope.
         _ <- Scope.ensure(handle.stopPolling)
     yield handle

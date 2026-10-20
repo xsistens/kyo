@@ -68,10 +68,10 @@ import kyo.apollo.runtime.ResponseStream
   * Mirrors apollo-kotlin's `ApolloClient`; its `ApolloClient.Builder` is the
   * [[ApolloClient.Config]] value.
   *
-  * @param activeQueries registry of the live `useQuery` watchers, populated by the
-  *                      kyo-ui binding (each live query registers on setup and
-  *                      de-registers on `Scope` teardown); the seam for imperative
-  *                      `refetchQueries` / `resetStore`
+  * @param activeQueries registry of the live watchers, populated by the kyo-ui
+  *                      binding (each watcher registers on setup and de-registers on
+  *                      `Scope` teardown, and takes no part while it is paused); the
+  *                      seam for imperative `refetchQueries` / `resetStore`
   */
 final class ApolloClient private (
     config: ApolloClient.Config,

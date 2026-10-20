@@ -253,6 +253,31 @@ end extension
   */
 object ApolloSignal:
 
+    /** Enters a watcher in its client's [[ActiveQueryRegistry]] for the enclosing `Scope`, so `refetchQueries` and
+      * `resetStore` reach it. `target` is read whenever the registry is drained: `Absent` while the watcher is paused.
+      */
+    private[apollo] def register(client: ApolloClient, target: Maybe[ActiveQueryRegistry.Target] < Sync)(using
+        Frame
+    ): Unit < (Sync & Scope) =
+        client.activeQueries.register(target)
+
+    /** What the registry refetches for a watcher of `call`: a `NetworkOnly` fetch whose write-back re-emits the
+      * watcher. `during`, a query handle's activity cell, reads [[NetworkStatus.Refetch]] while it runs.
+      */
+    private[apollo] def targetOf[D](call: ApolloCall[D], during: Maybe[Signal.SignalRef[Maybe[NetworkStatus]]])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ActiveQueryRegistry.Target =
+        val operation = call.requestBuilder.operation
+        ActiveQueryRegistry.Target(
+            ActiveQueryRegistry.QueryKey(operation.name, operation.document, operation.variables),
+            ApolloEffect.asExecuteFailure(call.fetchPolicy(FetchPolicy.NetworkOnly).data.unit),
+            during.fold(Kyo.unit)(_.set(Present(NetworkStatus.Refetch))),
+            during.fold(Kyo.unit)(_.set(Absent)),
+            followsCache = true
+        )
+    end targetOf
+
     /** Hands a failed update to the `onFailure` rules around the follow, with `otherwise` where none matches.
       * Logged either way, so an app with no sink installed still sees it.
       */
@@ -381,10 +406,14 @@ object ApolloSignal:
       * watcher, such as the cursor accumulator of a paginated query. Sequencing it here
       * rather than in a second observer of `values` is what stops a concurrent
       * `fetchMore` from sending the previous value's cursor to the new query.
+      *
+      * The watcher of each value is in the client's [[ActiveQueryRegistry]] for as long
+      * as that value is current, so `refetchQueries` and `resetStore` reach the query the
+      * signal shows and nothing while it is parked at `Absent`.
       */
     private[kyo] def driveSwitching[D, V](
         values: Signal[Maybe[V]],
-        source: V => Stream[ApolloResponse[D], Async & Scope],
+        call: V => ApolloCall[D],
         ref: Signal.SignalRef[QueryState[D]],
         onSwitch: Maybe[V] => Unit < Sync
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]], CanEqual[V, V]): Unit < Async =
@@ -392,10 +421,14 @@ object ApolloSignal:
             onSwitch(value).andThen {
                 value match
                     case Present(v) =>
+                        val current = call(v)
                         ref.currentWith {
                             case QueryState.Idle => ref.set(QueryState.Loading)
                             case _               => (): Unit < Sync
-                        }.andThen(Fiber.init(Scope.run(source(v).foreach(resp => push(ref, resp)))).unit)
+                        }.andThen(Fiber.init(Scope.run(
+                            register(current.apolloClient, Present(targetOf(current, Absent)))
+                                .andThen(current.watch().foreach(resp => push(ref, resp)))
+                        )).unit)
                     case Absent =>
                         ref.set(QueryState.Idle)
             }

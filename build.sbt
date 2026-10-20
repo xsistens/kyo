@@ -4234,7 +4234,7 @@ lazy val `kyo-apollo-itserver` =
         .jvmSettings(mimaCheck(false), publish / skip := true)
 
 // Apollo bindings for kyo-ui: reactive Signal/Var adapters over the apollo core
-// store plus query/mutation effects. JS only, depends on the apollo core and kyo-ui.
+// store plus query/mutation effects, on every platform; depends on the apollo core and kyo-ui.
 lazy val `kyo-apollo-ui` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Pure)

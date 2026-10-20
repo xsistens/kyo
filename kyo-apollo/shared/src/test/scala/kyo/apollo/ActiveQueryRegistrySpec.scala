@@ -1,21 +1,33 @@
 package kyo.apollo
 
 import kyo.*
-import kyo.apollo.exception.ApolloException
+import kyo.apollo.ActiveQueryRegistry.QueryKey
+import kyo.apollo.ActiveQueryRegistry.Target
 import kyo.apollo.exception.ApolloExecuteFailure
+import kyo.apollo.exception.DefaultApolloException
+import kyo.apollo.json.Json
 
 /** Tests [[ActiveQueryRegistry]]: registration is owned by the enclosing `Scope`
   * (release removes exactly that entry), registration order is the refetch
-  * order, and concurrent registrations never lose an entry or share an id.
+  * order, an entry takes part only while its target is present, the targets of
+  * one query are refetched once, and concurrent registrations never lose an entry
+  * or share an id.
   */
 class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
 
-    private def refetch: Unit < (Async & Abort[ApolloExecuteFailure]) = ()
+    private def key(name: String, id: String = "1"): QueryKey =
+        QueryKey(name, s"query $name", Json.JObj(Map("id" -> Json.JStr(id))))
+
+    private def target(name: String, fetch: Unit < (Async & Abort[ApolloExecuteFailure]) = ()): Target =
+        Target(key(name), fetch, (), (), followsCache = true)
 
     "a refetch's row is the execute failures, not the module-wide ApolloException" in {
-        val blanket: Unit < (Async & Abort[ApolloException]) = ()
-        typeCheck("ActiveQueryRegistry.init.map(_.register(\"a\", refetch))")
-        typeCheckFailure("ActiveQueryRegistry.init.map(_.register(\"a\", blanket))")(
+        typeCheck(
+            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloExecuteFailure]), (), (), true)"
+        )
+        typeCheckFailure(
+            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloException]), (), (), true)"
+        )(
             "Abort[kyo.apollo.exception.ApolloException]"
         )
     }
@@ -25,41 +37,115 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
             registry <- ActiveQueryRegistry.init
             _        <- Scope.run {
                 for
-                    _ <- registry.register("a", refetch)
-                    _ <- Scope.run(registry.register("b", refetch))
-                    n <- registry.selected(Set.empty).map(_.size)
+                    _ <- registry.register(Present(target("a")))
+                    _ <- Scope.run(registry.register(Present(target("b"))))
+                    n <- registry.live.map(_.size)
                     _ = assert(n == 1)
                     _ <- Scope.run {
                         for
-                            _ <- registry.register("c", refetch)
-                            _ <- Scope.run(registry.register("d", refetch))
-                            e <- registry.entries
-                        yield assert(e.map(_.name) == Chunk("a", "c"))
+                            _ <- registry.register(Present(target("c")))
+                            _ <- Scope.run(registry.register(Present(target("d"))))
+                            e <- registry.live
+                        yield assert(e.map(_.key.name) == Chunk("a", "c"))
                     }
-                    n <- registry.selected(Set.empty).map(_.size)
+                    n <- registry.live.map(_.size)
                 yield assert(n == 1)
             }
-            n <- registry.selected(Set.empty).map(_.size)
+            n <- registry.entries.map(_.size)
         yield assert(n == 0)
     }
 
-    "selected filters by operation name and keeps registration order" in {
+    "refetchPlan filters by operation name and keeps registration order" in {
         Scope.run {
             for
+                log      <- AtomicRef.init(Chunk.empty[String])
                 registry <- ActiveQueryRegistry.init
-                _        <- registry.register("users", refetch)
-                _        <- registry.register("posts", refetch)
-                _        <- registry.register("users", refetch)
-                all      <- registry.selected(Set.empty)
-                users    <- registry.selected(Set("users"))
-                none     <- registry.selected(Set("comments"))
-                entries  <- registry.entries
+                note = (s: String) => log.updateAndGet(_ :+ s).unit
+                _     <- registry.register(Present(target("users", note("users"))))
+                _     <- registry.register(Present(target("posts", note("posts"))))
+                all   <- registry.refetchPlan(Set.empty)
+                users <- registry.refetchPlan(Set("users"))
+                none  <- registry.refetchPlan(Set("comments"))
+                _     <- Kyo.foreachDiscard(all)(identity)
+                order <- log.get
             yield
-                assert(all.size == 3)
-                assert(users.size == 2)
+                assert(all.size == 2)
+                assert(users.size == 1)
                 assert(none.isEmpty)
-                assert(entries.map(_.name) == Chunk("users", "posts", "users"))
-                assert(entries.map(_.id) == Chunk(1L, 2L, 3L))
+                assert(order == Chunk("users", "posts"))
+        }
+    }
+
+    "the targets of one query are refetched once, and every one of them sees it begin and end" in {
+        Scope.run {
+            for
+                log      <- AtomicRef.init(Chunk.empty[String])
+                registry <- ActiveQueryRegistry.init
+                note = (s: String) => log.updateAndGet(_ :+ s).unit
+                one  = (tag: String) =>
+                    Target(key("users"), note(s"fetch $tag"), note(s"begin $tag"), note(s"end $tag"), followsCache = true)
+                _     <- registry.register(Present(one("a")))
+                _     <- registry.register(Present(one("b")))
+                _     <- registry.register(Present(target("users").copy(key = key("users", "2"), fetch = note("fetch other"))))
+                plan  <- registry.refetchPlan(Set("users"))
+                _     <- Kyo.foreachDiscard(plan)(identity)
+                order <- log.get
+            yield
+                assert(plan.size == 2)
+                assert(order == Chunk("begin a", "begin b", "fetch a", "end a", "end b", "fetch other"))
+        }
+    }
+
+    "a target that does not follow the cache runs its own fetch" in {
+        Scope.run {
+            for
+                log      <- AtomicRef.init(Chunk.empty[String])
+                registry <- ActiveQueryRegistry.init
+                note = (s: String) => log.updateAndGet(_ :+ s).unit
+                _     <- registry.register(Present(target("users", note("watcher"))))
+                _     <- registry.register(Present(target("users", note("lazy")).copy(followsCache = false)))
+                plan  <- registry.refetchPlan(Set.empty)
+                _     <- Kyo.foreachDiscard(plan)(identity)
+                order <- log.get
+            yield assert(order == Chunk("lazy"))
+        }
+    }
+
+    "a failed fetch still ends every target of its query" in {
+        Scope.run {
+            for
+                ended    <- AtomicInt.init(0)
+                registry <- ActiveQueryRegistry.init
+                failing = Target(
+                    key("users"),
+                    Abort.fail(DefaultApolloException("down")),
+                    (),
+                    ended.incrementAndGet.unit,
+                    followsCache = true
+                )
+                _      <- registry.register(Present(failing))
+                _      <- registry.register(Present(failing))
+                plan   <- registry.refetchPlan(Set.empty)
+                result <- Abort.run[ApolloExecuteFailure](Kyo.foreachDiscard(plan)(identity))
+                n      <- ended.get
+            yield
+                assert(result.isFailure)
+                assert(n == 2)
+        }
+    }
+
+    "an entry takes part only while its target is present" in {
+        Scope.run {
+            for
+                paused   <- AtomicBoolean.init(true)
+                registry <- ActiveQueryRegistry.init
+                _        <- registry.register(paused.get.map(p => if p then Absent else Present(target("users"))))
+                before   <- registry.refetchPlan(Set.empty)
+                _        <- paused.set(false)
+                after    <- registry.refetchPlan(Set.empty)
+            yield
+                assert(before.isEmpty)
+                assert(after.size == 1)
         }
     }
 
@@ -69,7 +155,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
             _        <- Scope.run {
                 for
                     _     <- registry.registerResetHook(())
-                    _     <- registry.register("a", refetch)
+                    _     <- registry.register(Present(target("a")))
                     hooks <- registry.resetHookEffects
                     e     <- registry.entries
                 yield
@@ -92,7 +178,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                 latch    <- Latch.init(1)
                 forks    <- Kyo.foreach(1 to fibers) { i =>
                     Fiber.init(
-                        latch.await.andThen(Loop.repeat(perFiber)(registry.register(s"q$i", refetch)))
+                        latch.await.andThen(Loop.repeat(perFiber)(registry.register(Present(target(s"q$i")))))
                     )
                 }
                 _       <- latch.release

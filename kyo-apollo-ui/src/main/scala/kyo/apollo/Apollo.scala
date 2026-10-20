@@ -36,53 +36,63 @@ object Apollo:
 
     /** Prepare a live query — react-apollo's `useQuery`: reactive
       * [[QueryHandle.state]] paired with a `refetch` handle. Bind inside a
-      * `Scope.run { … }`; the watcher tears down when the block exits.
+      * `Scope.run { … }`; the watcher tears down when the block exits. Like every
+      * live watcher it takes part in `client.refetchQueries` and `client.resetStore`,
+      * and [[QueryHandle.networkStatus]] reads [[NetworkStatus.Refetch]] while one of
+      * them refetches it.
       */
     def query[D](call: ApolloCall[D])(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): RawQueryHandle[D] < (Async & Scope) =
-        buildQueryHandle(call, watchSignal(call))
+        buildQueryHandle(call, activity => watching(call, Present(activity)))
 
     /** [[query]] with a live `skip` (react-apollo's `skip`): while `skip` is `true`
       * the reactive state freezes ([[SkipMode.Freeze]]) or the watcher is torn down
-      * ([[SkipMode.Unsubscribe]]); `refetch` is unaffected.
+      * ([[SkipMode.Unsubscribe]]). The handle's own `refetch` is unaffected; while
+      * skipped, `client.refetchQueries` and `client.resetStore` leave the query out,
+      * as react leaves out a standby query.
       */
     def query[D](call: ApolloCall[D], skip: Signal[Boolean], mode: SkipMode = SkipMode.Freeze)(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): RawQueryHandle[D] < (Async & Scope) =
-        buildQueryHandle(call, watchSignal(call, skip, mode))
+        buildQueryHandle(call, activity => watchingGated(call, skip, mode, Present(activity)))
 
     /** Prepare a query that fetches only when asked — react-apollo's `useLazyQuery`:
-      * `state` is `Idle` until `load` is invoked.
+      * `state` is `Idle` until `load` is invoked. Once it has loaded, it takes part in
+      * `client.refetchQueries` and `client.resetStore`, which run `load` again.
       */
     def lazyQuery[D](call: ApolloCall[D])(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): LazyQueryHandle[D] < (Async & Scope) =
-        Signal.initRef[QueryState[D]](QueryState.Idle).map { ref =>
-            LazyQueryHandle(
-                ref,
-                // Arm `Loading`, fetch NetworkOnly, then project the outcome into `state`
-                // and hand the typed data back (re-raising any Abort/Panic after recording
-                // a `Failure`, so a failed load both surfaces the error AND shows in the UI).
-                load = ref.set(QueryState.Loading).andThen {
-                    Abort.run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data).map {
-                        case Result.Success(data) =>
-                            ref.set(QueryState.Success(data, fromCache = false)).andThen(data)
-                        case failed =>
-                            val ex = failed match
-                                case Result.Failure(e) => e
-                                case _                 => DefaultApolloException("lazy query failed")
-                            ref.set(QueryState.Failure(ex)).andThen(Abort.get(failed))
-                    }
+        for
+            ref    <- Signal.initRef[QueryState[D]](QueryState.Idle)
+            loaded <- AtomicBoolean.init(false)
+            // Arm `Loading`, fetch NetworkOnly, then project the outcome into `state`
+            // and hand the typed data back (re-raising any Abort/Panic after recording
+            // a `Failure`, so a failed load both surfaces the error AND shows in the UI).
+            load = loaded.set(true).andThen(ref.set(QueryState.Loading)).andThen {
+                Abort.run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data).map {
+                    case Result.Success(data) =>
+                        ref.set(QueryState.Success(data, fromCache = false)).andThen(data)
+                    case failed =>
+                        val ex = failed match
+                            case Result.Failure(e) => e
+                            case _                 => DefaultApolloException("lazy query failed")
+                        ref.set(QueryState.Failure(ex)).andThen(Abort.get(failed))
                 }
-            )
-        }
+            }
+            // `state` follows `load`, not the cache, so a refetch of this query runs `load` itself.
+            target = ApolloSignal
+                .targetOf(call, Absent)
+                .copy(fetch = ApolloEffect.asExecuteFailure(load.unit), followsCache = false)
+            _ <- ApolloSignal.register(call.apolloClient, loaded.get.map(on => if on then Present(target) else Absent))
+        yield LazyQueryHandle(ref, load)
 
     // --- Mutations -----------------------------------------------------------
 
@@ -423,6 +433,8 @@ object Apollo:
     /** Prepare a paginated query over a cursor state `C` — the general
       * react-apollo `fetchMore` shape. `page(cursors)` re-issues the operation for a
       * cursor state; pages share their connection slots in the cache.
+      * The first page's watcher takes part in `client.refetchQueries` and
+      * `client.resetStore`, and its refetch merges into the connection like a `fetchMore`.
       */
     def paginatedQuery[D, C](initial: C)(page: C => ApolloCall[D])(using
         Frame,
@@ -540,7 +552,7 @@ object Apollo:
             _       <- UI.fork(
                 ApolloSignal.driveSwitching(
                     values,
-                    (v: V) => page(v, initial).watch(),
+                    (v: V) => page(v, initial),
                     ref,
                     _ => cursors.set(initial)
                 )
@@ -607,6 +619,8 @@ object Apollo:
       * every query a route needs in one loader and the fetches run in parallel
       * instead of waterfalling mount by mount. The watcher lives in the `Scope`
       * this is bound in.
+      * Its watcher takes part in `client.refetchQueries` and `client.resetStore`
+      * like a [[watchSignal]].
       */
     def preload[D](call: ApolloCall[D])(using
         Frame,
@@ -621,15 +635,29 @@ object Apollo:
       * [[QueryState.Loading]], drains the cache watcher (`call.watch()`) on a forked
       * `Scope`-bound fiber, and pushes [[ApolloSignal.project]] of each emission into
       * the signal — `Loading`, then the first response, then re-emits on every cache
-      * change.
+      * change. The watcher only learns of what is written into this client's cache; it
+      * is in the client's [[ActiveQueryRegistry]] for the enclosing `Scope`, so
+      * `client.refetchQueries` and `client.resetStore` fetch it again when the server
+      * knows more than the cache.
       */
     def watchSignal[D](call: ApolloCall[D])(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): Signal[QueryState[D]] < (Async & Scope) =
+        watching(call, Absent)
+
+    /** [[watchSignal]] for a watcher whose refetch through the registry shows on `during`, a query handle's
+      * activity cell. The watcher is in the client's [[ActiveQueryRegistry]] for the enclosing `Scope`.
+      */
+    private def watching[D](call: ApolloCall[D], during: Maybe[Signal.SignalRef[Maybe[NetworkStatus]]])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
+            _   <- ApolloSignal.register(call.apolloClient, Present(ApolloSignal.targetOf(call, during)))
             // `push`, not a bare `project`: a mid-stream transport failure must retain
             // the last good data (same contract as the gated overload).
             _ <- UI.fork(Scope.run(call.watch().foreach(resp => ApolloSignal.push(ref, resp))))
@@ -638,6 +666,7 @@ object Apollo:
     /** [[watchSignal]] with a live `skip` — react-apollo's `skip` (urql's `pause`).
       * While `skip` is `true`, [[SkipMode.Freeze]] (default) keeps the watcher live but
       * stops updating; [[SkipMode.Unsubscribe]] tears it down and re-establishes on resume.
+      * While skipped, `client.refetchQueries` and `client.resetStore` leave it out.
       */
     def watchSignal[D](call: ApolloCall[D], skip: Signal[Boolean], mode: SkipMode = SkipMode.Freeze)(
         using
@@ -645,10 +674,27 @@ object Apollo:
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): Signal[QueryState[D]] < (Async & Scope) =
+        watchingGated(call, skip, mode, Absent)
+
+    /** [[watchSignal]] with a live `skip`, for a watcher whose refetch through the registry shows on `during`. */
+    private def watchingGated[D](
+        call: ApolloCall[D],
+        skip: Signal[Boolean],
+        mode: SkipMode,
+        during: Maybe[Signal.SignalRef[Maybe[NetworkStatus]]]
+    )(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): Signal[QueryState[D]] < (Async & Scope) =
+        val target = ApolloSignal.targetOf(call, during)
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
+            _   <- ApolloSignal.register(call.apolloClient, skip.current.map(skipped => if skipped then Absent else Present(target)))
             _   <- UI.fork(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
         yield ref
+        end for
+    end watchingGated
 
     /** [[watchSignal]] over **live variables** — react-apollo's variables change on a
       * mounted `useQuery`, where the hook instance survives and only the operation is
@@ -674,7 +720,7 @@ object Apollo:
         for
             ref <- values.currentWith(v0 => Signal.initRef[QueryState[D]](ApolloSignal.seedFor(v0)))
             _   <- UI.fork(
-                ApolloSignal.driveSwitching(values, (v: V) => call(v).watch(), ref, _ => (): Unit < Sync)
+                ApolloSignal.driveSwitching(values, call, ref, _ => (): Unit < Sync)
             )
         yield ref
 
@@ -683,6 +729,8 @@ object Apollo:
       * the watcher re-emits the fresh [[QueryState]]. A failed tick goes to the
       * `onFailure` rules around the call as a notice where none matches, and the poll
       * goes on.
+      * As a [[watchSignal]], it takes part in `client.refetchQueries` and
+      * `client.resetStore`.
       */
     def pollingSignal[D](call: ApolloCall[D], interval: Duration)(using
         Frame,
