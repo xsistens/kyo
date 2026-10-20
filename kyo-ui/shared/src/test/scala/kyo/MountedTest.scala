@@ -1003,4 +1003,304 @@ class MountedTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // ---- Identity without the Frame: a keyed instance is found by its own identity, regions by their place ----
+
+    // A component that takes a `Frame`, as application code does: both regions it builds get the caller's frame.
+    private def twoRegions(show: Boolean, a: Signal[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        div(
+            if show then a.render(x => span(x)) else span("none"),
+            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+        )
+
+    "a keyed mount in the second region of a component that takes a Frame survives the first region coming and going" in {
+        for
+            runs  <- AtomicInt.init(0)
+            outer <- Signal.initRef(true)
+            a     <- Signal.initRef("a")
+            b     <- Signal.initRef("b")
+            ui = div(outer.render(show => twoRegions(show, a, b, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 1, s"the keyed instance restarted when its neighbour region came and went: $total runs")
+    }
+
+    // A helper without a `Frame` of its own: every region it builds gets the one frame derived inside it.
+    private def panelRegion(sig: Signal[String], key: String, runs: AtomicRef[Map[String, Int]]): UI =
+        sig.render(_ => div(UI.mounted(counted(runs, key)).keyed(key)))
+
+    "two regions from one helper without a Frame keep their keyed instances when the first one goes away" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            outer <- Signal.initRef(true)
+            a     <- Signal.initRef("a")
+            b     <- Signal.initRef("b")
+            ui = div(outer.render(show => div(if show then panelRegion(a, "p1", runs) else span("none"), panelRegion(b, "p2", runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "p1:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:")
+                    _ <- afterRepaint(recorder, Seq("0"))(outer.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0"), "p1:")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "p2:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("p1" -> 2, "p2" -> 1), s"runs per instance: $counts")
+    }
+
+    private def withNeighbour(mode: Int, a: Signal[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        val neighbour: UI = mode match
+            case 0 => a.render(x => span(x))
+            case 1 => span("constant")
+            case _ => UI.mounted(Kyo.lift(span("other mount")))
+        div(neighbour, b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
+    end withNeighbour
+
+    "an unrelated neighbour that turns from a region into a constant or a mount does not restart a keyed instance" in {
+        for
+            runs <- AtomicInt.init(0)
+            mode <- Signal.initRef(0)
+            a    <- Signal.initRef("a")
+            b    <- Signal.initRef("b")
+            ui = div(mode.render(m => withNeighbour(m, a, b, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                Kyo.foreachDiscard(Seq(1, 2, 0, 2, 1)) { next =>
+                    afterRepaint(recorder, Seq("0"))(mode.set(next)).andThen(showsEventually(recorder, Seq("0", "1", "0"), "runs:"))
+                }.andThen(showsEventually(recorder, Seq("0", "1", "0"), "runs:1"))
+            }
+            total <- runs.get
+        yield assert(total == 1, s"a neighbour changing kind restarted the keyed instance: $total runs")
+    }
+
+    "a keyed instance that moves from one region to another in one pass keeps its instance" in {
+        for
+            runs <- AtomicInt.init(0)
+            left <- Signal.initRef(true)
+            r1   <- Signal.initRef("r1")
+            r2   <- Signal.initRef("r2")
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("moving")
+            ui   = div(left.render(l =>
+                div(
+                    r1.render(_ => if l then div(node) else div(span("empty-1"))),
+                    r2.render(_ => if l then div(span("empty-2")) else div(node))
+                )
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0", "0"), "runs:1")
+                    _     <- afterRepaint(recorder, Seq("0"))(left.set(false))
+                    _     <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    moved <- recorder.shown(Seq("0", "1", "0"))
+                    _     <- afterRepaint(recorder, Seq("0"))(left.set(true))
+                    _     <- showsEventually(recorder, Seq("0", "0", "0"), "runs:")
+                    back  <- recorder.shown(Seq("0", "0", "0"))
+                    total <- runs.get
+                yield assert(
+                    moved.contains("runs:1") && back.contains("runs:1") && total == 1,
+                    s"moved: $moved, back: $back, runs: $total"
+                )
+            }
+        yield succeed
+    }
+
+    "the same keyed identity shown twice in one pass is reported at both places and runs no effect" in {
+        for
+            runs <- AtomicInt.init(0)
+            both <- Signal.initRef(true)
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("twice")
+            ui   = div(both.render(b => if b then div(node, node) else div(node)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
+                    _      <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    first  <- recorder.shown(Seq("0", "0"))
+                    second <- recorder.shown(Seq("0", "1"))
+                    before <- runs.get
+                    _      <- afterRepaint(recorder, Seq("0"))(both.set(false))
+                    _      <- showsEventually(recorder, Seq("0", "0"), "runs:1")
+                yield
+                    assert(before == 0, s"a duplicated identity ran its effect: $before runs")
+                    assert(first.contains("shown in 2 places") && first.contains("0.0") && first.contains("0.1"), first)
+                    assert(second.contains("shown in 2 places"), second)
+            }
+        yield succeed
+    }
+
+    "the same keyed identity twice in a dynamic splice is reported like literal arguments" in {
+        for
+            runs <- AtomicInt.init(0)
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("spliced-twice")
+            kids = Seq[UI.Ast.HtmlChildVal](span("lead"), node, node)
+            ui   = div(div(kids*))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("0", "2"), "kyo-mount-error")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 0, s"a duplicated identity ran its effect: $total runs")
+    }
+
+    // A splice is a dynamic range: positions in it shift with its length. A keyed instance does not depend on its position, so it
+    // stays; a keyless one is new on every re-render of its region, as anywhere else; a region in the splice keeps its keyed mount.
+    "a dynamic splice whose length changes keeps keyed instances, also inside a region in it, and renews keyless ones" in {
+        for
+            keyedRuns  <- AtomicInt.init(0)
+            nestedRuns <- AtomicInt.init(0)
+            freeRuns   <- AtomicInt.init(0)
+            lead       <- Signal.initRef(0)
+            inner      <- Signal.initRef("x")
+            keyedNode  = UI.mounted(keyedRuns.incrementAndGet.map(r => span(s"keyed:$r"))).keyed("spliced")
+            nestedNode = UI.mounted(nestedRuns.incrementAndGet.map(r => span(s"nested:$r"))).keyed("nested")
+            freeNode   = UI.mounted(freeRuns.incrementAndGet.map(r => span(s"free:$r")))
+            ui         = div(lead.render { n =>
+                val leads = Seq.fill[UI.Ast.HtmlChildVal](n)(span("lead"))
+                div((leads ++ Seq[UI.Ast.HtmlChildVal](keyedNode, inner.render(_ => div(nestedNode)), freeNode))*)
+            })
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "keyed:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "nested:1")
+                    _ <- showsEventually(recorder, Seq("0", "2"), "free:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(lead.set(2))
+                    _ <- showsEventually(recorder, Seq("0", "2"), "keyed:")
+                    _ <- showsEventually(recorder, Seq("0", "3", "0"), "nested:")
+                    _ <- showsEventually(recorder, Seq("0", "4"), "free:2")
+                    _ <- afterRepaint(recorder, Seq("0"))(lead.set(1))
+                    _ <- showsEventually(recorder, Seq("0", "1"), "keyed:")
+                    _ <- showsEventually(recorder, Seq("0", "2", "0"), "nested:")
+                    _ <- showsEventually(recorder, Seq("0", "3"), "free:3")
+                    k <- recorder.shown(Seq("0", "1"))
+                    m <- recorder.shown(Seq("0", "2", "0"))
+                yield assert(k.contains("keyed:1") && m.contains("nested:1"), s"keyed: $k, nested: $m")
+            }
+            k <- keyedRuns.get
+            m <- nestedRuns.get
+            f <- freeRuns.get
+        yield assert((k, m, f) == (1, 1, 3), s"runs (keyed, nested, keyless): ${(k, m, f)}")
+    }
+
+    "a keyed mount inside a region inside keyed rows is told apart by the row key" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("a", "b"))
+            tick  <- Signal.initRef(0)
+            ui = div(items.foreachKeyed(identity)(id => div(tick.render(_ => div(UI.mounted(counted(runs, id)).keyed("m"))))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "a", "0", "0"), "a:1")
+                    _ <- showsEventually(recorder, Seq("0", "b", "0", "0"), "b:1")
+                    _ <- items.set(Chunk("c", "a", "b"))
+                    _ <- showsEventually(recorder, Seq("0", "c", "0", "0"), "c:1")
+                    _ <- tick.set(1)
+                    _ <- showsEventually(recorder, Seq("0", "a", "0", "0"), "a:1")
+                    _ <- showsEventually(recorder, Seq("0", "b", "0", "0"), "b:1")
+                    _ <- showsEventually(recorder, Seq("0", "c", "0", "0"), "c:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("a" -> 1, "b" -> 1, "c" -> 1), s"runs per row: $counts")
+    }
+
+    "an unkeyed foreach keeps keyed instances by position, as before" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            items <- Signal.initRef(Chunk("a", "b"))
+            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed("m"))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "0"), "a:1")
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "b:1")
+                    _      <- items.set(Chunk("c", "a", "b"))
+                    _      <- showsEventually(recorder, Seq("0", "2", "0"), "b:2")
+                    first  <- recorder.shown(Seq("0", "0", "0"))
+                    second <- recorder.shown(Seq("0", "1", "0"))
+                yield assert(first.contains("a:1") && second.contains("b:1"), s"row 0: $first, row 1: $second")
+            }
+            counts <- runs.get
+        yield assert(counts == Map("a" -> 1, "b" -> 2), s"runs: $counts")
+    }
+
+    private def card(issue: String, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        div(refresh.render(_ => div(UI.mounted(counted(runs, issue)).keyed(issue))))
+
+    // The page takes a `Frame` too, as application code does, so both cards and their regions get the page's caller's frame.
+    private def board(pinned: Boolean, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        div(if pinned then card("A", refresh, runs) else span("nothing pinned"), card("B", refresh, runs))
+
+    "two cards on a page that takes a Frame keep the second card's instance while the first comes and goes" in {
+        for
+            runs    <- AtomicRef.init(Map.empty[String, Int])
+            pinned  <- Signal.initRef(true)
+            refresh <- Signal.initRef(0)
+            ui = div(pinned.render(p => board(p, refresh, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:")
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("A" -> 2, "B" -> 1), s"runs per card: $counts")
+    }
+
+    private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
+        div(
+            if editing then input.value(draft) else span("read only"),
+            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+        )
+
+    "a bound input appearing before a region does not restart the region's keyed instance" in {
+        for
+            runs    <- AtomicInt.init(0)
+            editing <- Signal.initRef(false)
+            draft   <- Signal.initRef("draft")
+            b       <- Signal.initRef("b")
+            ui = div(editing.render(e => draftBox(e, draft, b, runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(editing.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- afterRepaint(recorder, Seq("0"))(editing.set(false))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 1, s"a bound input before the region restarted its keyed instance: $total runs")
+    }
+
+    "rows spliced into a fragment whose mounts share a key without data are reported, not paired by position" in {
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            order <- Signal.initRef(Chunk("A", "B"))
+            ui = div(order.render(o => ul(fragment(o.toSeq.map(id => li(span(id), UI.mounted(counted(runs, id)).keyed("note")))*))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    _     <- showsEventually(recorder, Seq("0", "0", "1", "1"), "kyo-mount-error")
+                    _     <- afterRepaint(recorder, Seq("0"))(order.set(Chunk("B", "A")))
+                    _     <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    shown <- recorder.shown(Seq("0", "0", "1", "1"))
+                yield assert(shown.contains("kyo-mount-error") && !shown.contains("A:") && !shown.contains("B:"), shown)
+            }
+            counts <- runs.get
+        yield assert(counts.isEmpty, s"a duplicated identity ran its effect: $counts")
+    }
+
 end MountedTest
