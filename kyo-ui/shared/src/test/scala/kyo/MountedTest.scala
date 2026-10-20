@@ -1755,4 +1755,38 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    // The issue tracker's tool bar summary: a write takes a region's value away and a second one, made while the region's pass
+    // closes, takes it back, so the region runs no pass for it. A cut must still see that region as current, or a release elsewhere
+    // waits for good.
+    "a region whose value comes back while its pass closes does not hold back a release elsewhere" in {
+        for
+            released <- Latch.init(1)
+            reverted <- Latch.init(1)
+            armed    <- AtomicBoolean.init(false)
+            value    <- Signal.initRef(0)
+            show     <- Signal.initRef(true)
+            // A keyless mount is released as its region's pass closes: its finalizer writes the value back then.
+            keyless = UI.mounted(
+                Scope.ensure(armed.compareAndSet(true, false).map(go => if go then value.set(0).andThen(reverted.release) else Kyo.unit))
+                    .andThen(span("keyless"))
+            )
+            node = UI.mounted(Scope.ensure(released.release).andThen(span("panel"))).keyed("panel")
+            ui   = div(
+                value.render(n => div(span(s"value:$n"), keyless)),
+                show.render(s => if s then div(node) else div(span("hidden")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    _ <- armed.set(true)
+                    _ <- value.set(1)
+                    _ <- reverted.await
+                    _ <- show.set(false)
+                    _ <- showsEventually(recorder, Seq("1"), "hidden")
+                    _ <- released.await
+                yield ()
+            }
+        yield succeed
+    }
+
 end MountedTest
