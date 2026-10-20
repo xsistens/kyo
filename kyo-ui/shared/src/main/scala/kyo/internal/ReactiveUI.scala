@@ -44,7 +44,10 @@ private[kyo] case class ReactiveUI(
     // The AST node's own `Frame`, so [[Devtools]] can name a region by its user call site rather than its path.
     frame: Frame = Frame.internal,
     bounded: Maybe[UI.Ast.Bounded] = Absent
-)
+):
+    /** Whether a mount is at or below this node, through regions but not into a mount's content: what a pass must record. */
+    lazy val containsMount: Boolean = mounted.nonEmpty || children.exists(_.containsMount)
+end ReactiveUI
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
   * function, row render) reachable at subscribe time, plus the items snapshot matching the walked children.
@@ -1566,7 +1569,9 @@ private[kyo] object ReactiveUI:
         lastSignalChangeTime: AtomicRef[Instant],
         private val dragSessionCountFn: () => Int < Sync = () => 0,
         private val dragExpiryWorkerCountFn: () => Int < Sync = () => 0,
-        private val dragLock: Meter = Meter.Noop
+        private val dragLock: Meter = Meter.Noop,
+        /** The session's mount tables report their work here (see [[MountCounters]]). */
+        private[kyo] val mountSession: MountSession = new MountSession
     ):
         private[kyo] def dragSessionCount(using Frame): Int < Sync      = dragSessionCountFn()
         private[kyo] def dragExpiryWorkerCount(using Frame): Int < Sync = dragExpiryWorkerCountFn()
@@ -1650,7 +1655,8 @@ private[kyo] object ReactiveUI:
             dispatch <- rui.mountDispatch match
                 case Present(d) => Kyo.lift(d)
                 case Absent     => MountDispatch.init
-            (rootTable, rootMounts) <- MountTable.root(rui.path)
+            session = new MountSession
+            (rootTable, rootMounts) <- MountTable.root(rui.path, session)
             _                       <- Scope.ensure(rootTable.evictAll)
             // The root's pass covers the whole tree, so every identity shown twice anywhere in it is found here.
             rootPass <- rootMounts.beginWalk(Seq(rui))
@@ -1661,8 +1667,10 @@ private[kyo] object ReactiveUI:
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
             // suppresses the browser's activation on both while replacing it on only one, which is a
             // button that stops working rather than one that works twice.
-            activating      = activatingHandle(rui.handle)
-            validatedHandle = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
+            activating = activatingHandle(rui.handle)
+            dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
+            // Every handler is one change: the moves its writes cause are decided once it has ended (see MountTable).
+            validatedHandle: ValidatedHandler = (path, event) => session.within(dragging(path, event))
         yield Subscription(
             (path, event) =>
                 DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
@@ -1672,7 +1680,8 @@ private[kyo] object ReactiveUI:
             signalChangeTime,
             () => dragSessions.get.map(_.size),
             () => expiryWorkers.get,
-            dragMutex
+            dragMutex,
+            session
         )
 
     /** Turns a keydown's recorded activation into the click it stands for.
@@ -2282,22 +2291,24 @@ private[kyo] object ReactiveUI:
                 case Absent       => rui.signal.observe(paint)
 
         def start(step: (UI, Boolean) => Unit < (Async & Scope)): Unit < (Async & Scope) =
-            startOwnedFiber {
-                Abort.run[Throwable] {
-                    var first = true
-                    observed { current =>
-                        val isFirst = first
-                        first = false
-                        step(current, isFirst)
+            regionMounts.register.map { watch =>
+                startOwnedFiber {
+                    Abort.run[Throwable] {
+                        var first = true
+                        Signal.passWatch.let(Present(watch))(observed { current =>
+                            val isFirst = first
+                            first = false
+                            step(current, isFirst)
+                        })
+                    }.map { result =>
+                        result.fold(
+                            _ => (),
+                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
+                            panic =>
+                                if panic.isInstanceOf[Interrupted] then ()
+                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
+                        )
                     }
-                }.map { result =>
-                    result.fold(
-                        _ => (),
-                        err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                        panic =>
-                            if panic.isInstanceOf[Interrupted] then ()
-                            else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                    )
                 }
             }
 
@@ -2673,8 +2684,9 @@ private[kyo] object ReactiveUI:
                 val keyFn = keyFnMaybe.get // reusable guarantees a key function
                 val rows  = spec.rows
                 for
-                    _ <- Scope.ensure(rows.evictAll)
-                    _ <- startOwnedFiber {
+                    _     <- Scope.ensure(rows.evictAll)
+                    watch <- regionMounts.register
+                    _     <- startOwnedFiber {
                         // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
                         // scoped children still die with it, since a nested region's or mount's release is
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
@@ -2816,12 +2828,12 @@ private[kyo] object ReactiveUI:
 
                         Abort.run[Throwable] {
                             var first = true
-                            itemSignal.observe { items =>
+                            Signal.passWatch.let(Present(watch))(itemSignal.observe { items =>
                                 val isFirst = first
                                 first = false
                                 if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
                                 else handle(items)
-                            }
+                            })
                         }.map { result =>
                             result.fold(
                                 _ => (),
@@ -2873,8 +2885,14 @@ private[kyo] object ReactiveUI:
         val supervision: MountSupervision,
         val children: MountTable,
         runner: Fiber[Unit, Any],
-        scope: Scope.Finalizer
+        scope: Scope.Finalizer,
+        go: Promise[Unit, Any]
     ):
+        /** Lets the effect run. An instance claimed while its table settles what is in transit is made before it may run, so it shows in
+          * its place at once, and runs once the cut has released what had to go.
+          */
+        def launch(using Frame): Unit < Sync = go.completeUnitDiscard
+
         // Unsafe: written as a subscription showing the instance ends, read when the instance leaves its snapshot after it.
         private val lastShown = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
         // Unsafe: set once, by the first paint of this instance that reaches the page, whichever subscription makes it.
@@ -2915,7 +2933,7 @@ private[kyo] object ReactiveUI:
 
     private[kyo] object MountInstance:
         /** `frames` are the boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one. */
-        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope)(using
+        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, launch: Boolean = true)(using
             Frame
         ): MountInstance < Sync =
             for
@@ -2923,20 +2941,27 @@ private[kyo] object ReactiveUI:
                 supervision = MountSupervision(spec, cell, frames)
                 inner       = FailureFrame.Mount(supervision) :: frames
                 scope  <- Scope.Finalizer.init(1)
-                runner <- Fiber.initUnscoped(runEffect(spec, cell, scope, supervision, inner))
-            yield new MountInstance(cell, supervision, new MountTable(inner), runner, scope)
+                go     <- Promise.init[Unit, Any]
+                _      <- if launch then go.completeUnitDiscard else Kyo.unit
+                runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session)))
+            yield new MountInstance(cell, supervision, childTable(supervision, parent), runner, scope, go)
+
+        /** The table of the content of an instance supervised by `supervision`: its mounts meet the instance and what is around it now. */
+        private def childTable(supervision: MountSupervision, parent: MountTable): MountTable =
+            new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames)
 
         /** An instance that runs no effect and shows its node's error view for `message` from the start: what each place of an identity
           * shown more than once in one pass gets.
           */
-        def failed(spec: MountedSpec, message: String, frames: Failures.Scope)(using Frame): MountInstance < Sync =
+        def failed(spec: MountedSpec, message: String, frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
             for
                 cell <- Signal.initRef[MountState](MountState.Pending(Absent))
                 supervision = MountSupervision(spec, cell, frames)
                 _      <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
                 scope  <- Scope.Finalizer.init(1)
+                go     <- Promise.init[Unit, Any]
                 runner <- Fiber.initUnscoped(Kyo.unit)
-            yield new MountInstance(cell, supervision, new MountTable(FailureFrame.Mount(supervision) :: frames), runner, scope)
+            yield new MountInstance(cell, supervision, childTable(supervision, parent), runner, scope, go)
 
         /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. */
         private def runEffect(
@@ -2944,9 +2969,12 @@ private[kyo] object ReactiveUI:
             cell: SignalRef[MountState],
             scope: Scope.Finalizer,
             supervision: MountSupervision,
-            frames: Failures.Scope
+            frames: Failures.Scope,
+            session: MountSession
         )(using Frame): Unit < Async =
-            val effect = Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
+            val effect = MountSession.current.let(Present(session))(
+                Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
+            )
             Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
                 case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
                 case Result.Failure(failure) =>
@@ -2962,13 +2990,39 @@ private[kyo] object ReactiveUI:
     end MountInstance
 
     /** Routes the failures of one mount instance into its content cell. The first failure wins, and a publish that arrives after a
-      * failure does not overwrite it.
+      * failure does not overwrite it. The node and the frames are those of the node that shows the instance now: an instance that moves
+      * to another node takes that node's error view, its `onFailure` rules and its boundaries.
       */
     final private[kyo] class MountSupervision(
-        spec: MountedSpec,
+        initialSpec: MountedSpec,
         cell: SignalRef[MountState],
-        frames: Failures.Scope
+        initialFrames: Failures.Scope
     ):
+        // Unsafe: written by the claim that adopts the instance, read wherever a failure is routed.
+        private val at      = AtomicRef.Unsafe.init((initialSpec, initialFrames))(using AllowUnsafe.embrace.danger)
+        private val failure = AtomicRef.Unsafe.init(Maybe.empty[(Any, UI.MountErrorSource)])(using AllowUnsafe.embrace.danger)
+
+        private def spec: MountedSpec = at.get()(using AllowUnsafe.embrace.danger)._1
+
+        def frames: Failures.Scope = at.get()(using AllowUnsafe.embrace.danger)._2
+
+        /** Makes `spec` and `frames` the node and frames of this instance. A failed instance that `moved` to another node is shown again
+          * in that node's error view.
+          */
+        def adopt(spec: MountedSpec, frames: Failures.Scope, moved: Boolean)(using Frame): Unit < Sync =
+            Sync.Unsafe.defer {
+                at.set((spec, frames))
+                if !moved then Kyo.unit
+                else
+                    failure.get() match
+                        case Present((raised, source)) => cell.set(MountState.Failed(errorView(raised, source)))
+                        case Absent                    => Kyo.unit
+                end if
+            }
+
+        private def errorView(raised: Any, source: UI.MountErrorSource): UI =
+            val (s, f) = at.get()(using AllowUnsafe.embrace.danger)
+            s.errorUI(s.mountError(raised, source), Failures.views(f))
 
         /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt goes to the `onFailure` rules
           * around the node, and fails the node when none matches.
@@ -2989,12 +3043,14 @@ private[kyo] object ReactiveUI:
         /** The frames this node's own failures meet: the node, then what is around it. */
         private def own: Failures.Scope = FailureFrame.Mount(this) :: frames
 
-        def fail(failure: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
-            val failed = MountState.Failed(spec.errorUI(spec.mountError(failure, source), Failures.views(frames)))
-            cell.getAndUpdate {
-                case done: MountState.Failed => done
-                case _                       => failed
-            }.unit
+        def fail(raised: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
+            Sync.Unsafe.defer(discard(failure.compareAndSet(Absent, Present((raised, source))))).andThen {
+                val failed = MountState.Failed(errorView(raised, source))
+                cell.getAndUpdate {
+                    case done: MountState.Failed => done
+                    case _                       => failed
+                }.unit
+            }
         end fail
     end MountSupervision
 
@@ -3053,14 +3109,22 @@ private[kyo] object ReactiveUI:
         /** A number no pass or subscription had before. */
         def fresh(): Long = serials.incrementAndGet()
 
+        private val noDuplicates = new java.util.IdentityHashMap[ReactiveUI, String]()
+
         /** The pass of a subscription the table no longer follows: it decides nothing, and nothing it subscribes is followed either. */
-        val stale: MountPass = new MountPass(0L, new java.util.IdentityHashMap[ReactiveUI, String]())
+        val stale: MountPass = new MountPass(0L, noDuplicates)
+
+        /** A pass that found nothing to decide. */
+        def clean(id: Long): MountPass = new MountPass(id, noDuplicates)
     end MountPass
 
     /** What a [[MountTable]] knows about one region: `cover`, the pass its current subscription was born in, `holds`, the keyed identities
       * its latest pass shows directly (an identity it shows twice is left out), `walked` and `pass`, the walk that pass saw and what it
       * decided, so the first pass of a subscription over the very walk its parent decided reuses that decision, and `handoff`, the
-      * snapshots instances that ended left at their paths for a `KeepLatest` successor in this region.
+      * snapshots instances that left this region left at their paths for a `KeepLatest` successor here.
+      *
+      * Only regions whose walk holds a mount have an entry. A region without one is followed by the subscription with the newest birth
+      * that acts on it, so a region that gains its first mount in a pass of its own takes its entry then.
       */
     final private case class RegionEntry(
         cover: Long,
@@ -3074,37 +3138,169 @@ private[kyo] object ReactiveUI:
     /** A live keyed instance, where it was last shown, and in which region. */
     final private case class MountSlot(instance: MountInstance, path: Seq[String], region: RegionKey)
 
-    final private case class TableState(instances: Dict[MountIdentity, MountSlot], regions: Dict[RegionKey, RegionEntry])
-
-    /** What opening a pass changed: the pass, the instances no region holds any more, and the identities it shares with a region outside
-      * it.
+    /** `waiting` are the identities a cut has to decide: an instance no region shows any more (in transit), one that a second region
+      * claims while the first still shows it, one that waits to start until what is in transit is settled, and one whose duplicate
+      * report may have ended.
       */
-    final private case class Opened(pass: MountPass, gone: Chunk[MountSlot], shared: Chunk[MountIdentity], duplicates: Chunk[String])
+    final private case class TableState(
+        instances: Dict[MountIdentity, MountSlot],
+        regions: Dict[RegionKey, RegionEntry],
+        waiting: Set[MountIdentity],
+        views: Dict[MountIdentity, Chunk[ClaimView]],
+        // Instances a cut is releasing right now: a new one may not run before they are gone.
+        releasing: Int
+    ):
+        /** Whether a new instance has to wait for a cut before its effect runs. */
+        def unsettled: Boolean = waiting.nonEmpty || releasing > 0
+
+        def holders(identity: MountIdentity): Int =
+            regions.foldLeft(0)((n, _, e) => if e.holds.contains(identity) then n + 1 else n)
+    end TableState
+
+    private object TableState:
+        val empty: TableState = TableState(Dict.empty, Dict.empty, Set.empty, Dict.empty, 0)
+
+    /** What a keyed node shows: the live instance of its identity, what its `PendingPolicy` shows while a cut decides who the instance
+      * belongs to, or the report of an identity shown in more than one place.
+      */
+    private[kyo] enum ClaimState:
+        case Live(instance: MountInstance)
+        case Waiting(shown: Maybe[UI])
+        case Duplicate(message: String)
+    end ClaimState
+
+    private[kyo] object ClaimState:
+        given CanEqual[ClaimState, ClaimState] = CanEqual.derived
+
+    /** One keyed node's claim on its identity, which a cut can switch. */
+    final private[kyo] class ClaimView(
+        val node: ReactiveUI,
+        val spec: MountedSpec,
+        val region: RegionKey,
+        val frames: () => Failures.Scope,
+        val seed: Maybe[UI],
+        val state: SignalRef[ClaimState]
+    )
+
+    /** What opening a pass changed: the pass, the instances it put in transit, and the duplicate reports it made. */
+    final private case class Opened(pass: MountPass, dropped: Chunk[MountSlot], waits: Boolean, duplicates: Chunk[String], work: Int)
+
+    /** Work counts of one session, for measuring what the tables cost: regions registered and unregistered, region passes that planned
+      * their walk and passes that skipped it (no mount in it and none recorded below), cuts recorded and settled, and regions a cut check
+      * looked at.
+      */
+    final private[kyo] class MountCounters:
+        val registered   = new java.util.concurrent.atomic.AtomicLong()
+        val unregistered = new java.util.concurrent.atomic.AtomicLong()
+        val planned      = new java.util.concurrent.atomic.AtomicLong()
+        val skipped      = new java.util.concurrent.atomic.AtomicLong()
+        val cuts         = new java.util.concurrent.atomic.AtomicLong()
+        val settled      = new java.util.concurrent.atomic.AtomicLong()
+        val scanned      = new java.util.concurrent.atomic.AtomicLong()
+    end MountCounters
+
+    /** One mount session: the open handlers and [[kyo.UI.batch]] blocks, which together form one change, and the tables waiting for that
+      * change to end before they can take a cut.
+      */
+    final private[kyo] class MountSession:
+        import AllowUnsafe.embrace.danger
+
+        private val open    = new java.util.concurrent.atomic.AtomicInteger()
+        private val pending = AtomicRef.Unsafe.init(Set.empty[MountTable])
+        val counters        = new MountCounters
+
+        def isOpen: Boolean = open.get() > 0
+
+        def enter(): Unit = discard(open.incrementAndGet())
+
+        /** Ends one handler or batch; the last one to end lets every waiting table take its cut. */
+        def exit(): Unit =
+            if open.decrementAndGet() == 0 then pending.getAndSet(Set.empty).foreach(_.closeEpoch())
+
+        /** `table` takes its cut when the change now open ends, or at once when none is open. */
+        def defer(table: MountTable): Unit =
+            discard(pending.getAndUpdate(_ + table))
+            if !isOpen && pending.getAndUpdate(_ - table).contains(table) then table.closeEpoch()
+        end defer
+
+        /** Runs `v` as one change: the cuts its writes cause wait until it ends. */
+        def within[A, S](v: => A < S)(using Frame): A < (S & Sync) =
+            Sync.Unsafe.defer(enter()).andThen(Sync.ensure(Sync.Unsafe.defer(exit()))(MountSession.current.let(Present(this))(v)))
+    end MountSession
+
+    private[kyo] object MountSession:
+        /** The session of the handler or mount effect that is running, inherited by the fibers they fork. */
+        val current: Local[Maybe[MountSession]] = Local.init(Maybe.empty[MountSession])
+
+    /** The passes of one region subscription as its observation reports them (see `Signal.PassWatch`): how many started, which of them
+      * last recorded its walk in the table, and whether a write landed since the latest read. A cut waits for a region until it has seen
+      * every write of the change: it was current when the change ended, or a pass that started after that has recorded its walk.
+      */
+    final private[kyo] class RegionWatch(scope: MountScope) extends Signal.PassWatch:
+        private val starts                         = new java.util.concurrent.atomic.AtomicLong()
+        private val planned                        = new java.util.concurrent.atomic.AtomicLong()
+        private val ended                          = new java.util.concurrent.atomic.AtomicBoolean()
+        @volatile private var probe: () => Boolean = () => false
+
+        def started(behind: () => Boolean): Unit =
+            probe = behind
+            discard(starts.incrementAndGet())
+
+        def rested(): Unit = scope.table.recheck()
+
+        /** The pass that started last has recorded its walk. */
+        def recorded(): Unit =
+            planned.set(starts.get())
+            scope.table.recheck()
+
+        def end(): Unit =
+            ended.set(true)
+            scope.table.recheck()
+
+        def started: Long = starts.get()
+
+        def caughtUp(at: Long): Boolean =
+            ended.get() || !scope.followed || {
+                val p = planned.get()
+                p > at || (p == starts.get() && !probe())
+            }
+    end RegionWatch
 
     /** The keyed instances of one owner, the session root or a mount instance's content, found by their own [[MountIdentity]], and what
       * every region of that content shows.
       *
-      * Regions own no instances. A region's pass records which identities it shows; an instance lives while any region of the table shows
-      * it, and is released once none does. So a keyed instance survives whatever happens to the regions around it, including moving from
-      * one region to another, as long as one pass covers both places: a pass decides for every region nested in it that it subscribes, so
-      * the region losing the instance and the region gaining it are updated together, before either of their own passes runs.
+      * Regions own no instances. A region's pass records which identities it shows; an instance lives while a region of the table shows it.
+      * A pass covers every region nested in it that it subscribes, so a move between two of them is recorded at once.
       *
-      * An identity shown more than once by one pass is ambiguous: the pass gives none of those places an instance, and each shows an error
-      * naming all of them. Two regions that render independently can still show one identity at the same time (the second shows it before
-      * the first has dropped it, or a genuine duplicate that no common pass sees); they share the instance, and a warning names both.
+      * Between regions that render separately the table decides nothing in a pass: release, move and duplicate are decided at a cut. An
+      * instance no region shows any more stays in transit, alive, and a region that shows it next adopts it. A second region that claims
+      * one the first still shows waits, showing what its node's `PendingPolicy` says. A new instance waits to start while anything is in
+      * transit, so what is released is released before it starts. When the change ends (the handlers and [[kyo.UI.batch]] blocks of the
+      * session, or the pass itself outside them), the table records where every region's passes stand; the cut is reached once each has
+      * seen every write of the change. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several
+      * places is reported at all of them. The decision depends on what the regions show once they all saw the change, never on the order
+      * they rendered it in.
+      *
+      * An identity shown more than once by one pass is reported at once: that pass is a cut of its own.
       *
       * The old subscription of a region stops only once the enclosing region's previous value has released, which can be after the new one
       * started. Each subscription is born in the pass that subscribed it, and an entry follows the subscription of the pass that last
-      * covered it, so an older one that still runs a pass changes nothing: it releases nothing, records nothing, and a node it subscribes
-      * shows the live instance of its identity, or one of its own that its scope releases.
+      * covered it, so an older one that still runs a pass changes nothing.
       *
       * All of it is one immutable state behind one atomic reference, changed by compare-and-set: regions of a table run their passes on
       * fibers of their own.
       */
-    final private[kyo] class MountTable(val frames: Failures.Scope):
+    final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope):
         import AllowUnsafe.embrace.danger
 
-        private val state = AtomicRef.Unsafe.init(TableState(Dict.empty, Dict.empty))
+        private val state   = AtomicRef.Unsafe.init(TableState.empty)
+        private val watches = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
+        private val cut     = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long)]])
+        private val wake    = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
+        private val running = new java.util.concurrent.atomic.AtomicBoolean()
+        private val closed  = new java.util.concurrent.atomic.AtomicBoolean()
+
+        def frames: Failures.Scope = framesOf()
 
         private[ReactiveUI] def read: TableState = state.get()
 
@@ -3130,17 +3326,145 @@ private[kyo] object ReactiveUI:
                         (s.copy(regions = s.regions.update(RegionKey.top, entry)), ())
                     }
                 end if
-                new MountScope(this, RegionKey.top, birth, path, depth, frames)
+                new MountScope(this, RegionKey.top, birth, path, depth, Nil)
             }
 
-        /** Releases every instance, and waits for all of it. */
+        /** Registers a region subscription's watch for the cuts of this table, until the current scope closes. */
+        def register(scope: MountScope)(using Frame): RegionWatch < (Sync & Scope) =
+            Sync.Unsafe.defer {
+                val watch = new RegionWatch(scope)
+                discard(watches.getAndUpdate(_ + watch))
+                discard(session.counters.registered.incrementAndGet())
+                Scope.ensure(Sync.Unsafe.defer {
+                    discard(watches.getAndUpdate(_ - watch))
+                    discard(session.counters.unregistered.incrementAndGet())
+                    watch.end()
+                }).andThen(watch)
+            }
+
+        /** Wakes the settling fiber, if one waits. Callable from any thread, without effects. */
+        def recheck(): Unit =
+            if running.get() then wake.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
+
+        /** The change that put identities in waiting has ended: records where every region's passes stand. */
+        def closeEpoch(): Unit =
+            if state.get().waiting.nonEmpty then
+                val all = watches.get()
+                cut.set(Present(Chunk.from(all.iterator.map(w => (w, w.started)))))
+                discard(session.counters.cuts.incrementAndGet())
+                recheck()
+        end closeEpoch
+
+        /** Makes sure what is waiting gets decided: a settling fiber runs, and the cut is taken when the change ends. */
+        private[ReactiveUI] def awaitCut()(using Frame): Unit < Sync =
+            Sync.Unsafe.defer {
+                val start = running.compareAndSet(false, true)
+                session.defer(this)
+                if start then Fiber.initUnscoped(settling).unit else Kyo.unit
+            }
+
+        private def cutReached: Boolean =
+            cut.get() match
+                case Absent       => false
+                case Present(all) =>
+                    discard(session.counters.scanned.addAndGet(all.size))
+                    all.forall((w, at) => w.caughtUp(at))
+
+        /** Settles the table, cut after cut, while anything waits. */
+        private def settling(using Frame): Unit < Async =
+            Sync.Unsafe.defer {
+                val signal = wake.get()
+                if closed.get() then
+                    running.set(false)
+                    Kyo.unit
+                else if state.get().waiting.isEmpty then
+                    running.set(false)
+                    // An identity may have started waiting between the check and the flag.
+                    if state.get().waiting.nonEmpty && running.compareAndSet(false, true) then settling else Kyo.unit
+                else if cutReached then settle.andThen(settling)
+                else signal.safe.get.andThen(settling)
+                end if
+            }
+
+        /** The cut: decides every waiting identity from what the regions show now, releases, then starts, then switches the nodes. */
+        private def settle(using Frame): Unit < Async =
+            Sync.Unsafe.defer {
+                discard(session.counters.settled.incrementAndGet())
+                cut.set(Absent)
+                val (released, starts, switches, launches) = modify { s =>
+                    var instances = s.instances
+                    var released  = Chunk.empty[MountSlot]
+                    var starts    = Chunk.empty[(MountIdentity, ClaimView)]
+                    var switches  = Chunk.empty[(ClaimView, ClaimState)]
+                    var launches  = Chunk.empty[MountInstance]
+                    s.waiting.foreach { identity =>
+                        val views   = s.views.get(identity).getOrElse(Chunk.empty)
+                        val holding = views.filter(v => s.regions.get(v.region).exists(_.holds.contains(identity)))
+                        s.holders(identity) match
+                            case 0 =>
+                                instances.get(identity).foreach { slot =>
+                                    released = released.append(slot)
+                                    instances = instances.remove(identity)
+                                }
+                            case 1 =>
+                                instances.get(identity) match
+                                    case Present(slot) =>
+                                        launches = launches.append(slot.instance)
+                                        holding.foreach(v => switches = switches.append((v, ClaimState.Live(slot.instance))))
+                                        holding.headMaybe.foreach(v =>
+                                            instances = instances.update(identity, slot.copy(path = v.spec.path, region = v.region))
+                                        )
+                                    case Absent =>
+                                        holding.headMaybe.foreach(v => starts = starts.append((identity, v)))
+                            case _ =>
+                                instances.get(identity).foreach { slot =>
+                                    released = released.append(slot)
+                                    instances = instances.remove(identity)
+                                }
+                                val message = duplicateMessage(identity, holding.map(_.node))
+                                holding.foreach(v => switches = switches.append((v, ClaimState.Duplicate(message))))
+                        end match
+                    }
+                    (
+                        s.copy(instances = instances, waiting = Set.empty, releasing = s.releasing + released.size),
+                        (released, starts, switches, launches)
+                    )
+                }
+                Async.uninterruptible(
+                    Kyo.foreachDiscard(released)(_.instance.teardown)
+                        .andThen(Sync.Unsafe.defer(modify(s => (s.copy(releasing = s.releasing - released.size), ()))))
+                )
+                    .andThen(Kyo.foreachDiscard(launches)(_.launch))
+                    .andThen(Kyo.foreachDiscard(switches) { (view, next) =>
+                        next match
+                            case ClaimState.Live(instance) =>
+                                instance.supervision.adopt(view.spec, view.frames(), moved = true).andThen(view.state.set(next))
+                            case _ => view.state.set(next)
+                    })
+                    .andThen(Kyo.foreachDiscard(starts) { (identity, view) =>
+                        MountInstance.start(view.spec, view.seed, view.frames(), this).map { fresh =>
+                            Sync.Unsafe.defer(modify { s =>
+                                if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
+                                else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
+                            }).map(kept => if kept then view.state.set(ClaimState.Live(fresh)) else fresh.teardown)
+                        }
+                    })
+            }
+
+        /** Releases every instance, in transit or not, and waits for all of it. */
         def evictAll(using Frame): Unit < Async =
-            Sync.Unsafe.defer(modify(s => (TableState(Dict.empty, Dict.empty), s.instances))).map { instances =>
-                if instances.isEmpty then Kyo.unit
+            Sync.Unsafe.defer {
+                closed.set(true)
+                val all = modify(s => (TableState.empty, s.instances))
+                recheck()
+                if all.isEmpty then Kyo.unit
                 else
-                    Async.uninterruptible(Kyo.foreachDiscard(instances.foldLeft(Chunk.empty[MountInstance])((acc, _, slot) =>
-                        acc.append(slot.instance)
-                    ))(_.teardown))
+                    Async.uninterruptible(
+                        Kyo.foreachDiscard(
+                            all.foldLeft(Chunk.empty[MountInstance])((acc, _, slot) => acc.append(slot.instance))
+                        )(_.teardown)
+                    )
+                end if
             }
     end MountTable
 
@@ -3148,28 +3472,44 @@ private[kyo] object ReactiveUI:
         val nothingToRelease: () => Unit < Async = () => Kyo.unit
 
         /** The table of a session rooted at `path`, and the scope of its one subscription. */
-        def root(path: Seq[String])(using Frame): (MountTable, MountScope) < Sync =
-            val table = new MountTable(Nil)
+        def root(path: Seq[String], session: MountSession = new MountSession)(using Frame): (MountTable, MountScope) < Sync =
+            val table = new MountTable(session, () => Nil)
             table.content(path, 0).map(scope => (table, scope))
     end MountTable
 
     /** One subscription's handle on a [[MountTable]]: the region it renders, the pass it was born in, and where the table's content is shown,
-      * which makes region keys relative. A boundary comes first in `frames` for the mounts below it.
+      * which makes region keys relative. The boundaries between the region and the table's content come first in `frames`.
       */
     final private[kyo] class MountScope private[ReactiveUI] (
-        table: MountTable,
+        val table: MountTable,
         val region: RegionKey,
         birth: Long,
         basePath: Seq[String],
         baseDepth: Int,
-        val frames: Failures.Scope
+        boundaries: Failures.Scope
     ):
         import AllowUnsafe.embrace.danger
 
-        private def entryIn(s: TableState): Maybe[RegionEntry] = s.regions.get(region).filter(_.cover == birth)
+        @volatile private var watch: Maybe[RegionWatch] = Absent
+
+        def frames: Failures.Scope = boundaries ++ table.frames
+
+        /** The entry this subscription acts on: its own, one it takes over as the newest subscription of a region without a covering
+          * pass, or a fresh one for a region that had none. `Absent` when a newer subscription follows the region.
+          */
+        private def entryIn(s: TableState): Maybe[RegionEntry] =
+            s.regions.get(region) match
+                case Present(e) if e.cover == birth => Present(e)
+                case Present(e) if e.cover < birth  => Present(e.copy(cover = birth))
+                case Present(_)                     => Absent
+                case Absent                         =>
+                    if birth == MountPass.stale.id then Absent
+                    else Present(RegionEntry(birth, Set.empty, Absent, complete = false, MountPass.stale, Dict.empty))
 
         /** Whether the table still follows this subscription. */
-        def current(using Frame): Boolean < Sync = Sync.Unsafe.defer(entryIn(table.read).nonEmpty)
+        def followed: Boolean = entryIn(table.read).nonEmpty
+
+        def current(using Frame): Boolean < Sync = Sync.Unsafe.defer(followed)
 
         private[ReactiveUI] def keyOf(at: ReactiveRegion.RegionIdentity): RegionKey =
             val rel = at.path.drop(basePath.size)
@@ -3177,49 +3517,49 @@ private[kyo] object ReactiveUI:
 
         /** The scope of the region `kid`, which `pass` subscribes. */
         def child(pass: MountPass, kid: ReactiveUI): MountScope =
-            val inner = kid.bounded.fold(frames)(b => FailureFrame.Boundary(b.settings) :: frames)
+            val inner = kid.bounded.fold(boundaries)(b => FailureFrame.Boundary(b.settings) :: boundaries)
             new MountScope(table, keyOf(kid.at), pass.id, basePath, baseDepth, inner)
+
+        /** Registers this subscription's passes for the table's cuts; its observation reports to the answer. */
+        def register(using Frame): RegionWatch < (Sync & Scope) =
+            table.register(this).map { w =>
+                watch = Present(w)
+                w
+            }
+
+        /** The pass that started last has recorded everything it shows. */
+        def recorded(using Frame): Unit < Sync = Sync.Unsafe.defer(watch.foreach(_.recorded()))
 
         /** Opens a render pass of the region over `kids`, the region's walk. It records what the region and every region nested in the walk
           * show, gives none of the places of an identity shown twice an instance, and drops the regions the walk no longer has, except
-          * those inside `retained` rows of a keyed list, whose subscriptions carry on. Instances no region shows any more leave the table,
-          * their snapshots stay for a `KeepLatest` successor in the region that showed them, and the answer releases them, which the caller
-          * runs, and waits for, before any new instance starts. The release runs once and out of reach of an interrupt: an outer re-render
-          * that interrupts this region's loop ends the wait, not the release.
+          * those inside `retained` rows of a keyed list, whose subscriptions carry on. An instance no region shows any more goes in
+          * transit, and leaves its snapshot for a `KeepLatest` successor in the region that showed it; a cut decides it (see
+          * [[MountTable]]). A pass whose walk has no mount, in a region with nothing recorded below it, records nothing.
           */
         def openWalk(kids: Seq[ReactiveUI], retained: Set[String] = Set.empty)(using Frame): (MountPass, () => Unit < Async) < Sync =
             Sync.Unsafe.defer {
                 val id     = MountPass.fresh()
                 val opened = table.modify { s =>
                     entryIn(s) match
-                        case Absent => (s, Opened(MountPass.stale, Chunk.empty, Chunk.empty, Chunk.empty))
+                        case Absent => (s, Opened(MountPass.stale, Chunk.empty, false, Chunk.empty, 0))
                         // The first pass of a subscription over the walk the pass that subscribed it already decided.
                         case Present(entry) if retained.isEmpty && entry.complete && entry.walked.exists(_ eq kids) =>
-                            (s, Opened(entry.pass, Chunk.empty, Chunk.empty, Chunk.empty))
+                            (s, Opened(entry.pass, Chunk.empty, false, Chunk.empty, 0))
+                        case Present(entry) if !kids.exists(_.containsMount) && nothingBelow(s, entry) =>
+                            (s, Opened(MountPass.clean(id), Chunk.empty, false, Chunk.empty, 1))
                         case Present(entry) => plan(s, entry, kids, retained, id)
                 }
-                val warnings = Kyo.foreachDiscard(opened.shared) { identity =>
-                    Log.warn(
-                        s"kyo-ui: the keyed mount ${identity.key} is shown by two regions at once that no common render pass covers; " +
-                            "they share one instance. If this is not a move in progress, give each place a key of its own."
-                    )
-                }
+                if opened.work == 1 then discard(table.session.counters.skipped.incrementAndGet())
+                else if opened.work == 2 then discard(table.session.counters.planned.incrementAndGet())
+                watch.foreach(_.recorded())
                 val reported = Kyo.foreachDiscard(opened.duplicates)(message => Log.warn(s"kyo-ui: $message"))
-                if opened.gone.isEmpty then warnings.andThen(reported).andThen((opened.pass, MountTable.nothingToRelease))
-                else
-                    warnings.andThen(reported).andThen(Kyo.foreachDiscard(opened.gone)(slot =>
-                        leaveSnapshot(slot.instance, slot.region, slot.path)
-                    )).andThen {
-                        val released = AtomicBoolean.Unsafe.init(false)
-                        val release  = () =>
-                            Sync.Unsafe.defer {
-                                if !released.compareAndSet(false, true) then Kyo.unit
-                                else Async.uninterruptible(Kyo.foreachDiscard(opened.gone)(_.instance.teardown))
-                            }
-                        (opened.pass, release)
-                    }
-                end if
+                val dropped  = Kyo.foreachDiscard(opened.dropped)(slot => leaveSnapshot(slot.instance, slot.region, slot.path))
+                val waits    = if opened.waits then table.awaitCut() else Kyo.unit
+                reported.andThen(dropped).andThen(waits).andThen((opened.pass, MountTable.nothingToRelease))
             }
+
+        private def nothingBelow(s: TableState, entry: RegionEntry): Boolean =
+            entry.holds.isEmpty && s.regions.foldLeft(true)((ok, key, _) => ok && (key == region || !region.encloses(key)))
 
         private def plan(s: TableState, entry: RegionEntry, kids: Seq[ReactiveUI], retained: Set[String], id: Long): (TableState, Opened) =
             val rowDepth                               = region.path.size
@@ -3238,8 +3578,9 @@ private[kyo] object ReactiveUI:
                                 discard(seen.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(member))
                             }
                         case Absent =>
+                            // A nested region without a mount in its walk needs no entry: its subscription takes one if it gains a mount.
                             val key = keyOf(member.at)
-                            if !inRetainedRow(key) then visit(key, member.children)
+                            if member.containsMount && !inRetainedRow(key) then visit(key, member.children)
                 }
             end visit
             visit(region, kids)
@@ -3249,17 +3590,23 @@ private[kyo] object ReactiveUI:
             seen.forEach { (identity, nodes) =>
                 if nodes.size > 1 then
                     doubled += identity
-                    val message = duplicateMessage(identity, nodes)
+                    val message = duplicateMessage(identity, Chunk.from((0 until nodes.size).map(nodes.get)))
                     messages = messages.append(message)
                     nodes.forEach(node => discard(duplicates.put(node, message)))
             }
             val pass    = new MountPass(id, duplicates)
-            var regions = s.regions.filter((key, _) => !(region.encloses(key) && !covered.containsKey(key) && !inRetainedRow(key)))
-            var inside  = Set.empty[MountIdentity]
+            var lost    = Set.empty[MountIdentity]
+            var regions = s.regions.filter { (key, e) =>
+                val keep = !(region.encloses(key) && !covered.containsKey(key) && !inRetainedRow(key))
+                if !keep then lost ++= e.holds
+                keep
+            }
+            var inside = Set.empty[MountIdentity]
             covered.forEach { (key, value) =>
                 val (walked, found) = value
                 val holds           = found.iterator.filterNot(doubled.contains).toSet
                 inside ++= holds
+                s.regions.get(key).foreach(old => lost ++= old.holds.diff(holds))
                 val next =
                     if key == region then entry.copy(holds = holds, walked = Present(walked), complete = retained.isEmpty, pass = pass)
                     else
@@ -3273,17 +3620,16 @@ private[kyo] object ReactiveUI:
                         )
                 regions = regions.update(key, next)
             }
-            val outside =
-                regions.foldLeft(Set.empty[MountIdentity])((acc, key, e) => if covered.containsKey(key) then acc else acc ++ e.holds)
-            val held = inside ++ outside
-            val gone = s.instances.foldLeft(Chunk.empty[MountSlot])((acc, identity, slot) =>
-                if held.contains(identity) then acc else acc.append(slot)
-            )
-            val instances = if gone.isEmpty then s.instances else s.instances.filter((identity, _) => held.contains(identity))
-            (
-                TableState(instances, regions),
-                Opened(pass, gone, Chunk.from(inside.intersect(outside).filter(s.instances.contains)), messages)
-            )
+            val next = s.copy(regions = regions)
+            // In transit: instances no region shows any more. Contested: identities this pass shows that a region outside it shows too.
+            // Reported duplicates whose places changed may have ended.
+            val dropped = s.instances.foldLeft(Chunk.empty[(MountIdentity, MountSlot)]) { (acc, identity, slot) =>
+                if next.holders(identity) == 0 && !s.waiting.contains(identity) then acc.append((identity, slot)) else acc
+            }
+            val contested = inside.filter(identity => next.holders(identity) > 1)
+            val reopened  = lost.filter(identity => s.views.get(identity).exists(_.nonEmpty))
+            val waiting   = s.waiting ++ dropped.map(_._1) ++ contested ++ reopened
+            (next.copy(waiting = waiting), Opened(pass, dropped.map(_._2), waiting.size > s.waiting.size, messages, 2))
         end plan
 
         /** Leaves what `instance` showed at `path` in `at`, if that region is still there, for a `KeepLatest` successor. */
@@ -3329,9 +3675,10 @@ private[kyo] object ReactiveUI:
         /** Ends a pass: the snapshots it could hand on are gone. */
         def endWalk(using Frame): Unit < Sync =
             Sync.Unsafe.defer(table.modify { s =>
-                entryIn(s) match
-                    case Present(e) if !e.handoff.isEmpty => (s.copy(regions = s.regions.update(region, e.copy(handoff = Dict.empty))), ())
-                    case _                                => (s, ())
+                s.regions.get(region) match
+                    case Present(e) if e.cover == birth && !e.handoff.isEmpty =>
+                        (s.copy(regions = s.regions.update(region, e.copy(handoff = Dict.empty))), ())
+                    case _ => (s, ())
             })
 
         /** Leaves what a boundary at `path` showed when it ended, for a successor this region's next pass starts there. */
@@ -3346,63 +3693,115 @@ private[kyo] object ReactiveUI:
         def left(path: Seq[String])(using Frame): Maybe[UI] < Sync =
             Sync.Unsafe.defer(entryIn(table.read).flatMap(_.handoff.get(path)))
 
-        /** The instance for the keyed node `rui` of `pass`: an error when the pass shows its identity in another place too, else the live
-          * instance of its identity, else a new one the table keeps while a region shows it. A subscription the table no longer follows
+        /** The claim of the keyed node `rui` of `pass` on `identity`: the report when the pass shows the identity in another place too;
+          * the live instance when no other region shows it; otherwise, or while something is in transit and the instance is still to
+          * start, what the node's `PendingPolicy` shows until the table's next cut decides. A subscription the table no longer follows
           * gets the live instance, or one of its own that its scope releases.
           */
         def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, pass: MountPass)(using
             Frame
-        ): MountInstance < (Async & Scope) =
+        ): ClaimView < (Async & Scope) =
+            def view(state: ClaimState, seed: Maybe[UI]): ClaimView < Sync =
+                Signal.initRef[ClaimState](state).map(ref => new ClaimView(rui, spec, region, () => frames, seed, ref))
             pass.duplicate(rui) match
-                case Present(message) => MountInstance.failed(spec, message, frames).map(i => Scope.ensure(i.teardown).andThen(i))
+                case Present(message) => view(ClaimState.Duplicate(message), Absent)
                 case Absent           =>
                     Sync.Unsafe.defer(table.read).map { s =>
-                        val live  = s.instances.get(identity)
-                        val entry = entryIn(s)
-                        if live.nonEmpty && entry.nonEmpty then
-                            val slot = live.get
-                            Sync.Unsafe.defer(table.modify { now =>
-                                now.instances.get(identity) match
-                                    case Present(live) if live.instance eq slot.instance =>
-                                        (
-                                            now.copy(instances =
-                                                now.instances.update(identity, MountSlot(live.instance, spec.path, region))
-                                            ),
-                                            ()
+                        val live = s.instances.get(identity)
+                        entryIn(s) match
+                            case Absent =>
+                                live match
+                                    case Present(slot) => view(ClaimState.Live(slot.instance), Absent)
+                                    case Absent        =>
+                                        MountInstance.start(spec, Absent, frames, table).map(i =>
+                                            Scope.ensure(i.teardown).andThen(view(ClaimState.Live(i), Absent))
                                         )
-                                    case _ => (now, ())
-                            }).andThen(slot.instance)
-                        else if live.nonEmpty then Kyo.lift(live.get.instance)
-                        else if entry.isEmpty then
-                            MountInstance.start(spec, Absent, frames).map(i => Scope.ensure(i.teardown).andThen(i))
-                        else
-                            val seed = spec.node.pendingPolicy match
-                                case UI.PendingPolicy.Placeholder => Absent
-                                case UI.PendingPolicy.KeepLatest  => entry.get.handoff.get(spec.path)
-                            MountInstance.start(spec, seed, frames).map { fresh =>
-                                val outcome = Sync.Unsafe.defer(table.modify[Maybe[MountInstance]] { now =>
-                                    now.instances.get(identity) match
-                                        case Present(other) => (now, Present(other.instance))
-                                        case Absent         =>
-                                            val held = now.regions.foldLeft(false)((acc, _, e) => acc || e.holds.contains(identity))
-                                            if held then
-                                                (
-                                                    now.copy(instances =
-                                                        now.instances.update(identity, MountSlot(fresh, spec.path, region))
-                                                    ),
-                                                    Absent
-                                                )
-                                            else (now, Present(fresh))
-                                            end if
-                                })
-                                outcome.map { other =>
-                                    if other.isEmpty then Kyo.lift(fresh)
-                                    else if other.get eq fresh then Scope.ensure(fresh.teardown).andThen(fresh)
-                                    else fresh.teardown.andThen(other.get)
-                                }
-                            }
-                        end if
+                            case Present(entry) =>
+                                val others  = s.holders(identity) > 1
+                                val pending = s.unsettled
+                                val seed    = spec.node.pendingPolicy match
+                                    case UI.PendingPolicy.Placeholder => Absent
+                                    case UI.PendingPolicy.KeepLatest  => entry.handoff.get(spec.path)
+                                live match
+                                    case Present(slot) if !others =>
+                                        val moved = slot.region != region
+                                        Sync.Unsafe.defer(table.modify { now =>
+                                            now.instances.get(identity) match
+                                                case Present(same) if same.instance eq slot.instance =>
+                                                    (
+                                                        now.copy(instances =
+                                                            now.instances.update(identity, MountSlot(same.instance, spec.path, region))
+                                                        ),
+                                                        ()
+                                                    )
+                                                case _ => (now, ())
+                                        }).andThen(slot.instance.supervision.adopt(spec, frames, moved))
+                                            .andThen(view(ClaimState.Live(slot.instance), Absent))
+                                            .map(registered(identity, _, false))
+                                    case Present(slot) =>
+                                        val shown = spec.node.pendingPolicy match
+                                            case UI.PendingPolicy.Placeholder => Kyo.lift(Maybe.empty[UI])
+                                            case UI.PendingPolicy.KeepLatest  => slot.instance.snapshot
+                                        shown.map(snapshot => view(ClaimState.Waiting(snapshot), seed)).map(registered(identity, _, true))
+                                    case Absent =>
+                                        // While something is in transit, or another region shows the identity too, the instance is made
+                                        // and shown but its effect waits for the cut: what is released goes first, and a duplicate never runs.
+                                        // The effect is let go only once the instance is filed with nothing unsettled in the table.
+                                        val launch = !others && !pending
+                                        MountInstance.start(spec, seed, frames, table, launch = false).map { fresh =>
+                                            Sync.Unsafe.defer(table.modify[(Maybe[MountInstance], Boolean)] { now =>
+                                                now.instances.get(identity) match
+                                                    case Present(other) => (now, (Present(other.instance), false))
+                                                    case Absent         =>
+                                                        if now.holders(identity) == 0 then (now, (Absent, false))
+                                                        else
+                                                            val waits = !launch || now.unsettled
+                                                            (
+                                                                now.copy(instances =
+                                                                    now.instances.update(identity, MountSlot(fresh, spec.path, region))
+                                                                ),
+                                                                (Present(fresh), waits)
+                                                            )
+                                            }).map { (kept, waits) =>
+                                                if kept.isEmpty then
+                                                    // No region holds it any more: a scope that ends with this node.
+                                                    fresh.launch.andThen(Scope.ensure(fresh.teardown)).andThen(view(
+                                                        ClaimState.Live(fresh),
+                                                        seed
+                                                    ))
+                                                else if kept.get eq fresh then
+                                                    (if waits then Kyo.unit else fresh.launch)
+                                                        .andThen(view(ClaimState.Live(fresh), seed))
+                                                        .map(registered(identity, _, waits))
+                                                else
+                                                    fresh.teardown.andThen(view(
+                                                        ClaimState.Live(kept.get),
+                                                        Absent
+                                                    )).map(registered(identity, _, false))
+                                            }
+                                        }
+                                end match
+                        end match
                     }
+            end match
+        end claim
+
+        /** Files `view` under `identity` while the current scope lives; `waits` puts the identity in waiting for the next cut. */
+        private def registered(identity: MountIdentity, view: ClaimView, waits: Boolean)(using Frame): ClaimView < (Sync & Scope) =
+            Sync.Unsafe.defer {
+                val added = table.modify { s =>
+                    val views = s.views.update(identity, s.views.get(identity).getOrElse(Chunk.empty).append(view))
+                    (
+                        s.copy(views = views, waiting = if waits then s.waiting + identity else s.waiting),
+                        waits && !s.waiting.contains(identity)
+                    )
+                }
+                val unfile = Scope.ensure(Sync.Unsafe.defer(table.modify { s =>
+                    val left = s.views.get(identity).getOrElse(Chunk.empty).filterNot(_ eq view)
+                    (s.copy(views = if left.isEmpty then s.views.remove(identity) else s.views.update(identity, left)), ())
+                }))
+                unfile.andThen(if added then table.awaitCut() else Kyo.unit).andThen(view)
+            }
 
         /** A keyless instance for `spec`, released with the caller's scope; only a subscription the table still follows leaves its snapshot. */
         def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
@@ -3410,7 +3809,7 @@ private[kyo] object ReactiveUI:
                 val seed = spec.node.pendingPolicy match
                     case UI.PendingPolicy.Placeholder => Absent
                     case UI.PendingPolicy.KeepLatest  => entry.flatMap(_.handoff.get(spec.path))
-                MountInstance.start(spec, seed, frames).map { instance =>
+                MountInstance.start(spec, seed, frames, table).map { instance =>
                     Scope.ensure(current.map(still => if still then leaveSnapshot(instance, region, spec.path) else Kyo.unit).andThen(
                         instance.teardown
                     ))
@@ -3419,11 +3818,11 @@ private[kyo] object ReactiveUI:
             }
     end MountScope
 
-    /** The message each place of an identity shown in several places of one pass shows. */
-    private def duplicateMessage(identity: MountIdentity, nodes: java.util.ArrayList[ReactiveUI]): String =
-        val places = (0 until nodes.size).map(i => nodes.get(i).path.mkString(".")).mkString(", ")
-        val site   = nodes.get(0).mounted.fold("")(spec => s" (UI.mounted at ${spec.node.frame.position.show})")
-        s"the keyed mount ${identity.key}$site is shown in ${nodes.size} places in one render pass: $places. " +
+    /** The message each place of an identity shown in several places at once shows. */
+    private def duplicateMessage(identity: MountIdentity, nodes: Chunk[ReactiveUI]): String =
+        val places = nodes.map(_.path.mkString(".")).mkString(", ")
+        val site   = nodes.headMaybe.flatMap(_.mounted).fold("")(spec => s" (UI.mounted at ${spec.node.frame.position.show})")
+        s"the keyed mount ${identity.key}$site is shown in ${nodes.size} places at once: $places. " +
             "A keyed instance can show in one place only, so none of them gets one. Give each place a key of its own, " +
             "such as the id of the data it shows, or render repeating data with foreachKeyed."
     end duplicateMessage
@@ -3441,11 +3840,55 @@ private[kyo] object ReactiveUI:
         pass: MountPass,
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
-        val instance = spec.identity match
-            case Present(identity) => mounts.claim(rui, identity, spec, pass)
-            case Absent            => mounts.startKeyless(spec)
-        mounts.current.map(follow => instance.map(subscribeMountContent(rui, spec, _, exchange, signalChangeTime, dispatch, follow)))
+        def show(instance: MountInstance, follow: Boolean): Unit < (Async & Scope) =
+            subscribeMountContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
+        mounts.current.map { follow =>
+            spec.identity match
+                case Absent            => mounts.startKeyless(spec).map(show(_, follow))
+                case Present(identity) =>
+                    mounts.claim(rui, identity, spec, pass).map { view =>
+                        def showClaim(state: ClaimState): Unit < (Async & Scope) =
+                            state match
+                                case ClaimState.Live(instance)     => show(instance, follow)
+                                case ClaimState.Waiting(shown)     => showWaiting(rui, shown, spec, exchange)
+                                case ClaimState.Duplicate(message) =>
+                                    MountInstance.failed(spec, message, mounts.frames, mounts.table)
+                                        .map(failed => Scope.ensure(failed.teardown).andThen(show(failed, follow)))
+                        // The state the claim starts in is shown in this pass, like any node; a cut that switches it later closes what
+                        // that showed and shows the next state in a scope of its own.
+                        for
+                            first <- view.state.get
+                            shown <- Scope.Finalizer.init(1)
+                            _     <- Scope.ensure(shown.close(Absent).andThen(shown.await))
+                            _     <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
+                                Tag[Scope],
+                                derive = (_: Maybe[Scope.Finalizer]) => shown,
+                                fork = (parent: Scope.Finalizer) => parent.forked,
+                                join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
+                            )(showClaim(first))
+                            _ <- startOwnedFiber(
+                                Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
+                                    shown.close(Absent).andThen(shown.await).andThen(showClaim(next))
+                                }).unit
+                            )
+                        yield ()
+                        end for
+                    }
+        }
     end subscribeMounted
+
+    /** Shows what a keyed node waiting for a cut shows: the snapshot its `KeepLatest` policy keeps, held like any snapshot so nothing in
+      * it looks live, or its placeholder. No instance is behind it, so no event reaches it.
+      */
+    private def showWaiting(rui: ReactiveUI, shown: Maybe[UI], spec: MountedSpec, exchange: UIExchange)(using
+        Frame
+    ): Unit < (Async & Scope) =
+        deliverMeasured(rui, UI.RenderCause.Signal, exchange)(
+            _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, shown.getOrElse(spec.placeholder))
+        ).andThen(
+            if shown.isEmpty then Kyo.unit
+            else exchange.onHold(rui.region, true).andThen(Scope.ensure(exchange.onHold(rui.region, false)))
+        )
 
     /** Shows an instance's content cell in the node's range. The content as it is now is painted at once, so a kept instance replaces
       * the placeholder its enclosing region just rendered without a visible gap; then a region over the cell follows it. Live content
@@ -3468,6 +3911,7 @@ private[kyo] object ReactiveUI:
             _       <- dispatch.register(rui.contentContext, instance)
             _       <- Scope.ensure(dispatch.unregister(rui.contentContext, instance))
             content <- instance.children.content(rui.path, rui.contentContext.transparentDepth, follow)
+            watch   <- content.register
             first   <- instance.cell.current
             // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
             // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
@@ -3515,7 +3959,7 @@ private[kyo] object ReactiveUI:
                         case (true, false) => through.onHold(rui.region, false)
                         case _             => Kyo.unit
                     _ <- state match
-                        case MountState.Pending(Present(_)) => Kyo.unit
+                        case MountState.Pending(Present(_)) => content.recorded
                         case _                              =>
                             for
                                 (kids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
@@ -3566,7 +4010,7 @@ private[kyo] object ReactiveUI:
                         }
                     end for
             _ <- startOwnedFiber(
-                Abort.run[Throwable](instance.cell.observe(observed)).map { result =>
+                Abort.run[Throwable](Signal.passWatch.let(Present(watch))(instance.cell.observe(observed))).map { result =>
                     result.fold(
                         _ => (),
                         err => Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", err),

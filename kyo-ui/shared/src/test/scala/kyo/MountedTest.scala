@@ -295,6 +295,12 @@ class MountedTest extends kyo.test.Test[Any]:
     // An outer re-render stops the old subscription of a region only once the outer value's scope has drained, while the new
     // subscription of that region already works on the same table. The table follows the subscription born in the pass that last
     // covered the region; the older one, still running a pass, must neither release nor record anything in it.
+    private def liveOf(view: ReactiveUI.ClaimView)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
+        view.state.get.map {
+            case ReactiveUI.ClaimState.Live(instance) => Present(instance)
+            case _                                    => Absent
+        }
+
     "a region's newer subscription owns its entry in the mount table, and an older one still running leaves the table alone" in {
         Scope.run {
             for
@@ -312,28 +318,29 @@ class MountedTest extends kyo.test.Test[Any]:
                 outerFirst   <- top.beginWalk(Seq(root))
                 older = top.child(outerFirst, region)
                 olderPass <- older.beginWalk(region.children)
-                first     <- older.claim(node, identity, spec, olderPass)
+                first     <- older.claim(node, identity, spec, olderPass).map(liveOf)
                 _         <- older.endWalk
-                _         <- assertEventually(first.cell.current.map(_.isInstanceOf[ReactiveUI.MountState.Ready]))
+                _         <- assertEventually(first.fold(Kyo.lift(false))(_.cell.current.map(_.isInstanceOf[ReactiveUI.MountState.Ready])))
                 outerNext <- top.beginWalk(Seq(root))
                 newer = top.child(outerNext, region)
                 newerPass <- newer.beginWalk(region.children)
-                kept      <- newer.claim(node, identity, spec, newerPass)
+                kept      <- newer.claim(node, identity, spec, newerPass).map(liveOf)
                 _         <- older.beginWalk(Seq.empty)
                 _         <- older.endWalk
-                stale     <- older.claim(node, identity, spec, olderPass)
+                stale     <- older.claim(node, identity, spec, olderPass).map(liveOf)
                 _         <- newer.endWalk
                 gone      <- released.get
                 againPass <- newer.beginWalk(region.children)
-                again     <- newer.claim(node, identity, spec, againPass)
+                again     <- newer.claim(node, identity, spec, againPass).map(liveOf)
                 _         <- newer.endWalk
                 _         <- table.evictAll
                 after     <- released.get
             yield
-                assert(kept eq first, "the newer subscription did not find the kept instance")
+                def same(a: Maybe[ReactiveUI.MountInstance]) = a.nonEmpty && first.exists(_ eq a.get)
+                assert(same(kept), "the newer subscription did not find the kept instance")
                 assert(!gone, "the older subscription released the instance the newer one shows")
-                assert(stale eq first, "the older subscription's claim did not reuse the live instance")
-                assert(again eq first, "the table lost the instance after the older subscription's pass")
+                assert(same(stale), "the older subscription's claim did not reuse the live instance")
+                assert(same(again), "the table lost the instance after the older subscription's pass")
                 assert(after, "evicting the table did not release the instance")
         }
     }
@@ -344,12 +351,13 @@ class MountedTest extends kyo.test.Test[Any]:
             path = Seq("0", "1")
             at   = ReactiveRegion.RegionIdentity(path, 1)
             node = UI.mounted(Kyo.lift(UI.empty))
-            instance <- ReactiveUI.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil)
-            _        <- dispatch.register(at, instance)
-            _        <- dispatch.register(at, instance)
-            _        <- dispatch.unregister(at, instance)
-            found    <- dispatch.instance(at)
-            _        <- instance.teardown
+            (table, _) <- ReactiveUI.MountTable.root(Seq.empty)
+            instance   <- ReactiveUI.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil, table)
+            _          <- dispatch.register(at, instance)
+            _          <- dispatch.register(at, instance)
+            _          <- dispatch.unregister(at, instance)
+            found      <- dispatch.instance(at)
+            _          <- instance.teardown
         yield assert(found.exists(_ eq instance))
     }
 
@@ -361,16 +369,17 @@ class MountedTest extends kyo.test.Test[Any]:
         val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
         val innerAt                = ReactiveRegion.RegionIdentity(path, 3)
         for
-            dispatch <- MountDispatch.init
-            outer    <- ReactiveUI.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil)
-            inner    <- ReactiveUI.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil)
-            _        <- dispatch.register(outerAt, outer)
-            before   <- dispatch.instance(innerAt)
-            _        <- dispatch.register(innerAt, inner)
-            o        <- dispatch.instance(outerAt)
-            i        <- dispatch.instance(innerAt)
-            _        <- inner.teardown
-            _        <- outer.teardown
+            dispatch   <- MountDispatch.init
+            (table, _) <- ReactiveUI.MountTable.root(Seq.empty)
+            outer      <- ReactiveUI.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil, table)
+            inner      <- ReactiveUI.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil, table)
+            _          <- dispatch.register(outerAt, outer)
+            before     <- dispatch.instance(innerAt)
+            _          <- dispatch.register(innerAt, inner)
+            o          <- dispatch.instance(outerAt)
+            i          <- dispatch.instance(innerAt)
+            _          <- inner.teardown
+            _          <- outer.teardown
         yield
             assert(outerNode.frame == innerNode.frame)
             assert(before.isEmpty, "the inner mount found the outer one's instance before its own registered")
@@ -1614,6 +1623,84 @@ class MountedTest extends kyo.test.Test[Any]:
                 yield ()
             }
         yield succeed
+    }
+
+    private def writerDock(batched: Boolean)(using Frame, kyo.test.AssertScope) =
+        for
+            runs    <- AtomicInt.init(0)
+            left    <- Signal.initRef(true)
+            right   <- Signal.initRef(false)
+            trigger <- Promise.init[Unit, Any]
+            between <- Promise.init[Unit, Any]
+            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("written")
+            move = left.set(false).andThen(between.get).andThen(right.set(true))
+            // The writer is a fiber the effect of another mount forked: its writes are no event handler's.
+            writer = UI.mounted(UI.fork(trigger.get.andThen(if batched then UI.batch(move) else move)).andThen(span("writer")))
+            ui     = div(
+                writer,
+                left.render(l => if l then div(node) else div(span("empty-left"))),
+                right.render(r => if r then div(node) else div(span("empty-right")))
+            )
+            total <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                    _ <- trigger.completeUnitDiscard
+                    // The losing region renders while the writer is between its two writes.
+                    _ <- showsEventually(recorder, Seq("1"), "empty-left")
+                    _ <- between.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("2", "0"), "runs:")
+                    n <- runs.get
+                yield n
+            }
+        yield total
+
+    "a move a background fiber writes in two steps inside UI.batch keeps its instance" in {
+        writerDock(batched = true).map(total => assert(total == 1, s"runs: $total"))
+    }
+
+    // Two writes with time between them and no batch are two changes: the first is decided before the second is made. This pins the
+    // documented behaviour, not a guarantee to keep.
+    "a move a background fiber writes in two steps without UI.batch is two changes: released, then started again" in {
+        writerDock(batched = false).map(total => assert(total == 2, s"runs: $total"))
+    }
+
+    "a large keyed list of regions without mounts records nothing and scans nothing per pass" in {
+        val rows = 2000
+        for
+            items <- Signal.initRef(Chunk.from((1 to rows).map(_.toString)))
+            tick  <- Signal.initRef(0)
+            ui       = div(items.foreachKeyed(identity)(id => div(tick.render(n => span(s"$id:$n")))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- ReactiveUI.subscribe(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- assertEventually(Sync.defer(c.registered.get == rows + 1))
+                    _ <- assertEventually(Sync.defer(c.skipped.get >= rows + 1))
+                    before = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                    _ <- tick.set(1)
+                    _ <- assertEventually(Sync.defer(c.skipped.get >= before._5 + rows))
+                    _ <- items.set(Chunk.from((1 to rows).map(_.toString)) :+ "new")
+                    _ <- showsEventually(recorder, Seq("0", "new", "0"), "new:1")
+                    // The new row's region registers as its row subscribes, which may be after the list painted it.
+                    _ <- assertEventually(Sync.defer(c.registered.get == before._1 + 1))
+                    after = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                yield (before, after)
+            }
+        yield
+            val (
+                (regBefore, plannedBefore, scannedBefore, cutsBefore, skippedBefore),
+                (regAfter, plannedAfter, scannedAfter, cutsAfter, skippedAfter)
+            ) =
+                counts
+            java.lang.System.out.println(s"MOUNTCOST rows=$rows before=${counts._1} after=${counts._2}")
+            assert(plannedBefore == 0 && plannedAfter == 0, s"a pass without mounts planned: ${counts}")
+            assert(scannedAfter == 0 && cutsAfter == 0, s"a cut scanned regions with nothing in transit: ${counts}")
+            assert(regAfter == regBefore + 1, s"a re-render or a new row registered more than the new row's region: ${counts}")
+            assert(skippedAfter - skippedBefore >= rows, s"the tick did not reach every row: ${counts}")
+        end for
     }
 
 end MountedTest
