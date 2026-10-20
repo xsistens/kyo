@@ -1703,4 +1703,55 @@ class MountedTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // ---- A handler that waits for what its own writes cause ----
+
+    // The shape of an app that stops its running part and waits until it is gone (Runs.stop in the issue tracker's demo shell): the
+    // handler hides a keyed instance and then waits for that instance's release. The release must not wait for the handler.
+    "a click handler that hides a keyed instance and waits for its release finishes" in {
+        for
+            released <- Latch.init(1)
+            done     <- Latch.init(1)
+            show     <- Signal.initRef(true)
+            node = UI.mounted(Scope.ensure(released.release).andThen(span("app"))).keyed("run")
+            ui   = div(
+                button("stop").onClick(show.set(false).andThen(released.await).andThen(done.release)),
+                show.render(s => if s then div(node) else div(span("stopped")))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _ <- showsEventually(recorder, Seq("1", "0"), "app")
+                    _ <- Fiber.init(handle(Seq("0"), click("0")))
+                    // The region has dropped the instance: what is left is only its release.
+                    _ <- showsEventually(recorder, Seq("1"), "stopped")
+                    _ <- done.await
+                yield ()
+            }
+        yield succeed
+    }
+
+    // The shape of a mutation handler that stays in flight until the server answers, while the answer is only given once the new
+    // keyed content shows (D17 in the issue tracker's tests): the effect of the instance the handler's write shows must not wait for
+    // the handler.
+    "a click handler in flight does not hold back the effect of the keyed instance its write shows" in {
+        for
+            key     <- Signal.initRef("a")
+            started <- Latch.init(1)
+            answer  <- Latch.init(1)
+            node = (k: String) => UI.mounted((if k == "b" then started.release else Kyo.unit).andThen(span(s"content-$k"))).keyed(k)
+            ui   = div(button("save").onClick(key.set("b").andThen(answer.await)), key.render(k => div(node(k))))
+            _ <- mount(ui) { (recorder, handle) =>
+                for
+                    _      <- showsEventually(recorder, Seq("1", "0"), "content-a")
+                    before <- recorder.paintsAt(Seq("1"))
+                    _      <- Fiber.init(handle(Seq("0"), click("0")))
+                    // The region has rendered the new key while the handler is still in flight, waiting for `answer`.
+                    _ <- assertEventually(recorder.paintsAt(Seq("1")).map(_ > before))
+                    _ <- started.await
+                    _ <- answer.release
+                    _ <- showsEventually(recorder, Seq("1", "0"), "content-b")
+                yield ()
+            }
+        yield succeed
+    }
+
 end MountedTest
