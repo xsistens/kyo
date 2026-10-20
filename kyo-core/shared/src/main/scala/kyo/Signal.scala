@@ -228,7 +228,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     private[kyo] def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
         g: B => Unit < (S & Async & Scope)
     )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+        Signal.passWatch.use(watch => Signal.passWatch.let(Absent)(observeWatched(proj, baseline, repairInterval, watch)(g)))
+
+    /** [[observeProjected]] reporting its passes to `watch` (see [[Signal.PassWatch]]). */
+    private def observeWatched[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration, watch: Maybe[Signal.PassWatch])(
+        g: B => Unit < (S & Async & Scope)
+    )(using CanEqual[B, B], Frame): Unit < (S & Async) =
         Local.snapshotWith { locals =>
+            val probe           = if watch.isEmpty then null else new Signal.PassProbe
             val image           = Signal.lastProjection(proj)
             val wakesOnAnyInput = repairInterval.isFinite
             // An infinite interval arms no timer: the loop then waits on `nextWith` alone, as `streamChanges` does.
@@ -239,7 +246,17 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             def holdUntilChanged(b: B): Unit < (S & Async) =
                 await.andThen(recheck(b))
             def recheck(b: B): Unit < (S & Async) =
-                currentWith(c => if image(c) == b then holdUntilChanged(b) else (): Unit < (S & Async))
+                currentWith { c =>
+                    if image(c) == b then
+                        if probe != null then watch.get.rested()
+                        holdUntilChanged(b)
+                    else (): Unit < (S & Async)
+                }
+            // The repairing loop records no read: the probe compares the suspension-free current value, where there is one.
+            def startRepairing(b: B): Unit =
+                if probe != null then
+                    probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
+                    watch.get.started(probe.behind)
             // Cleared by the first read that is not exact, after which the observation stays on the repairing loop: without that
             // a signal over `initRaw` would run its exact parts twice per wakeup, once for the attempt and once for `currentWith`.
             var exact = true
@@ -248,9 +265,17 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                 read.awaitChange.andThen(Sync.Unsafe.defer {
                     val again = new Signal.ExactRead(locals)
                     readExact(again, wakesOnAnyInput) match
-                        case Present(c) => if image(c) == b then holdExact(again, b) else (): Unit < (S & Async)
-                        case Absent     =>
+                        case Present(c) =>
+                            if image(c) == b then
+                                if probe != null then
+                                    probe.exact(again)
+                                    watch.get.rested()
+                                holdExact(again, b)
+                            else (): Unit < (S & Async)
+                        case Absent =>
                             exact = false
+                            if probe != null then
+                                probe.repairing(() => unsafeCurrent()(using AllowUnsafe.embrace.danger).exists(c => proj(c) != b))
                             recheck(b)
                     end match
                 })
@@ -258,7 +283,10 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                 currentWith { cur =>
                     val b = image(cur)
                     if last.exists(_ == b) then await.andThen(loop(last))
-                    else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+                    else
+                        startRepairing(b)
+                        Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+                    end if
                 }
             def loop(last: Maybe[B]): Unit < (S & Async) =
                 if !exact then repairing(last)
@@ -269,7 +297,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                             case Present(cur) =>
                                 val b = image(cur)
                                 if last.exists(_ == b) then read.awaitChange.andThen(loop(last))
-                                else Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
+                                else
+                                    if probe != null then
+                                        probe.exact(read)
+                                        watch.get.started(probe.behind)
+                                    Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
+                                end if
                             case Absent =>
                                 exact = false
                                 repairing(last)
@@ -277,7 +310,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     }
             loop(baseline)
         }
-    end observeProjected
+    end observeWatched
 
     /** Reads the current value together with every [[SignalRef]] it comes from, recording each ref with its version in `read`, or answers
       * `Absent` when the value does not come from refs alone, as for a signal defined with [[Signal.initRaw]].
@@ -521,6 +554,52 @@ object Signal:
       * timer at all.
       */
     val defaultRepairInterval: Duration = 1.second
+
+    /** What an observation tells the engine running it about its passes, for kyo-ui's mount tables only (see [[passWatch]]).
+      *
+      * The engine has to know, at a given moment, whether an observer has seen every write so far: whether the value its latest pass
+      * consumed is still the value it would read now. Only the observation knows what it read (the refs and versions of its exact read,
+      * or the version of a [[SignalRef]]), so it hands out a probe answering exactly that.
+      */
+    private[kyo] trait PassWatch:
+        /** A pass for a new value starts. `behind` answers, from any thread and without suspending, whether a write landed since the
+          * pass read its value. For a signal observed through the repairing loop it compares the projection of the suspension-free
+          * current value where there is one, and answers `false` where there is none.
+          */
+        def started(behind: () => Boolean): Unit
+
+        /** A write woke the observer, it read again and found its image unchanged: it is current again without a pass, and the probe of
+          * its latest pass now answers for that read.
+          */
+        def rested(): Unit
+    end PassWatch
+
+    /** The [[PassWatch]] an observation started in this context reports to. Read once when the observation starts and cleared for
+      * everything the observation runs, so observations its passes start do not report to it.
+      */
+    private[kyo] val passWatch: Local[Maybe[PassWatch]] = Local.init(Maybe.empty[PassWatch])
+
+    /** The read of the latest pass of one observation, behind its probe. */
+    final private class PassProbe:
+        @volatile private var read: ExactRead         = null
+        @volatile private var fallback: () => Boolean = null
+
+        def exact(r: ExactRead): Unit =
+            fallback = null
+            read = r
+
+        def repairing(f: () => Boolean): Unit =
+            read = null
+            fallback = f
+
+        val behind: () => Boolean = () =>
+            val r = read
+            if r != null then r.changed()(using AllowUnsafe.embrace.danger)
+            else
+                val f = fallback
+                f != null && f()
+            end if
+    end PassProbe
 
     private val identityAny: Any => Any = a => a
 
@@ -1184,21 +1263,39 @@ object Signal:
                         else waiter.use(_ => ())
                     end if
                 }
-            Sync.defer {
-                val image                              = Signal.lastProjection(proj)
-                def hold(v0: Long, b: B): Unit < Async =
-                    nextSince(v0).andThen(Sync.Unsafe.defer {
-                        val v1 = _unsafe.version()
-                        if image(_unsafe.get()) == b then hold(v1, b) else (): Unit < Async
-                    })
-                def loop(last: Maybe[B]): Unit < (S & Async) =
-                    Sync.Unsafe.defer {
-                        val v0 = _unsafe.version()
-                        val b  = image(_unsafe.get())
-                        if last.exists(_ == b) then nextSince(v0).andThen(loop(last))
-                        else Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
+            Signal.passWatch.use { watch =>
+                Signal.passWatch.let(Absent) {
+                    Sync.defer {
+                        val image = Signal.lastProjection(proj)
+                        // The version the latest pass, or the latest unchanged re-read, consumed (see Signal.PassWatch).
+                        val seen                               = new java.util.concurrent.atomic.AtomicLong()
+                        val behind                             = () => _unsafe.version()(using AllowUnsafe.embrace.danger) != seen.get()
+                        def hold(v0: Long, b: B): Unit < Async =
+                            nextSince(v0).andThen(Sync.Unsafe.defer {
+                                val v1 = _unsafe.version()
+                                if image(_unsafe.get()) == b then
+                                    if watch.nonEmpty then
+                                        seen.set(v1)
+                                        watch.get.rested()
+                                    hold(v1, b)
+                                else (): Unit < Async
+                                end if
+                            })
+                        def loop(last: Maybe[B]): Unit < (S & Async) =
+                            Sync.Unsafe.defer {
+                                val v0 = _unsafe.version()
+                                val b  = image(_unsafe.get())
+                                if last.exists(_ == b) then nextSince(v0).andThen(loop(last))
+                                else
+                                    if watch.nonEmpty then
+                                        seen.set(v0)
+                                        watch.get.started(behind)
+                                    Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
+                                end if
+                            }
+                        loop(baseline)
                     }
-                loop(baseline)
+                }
             }
         end observeProjected
 

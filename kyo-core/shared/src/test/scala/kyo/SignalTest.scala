@@ -1944,4 +1944,53 @@ class SignalTest extends kyo.test.Test[Any]:
         }
     }
 
+    "pass watch" - {
+        final class Watch extends Signal.PassWatch:
+            val starts                               = new java.util.concurrent.atomic.AtomicInteger(0)
+            val rests                                = new java.util.concurrent.atomic.AtomicInteger(0)
+            @volatile var probe: () => Boolean       = () => false
+            def started(behind: () => Boolean): Unit =
+                probe = behind
+                discard(starts.incrementAndGet())
+            def rested(): Unit = discard(rests.incrementAndGet())
+        end Watch
+
+        def reportsPasses(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
+            for
+                ref   <- Signal.initRef(0)
+                gate  <- Promise.init[Unit, Any]
+                inner <- AtomicInt.init(0)
+                watch = new Watch
+                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe { v =>
+                    // An observation a pass starts must not report to the watch of the one that started it.
+                    Fiber.init(ref.map(_ + 1).observe(_ => inner.incrementAndGet.unit)).andThen(if v == 1 then gate.get else Kyo.unit)
+                }))
+                _          <- assertEventually(Sync.defer(watch.starts.get == 1))
+                idle       <- Sync.defer(watch.probe())
+                _          <- ref.set(1)
+                _          <- assertEventually(Sync.defer(watch.starts.get == 2))
+                inPass     <- Sync.defer(watch.probe())
+                _          <- ref.set(2)
+                behind     <- Sync.defer(watch.probe())
+                _          <- ref.set(1)
+                _          <- gate.completeUnitDiscard
+                _          <- assertEventually(Sync.defer(watch.rests.get >= 1))
+                caughtUp   <- Sync.defer(watch.probe())
+                startsThen <- Sync.defer(watch.starts.get)
+                _          <- fiber.interrupt
+            yield
+                assert(!idle && !inPass, "a pass that read the latest value reported itself behind")
+                assert(behind, "a write during a pass did not make it behind")
+                assert(!caughtUp, "a re-read with an unchanged image left the observer behind")
+                assert(startsThen == 2, s"a nested observation or an unchanged re-read reported a pass: ${startsThen} starts")
+
+        "a SignalRef observation reports its passes and whether a write landed since its read" in {
+            reportsPasses(ref => ref)
+        }
+
+        "an exact combinator observation reports its passes and whether a write landed since its read" in {
+            Signal.initRef(0).map(other => reportsPasses(ref => ref.combineLatest(other).map(_._1)))
+        }
+    }
+
 end SignalTest
