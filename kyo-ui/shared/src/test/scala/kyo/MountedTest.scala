@@ -1401,6 +1401,7 @@ class MountedTest extends kyo.test.Test[Any]:
             if path == held && armed.compareAndSet(true, false) then
                 entered.completeUnitDiscard.andThen(gate.get).andThen(super.onChange(region, path, context, parentContext, previous, ui))
             else super.onChange(region, path, context, parentContext, previous, ui)
+        end onChange
     end Gated
 
     private def mountWith[A](recorder: Recorder, ui: UI)(
@@ -1785,6 +1786,96 @@ class MountedTest extends kyo.test.Test[Any]:
                     _ <- showsEventually(recorder, Seq("1"), "hidden")
                     _ <- released.await
                 yield ()
+            }
+        yield succeed
+    }
+
+    // ---- Regions the cut cannot read exactly, and a superseded subscription ----
+
+    // A region over a signal built with `Signal.initRaw` is observed through the repairing loop: it has no exact read, so whether a
+    // write landed since its pass cannot be told. A cut counts it as behind until its next re-read, which the repair timer brings
+    // at the latest. Virtual time drives that timer.
+    "a panel moved into a region over an initRaw signal keeps its instance when the losing region renders first" in {
+        val ri = Signal.defaultRepairInterval
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    _        <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                    runs     <- AtomicInt.init(0)
+                    released <- AtomicInt.init(0)
+                    left     <- Signal.initRef(true)
+                    right    <- Signal.initRef((false, 0))
+                    entered  <- Promise.init[Unit, Any]
+                    gate     <- Promise.init[Unit, Any]
+                    recorder = new Gated(Seq("2"), entered, gate)
+                    rawRight = Signal.initRaw[(Boolean, Int)](
+                        [B, S] => (f: ((Boolean, Int)) => B < S) => right.currentWith(f),
+                        [B, S] => (f: ((Boolean, Int)) => B < S) => right.nextWith(f)
+                    )
+                    node = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                        .keyed("raw-docked")
+                    ui = div(
+                        button("move").onClick(UI.batch(left.set(false).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
+                        left.render(l => if l then div(node) else div(span("empty-left"))),
+                        rawRight.render(p => if p._1 then div(node) else div(span("empty-right")))
+                    )
+                    _ <- mountWith(recorder, ui) { handle =>
+                        for
+                            _ <- showsEventually(recorder, Seq("1", "0"), "runs:1")
+                            // The gaining region is held in a pass of an unrelated value, so the losing one renders the move first.
+                            _     <- Sync.defer(recorder.arm())
+                            _     <- right.getAndUpdate(p => (p._1, p._2 + 1))
+                            _     <- entered.get
+                            _     <- handle(Seq("0"), click("0"))
+                            _     <- showsEventually(recorder, Seq("1"), "empty-left")
+                            _     <- gate.completeUnitDiscard
+                            _     <- showsEventually(recorder, Seq("2", "0"), "runs:")
+                            total <- runs.get
+                            gone  <- released.get
+                        yield assert(total == 1 && gone == 0, s"runs: $total, released: $gone")
+                    }
+                yield succeed
+            }
+        }
+    }
+
+    // A region without a mount has no entry in its table, so nothing records which of its subscriptions is current. Here the old
+    // subscription of such a region is in the middle of a pass that gains the region's first keyed mount, held in its paint, when
+    // its parent re-renders and subscribes the region again.
+    "a superseded region that gains its first keyed mount while its parent re-renders starts no instance of its own" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            outer    <- Signal.initRef(0)
+            inner    <- Signal.initRef(false)
+            entered  <- Promise.init[Unit, Any]
+            gate     <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("0", "1"), entered, gate)
+            node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                .keyed("first-mount")
+            ui = div(outer.render(n => div(span(s"outer:$n"), inner.render(v => if v then div(node) else div(span("no mount"))))))
+            _ <- mountWith(recorder, ui) { _ =>
+                for
+                    // Both regions have run their first pass and observe their signals: the inner one is the subscription that will
+                    // be superseded.
+                    _ <- assertEventually(Sync.Unsafe.defer(outer.unsafe.waiters() == 1 && inner.unsafe.waiters() == 1))
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- inner.set(true)
+                    // The old subscription has recorded its walk and is held in its paint.
+                    _ <- entered.get
+                    _ <- outer.set(1)
+                    _ <- showsEventually(recorder, Seq("0"), "outer:1")
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    _ <- gate.completeUnitDiscard
+                    // Only the new subscription of the inner region still observes it once the old one is gone.
+                    _     <- assertEventually(Sync.Unsafe.defer(inner.unsafe.waiters() == 1))
+                    shown <- recorder.shown(Seq("0", "1", "0"))
+                    total <- runs.get
+                    gone  <- released.get
+                yield assert(
+                    total == 1 && gone == 0 && shown.contains("runs:1"),
+                    s"runs: $total, released: $gone, shown: $shown"
+                )
             }
         yield succeed
     }
