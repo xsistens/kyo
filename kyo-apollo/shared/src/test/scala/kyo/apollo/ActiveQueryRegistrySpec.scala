@@ -19,14 +19,14 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
         QueryKey(name, s"query $name", Json.JObj(Map("id" -> Json.JStr(id))))
 
     private def target(name: String, fetch: Unit < (Async & Abort[ApolloExecuteFailure]) = ()): Target =
-        Target(key(name), fetch, (), (), followsCache = true)
+        Target(key(name), fetch, (), (), followsCache = true, missed = ())
 
     "a refetch's row is the execute failures, not the module-wide ApolloException" in {
         typeCheck(
-            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloExecuteFailure]), (), (), true)"
+            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloExecuteFailure]), (), (), true, ())"
         )
         typeCheckFailure(
-            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloException]), (), (), true)"
+            "ActiveQueryRegistry.Target(ActiveQueryRegistry.QueryKey(\"a\", \"\", kyo.apollo.json.Json.JNull), (): Unit < (Async & Abort[kyo.apollo.exception.ApolloException]), (), (), true, ())"
         )(
             "Abort[kyo.apollo.exception.ApolloException]"
         )
@@ -37,14 +37,14 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
             registry <- ActiveQueryRegistry.init
             _        <- Scope.run {
                 for
-                    _ <- registry.register(Present(target("a")))
-                    _ <- Scope.run(registry.register(Present(target("b"))))
+                    _ <- registry.register(target("a"), true)
+                    _ <- Scope.run(registry.register(target("b"), true))
                     n <- registry.live.map(_.size)
                     _ = assert(n == 1)
                     _ <- Scope.run {
                         for
-                            _ <- registry.register(Present(target("c")))
-                            _ <- Scope.run(registry.register(Present(target("d"))))
+                            _ <- registry.register(target("c"), true)
+                            _ <- Scope.run(registry.register(target("d"), true))
                             e <- registry.live
                         yield assert(e.map(_.key.name) == Chunk("a", "c"))
                     }
@@ -61,8 +61,8 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                 log      <- AtomicRef.init(Chunk.empty[String])
                 registry <- ActiveQueryRegistry.init
                 note = (s: String) => log.updateAndGet(_ :+ s).unit
-                _     <- registry.register(Present(target("users", note("users"))))
-                _     <- registry.register(Present(target("posts", note("posts"))))
+                _     <- registry.register(target("users", note("users")), true)
+                _     <- registry.register(target("posts", note("posts")), true)
                 all   <- registry.refetchPlan(Set.empty)
                 users <- registry.refetchPlan(Set("users"))
                 none  <- registry.refetchPlan(Set("comments"))
@@ -83,10 +83,10 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                 registry <- ActiveQueryRegistry.init
                 note = (s: String) => log.updateAndGet(_ :+ s).unit
                 one  = (tag: String) =>
-                    Target(key("users"), note(s"fetch $tag"), note(s"begin $tag"), note(s"end $tag"), followsCache = true)
-                _     <- registry.register(Present(one("a")))
-                _     <- registry.register(Present(one("b")))
-                _     <- registry.register(Present(target("users").copy(key = key("users", "2"), fetch = note("fetch other"))))
+                    Target(key("users"), note(s"fetch $tag"), note(s"begin $tag"), note(s"end $tag"), followsCache = true, missed = ())
+                _     <- registry.register(one("a"), true)
+                _     <- registry.register(one("b"), true)
+                _     <- registry.register(target("users").copy(key = key("users", "2"), fetch = note("fetch other")), true)
                 plan  <- registry.refetchPlan(Set("users"))
                 _     <- Kyo.foreachDiscard(plan)(identity)
                 order <- log.get
@@ -102,8 +102,8 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                 log      <- AtomicRef.init(Chunk.empty[String])
                 registry <- ActiveQueryRegistry.init
                 note = (s: String) => log.updateAndGet(_ :+ s).unit
-                _     <- registry.register(Present(target("users", note("watcher"))))
-                _     <- registry.register(Present(target("users", note("lazy")).copy(followsCache = false)))
+                _     <- registry.register(target("users", note("watcher")), true)
+                _     <- registry.register(target("users", note("lazy")).copy(followsCache = false), true)
                 plan  <- registry.refetchPlan(Set.empty)
                 _     <- Kyo.foreachDiscard(plan)(identity)
                 order <- log.get
@@ -121,10 +121,11 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                     Abort.fail(DefaultApolloException("down")),
                     (),
                     ended.incrementAndGet.unit,
-                    followsCache = true
+                    followsCache = true,
+                    missed = ()
                 )
-                _      <- registry.register(Present(failing))
-                _      <- registry.register(Present(failing))
+                _      <- registry.register(failing, true)
+                _      <- registry.register(failing, true)
                 plan   <- registry.refetchPlan(Set.empty)
                 result <- Abort.run[ApolloExecuteFailure](Kyo.foreachDiscard(plan)(identity))
                 n      <- ended.get
@@ -134,18 +135,25 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
         }
     }
 
-    "an entry takes part only while its target is present" in {
+    "an entry takes part only while it is active, and a paused one is told what it missed" in {
         Scope.run {
             for
                 paused   <- AtomicBoolean.init(true)
+                missed   <- AtomicInt.init(0)
                 registry <- ActiveQueryRegistry.init
-                _        <- registry.register(paused.get.map(p => if p then Absent else Present(target("users"))))
+                _        <- registry.register(target("users").copy(missed = missed.incrementAndGet.unit), paused.get.map(!_))
                 before   <- registry.refetchPlan(Set.empty)
+                other    <- registry.refetchPlan(Set("posts"))
+                told     <- missed.get
                 _        <- paused.set(false)
                 after    <- registry.refetchPlan(Set.empty)
+                still    <- missed.get
             yield
                 assert(before.isEmpty)
+                assert(other.isEmpty)
+                assert(told == 1)
                 assert(after.size == 1)
+                assert(still == 1)
         }
     }
 
@@ -155,7 +163,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
             _        <- Scope.run {
                 for
                     _     <- registry.registerResetHook(())
-                    _     <- registry.register(Present(target("a")))
+                    _     <- registry.register(target("a"), true)
                     hooks <- registry.resetHookEffects
                     e     <- registry.entries
                 yield
@@ -178,7 +186,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
                 latch    <- Latch.init(1)
                 forks    <- Kyo.foreach(1 to fibers) { i =>
                     Fiber.init(
-                        latch.await.andThen(Loop.repeat(perFiber)(registry.register(Present(target(s"q$i")))))
+                        latch.await.andThen(Loop.repeat(perFiber)(registry.register(target(s"q$i"), true)))
                     )
                 }
                 _       <- latch.release

@@ -19,10 +19,11 @@ import scala.collection.immutable.VectorMap
   * changed fields, because the normalized cache already re-emits every watcher of a
   * shared record.
   *
-  * An entry yields its CURRENT [[ActiveQueryRegistry.Target]] each time the registry
-  * is drained: `Absent` while the watcher is paused (a `skip`, live variables at
-  * `Absent`, a lazy query not loaded yet), so a paused watcher takes no part, as in
-  * react-apollo, where a standby query is left out. Entries whose targets share a
+  * An entry takes part only while it is ACTIVE, read each time the registry is
+  * drained: a watcher paused by a `skip`, or a lazy query not loaded yet, is left
+  * out, as in react-apollo, where a standby query is. A paused watcher that a drain
+  * leaves out is told so (its target's `missed`), so it can catch up when it
+  * resumes instead of showing what it held before. Entries whose targets share a
   * [[ActiveQueryRegistry.QueryKey]] are one query: they are refetched with ONE
   * request, and the cache hands the answer to all of them.
   *
@@ -41,15 +42,14 @@ final class ActiveQueryRegistry private (
 ):
     import ActiveQueryRegistry.*
 
-    /** Register a live watcher for the lifetime of the enclosing `Scope`. `target` is
-      * read each time the registry is drained and yields what the watcher would
-      * refetch now, or `Absent` while it is paused. The `Scope`'s teardown removes
-      * exactly this entry.
+    /** Register a live watcher for the lifetime of the enclosing `Scope`. `active` is
+      * read each time the registry is drained: while it is `false` the watcher is
+      * paused and takes no part. The `Scope`'s teardown removes exactly this entry.
       */
-    def register(target: Maybe[Target] < Sync)(using Frame): Unit < (Sync & Scope) =
+    def register(target: Target, active: Boolean < Sync)(using Frame): Unit < (Sync & Scope) =
         Scope.acquireRelease(
             seq.incrementAndGet.map { id =>
-                queries.updateAndGet(_.updated(id, Entry(id, target))).andThen(id)
+                queries.updateAndGet(_.updated(id, Entry(id, target, active))).andThen(id)
             }
         )(id => queries.updateAndGet(_.removed(id))).unit
 
@@ -69,14 +69,20 @@ final class ActiveQueryRegistry private (
       * query is fetched, then every target runs its `end`, whether the fetch
       * succeeded or failed. The fetch is sent once when every target follows the
       * cache; a target that does not runs its own fetch, whose write-back reaches the
-      * ones that do. Works on one snapshot of the registry.
+      * ones that do. A paused entry the names would have chosen runs its target's
+      * `missed` now, as the plan is made. Works on one snapshot of the registry.
       */
     private[apollo] def refetchPlan(names: Set[String])(using
         Frame
     ): Chunk[Unit < (Async & Abort[ApolloExecuteFailure])] < Sync =
-        live.map { targets =>
-            val chosen = targets.filter(t => names.isEmpty || names.contains(t.key.name))
-            val byKey  = chosen.foldLeft(VectorMap.empty[QueryKey, Chunk[Target]]) { (acc, t) =>
+        entries.map { es =>
+            Kyo.foreach(es.filter(e => names.isEmpty || names.contains(e.target.key.name)))(e =>
+                e.active.map(on => (e.target, on))
+            )
+        }.map { named =>
+            Kyo.foreachDiscard(named.collect { case (t, false) => t })(_.missed).andThen(named.collect { case (t, true) => t })
+        }.map { chosen =>
+            val byKey = chosen.foldLeft(VectorMap.empty[QueryKey, Chunk[Target]]) { (acc, t) =>
                 acc.updated(t.key, acc.getOrElse(t.key, Chunk.empty) :+ t)
             }
             Chunk.from(byKey.values.map { same =>
@@ -88,9 +94,9 @@ final class ActiveQueryRegistry private (
             })
         }
 
-    /** The targets of the entries that are live now, in registration order. */
+    /** The targets of the entries that are active now, in registration order. */
     private[apollo] def live(using Frame): Chunk[Target] < Sync =
-        entries.map(es => Kyo.foreach(es)(_.target).map(_.collect { case Present(t) => t }))
+        entries.map(es => Kyo.foreach(es)(e => e.active.map(on => (e.target, on))).map(_.collect { case (t, true) => t }))
 
     /** Snapshot of the registered `onResetStore` hooks, in registration order. */
     private[apollo] def resetHookEffects(using Frame): Chunk[Unit < Async] < Sync =
@@ -117,16 +123,19 @@ object ActiveQueryRegistry:
       * @param followsCache whether the watcher re-emits on a cache write: then any fetch of
       *                     its query reaches it, and one fetch serves every such watcher. A
       *                     watcher that does not (a lazy query's state) needs its own fetch.
+      * @param missed       run when a refetch or reset leaves the watcher out because it is
+      *                     paused, so it can fetch again when it resumes
       */
     final case class Target(
         key: QueryKey,
         fetch: Unit < (Async & Abort[ApolloExecuteFailure]),
         begin: Unit < Sync,
         end: Unit < Sync,
-        followsCache: Boolean
+        followsCache: Boolean,
+        missed: Unit < Sync
     )
 
-    final private[apollo] case class Entry(id: Long, target: Maybe[Target] < Sync)
+    final private[apollo] case class Entry(id: Long, target: Target, active: Boolean < Sync)
 
     final private[apollo] case class ResetHook(id: Long, hook: Unit < Async)
 

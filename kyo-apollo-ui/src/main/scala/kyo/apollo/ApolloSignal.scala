@@ -254,12 +254,12 @@ end extension
 object ApolloSignal:
 
     /** Enters a watcher in its client's [[ActiveQueryRegistry]] for the enclosing `Scope`, so `refetchQueries` and
-      * `resetStore` reach it. `target` is read whenever the registry is drained: `Absent` while the watcher is paused.
+      * `resetStore` reach it. `active` is read whenever the registry is drained: `false` while the watcher is paused.
       */
-    private[apollo] def register(client: ApolloClient, target: Maybe[ActiveQueryRegistry.Target] < Sync)(using
+    private[apollo] def register(client: ApolloClient, target: ActiveQueryRegistry.Target, active: Boolean < Sync)(using
         Frame
     ): Unit < (Sync & Scope) =
-        client.activeQueries.register(target)
+        client.activeQueries.register(target, active)
 
     /** What the registry refetches for a watcher of `call`: a `NetworkOnly` fetch whose write-back re-emits the
       * watcher. `during`, a query handle's activity cell, reads [[NetworkStatus.Refetch]] while it runs.
@@ -274,7 +274,8 @@ object ApolloSignal:
             ApolloEffect.asExecuteFailure(call.fetchPolicy(FetchPolicy.NetworkOnly).data.unit),
             during.fold(Kyo.unit)(_.set(Present(NetworkStatus.Refetch))),
             during.fold(Kyo.unit)(_.set(Absent)),
-            followsCache = true
+            followsCache = true,
+            missed = Kyo.unit
         )
     end targetOf
 
@@ -426,7 +427,7 @@ object ApolloSignal:
                             case QueryState.Idle => ref.set(QueryState.Loading)
                             case _               => (): Unit < Sync
                         }.andThen(Fiber.init(Scope.run(
-                            register(current.apolloClient, Present(targetOf(current, Absent)))
+                            register(current.apolloClient, targetOf(current, Absent), true)
                                 .andThen(current.watch().foreach(resp => push(ref, resp)))
                         )).unit)
                     case Absent =>

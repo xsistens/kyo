@@ -52,7 +52,8 @@ object Apollo:
       * the reactive state freezes ([[SkipMode.Freeze]]) or the watcher is torn down
       * ([[SkipMode.Unsubscribe]]). The handle's own `refetch` is unaffected; while
       * skipped, `client.refetchQueries` and `client.resetStore` leave the query out,
-      * as react leaves out a standby query.
+      * as react leaves out a standby query, and one that left it out is made up for
+      * with a fetch when it resumes.
       */
     def query[D](call: ApolloCall[D], skip: Signal[Boolean], mode: SkipMode = SkipMode.Freeze)(using
         Frame,
@@ -91,7 +92,7 @@ object Apollo:
             target = ApolloSignal
                 .targetOf(call, Absent)
                 .copy(fetch = ApolloEffect.asExecuteFailure(load.unit), followsCache = false)
-            _ <- ApolloSignal.register(call.apolloClient, loaded.get.map(on => if on then Present(target) else Absent))
+            _ <- ApolloSignal.register(call.apolloClient, target, loaded.get)
         yield LazyQueryHandle(ref, load)
 
     // --- Mutations -----------------------------------------------------------
@@ -657,7 +658,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- ApolloSignal.register(call.apolloClient, Present(ApolloSignal.targetOf(call, during)))
+            _   <- ApolloSignal.register(call.apolloClient, ApolloSignal.targetOf(call, during), true)
             // `push`, not a bare `project`: a mid-stream transport failure must retain
             // the last good data (same contract as the gated overload).
             _ <- UI.fork(Scope.run(call.watch().foreach(resp => ApolloSignal.push(ref, resp))))
@@ -666,7 +667,8 @@ object Apollo:
     /** [[watchSignal]] with a live `skip` — react-apollo's `skip` (urql's `pause`).
       * While `skip` is `true`, [[SkipMode.Freeze]] (default) keeps the watcher live but
       * stops updating; [[SkipMode.Unsubscribe]] tears it down and re-establishes on resume.
-      * While skipped, `client.refetchQueries` and `client.resetStore` leave it out.
+      * While skipped, `client.refetchQueries` and `client.resetStore` leave it out, and
+      * one that left it out is made up for with a fetch when it resumes.
       */
     def watchSignal[D](call: ApolloCall[D], skip: Signal[Boolean], mode: SkipMode = SkipMode.Freeze)(
         using
@@ -676,7 +678,13 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         watchingGated(call, skip, mode, Absent)
 
-    /** [[watchSignal]] with a live `skip`, for a watcher whose refetch through the registry shows on `during`. */
+    /** [[watchSignal]] with a live `skip`, for a watcher whose refetch through the registry shows on `during`.
+      *
+      * While skipped it takes no part in the registry. When a refetch or a reset leaves it out, it fetches its query
+      * once it resumes: a reset clears the cache without telling the watchers, and a frozen watcher drops what it is
+      * told while skipped, so without that fetch it would go on showing what it held before. A failed catch-up goes to
+      * the `onFailure` rules as a notice where none matches, like a failed poll.
+      */
     private def watchingGated[D](
         call: ApolloCall[D],
         skip: Signal[Boolean],
@@ -687,11 +695,18 @@ object Apollo:
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): Signal[QueryState[D]] < (Async & Scope) =
-        val target = ApolloSignal.targetOf(call, during)
         for
-            ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- ApolloSignal.register(call.apolloClient, skip.current.map(skipped => if skipped then Absent else Present(target)))
-            _   <- UI.fork(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
+            ref    <- Signal.initRef[QueryState[D]](QueryState.Loading)
+            missed <- Signal.initRef(false)
+            target = ApolloSignal.targetOf(call, during).copy(missed = missed.set(true))
+            _ <- ApolloSignal.register(call.apolloClient, target, skip.current.map(!_))
+            _ <- UI.fork(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
+            // The pair, not `skip` alone: a pause and a resume between two reads of `skip` look like no change.
+            _ <- UI.fork(skip.combineLatest(missed).observe {
+                case (false, true) =>
+                    missed.set(false).andThen(ApolloSignal.pollTick(call.fetchPolicy(FetchPolicy.NetworkOnly).data))
+                case _ => Kyo.unit
+            })
         yield ref
         end for
     end watchingGated

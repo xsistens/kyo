@@ -233,13 +233,16 @@ class ApolloRefetchSpec extends kyo.test.Test[Any]:
         "watchSignal with skip" in {
             val engine = ServerEngine(body("Alice"))
             for
-                client  <- cached(engine)
-                skip    <- Signal.initRef(false)
-                signal  <- Apollo.watchSignal(client.query(CurrentUserQuery()), skip)
-                _       <- awaitSignal(signal)(named("Alice"))
-                _       <- skip.set(true)
-                paused  <- sent(engine)(client.refetchQueries("CurrentUser"))
-                _       <- skip.set(false)
+                client <- cached(engine)
+                skip   <- Signal.initRef(false)
+                signal <- Apollo.watchSignal(client.query(CurrentUserQuery()), skip)
+                _      <- awaitSignal(signal)(named("Alice"))
+                _      <- skip.set(true)
+                paused <- sent(engine)(client.refetchQueries("CurrentUser"))
+                before <- engine.calls
+                _      <- skip.set(false)
+                // The refetch it was left out of is made up for once it resumes.
+                _       <- assertEventually(engine.calls.map(_ == before + 1))
                 resumed <- sent(engine)(client.refetchQueries("CurrentUser"))
             yield
                 assert(paused == 0)
@@ -250,17 +253,52 @@ class ApolloRefetchSpec extends kyo.test.Test[Any]:
         "a query handle with skip" in {
             val engine = ServerEngine(body("Alice"))
             for
-                client  <- cached(engine)
-                skip    <- Signal.initRef(false)
-                handle  <- Apollo.query(client.query(CurrentUserQuery()), skip)
-                _       <- awaitSignal(handle.state)(named("Alice"))
-                _       <- skip.set(true)
-                paused  <- sent(engine)(client.refetchQueries("CurrentUser"))
-                _       <- skip.set(false)
+                client <- cached(engine)
+                skip   <- Signal.initRef(false)
+                handle <- Apollo.query(client.query(CurrentUserQuery()), skip)
+                _      <- awaitSignal(handle.state)(named("Alice"))
+                _      <- skip.set(true)
+                paused <- sent(engine)(client.refetchQueries("CurrentUser"))
+                before <- engine.calls
+                _      <- skip.set(false)
+                // The refetch it was left out of is made up for once it resumes.
+                _       <- assertEventually(engine.calls.map(_ == before + 1))
                 resumed <- sent(engine)(client.refetchQueries("CurrentUser"))
             yield
                 assert(paused == 0)
                 assert(resumed == 1)
+            end for
+        }
+
+        "watchSignal with skip, paused through a resetStore, shows the server's answer when it resumes" in {
+            val engine = ServerEngine(body("Alice"))
+            for
+                client <- cached(engine)
+                skip   <- Signal.initRef(false)
+                signal <- Apollo.watchSignal(client.query(CurrentUserQuery()), skip)
+                _      <- awaitSignal(signal)(named("Alice"))
+                _      <- skip.set(true)
+                _      <- engine.answer(body("Bob"))
+                _      <- client.resetStore
+                _      <- skip.set(false)
+                _      <- awaitSignal(signal)(named("Bob"))
+            yield succeed
+            end for
+        }
+
+        "a query handle with skip, paused through a refetch of its name, catches up when it resumes" in {
+            val engine = ServerEngine(body("Alice"))
+            for
+                client <- cached(engine)
+                skip   <- Signal.initRef(false)
+                handle <- Apollo.query(client.query(CurrentUserQuery()), skip)
+                _      <- awaitSignal(handle.state)(named("Alice"))
+                _      <- skip.set(true)
+                _      <- engine.answer(body("Bob"))
+                _      <- client.refetchQueries("CurrentUser")
+                _      <- skip.set(false)
+                _      <- awaitSignal(handle.state)(named("Bob"))
+            yield succeed
             end for
         }
 
