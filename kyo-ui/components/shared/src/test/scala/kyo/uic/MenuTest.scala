@@ -184,4 +184,81 @@ class MenuTest extends UicTest:
             )
     }
 
+    // ── the navigation role: a list of links, not a menu widget ──────────────────
+
+    private def site(using Frame) =
+        uic.Menu()
+            .accessibleRole(uic.MenuAccessibleRole.Navigation)
+            .accessibleName("Components")
+            .items(
+                uic.MenuItem("Actions").items(
+                    uic.MenuItem("Button").url("/c/button").current(true),
+                    uic.MenuItem("Link").url("/c/link")
+                ),
+                uic.MenuItem("Report a problem").onSelect(())
+            )
+
+    "a navigation menu is a named nav landmark around a plain list" in {
+        // A site's navigation is links, and the ARIA menu role promises an application menu
+        // instead: one tab stop, arrows inside, and a screen reader that stops reading the
+        // rows as links. So none of that vocabulary may appear here.
+        for
+            ui   <- Kyo.lift(site.render)
+            root <- elementWithClass(ui, "p-menu")
+            list <- elementWithClass(ui, "p-menu-list")
+            rows <- elementsWithClass(ui, "p-menu-item")
+            head <- elementWithClass(ui, "p-menu-submenu-label")
+        yield
+            assert(root.isInstanceOf[UI.Ast.Nav], "the root is a <nav>, which is the landmark")
+            assert(root.attrs.ariaAttrs.get("label").contains("Components"), "named, since a page has several navs")
+            assert(list.attrs.role.isEmpty, "the list keeps its native list semantics")
+            assert(list.attrs.tabIndex.isEmpty && list.attrs.onKeyDown.isEmpty, "and is no tab stop with arrow keys")
+            assert(rows.forall(_.attrs.role.isEmpty), "a row is a list item, not a menuitem")
+            assert(head.attrs.role.isEmpty, "a group heading stays readable as a list item")
+    }
+
+    "every link in a navigation menu is its own tab stop and navigates natively" in {
+        for
+            links <- elementsWithClass(site.render, "p-menu-item-link")
+        yield
+            assert(links.forall(_.attrs.tabIndex.contains(0)), "the reader tabs from link to link")
+            assert(links(0).attrs.onClick.isEmpty, "a url row declares no click handler, so the browser follows it")
+            assert(links(0).attrs.ariaAttrs.get("current").contains("page"), "and the current page is announced")
+            assert(links(2).attrs.onClick.isDefined, "a row with an action still runs it")
+    }
+
+    "a navigation brings the row of the page being shown into view" in {
+        // A long nav opened on a deep link shows its top rows, and the page the reader is on can
+        // be screens further down. The flag scrolls it in with `nearest`, so a row already in
+        // view does not move.
+        for
+            rows <- elementsWithClass(site.render, "p-menu-item")
+        yield
+            assert(rows(0).attrs.scrollAuto.contains(true), "the current row carries the flag")
+            assert(rows.drop(1).forall(_.attrs.scrollAuto.isEmpty), "and no other row does")
+    }
+
+    "the navigation role holds no highlight, so a bound one changes nothing" in {
+        for
+            hi <- Signal.initRef(1)
+            ui = site.wired(hi, "m")
+            focused <- elementsWithClass(ui, "p-focus")
+            list    <- elementWithClass(ui, "p-menu-list")
+        yield
+            assert(focused.isEmpty, "no roving highlight")
+            assert(list.attrs.ariaAttrs.get("activedescendant").isEmpty, "and nothing announced through one")
+    }
+
+    "an ordinary menu keeps the menu vocabulary, and takes a name on its list" in {
+        for
+            hi <- Signal.initRef(-1)
+            ui = menu.accessibleName("File").wired(hi, "m")
+            list <- elementWithClass(ui, "p-menu-list")
+            row  <- elementWithClass(ui, "p-menu-item")
+        yield
+            assert(list.attrs.role.contains("menu"))
+            assert(row.attrs.role.contains("menuitem"))
+            assert(list.attrs.ariaAttrs.get("label").contains("File"), "the list is the menu, so it carries the name")
+    }
+
 end MenuTest

@@ -246,4 +246,74 @@ class TabsTest extends UicTest:
             assert(headers(1).attrs.onKeyDown.isEmpty, "nor a key handler")
     }
 
+    // ── the panels: all of them stay in the page, only one is shown ──────────────
+
+    /** Whether `el` is hidden right now, through either the static or the reactive attribute. */
+    private def isHidden(el: UI.Ast.Element)(using Frame): Boolean < Sync =
+        el.attrs.reactiveBoolAttrs.get("hidden") match
+            case Some(sig) => sig.current
+            case None      => el.attrs.hidden.contains(true)
+
+    private def hiddenFlags(ui: UI)(using Frame): Chunk[Boolean] < Sync =
+        elementsWithClass(ui, "p-tabpanel").map(ps => Kyo.foreach(ps)(isHidden))
+
+    "every panel is rendered, and only the active one is visible" in {
+        // PrimeVue's default (`lazy` off): the inactive panels stay mounted and are hidden,
+        // so what a reader left in one (a typed value, a scroll position, an editor) is still
+        // there when they come back to it.
+        for
+            flags <- hiddenFlags(strip.selected("three").render)
+            first <- hiddenFlags(strip.render)
+        yield
+            assert(flags == Chunk(true, true, false), "the selected panel is the visible one")
+            assert(first == Chunk(false, true, true), "with nothing bound the first panel is the visible one")
+    }
+
+    "switching tabs toggles the panels in place instead of rebuilding them" in {
+        for
+            ref <- Signal.initRef("three")
+            ui = strip.selected(ref).render
+            regions <- regionsAbove(ui, "p-tabpanel")
+            before  <- hiddenFlags(ui)
+            headers <- elementsWithClass(ui, "p-tab")
+            _       <- click(headers(0))
+            after   <- hiddenFlags(ui)
+        yield
+            assert(regions == 0, "no reactive region sits above a panel, so a switch cannot rebuild one")
+            assert(before == Chunk(true, true, false))
+            assert(after == Chunk(false, true, true), "the click shows the first panel and hides the third")
+    }
+
+    "an id that names no tab shows the first panel, as the header strip does" in {
+        hiddenFlags(strip.selected("missing").render).map(flags => assert(flags == Chunk(false, true, true)))
+    }
+
+    "lazyPanels renders the active panel alone" in {
+        for
+            ref <- Signal.initRef("three")
+            ui = strip.selected(ref).lazyPanels(true).render
+            panels <- elementsWithClass(ui, "p-tabpanel")
+            _      <- ref.set("one")
+            later  <- elementsWithClass(ui, "p-tabpanel")
+        yield
+            assert(panels.size == 1, "one panel in the page")
+            assert(later.size == 1, "and still one after a switch")
+            assert(panels(0).attrs.reactiveBoolAttrs.get("hidden").isEmpty, "nothing to hide")
+            assert(panels(0).attrs.hidden.isEmpty)
+    }
+
+    "a panel is labelled by its header, and the header names the panel it controls" in {
+        for
+            headers <- elementsWithClass(strip.id("library").render, "p-tab")
+            panels  <- elementsWithClass(strip.id("library").render, "p-tabpanel")
+        yield
+            assert(panels.map(_.attrs.identifier).toList == List(
+                Present("library-one-panel"),
+                Present("library-two-panel"),
+                Present("library-three-panel")
+            ))
+            assert(panels(2).attrs.ariaAttrs.get("labelledby").contains("library-three"))
+            assert(headers(2).attrs.ariaAttrs.get("controls").contains("library-three-panel"))
+    }
+
 end TabsTest

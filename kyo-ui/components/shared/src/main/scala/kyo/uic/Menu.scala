@@ -3,6 +3,21 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
+/** What a [[Menu]] is to a reader. Hand-authored, and lives with Menu, the only host offering it. */
+enum MenuAccessibleRole derives CanEqual:
+    /** An application menu (the default): `role="menu"` rows, one tab stop, and arrow keys that
+      * move a highlight announced through `aria-activedescendant`.
+      */
+    case Menu
+
+    /** A site's navigation: a `<nav>` landmark around a plain list of links, each link its own tab
+      * stop and followed natively, the current page announced through `aria-current`. The ARIA
+      * menu pattern is wrong for this, since it tells a screen reader to expect an application menu
+      * and stops it reading the rows as links.
+      */
+    case Navigation
+end MenuAccessibleRole
+
 /** Menu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Menu
   * anatomy: `div.p-menu.p-component` > `ul.p-menu-list[role=menu]` of
   * `li.p-menu-item` rows — each `div.p-menu-item-content` >
@@ -36,13 +51,24 @@ import kyo.UI.*
   * page. The mount mints a base when none was given, so the announcement works
   * unasked; a caller's own `id` still wins.
   *
+  * `accessibleRole(MenuAccessibleRole.Navigation)` turns the same rows into a site's
+  * navigation: the root becomes a `<nav>` landmark, the list keeps its native list
+  * semantics, every link is a tab stop that the browser follows, and none of the
+  * menu keyboard above applies. Rows mark the page the reader is on with
+  * [[MenuItem.current]], and a row whose `current` is the constant `true` is scrolled
+  * into view, so a long nav opened on a deep link shows where the reader is. A navigation popup lists the same links in the overlay and
+  * does not close itself when one is followed, since following a url row runs no
+  * handler: the page closes it from its route.
+  *
   * Honest deferrals: no per-item templates; typeahead is not implemented.
   */
 final case class Menu private (
     itemsV: List[MenuItem] = Nil,
     popupRefV: Maybe[SignalRef[Boolean]] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, HasElementId:
+    idV: Maybe[String] = Absent,
+    roleV: MenuAccessibleRole = MenuAccessibleRole.Menu,
+    accessibleNameV: Maybe[TextValue] = Absent
+) extends Node, HasElementId, HasAccessibleName:
     type Self = Menu
 
     /** Appends items ([[MenuItem]] rows, `MenuItem.separator` dividers, and
@@ -61,6 +87,20 @@ final case class Menu private (
       */
     def popup(ref: SignalRef[Boolean]): Menu = copy(popupRefV = Present(ref))
 
+    /** What the menu is to a reader: an application menu (the default) or a site's
+      * navigation. See [[MenuAccessibleRole]].
+      */
+    def accessibleRole(v: MenuAccessibleRole): Menu = copy(roleV = v)
+
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Menu = copy(accessibleNameV = v)
+
+    /** Puts the accessible name on `el` as `aria-label`, a signal through the attribute channel. */
+    private def named[E <: UI.Ast.Element { type Self = E }](el: E): E =
+        accessibleNameV match
+            case Present(TextValue.Const(n)) => el.aria("label", n)
+            case Present(TextValue.Dyn(s))   => el.aria("label", s)
+            case Absent                      => el
+
     /** The flat row list: section items are flattened to a heading + their
       * children (Prime's grouped Menu model).
       */
@@ -75,18 +115,72 @@ final case class Menu private (
         }
 
     private[uic] def render(using Frame): UI =
-        // The keyboard highlight lives in a signal allocated by this effectful
-        // mount; static projections (SSG, the SSR page HTML) render the same
-        // anatomy inert until the client transport attaches.
-        val stat: UI = body(-1, Absent, idV)
-        UI.mounted {
-            for
-                cmds <- UI.commands
-                base <- cmds.freshId
-                hi   <- Signal.initRef(-1)
-            yield wired(hi, base)
-        }.placeholder(stat)
+        roleV match
+            case MenuAccessibleRole.Navigation =>
+                // No mount: a navigation holds no highlight and mints no id, so there is no state
+                // for one to allocate, and the static projection is already the live tree.
+                navigation
+            case MenuAccessibleRole.Menu =>
+                // The keyboard highlight lives in a signal allocated by this effectful
+                // mount; static projections (SSG, the SSR page HTML) render the same
+                // anatomy inert until the client transport attaches.
+                val stat: UI = body(-1, Absent, idV)
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        base <- cmds.freshId
+                        hi   <- Signal.initRef(-1)
+                    yield wired(hi, base)
+                }.placeholder(stat)
     end render
+
+    /** The navigation form: the rows as plain list items around links. Disabled rows are
+      * resolved first, as the menu form resolves them, so a reactive `disabled` still dims a row
+      * and takes its link out of the tab order.
+      */
+    private def navigation(using Frame): UI =
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val rowUIs: List[UI] = copy(itemsV = items).flatRows.map {
+                case MenuRow.Sep           => li.cssClass("p-menu-separator").role("separator")
+                case MenuRow.Heading(text) =>
+                    text match
+                        case TextValue.Const(t) => li.cssClass("p-menu-submenu-label")(t)
+                        case TextValue.Dyn(s)   => li.cssClass("p-menu-submenu-label")(s)
+                case MenuRow.Item(it) =>
+                    var row = MenuRender.markCurrent(li.cssClass("p-menu-item"), it)
+                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled")
+                    // A long nav opened on a deep link shows its top rows, and the current page can be
+                    // screens further down. A constant `current` is known here, so its row asks to be
+                    // scrolled in (`nearest`: a row already in view stays put). A reactive one is
+                    // patched through a channel with no render, so there is no moment to ask in.
+                    if it.currentFlag.constTrue then row = row.scrollAuto(true)
+                    // Only a row with an action declares a click handler. A url row declares none,
+                    // because kyo-ui prevent-defaults a click on any anchor carrying one, and the
+                    // browser following the link IS what the row is for.
+                    row(toChild(MenuRender.itemContent("menu", it, it.actionV, Absent, roving = false)))
+            }
+            val list = ul.cssClass("p-menu-list")(rowUIs.map(toChild)*)
+            popupRefV match
+                case Present(openRef) =>
+                    // The links are the stops, so focus goes to the list only to bring the reader
+                    // into the panel, and Tab walks on from there.
+                    var panelList = named(list.tabIndex(-1).focusAuto(true).focusRestore(true))
+                    idV.foreach(v => panelList = panelList.id(v))
+                    Overlay(openRef)
+                        .matchWidth(false)
+                        .animate(false)
+                        .panelClass("p-menu")
+                        .panelClass("p-component")
+                        .panelClass("p-menu-overlay")
+                        .seedFocus(false)(panelList)
+                        .render
+                case Absent =>
+                    var root = named(nav.cssClass("p-menu").cssClass("p-component"))
+                    idV.foreach(v => root = root.id(v))
+                    root(toChild(list))
+            end match
+        }
+    end navigation
 
     /** The subscription tree the mount publishes — the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as
@@ -104,14 +198,18 @@ final case class Menu private (
       * or a machine name does. Same split `AutoComplete` makes at its own mount.
       */
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI =
-        // Resolved HERE and not in `render`: the resolution is a reactive region, and one
-        // placed outside the mount would rebuild the mount on every emission — taking the
-        // open state with it. Inside the mount's content it re-renders the rows and nothing
-        // else.
-        MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items)
-            hi.render(h => self.body(h, Present(hi), Present(idV.getOrElse(base))))
-        }
+        roleV match
+            // A navigation has no highlight to wire, so the seam shows what `render` does.
+            case MenuAccessibleRole.Navigation => navigation
+            case MenuAccessibleRole.Menu       =>
+                // Resolved HERE and not in `render`: the resolution is a reactive region, and one
+                // placed outside the mount would rebuild the mount on every emission — taking the
+                // open state with it. Inside the mount's content it re-renders the rows and nothing
+                // else.
+                MenuRender.resolveDisabled(itemsV) { items =>
+                    val self = copy(itemsV = items)
+                    hi.render(h => self.body(h, Present(hi), Present(idV.getOrElse(base))))
+                }
     end wired
 
     /** @param partBase what internal parts derive from (`s"$partBase-active"`) — the caller's id
@@ -184,7 +282,7 @@ final case class Menu private (
                 row(toChild(MenuRender.itemContent("menu", it, act, Absent, roving = true)))
         }
 
-        var list = ul.cssClass("p-menu-list").role("menu")
+        var list = named(ul.cssClass("p-menu-list").role("menu"))
         if hiRow >= 0 then partBase.foreach(base => list = list.aria("activedescendant", s"$base-active"))
         // The caller's id goes on the ELEMENT, the way `HasElementId` says a container puts it on
         // its own root — inline that root is the `div.p-menu` below; in a popup the component's

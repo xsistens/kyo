@@ -295,6 +295,9 @@ object Theme:
       |   moves and drops on blur, and the two co-occur, so arrowing past the current page must
       |   not hide which page that is. Weight inherits down to the label; the colour is set on
       |   the link, which is where Prime puts the row's own colour. */
+      |/* A navigation Menu's root is a <nav>, which kyo-ui's base CSS lays out as a centered row;
+      |   the menu stacks its list like the <div> root of the ordinary form does. */
+      |nav.p-menu { flex-direction: column; align-items: stretch; }
       |.p-uic-menu-item-current { font-weight: 600; }
       |.p-uic-menu-item-current a { color: var(--p-primary-color, inherit); }
       |.p-uic-label { display: inline-flex; align-items: baseline; }
