@@ -160,6 +160,17 @@ final case class Dialog private (
     /** Adds content children. */
     def apply(cs: UI*): Dialog = copy(kids = kids ++ cs)
 
+    /** The name a text header gives the dialog when the caller gave it none.
+      *
+      * A dialog needs an accessible name, and the header is the one Prime points `aria-labelledby`
+      * at. The text itself is used rather than a reference to the title span, since a reference
+      * needs an id and minting one needs a mount this path does not have; the name a reader hears
+      * is the same. Custom header content carries no text to take, and a caller's own name or
+      * reference always wins.
+      */
+    private def headerName: Maybe[TextValue] =
+        if accessibleNameRefV.isDefined || headerContent.isDefined then Absent else headerText
+
     /** The severity's leading header glyph (shared vocabulary with Message's
       * design-derived defaults).
       */
@@ -245,7 +256,8 @@ final case class Dialog private (
                     }
                     if !preventInitialFocusFlag then box = box.focusAuto(true)
                     if !preventFocusRestoreFlag then box = box.focusRestore(true)
-                    accessibleNameV match
+                    val name: Maybe[TextValue] = accessibleNameV.orElse(headerName)
+                    name match
                         case Present(TextValue.Const(n)) => box = box.aria("label", n)
                         case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
                         case Absent                      => ()

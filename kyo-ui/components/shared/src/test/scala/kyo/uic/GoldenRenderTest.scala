@@ -161,6 +161,38 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "Dialog and Drawer are named by their text header unless the caller names them" in {
+        def opened(ui: SignalRef[Boolean] => UI)(using Frame): String < Async =
+            for
+                ref <- Signal.initRef(true)
+                out <- UI.runRender(ui(ref)).take(1).run
+            yield out.mkString
+
+        for
+            title       <- Signal.initRef("Rename file")
+            dlgText     <- opened(r => uic.Dialog().open(r).header("Confirm changes")(p("x")))
+            dlgSignal   <- opened(r => uic.Dialog().open(r).header(title)(p("x")))
+            dlgOwnName  <- opened(r => uic.Dialog().open(r).header("Confirm changes").accessibleName("Unsaved work")(p("x")))
+            dlgOwnRef   <- opened(r => uic.Dialog().open(r).header("Confirm changes").accessibleNameRef("lead")(p("x")))
+            dlgCustom   <- opened(r => uic.Dialog().open(r).header(span("Custom"))(p("x")))
+            drawerText  <- opened(r => uic.Drawer().open(r).header("Filters")(p("x")))
+            drawerOwn   <- opened(r => uic.Drawer().open(r).header("Filters").accessibleName("Search filters")(p("x")))
+            drawerNoHdr <- opened(r => uic.Drawer().open(r)(p("x")))
+        yield
+            assert(dlgText.contains("""aria-label="Confirm changes""""), "a text header names the dialog")
+            assert(dlgSignal.contains("""aria-label="Rename file""""), "a signal header names it with its current value")
+            assert(dlgOwnName.contains("""aria-label="Unsaved work""""), "the caller's own name wins")
+            assert(!dlgOwnName.contains("""aria-label="Confirm changes""""), "and the header does not add a second one")
+            assert(dlgOwnRef.contains("""aria-labelledby="lead""""), "a caller's reference is kept")
+            assert(!dlgOwnRef.contains("""aria-label="Confirm changes""""), "and the header does not compete with it")
+            assert(!dlgCustom.contains("aria-label=\"Custom\""), "custom header content carries no text to name with")
+            assert(drawerText.contains("""aria-label="Filters""""), "a text header names the drawer")
+            assert(drawerOwn.contains("""aria-label="Search filters""""), "the caller's own name wins on the drawer")
+            assert(!drawerOwn.contains("""aria-label="Filters""""), "and the drawer header does not add a second one")
+            assert(!drawerNoHdr.contains("aria-label=\"\""), "no header renders no empty name")
+        end for
+    }
+
     "Theme renders Prime tokens + component CSS + kyo remainder; NO sap* rules remain" in {
         val prime = uic.Theme.primeCss
         assert(prime.contains("--p-button-primary-background"), "declares Prime button token")
@@ -2884,15 +2916,27 @@ class GoldenRenderTest extends UicTest:
     }
 
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
+        // The panel tag that opens before `marker`: the one holding that content.
+        def panelTagOf(html: String, marker: String): String =
+            val at    = html.indexOf(marker)
+            val start = html.lastIndexOf("<div", at)
+            html.substring(start, html.indexOf(">", start))
+        end panelTagOf
+        def strip(ref: SignalRef[String])(using Frame) =
+            uic.Tabs()
+                .tab("First", "t1")(p("first-content"))
+                .tab("Second", "t2")(p("second-content"))
+                .selected(ref)
         for
             html <-
                 for
                     ref <- Signal.initRef("t2")
-                    ui = uic.Tabs()
-                        .tab("First", "t1")(p("first-content"))
-                        .tab("Second", "t2")(p("second-content"))
-                        .selected(ref)
-                    out <- UI.runRender(ui).take(1).run
+                    out <- UI.runRender(strip(ref)).take(1).run
+                yield out.mkString
+            lazyHtml <-
+                for
+                    ref <- Signal.initRef("t2")
+                    out <- UI.runRender(strip(ref).lazyPanels(true)).take(1).run
                 yield out.mkString
             counted <- renderHtml(uic.Tabs().tabs(uic.Tab("Inbox", UI.empty, "in", additionalText = Present("12"))))
         yield
@@ -2911,9 +2955,16 @@ class GoldenRenderTest extends UicTest:
             assert(html.contains("""role="tabpanel""""), "tabpanel role on the content panel")
             assert(html.contains("""aria-selected="true""""), "active tab marked aria-selected")
             assert(html.contains("second-content"), "selected tab's content is shown")
-            assert(!html.contains("first-content"), "unselected tab's content is not rendered")
+            // Was "not rendered": the strip now keeps every panel in the page, as PrimeVue does
+            // with `lazy` off, so what a reader left in a panel survives switching away from it.
+            assert(html.contains("first-content"), "an unselected tab's content stays in the page")
+            assert(panelTagOf(html, "first-content").contains("hidden"), "hidden while its tab is not selected")
+            assert(!panelTagOf(html, "second-content").contains("hidden"), "and the selected panel is not")
+            assert(!lazyHtml.contains("first-content"), "a lazy strip renders the selected panel alone")
+            assert(lazyHtml.contains("second-content"))
             assert(counted.contains("p-uic-tab-count"), "additionalText renders the count badge")
             assert(counted.contains("12"), "count text rendered")
+        end for
     }
 
     "Tree renders Prime's nested anatomy with aria-expanded reflecting the bound expansion set" in {
