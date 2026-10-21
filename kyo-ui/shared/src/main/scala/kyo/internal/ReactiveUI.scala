@@ -3150,17 +3150,29 @@ private[kyo] object ReactiveUI:
         waiting: Set[MountIdentity],
         views: Dict[MountIdentity, Chunk[ClaimView]],
         // Instances a cut is releasing right now: a new one may not run before they are gone, and the table's end waits for them.
-        releasing: Chunk[MountInstance]
+        releasing: Chunk[MountInstance],
+        // What the cuts decided and the settling fiber has still to carry out, oldest first.
+        decided: Chunk[Decision]
     ):
         /** Whether a new instance has to wait for a cut before its effect runs. */
-        def unsettled: Boolean = waiting.nonEmpty || releasing.nonEmpty
+        def unsettled: Boolean = waiting.nonEmpty || releasing.nonEmpty || decided.nonEmpty
 
         def holders(identity: MountIdentity): Int =
             regions.foldLeft(0)((n, _, e) => if e.holds.contains(identity) then n + 1 else n)
     end TableState
 
     private object TableState:
-        val empty: TableState = TableState(Dict.empty, Dict.empty, Set.empty, Dict.empty, Chunk.empty)
+        val empty: TableState = TableState(Dict.empty, Dict.empty, Set.empty, Dict.empty, Chunk.empty, Chunk.empty)
+
+    /** What one cut decided, for the settling fiber to carry out in this order: release, let new instances run, switch the nodes, start
+      * the instances that were still to start.
+      */
+    final private case class Decision(
+        released: Chunk[MountSlot],
+        launches: Chunk[MountInstance],
+        switches: Chunk[(ClaimView, ClaimState)],
+        starts: Chunk[(MountIdentity, ClaimView)]
+    )
 
     /** What a keyed node shows: the live instance of its identity, what its `PendingPolicy` shows while a cut decides who the instance
       * belongs to, or the report of an identity shown in more than one place.
@@ -3293,8 +3305,11 @@ private[kyo] object ReactiveUI:
       * the session it falls into), the table records where every region's passes stand; the cut is reached once each has seen every write
       * so far. A region over a signal without an exact read (one built with `Signal.initRaw`, or a combinator over one) cannot tell whether
       * a write reached it, so it counts as behind until its next re-read, which its repair timer brings within one repair interval
-      * (`Signal.defaultRepairInterval`): a cut in a table that holds such a region can wait that long. Then an identity shown once has moved there, one shown nowhere is released, and one shown in several places is reported at
-      * all of them. The decision depends on what the regions show once they all saw the writes, never on the order they rendered them in.
+      * (`Signal.defaultRepairInterval`): a cut in a table that holds such a region can wait that long. The decision is taken the moment the
+      * cut is reached, by whatever reports the last region caught up: an identity shown once has moved there, one shown nowhere is
+      * released, and one shown in several places is reported at all of them. It depends on what the regions show once they all saw the
+      * writes, never on the order they rendered them in, and a write after it is a change of its own, also when the table's settling fiber
+      * has not yet carried the decision out: a node hidden and shown again gets a new instance.
       * An event handler is no change of its own: it may wait for what its writes cause, a release or a new instance's content, and a
       * change that stayed open while it waits would never end.
       *
@@ -3361,7 +3376,9 @@ private[kyo] object ReactiveUI:
 
         /** Wakes the settling fiber, if one waits. Callable from any thread, without effects. */
         def recheck(): Unit =
+            decide()
             if running.get() then wake.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
+        end recheck
 
         /** The change that put identities in waiting has ended: records where every region's passes stand. */
         def closeEpoch(): Unit =
@@ -3380,35 +3397,21 @@ private[kyo] object ReactiveUI:
                 if start then Fiber.initUnscoped(settling).unit else Kyo.unit
             }
 
-        private def cutReached: Boolean =
-            cut.get() match
-                case Absent       => false
-                case Present(all) =>
-                    discard(session.counters.scanned.addAndGet(all.size))
-                    all.forall((w, at, restsAt) => w.caughtUp(at, restsAt))
+        private def reached(all: Chunk[(RegionWatch, Long, Long)]): Boolean =
+            discard(session.counters.scanned.addAndGet(all.size))
+            all.forall((w, at, restsAt) => w.caughtUp(at, restsAt))
 
-        /** Settles the table, cut after cut, while anything waits. */
-        private def settling(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
-                val signal = wake.get()
-                if closed.get() then
-                    running.set(false)
-                    Kyo.unit
-                else if state.get().waiting.isEmpty then
-                    running.set(false)
-                    // An identity may have started waiting between the check and the flag.
-                    if state.get().waiting.nonEmpty && running.compareAndSet(false, true) then settling else Kyo.unit
-                else if cutReached then settle.andThen(settling)
-                else signal.safe.get.andThen(settling)
-                end if
-            }
-
-        /** The cut: decides every waiting identity from what the regions show now, releases, then starts, then switches the nodes. */
-        private def settle(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
+        /** Takes the cut's decision the moment the cut is reached: called by whatever reports a region caught up, and when the change
+          * ends. Deciding later, on the settling fiber, would let a region that renders a later write record an identity again before
+          * the decision, which would then adopt an instance the cut had to release. Only one caller takes a cut: the one that clears it.
+          * The decision is a change of the table state; what it asks for (releases, launches, switches, starts) is left there for the
+          * settling fiber, which carries it out in order.
+          */
+        private def decide(): Unit =
+            val taken = cut.get()
+            if taken.nonEmpty && reached(taken.get) && cut.compareAndSet(taken, Absent) then
                 discard(session.counters.settled.incrementAndGet())
-                cut.set(Absent)
-                val (released, starts, switches, launches) = modify { s =>
+                modify { s =>
                     var instances = s.instances
                     var released  = Chunk.empty[MountSlot]
                     var starts    = Chunk.empty[(MountIdentity, ClaimView)]
@@ -3446,32 +3449,72 @@ private[kyo] object ReactiveUI:
                         end match
                     }
                     (
-                        s.copy(instances = instances, waiting = Set.empty, releasing = s.releasing.concat(released.map(_.instance))),
-                        (released, starts, switches, launches)
+                        s.copy(
+                            instances = instances,
+                            waiting = Set.empty,
+                            releasing = s.releasing.concat(released.map(_.instance)),
+                            decided = s.decided.append(Decision(released, launches, switches, starts))
+                        ),
+                        ()
                     )
                 }
-                Async.uninterruptible(
-                    Kyo.foreachDiscard(released)(_.instance.teardown)
-                        .andThen(Sync.Unsafe.defer(modify(s =>
-                            (s.copy(releasing = s.releasing.filterNot(i => released.exists(_.instance eq i))), ())
-                        )))
-                )
-                    .andThen(Kyo.foreachDiscard(launches)(_.launch))
-                    .andThen(Kyo.foreachDiscard(switches) { (view, next) =>
-                        next match
-                            case ClaimState.Live(instance) =>
-                                instance.supervision.adopt(view.spec, view.frames(), moved = true).andThen(view.state.set(next))
-                            case _ => view.state.set(next)
-                    })
-                    .andThen(Kyo.foreachDiscard(starts) { (identity, view) =>
-                        MountInstance.start(view.spec, view.seed, view.frames(), this).map { fresh =>
-                            Sync.Unsafe.defer(modify { s =>
-                                if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
-                                else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
-                            }).map(kept => if kept then view.state.set(ClaimState.Live(fresh)) else fresh.teardown)
-                        }
-                    })
+            end if
+        end decide
+
+        /** Carries out what the cuts decided, one decision after another, while anything waits or is still to be carried out. */
+        private def settling(using Frame): Unit < Async =
+            Sync.Unsafe.defer {
+                val signal = wake.get()
+                if closed.get() then
+                    running.set(false)
+                    Kyo.unit
+                else
+                    val next = modify[Maybe[Decision]] { s =>
+                        s.decided.headMaybe match
+                            case Present(d) => (s.copy(decided = s.decided.drop(1)), Present(d))
+                            case Absent     => (s, Absent)
+                    }
+                    next match
+                        case Present(decision) => carryOut(decision).andThen(settling)
+                        case Absent            =>
+                            val s = state.get()
+                            if s.waiting.isEmpty && s.decided.isEmpty then
+                                running.set(false)
+                                // An identity may have started waiting, or a decision been taken, between the read and the flag.
+                                val again = state.get()
+                                if (again.waiting.nonEmpty || again.decided.nonEmpty) && running.compareAndSet(false, true) then settling
+                                else Kyo.unit
+                            else signal.safe.get.andThen(settling)
+                            end if
+                    end match
+                end if
             }
+
+        /** Releases what a decision released, then lets the instances it kept run, switches the nodes, and starts what was still to start. */
+        private def carryOut(decision: Decision)(using Frame): Unit < Async =
+            val released = decision.released
+            Async.uninterruptible(
+                Kyo.foreachDiscard(released)(_.instance.teardown)
+                    .andThen(Sync.Unsafe.defer(modify(s =>
+                        (s.copy(releasing = s.releasing.filterNot(i => released.exists(_.instance eq i))), ())
+                    )))
+            )
+                .andThen(Kyo.foreachDiscard(decision.launches)(_.launch))
+                .andThen(Kyo.foreachDiscard(decision.switches) { (view, next) =>
+                    next match
+                        case ClaimState.Live(instance) =>
+                            instance.supervision.adopt(view.spec, view.frames(), moved = true).andThen(view.state.set(next))
+                        case _ => view.state.set(next)
+                })
+                .andThen(Kyo.foreachDiscard(decision.starts) { (identity, view) =>
+                    MountInstance.start(view.spec, view.seed, view.frames(), this).map { fresh =>
+                        Sync.Unsafe.defer(modify { s =>
+                            if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
+                            else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
+                        }).map(kept => if kept then view.state.set(ClaimState.Live(fresh)) else fresh.teardown)
+                    }
+                })
+        end carryOut
 
         /** Releases every instance, in transit or not, and waits for all of it, also for the releases a cut has already started: a
           * teardown of an instance that is already being torn down waits for that one to finish.
