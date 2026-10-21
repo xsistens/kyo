@@ -845,6 +845,80 @@ class UIServerWsTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // The event drain holds 256 events. A click handler waiting for a measure reply holds the drain while 256 further clicks fill it,
+    // and a drop and a sort move arrive on top. Neither fits: each is answered at once with a rejection, so the client does not wait
+    // for a decision that would never come. The held handler, released by the reply sent after them, then scrolls, which marks the
+    // point the rejections must come before.
+    "a drop or sort move that finds the event drain full is rejected at once".notNative in {
+        val target = DragProtocol.TargetData(
+            "ws-full-drop",
+            Drag.Operation.Move,
+            Present("target"),
+            Drag.Point(2, 2),
+            UI.Modifiers.none,
+            Present(Drag.Position.On)
+        )
+        val move = Drag.Move(
+            Chunk("item"),
+            Drag.Location("source"),
+            Drag.Location("destination"),
+            Absent,
+            Drag.Position.Inside,
+            Drag.Operation.Move
+        )
+        val mouse                                        = MouseEventData(UI.Modifiers.none, Absent)
+        def text(payload: HttpWebSocket.Payload): String =
+            payload match
+                case HttpWebSocket.Payload.Text(data) => data
+                case other                            => other.toString
+        def send(clientWs: HttpWebSocket, event: UIEvent): Unit < (Async & Abort[Closed]) =
+            clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](event)))
+        for
+            frames <- AtomicRef.init(Chunk.empty[String])
+            ready  <- Signal.initRef("ready")
+            app = UI.div(
+                UI.div.dropTarget(Drag.Target("target", Drag.Accept())).onDrop(Drag.Decision.Accept),
+                ready.map(UI.span(_)),
+                UI.button("hold").onClick(UI.commands.map(_.requestMeasureById("held")).andThen(UI.scrollIntoView("after-held"))),
+                UI.button("fill").onClick(Kyo.unit)
+            )
+            _ <- Scope.run {
+                HttpWebSocket.connect(
+                    serverWs => UIServer.serveSession(serverWs, app),
+                    clientWs =>
+                        for
+                            _       <- awaitSessionStart(clientWs)
+                            _       <- send(clientWs, UIEvent.Click(Seq("2"), mouse))
+                            request <- clientWs.take()
+                            _       <- Kyo.foreachDiscard(1 to 256)(_ => send(clientWs, UIEvent.Click(Seq("3"), mouse)))
+                            _       <- send(clientWs, UIEvent.Drop(Seq("0"), target))
+                            _       <- send(clientWs, UIEvent.SortMove(Seq("0"), "ws-full-sort", move))
+                            _       <- send(clientWs, UIEvent.MeasureMissing(Seq.empty, "held"))
+                            // Every frame up to the scroll the released handler sends, which comes after anything sent for the
+                            // drop and the sort move.
+                            later <- Loop(Chunk.empty[String]) { seen =>
+                                clientWs.take().map { frame =>
+                                    val next = seen.append(text(frame))
+                                    if next.last.contains("ScrollIntoView") then Loop.done(next) else Loop.continue(next)
+                                }
+                            }
+                            _ <- frames.set(text(request) +: later)
+                        yield ()
+                )
+            }
+            actual <- frames.get
+        yield
+            val busy     = Drag.Decision.Reject(Drag.Rejection.Application("Too many events are waiting in this session."))
+            val expected = Chunk[HtmlOp](
+                HtmlOp.RequestMeasureById("held"),
+                HtmlOp.ResolveDrag("ws-full-drop", busy),
+                HtmlOp.ResolveDrag("ws-full-sort", busy),
+                HtmlOp.ScrollIntoView("after-held")
+            ).map(Json.encode[HtmlOp](_))
+            assert(actual == expected, s"frames after the held click: $actual")
+        end for
+    }
+
     "malformed drag-start media is rejected without invoking handlers or terminating the session".notNative in {
         val invalidStart = UIEvent.DragStart(
             Seq("0"),
