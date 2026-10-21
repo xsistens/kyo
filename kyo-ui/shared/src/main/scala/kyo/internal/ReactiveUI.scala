@@ -3132,7 +3132,9 @@ private[kyo] object ReactiveUI:
         walked: Maybe[Seq[ReactiveUI]],
         complete: Boolean,
         pass: MountPass,
-        handoff: Dict[Seq[String], UI]
+        handoff: Dict[Seq[String], UI],
+        // The node that shows each held identity, as the pass recorded it: what a duplicate found at a cut is named by.
+        places: Dict[MountIdentity, ReactiveUI] = Dict.empty
     )
 
     /** A live keyed instance, where it was last shown, and in which region. */
@@ -3436,7 +3438,10 @@ private[kyo] object ReactiveUI:
                                     released = released.append(slot)
                                     instances = instances.remove(identity)
                                 }
-                                val message = duplicateMessage(identity, holding.map(_.node))
+                                // Named from what the regions' passes recorded, so a place whose claim is not filed yet is named too.
+                                val nodes =
+                                    s.regions.foldLeft(Chunk.empty[ReactiveUI])((acc, _, e) => e.places.get(identity).fold(acc)(acc.append))
+                                val message = duplicateMessage(identity, nodes)
                                 holding.foreach(v => switches = switches.append((v, ClaimState.Duplicate(message))))
                         end match
                     }
@@ -3580,16 +3585,20 @@ private[kyo] object ReactiveUI:
             val rowDepth                               = region.path.size
             def inRetainedRow(key: RegionKey): Boolean =
                 retained.nonEmpty && key.path.size > rowDepth && key.path.startsWith(region.path) && retained.contains(key.path(rowDepth))
-            val covered = new java.util.LinkedHashMap[RegionKey, (Seq[ReactiveUI], scala.collection.mutable.ArrayBuffer[MountIdentity])]()
-            val seen    = new java.util.LinkedHashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
+            val covered =
+                new java.util.LinkedHashMap[
+                    RegionKey,
+                    (Seq[ReactiveUI], scala.collection.mutable.ArrayBuffer[(MountIdentity, ReactiveUI)])
+                ]()
+            val seen = new java.util.LinkedHashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
             def visit(at: RegionKey, walked: Seq[ReactiveUI]): Unit =
-                val holds = scala.collection.mutable.ArrayBuffer.empty[MountIdentity]
+                val holds = scala.collection.mutable.ArrayBuffer.empty[(MountIdentity, ReactiveUI)]
                 discard(covered.put(at, (walked, holds)))
                 passMembers(walked).foreach { member =>
                     member.mounted match
                         case Present(spec) =>
                             spec.identity.foreach { identity =>
-                                holds += identity
+                                holds += ((identity, member))
                                 discard(seen.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(member))
                             }
                         case Absent =>
@@ -3619,11 +3628,14 @@ private[kyo] object ReactiveUI:
             var inside = Set.empty[MountIdentity]
             covered.forEach { (key, value) =>
                 val (walked, found) = value
-                val holds           = found.iterator.filterNot(doubled.contains).toSet
+                val kept            = found.iterator.filterNot((identity, _) => doubled.contains(identity)).toSeq
+                val holds           = kept.iterator.map(_._1).toSet
+                val places          = Dict.from(kept.toMap)
                 inside ++= holds
                 s.regions.get(key).foreach(old => lost ++= old.holds.diff(holds))
                 val next =
-                    if key == region then entry.copy(holds = holds, walked = Present(walked), complete = retained.isEmpty, pass = pass)
+                    if key == region then
+                        entry.copy(holds = holds, walked = Present(walked), complete = retained.isEmpty, pass = pass, places = places)
                     else
                         RegionEntry(
                             id,
@@ -3631,7 +3643,8 @@ private[kyo] object ReactiveUI:
                             Present(walked),
                             complete = true,
                             pass,
-                            s.regions.get(key).fold(Dict.empty[Seq[String], UI])(_.handoff)
+                            s.regions.get(key).fold(Dict.empty[Seq[String], UI])(_.handoff),
+                            places
                         )
                 regions = regions.update(key, next)
             }
@@ -3835,7 +3848,7 @@ private[kyo] object ReactiveUI:
 
     /** The message each place of an identity shown in several places at once shows. */
     private def duplicateMessage(identity: MountIdentity, nodes: Chunk[ReactiveUI]): String =
-        val places = nodes.map(_.path.mkString(".")).mkString(", ")
+        val places = nodes.map(_.path.mkString(".")).toSeq.sorted.mkString(", ")
         val site   = nodes.headMaybe.flatMap(_.mounted).fold("")(spec => s" (UI.mounted at ${spec.node.frame.position.show})")
         s"the keyed mount ${identity.key}$site is shown in ${nodes.size} places at once: $places. " +
             "A keyed instance can show in one place only, so none of them gets one. Give each place a key of its own, " +
