@@ -3147,18 +3147,18 @@ private[kyo] object ReactiveUI:
         regions: Dict[RegionKey, RegionEntry],
         waiting: Set[MountIdentity],
         views: Dict[MountIdentity, Chunk[ClaimView]],
-        // Instances a cut is releasing right now: a new one may not run before they are gone.
-        releasing: Int
+        // Instances a cut is releasing right now: a new one may not run before they are gone, and the table's end waits for them.
+        releasing: Chunk[MountInstance]
     ):
         /** Whether a new instance has to wait for a cut before its effect runs. */
-        def unsettled: Boolean = waiting.nonEmpty || releasing > 0
+        def unsettled: Boolean = waiting.nonEmpty || releasing.nonEmpty
 
         def holders(identity: MountIdentity): Int =
             regions.foldLeft(0)((n, _, e) => if e.holds.contains(identity) then n + 1 else n)
     end TableState
 
     private object TableState:
-        val empty: TableState = TableState(Dict.empty, Dict.empty, Set.empty, Dict.empty, 0)
+        val empty: TableState = TableState(Dict.empty, Dict.empty, Set.empty, Dict.empty, Chunk.empty)
 
     /** What a keyed node shows: the live instance of its identity, what its `PendingPolicy` shows while a cut decides who the instance
       * belongs to, or the report of an identity shown in more than one place.
@@ -3441,13 +3441,15 @@ private[kyo] object ReactiveUI:
                         end match
                     }
                     (
-                        s.copy(instances = instances, waiting = Set.empty, releasing = s.releasing + released.size),
+                        s.copy(instances = instances, waiting = Set.empty, releasing = s.releasing.concat(released.map(_.instance))),
                         (released, starts, switches, launches)
                     )
                 }
                 Async.uninterruptible(
                     Kyo.foreachDiscard(released)(_.instance.teardown)
-                        .andThen(Sync.Unsafe.defer(modify(s => (s.copy(releasing = s.releasing - released.size), ()))))
+                        .andThen(Sync.Unsafe.defer(modify(s =>
+                            (s.copy(releasing = s.releasing.filterNot(i => released.exists(_.instance eq i))), ())
+                        )))
                 )
                     .andThen(Kyo.foreachDiscard(launches)(_.launch))
                     .andThen(Kyo.foreachDiscard(switches) { (view, next) =>
@@ -3466,20 +3468,18 @@ private[kyo] object ReactiveUI:
                     })
             }
 
-        /** Releases every instance, in transit or not, and waits for all of it. */
+        /** Releases every instance, in transit or not, and waits for all of it, also for the releases a cut has already started: a
+          * teardown of an instance that is already being torn down waits for that one to finish.
+          */
         def evictAll(using Frame): Unit < Async =
             Sync.Unsafe.defer {
                 closed.set(true)
-                val all = modify(s => (TableState.empty, s.instances))
+                val all = modify(s =>
+                    (TableState.empty, s.instances.foldLeft(s.releasing)((acc, _, slot) => acc.append(slot.instance)))
+                )
                 recheck()
                 if all.isEmpty then Kyo.unit
-                else
-                    Async.uninterruptible(
-                        Kyo.foreachDiscard(
-                            all.foldLeft(Chunk.empty[MountInstance])((acc, _, slot) => acc.append(slot.instance))
-                        )(_.teardown)
-                    )
-                end if
+                else Async.uninterruptible(Kyo.foreachDiscard(all)(_.teardown))
             }
     end MountTable
 
