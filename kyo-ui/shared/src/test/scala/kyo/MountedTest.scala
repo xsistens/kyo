@@ -1967,4 +1967,47 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    // A cut's decision is taken the moment the last region has caught up, not when the table's settling fiber gets to it. Here that
+    // fiber is busy, held in the release of another instance, while a keyed node is hidden (a change of its own, decided at once) and
+    // shown again: it is a new instance, made but not run until the release before it is done, never the hidden one adopted back.
+    "a keyed node hidden and shown again while an earlier release still runs gets a new instance" in {
+        for
+            xReleasing <- Latch.init(1)
+            xGate      <- Latch.init(1)
+            runs       <- AtomicInt.init(0)
+            kReleased  <- AtomicBoolean.init(false)
+            showX      <- Signal.initRef(true)
+            showK      <- Signal.initRef(true)
+            nodeX = UI.mounted(Scope.ensure(xReleasing.release.andThen(xGate.await)).andThen(span("x-content"))).keyed("slow")
+            nodeK = UI.mounted(Scope.ensure(kReleased.set(true)).andThen(runs.incrementAndGet.map(r => span(s"k:$r"))))
+                .placeholder(span("k-pending"))
+                .whilePending(PendingPolicy.Placeholder)
+                .keyed("again")
+            ui = div(
+                showX.render(s => if s then div(nodeX) else div(span("no x"))),
+                showK.render(s => if s then div(nodeK) else div(span("no k")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "x-content")
+                    _ <- showsEventually(recorder, Seq("1", "0"), "k:1")
+                    // The settling fiber is now held in the release of the first panel.
+                    _ <- showX.set(false)
+                    _ <- xReleasing.await
+                    _ <- afterRepaint(recorder, Seq("1"))(showK.set(false))
+                    _ <- afterRepaint(recorder, Seq("1"))(showK.set(true))
+                    // The region's pass, its claim included, has ended: it waits for its next value.
+                    _ <- assertEventually(Sync.Unsafe.defer(showK.unsafe.waiters() == 1))
+                    _ <- xGate.release
+                    // Once the releases have run, the node shows an instance's content: the new one's, never the hidden one's.
+                    _     <- showsEventually(recorder, Seq("1", "0"), "k:")
+                    shown <- recorder.shown(Seq("1", "0"))
+                    _ = assert(shown.contains("k:2"), s"the hidden instance was adopted back instead of a new one: $shown")
+                    _     <- assertEventually(kReleased.get)
+                    total <- runs.get
+                yield assert(total == 2, s"runs: $total")
+            }
+        yield succeed
+    }
+
 end MountedTest
