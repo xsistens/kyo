@@ -119,8 +119,11 @@ final class WebSocketNetworkTransport private[apollo] (
     private val stateRef: AtomicRef[State]            = AtomicRef.Unsafe.init(State.initial)(using AllowUnsafe.embrace.danger).safe
     private val ownerStarted: AtomicBoolean           = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger).safe
     private val ownerExited: Fiber.Promise[Unit, Any] = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
-    private val closing: Fiber.Promise[Unit, Any]     = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
-    private val mailbox: Channel[Msg]                 =
+    // Uninterruptible: every wait for room races a put against this one promise, so the losing arm's interrupt must
+    // end that arm and not the close signal the later waits race against.
+    private val closing: Fiber.Promise[Unit, Any] =
+        Fiber.Promise.Unsafe.initUninterruptible[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
+    private val mailbox: Channel[Msg] =
         Channel.Unsafe.init[Msg](Int.MaxValue, Access.MultiProducerSingleConsumer)(using summon[Frame], AllowUnsafe.embrace.danger).safe
 
     // ---- public API -----------------------------------------------------------
