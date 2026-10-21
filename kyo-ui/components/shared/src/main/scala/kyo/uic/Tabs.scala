@@ -68,8 +68,10 @@ end Tab
   * `div.p-tablist-content.p-tablist-viewport` > `div.p-tablist-tab-list[role=tablist]`
   * of `button.p-tab[role=tab]` headers (the active one carrying `.p-tab-active`
   * plus the `span.p-tablist-active-bar` ink bar) above `div.p-tabpanels` >
-  * `div.p-tabpanel[role=tabpanel]` — only the active panel renders), so the
-  * extracted `@primeuix` tabs CSS applies verbatim. Prime positions the ink bar
+  * one `div.p-tabpanel[role=tabpanel]` per tab), so the extracted `@primeuix`
+  * tabs CSS applies verbatim. As in PrimeVue with `lazy` off, every panel is
+  * rendered once and the inactive ones carry `hidden`; [[Tabs.lazyPanels]]
+  * renders the active panel alone instead. Prime positions the ink bar
   * with JS measuring; here it sits inside the active tab and spans it via a
   * remainder rule, which is visually identical without a measuring runtime.
   *
@@ -99,7 +101,8 @@ final case class Tabs private (
     tabList: List[Tab] = Nil,
     selectedBinding: Maybe[ReactiveValue[String]] = Absent,
     onTabSelectF: Maybe[String => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    lazyPanelsFlag: Boolean = false
 ) extends Node, HasElementId:
     type Self = Tabs
 
@@ -128,6 +131,14 @@ final case class Tabs private (
     def selected(v: String | Signal[String]): Tabs = copy(selectedBinding = Present(ReactiveValue(v)))
 
     def onTabSelect(f: String => UI.Action)(using Frame): Tabs = copy(onTabSelectF = Present(Callback.of(f)))
+
+    /** Renders the active panel alone, and builds a panel again each time its tab is chosen
+      * (PrimeVue's `lazy`). Off by default: every panel is rendered once and a switch only
+      * toggles `hidden`, so what a reader left in a panel (a typed value, a scroll position,
+      * an editor, an open row) is still there when they come back to it. Turn it on where the
+      * panels are expensive to build and nothing in them needs to survive a switch.
+      */
+    def lazyPanels(v: Boolean): Tabs = copy(lazyPanelsFlag = v)
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Tabs = copy(idV = v)
@@ -168,11 +179,15 @@ final case class Tabs private (
       * are reachable by clicking, with the arrow wiring arriving with the mount.
       */
     private def renderTabs(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        withActive(active => bodyWith(active, ids, focus))
+        body(ids, focus)
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        withActive(active => bodyWith(active, ids, focus))
+        body(ids, focus)
+
+    /** The tab a selection shows: the one it names, or the first when it names none. */
+    private def resolve(selected: String): String =
+        if tabList.exists(_.id == selected) then selected else tabList.headOption.map(_.id).getOrElse("")
 
     /** Builds `f` against the active tab id, however the selection is bound.
       *
@@ -182,9 +197,18 @@ final case class Tabs private (
       */
     private def withActive(f: String => UI)(using Frame): UI =
         selectedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(f)
-            case Present(ReactiveValue.Const(v)) => f(v)
-            case Absent                          => f(tabList.headOption.map(_.id).getOrElse(""))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(a => f(resolve(a)))
+            case Present(ReactiveValue.Const(v)) => f(resolve(v))
+            case Absent                          => f(resolve(""))
+
+    /** Hides the panel of tab `id` while another tab is active. A bound signal toggles the
+      * attribute in place, which is what keeps the panel's subtree alive across a switch.
+      */
+    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: String)(using Frame): E =
+        selectedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => el.hidden(sig.map(a => resolve(a) != id))
+            case Present(ReactiveValue.Const(v)) => if resolve(v) == id then el else el.hidden(true)
+            case Absent                          => if resolve("") == id then el else el.hidden(true)
 
     /** The ref to write back to — `Absent` unless the binding is two-way. */
     private def selectedRef: Maybe[SignalRef[String]] = selectedBinding match
@@ -225,7 +249,11 @@ final case class Tabs private (
         // only to move the arrow focus, giving one to a header the arrows skip was pointless;
         // a CHOSEN id is different — a caller who names a header may well be naming it to
         // assert that it is disabled.
-        if ids.isDefinedAt(i) then out = out.id(ids(i))
+        if ids.isDefinedAt(i) then
+            out = out.id(ids(i))
+            // A lazy strip has only the active panel in the page, so only its header may point at one.
+            if !lazyPanelsFlag || isActive then out = out.aria("controls", panelId(ids(i)))
+        end if
         if t.disabled then out = out.cssClass("p-disabled")
         else
             out = out.tabIndex(if isActive then 0 else -1)
@@ -245,7 +273,41 @@ final case class Tabs private (
         out
     end interactive
 
-    private def bodyWith(active: String, ids: List[String], focus: String => UI.Action)(using Frame): UI =
+    /** The id of the panel a header controls, derived from the header's own. */
+    private def panelId(headerId: String): String = s"$headerId-panel"
+
+    /** The strip and the panels. Only the strip lives in the active-tab region: the panels sit
+      * outside it, each hiding itself while another tab is active, so choosing a tab repaints
+      * the headers and toggles two attributes, and builds no panel. A lazy strip puts the
+      * panels in a region of their own instead, since it builds the active one on each switch.
+      */
+    private def body(ids: List[String], focus: String => UI.Action)(using Frame): UI =
+        def panel(t: Tab, i: Int): UI.Ast.Div =
+            var el = div.cssClass("p-tabpanel").role("tabpanel")
+            if ids.isDefinedAt(i) then el = el.id(panelId(ids(i))).aria("labelledby", ids(i))
+            el
+        end panel
+        val indexed    = tabList.zipWithIndex
+        val panels: UI =
+            if lazyPanelsFlag then
+                withActive { active =>
+                    div.cssClass("p-tabpanels")(
+                        indexed.filter(_._1.id == active).map((t, i) => toChild(panel(t, i)(toChild(t.content))))*
+                    )
+                }
+            else
+                div.cssClass("p-tabpanels")(
+                    indexed.map((t, i) => toChild(hideUnlessActive(panel(t, i), t.id)(toChild(t.content))))*
+                )
+        // The caller's id on the component's own root, as HasElementId requires of a container.
+        // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
+        // because a derived name is a different string (GAPS.md F-34).
+        var root = div.cssClass("p-tabs").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
+        root(toChild(withActive(active => tablistWith(active, ids, focus))), toChild(panels))
+    end body
+
+    private def tablistWith(active: String, ids: List[String], focus: String => UI.Action)(using Frame): UI =
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
         val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
@@ -284,31 +346,16 @@ final case class Tabs private (
                     el(kids*)
             end match
         }
-        val tablist: UI =
-            div.cssClass("p-tablist")(
-                toChild(
-                    div.cssClass("p-tablist-content").cssClass("p-tablist-viewport")(
-                        toChild(
-                            div.cssClass("p-tablist-tab-list").role("tablist")(headers.map(toChild)*)
-                        )
+        div.cssClass("p-tablist")(
+            toChild(
+                div.cssClass("p-tablist-content").cssClass("p-tablist-viewport")(
+                    toChild(
+                        div.cssClass("p-tablist-tab-list").role("tablist")(headers.map(toChild)*)
                     )
                 )
             )
-
-        val panelContent: UI =
-            tabList.find(_.id == active).orElse(tabList.headOption).map(_.content).getOrElse(UI.empty)
-        val panels: UI =
-            div.cssClass("p-tabpanels")(
-                toChild(div.cssClass("p-tabpanel").role("tabpanel")(toChild(panelContent)))
-            )
-
-        // The caller's id on the component's own root, as HasElementId requires of a container.
-        // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
-        // because a derived name is a different string (GAPS.md F-34).
-        var root = div.cssClass("p-tabs").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
-        root(toChild(tablist), toChild(panels))
-    end bodyWith
+        )
+    end tablistWith
 
     /** Selecting a tab writes its id into the bound ref (only a two-way binding has
       * one), then fires `onTabSelect`.

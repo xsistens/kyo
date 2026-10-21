@@ -191,7 +191,11 @@ final case class Drawer private (
                 if positionV == DrawerPosition.Full then box = box.cssClass("p-drawer-full")
                 if !preventInitialFocusFlag then box = box.focusAuto(true)
                 if !preventFocusRestoreFlag then box = box.focusRestore(true)
-                accessibleNameV match
+                // A text header names the drawer when the caller gave it no name, as in Dialog.
+                val headerName: Maybe[TextValue] =
+                    if accessibleNameRefV.isDefined || headerContent.isDefined then Absent else headerText
+                val name: Maybe[TextValue] = accessibleNameV.orElse(headerName)
+                name match
                     case Present(TextValue.Const(n)) => box = box.aria("label", n)
                     case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
                     case Absent                      => ()
