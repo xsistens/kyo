@@ -780,7 +780,7 @@ val deleteFlow: UI < Async =
     )
 ```
 
-`Dialog` is the general form, taking your own header, footer, and body; `Drawer` is the same thing docked to an edge.
+`Dialog` is the general form, taking your own header, footer, and body; `Drawer` is the same thing docked to an edge. A text `header` is also the panel's accessible name, so a screen reader announces "Edit product, dialog" on open. `accessibleName` or `accessibleNameRef` replaces it, and a header given as custom content carries no text to take, so give that panel a name yourself.
 
 ```scala
 val editorDrawer: UI < Async =
@@ -891,11 +891,20 @@ val bar: UI = uic.Menubar().start(span("CATALOG")).items(uic.MenuItem("File").it
 
 A menu of `url` rows is a nav, and a nav's whole job is to mark the page you are on. `current` is that mark: `aria-current="page"` on the row's link plus `.p-uic-menu-item-current` on the row. Give it the route signal rather than a boolean you recompute, and the strip is built once — the class and the attribute are both channels, patched in place with no re-render, so navigating does not rebuild the list and the reader's keyboard position survives it. Do not reach for `.p-focus`: that is the roving highlight the component moves as the reader arrows through, and it is gone when the list loses focus.
 
-```scala
-def navItem(label: String, path: String)(using Frame): uic.MenuItem =
-    uic.MenuItem(label).url(path).current(UILocation.current.map(_ == path))
+A site's navigation also wants to be one to a screen reader, which the menu role is not: `role="menu"` announces an application menu, with one tab stop and arrows inside, and stops the rows reading as links. `accessibleRole(MenuAccessibleRole.Navigation)` keeps the same rows and the same skin and renders them as a `<nav>` landmark around a plain list, every link its own tab stop that the browser follows. Name it, since a page with a breadcrumb and a table of contents has several navs.
 
-val sidebar: UI = uic.Menu().items(navItem("Home", "/"), navItem("Queue", "/queue")).id("sidebar-nav")
+The route below is the current path: `UILocation.current` in a browser app, the request's path on the server.
+
+```scala
+def sidebar(route: Signal[String])(using Frame): UI =
+    def navItem(label: String, path: String): uic.MenuItem =
+        uic.MenuItem(label).url(path).current(route.map(_ == path))
+    uic.Menu()
+        .accessibleRole(uic.MenuAccessibleRole.Navigation)
+        .accessibleName("Main")
+        .items(navItem("Home", "/"), navItem("Queue", "/queue"))
+        .id("sidebar-nav")
+end sidebar
 ```
 
 ```scala
@@ -936,6 +945,8 @@ val navChrome: UI < Async =
         uic.Paginator().totalRecords(120).rows(10).page(page).pageLinkSize(5).jumpToPageInput(true)
     )
 ```
+
+`Tabs` keeps every panel in the page and hides the ones whose tab is not selected, as PrimeVue does by default, so a value typed into one panel, its scroll position and anything running in it are still there after a switch away and back. A switch repaints the header strip and toggles `hidden` on two panels; it builds nothing. `lazyPanels(true)` renders the selected panel alone and builds it again on each switch, for panels that are expensive to build and hold nothing worth keeping.
 
 `Paginator.template(...)` says which of its elements render and in which order. Prime names the same set in a space-separated string, where a misspelt name renders nothing and reports nothing; here they are `PaginatorElement` values, so the compiler catches a name that is not one of them and the order is the order of the list. The list REPLACES the layout rather than adding to it: an element it does not name does not render, `jumpToPageInput` included, and one it names twice renders twice. What an element needs in order to have something to show stays where it was, so `CurrentPageReport` still reads `currentPageReport` and the two dropdowns still read `rowsPerPageOptions`; an element named with nothing behind it renders a card.
 
@@ -1304,8 +1315,8 @@ The total is a `Total`, not a number, because plenty of sources cannot answer wi
 val lazyTable: UI =
     UI.mounted {
         for
-            text <- Signal.initRef("")
-            sort <- Signal.initRef(List.empty[uic.SortKey])
+            text   <- Signal.initRef("")
+            sort   <- Signal.initRef(List.empty[uic.SortKey])
             source <- uic.RowSource.init(text.combineLatest(sort), pageSize = 25) {
                 (key, offset, limit) => lookUp(key._1, key._2, offset, limit)
             }
@@ -1335,7 +1346,7 @@ A table can also scroll instead of paginating. `scrollRows(itemSize)`, beside th
 val infiniteTable: UI =
     UI.mounted {
         for
-            text <- Signal.initRef("")
+            text   <- Signal.initRef("")
             source <- uic.RowSource.init(text, pageSize = 40) {
                 (t, offset, limit) => lookUp(t, Nil, offset, limit)
             }
@@ -1624,7 +1635,7 @@ Handed a `RowSource` instead of a sequence, it holds no list at all: it writes t
 val lazyList: UI =
     UI.mounted {
         for
-            query <- Signal.initRef("")
+            query  <- Signal.initRef("")
             source <- uic.RowSource.init(query, pageSize = 40) { (q, offset, limit) =>
                 lookUp(q, Nil, offset, limit)
             }
@@ -1816,7 +1827,7 @@ import java.time.LocalDate
 val typedFields: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            price <- scope.numberField(0.0).rules(Validator.min(0.0) and Validator.max(10000.0)).declare
+            price   <- scope.numberField(0.0).rules(Validator.min(0.0) and Validator.max(10000.0)).declare
             restock <- scope.dateField[LocalDate](Absent)
                 .rules(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1))))
                 .declare
