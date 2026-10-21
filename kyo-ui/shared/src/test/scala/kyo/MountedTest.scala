@@ -1265,6 +1265,8 @@ class MountedTest extends kyo.test.Test[Any]:
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:1")
+                    // A's first instance must have run before it is unpinned: one released before its effect runs is never counted.
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:1")
                     _ <- afterRepaint(recorder, Seq("0"))(pinned.set(false))
                     _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:")
                     _ <- afterRepaint(recorder, Seq("0"))(pinned.set(true))
@@ -1274,6 +1276,38 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             counts <- runs.get
         yield assert(counts == Map("A" -> 2, "B" -> 1), s"runs per card: $counts")
+    }
+
+    // The first instance of A is still in its effect when A is unpinned: its release interrupts that effect, and the instance that
+    // shows A again once it is pinned runs at once instead of waiting for anything of the one before it.
+    "a keyed instance released while its effect is still pending does not hold back the instance that shows it again" in {
+        for
+            runs     <- AtomicRef.init(Map.empty[String, Int])
+            starts   <- AtomicInt.init(0)
+            entered  <- Latch.init(1)
+            gate     <- Promise.init[Unit, Any]
+            released <- AtomicBoolean.init(false)
+            pinned   <- Signal.initRef(true)
+            refresh  <- Signal.initRef(0)
+            effectA = starts.incrementAndGet.map { n =>
+                if n == 1 then Sync.ensure(released.set(true))(entered.release.andThen(gate.get).andThen(counted(runs, "A")))
+                else counted(runs, "A")
+            }
+            cardA = div(refresh.render(_ => div(UI.mounted(effectA).keyed("A"))))
+            ui    = div(pinned.render(p => div(if p then cardA else span("nothing pinned"), card("B", refresh, runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1", "0", "0"), "B:1")
+                    _ <- entered.await
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(false))
+                    _ <- afterRepaint(recorder, Seq("0"))(pinned.set(true))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "0"), "A:1")
+                    _ <- assertEventually(released.get)
+                yield ()
+            }
+            counts <- runs.get
+            total  <- starts.get
+        yield assert(counts == Map("A" -> 1, "B" -> 1) && total == 2, s"runs per card: $counts, effect starts of A: $total")
     }
 
     private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
