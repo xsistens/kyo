@@ -185,7 +185,10 @@ final class WebSocketNetworkTransport private[apollo] (
     ): ResponseStream[D] < (Async & Scope) =
         for
             channel <- Channel.init[ApolloResponse[D]](subscriptionBufferSize)
-            ended   <- Fiber.Promise.init[Unit, Any]
+            // Unsafe: there is no safe constructor for an uninterruptible promise. Uninterruptible because every close
+            // caller waits on it for its grace period, so a caller's interrupt or timeout must end that caller's wait
+            // and not the subscription's end the others are waiting for.
+            ended <- Sync.Unsafe.defer(Fiber.Promise.Unsafe.initUninterruptible[Unit, Any]().safe)
             subscriber = Subscriber(
                 id = id,
                 startFrame = protocol.startOperation(id, OperationRequestBody(request.operation)),
