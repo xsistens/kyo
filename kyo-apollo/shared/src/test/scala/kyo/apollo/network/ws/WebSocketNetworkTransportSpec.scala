@@ -632,5 +632,49 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 end for
             }
         }
+
+        "a response that waits for room in a full channel is delivered after an earlier wait for room ended" in Clock.withTimeControl {
+            _ =>
+                // A wait for room races the put against the start of a close. The put winning ends that race, and must
+                // not end the close signal a later wait for room races against: the consumer stalls twice, the owner
+                // waits for room both times, and every frame still arrives. The frames go out one stall at a time, so
+                // each stall finds the owner holding a frame it has no room for.
+                Kyo.foreachDiscard(Chunk.from(1 to 10)) { _ =>
+                    Scope.run {
+                        fixture(bufferSize = 1).map { f =>
+                            val subscription = f.transport.subscribe(request())
+                            val stalls       = Set(1, 5)
+                            for
+                                holding  <- Channel.init[Int](2)
+                                permits  <- Channel.init[Unit](2)
+                                received <- AtomicRef.init(Chunk.empty[Int])
+                                consumer <- Fiber.init(Scope.run(subscription.foreach { r =>
+                                    val value = r.data.getOrElse(-1)
+                                    val stall =
+                                        if stalls.contains(value) then holding.put(value).andThen(permits.take) else Kyo.unit
+                                    stall.andThen(received.getAndUpdate(_.append(value))).unit
+                                }))
+                                _ <- established(f.conn, "0")
+                                _ <- Sync.defer(f.conn.server(next("0", 1)))
+                                _ <- holding.take // the consumer holds 1
+                                // 2 fills the buffer and 3 waits for room; the drain has read 4 once the owner took 3.
+                                _ <- Sync.defer((2 to 4).foreach(i => f.conn.server(next("0", i))))
+                                _ <- f.conn.awaitFramesRead(1 + 4) // the ack, then 1 to 4
+                                _ <- permits.put(())               // room again: the put of 3 wins its race
+                                _ <- Sync.defer(f.conn.server(next("0", 5)))
+                                _ <- holding.take                  // the consumer holds 5
+                                // 6 fills the buffer and 7 waits for room again.
+                                _    <- Sync.defer((6 to 8).foreach(i => f.conn.server(next("0", i))))
+                                _    <- f.conn.awaitFramesRead(4) // 5 to 8
+                                _    <- Sync.defer(f.conn.server(complete("0")))
+                                _    <- permits.put(())
+                                _    <- consumer.get
+                                seen <- received.get
+                            yield assert(seen == Chunk.from(1 to 8), s"received $seen")
+                            end for
+                        }
+                    }
+                }
+        }
     }
 end WebSocketNetworkTransportSpec
