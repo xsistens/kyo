@@ -1,0 +1,12 @@
+# Subscription with an optional enum variable ($continent: Continent). Verifies
+# the generator emits `apollo.api.Subscription[D]` for subscription documents.
+subscription CountryUpdated($continent: Continent) {
+  countryUpdated(continent: $continent) {
+    __typename
+    code
+    name
+    emoji
+    continent
+    updatedAt
+  }
+}
