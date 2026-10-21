@@ -389,19 +389,21 @@ private[kyo] object UIServer:
                     )
                 case Result.Success(DragProtocol.ValidatedEvent.MeasureMissing(m)) =>
                     commands.deliverMeasureMissing(m.id)
-                // Drop and sort dispatch forks: their handlers may await lazy file reads served by later
-                // frames on this same socket loop, so running them inline would deadlock the session. The
-                // client models concurrent decisions (AwaitingDecisionAfterEnd), and session close unblocks
-                // a forked handler because the file service fails its pending reads with Disconnected.
+                // Element events go to the session's single-consumer drain, not inline on this loop: a handler
+                // that SUSPENDS, e.g. awaiting a value-returning `requestMeasureById` whose reply arrives as a
+                // LATER inbound frame, must not block this loop from reading that reply. Handing them to ONE
+                // consumer instead of forking a fiber each is what keeps their arrival order, which a blur
+                // followed by the focus that replaced it depends on, and a drop the drag start before it.
+                // `offer` rather than `put` keeps the reader non-blocking; a full drain means a backlog of 256
+                // handlers and drops the event, the same trade the browser mount's drain makes.
+                //
+                // A drop or sort move takes its place in that order too, but the drain only forks its handler
+                // when it reaches it: the handler may await lazy file reads served by later frames, and those
+                // frames may queue behind it, so running it on the drain would deadlock the session. The client
+                // models concurrent decisions (AwaitingDecisionAfterEnd), and session close unblocks a forked
+                // handler because the file service fails its pending reads with Disconnected.
                 case Result.Success(validated: (DragProtocol.ValidatedEvent.Drop | DragProtocol.ValidatedEvent.SortMove)) =>
-                    Fiber.initUnscoped(handle(event.path, validated).unit).unit
-                // Every other element event goes to the session's single-consumer drain, not inline on this
-                // loop: a handler that SUSPENDS, e.g. awaiting a value-returning `requestMeasureById` whose reply
-                // arrives as a LATER inbound frame, must not block this loop from reading that reply. Handing
-                // them to ONE consumer instead of forking a fiber each is what keeps their arrival order,
-                // which a blur followed by the focus that replaced it depends on. `offer` rather than `put`
-                // keeps the reader non-blocking; a full drain means a backlog of 256 handlers and drops the
-                // event, the same trade the browser mount's drain makes.
+                    Abort.runPartial[Closed](events.offer(Fiber.initUnscoped(handle(event.path, validated).unit).unit)).unit
                 case Result.Success(validated) =>
                     Abort.runPartial[Closed](events.offer(handle(event.path, validated).unit)).unit
                 case _ => ()
