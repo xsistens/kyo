@@ -167,10 +167,16 @@ class MountedTest extends kyo.test.Test[Any]:
             ui   = div(outer.render(n => div(span(s"outer:$n"), inner.render(_ => div(node)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:1")
-                    first  <- afterRepaint(recorder, Seq("0", "1", "0"))(outer.set(1))
-                    _      <- inner.set("y")
-                    second <- afterRepaint(recorder, Seq("0", "1", "0"))(outer.set(2))
+                    _ <- showsEventually(recorder, Seq("0", "1", "0"), "runs:1")
+                    // Each step waits for the repaint of the region it changes, so a late paint of an earlier step is not taken
+                    // for the paint of this one, and then for the instance's content in the repainted range.
+                    _      <- afterRepaint(recorder, Seq("0"))(outer.set(1))
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    first  <- recorder.shown(Seq("0", "1", "0"))
+                    _      <- afterRepaint(recorder, Seq("0", "1"))(inner.set("y"))
+                    _      <- afterRepaint(recorder, Seq("0"))(outer.set(2))
+                    _      <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                    second <- recorder.shown(Seq("0", "1", "0"))
                     total  <- runs.get
                 yield
                     assert(first.contains("runs:1") && second.contains("runs:1"), s"shown: $first / $second")
@@ -1303,10 +1309,12 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(order.render(o => ul(fragment(o.toSeq.map(id => li(span(id), UI.mounted(counted(runs, id)).keyed("note")))*))))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _     <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    _ <- showsEventually(recorder, Seq("0", "0", "1", "1"), "kyo-mount-error")
+                    _ <- afterRepaint(recorder, Seq("0"))(order.set(Chunk("B", "A")))
+                    _ <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
+                    // Each row's error paints on its own after the list's repaint: wait for the second row's too before reading it.
                     _     <- showsEventually(recorder, Seq("0", "0", "1", "1"), "kyo-mount-error")
-                    _     <- afterRepaint(recorder, Seq("0"))(order.set(Chunk("B", "A")))
-                    _     <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
                     shown <- recorder.shown(Seq("0", "0", "1", "1"))
                 yield assert(shown.contains("kyo-mount-error") && !shown.contains("A:") && !shown.contains("B:"), shown)
             }
@@ -1384,6 +1392,9 @@ class MountedTest extends kyo.test.Test[Any]:
 
     /** A recorder that, once armed, holds the next paint at `held` until `gate` completes: the region painting there is stuck in the
       * middle of a pass, so any later value of it waits behind that pass, and the other regions run first.
+      *
+      * The held region must render the value written to hold it (a nonce): its first pass can run after that write, and a pass whose
+      * content equals what the page already shows paints nothing, so a write it does not render would never reach the gate.
       */
     private class Gated(held: Seq[String], entered: Promise[Unit, Any], gate: Promise[Unit, Any]) extends Recorder():
         private val armed = new java.util.concurrent.atomic.AtomicBoolean(false)
@@ -1436,8 +1447,8 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(
                 // Two writes on the JVM: one change only inside UI.batch.
                 button("move").onClick(UI.batch(left.getAndUpdate(p => (false, p._2)).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
-                left.render(p => if p._1 then div(node) else div(span("empty-left"))),
-                right.render(p => if p._1 then div(node) else div(span("empty-right"))),
+                left.render(p => if p._1 then div(node) else div(span(s"empty-left:${p._2}"))),
+                right.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}"))),
                 tick.render(n => span(s"tick:$n"))
             )
             _ <- mountWith(recorder, ui) { handle =>
@@ -1451,6 +1462,8 @@ class MountedTest extends kyo.test.Test[Any]:
                     _ <-
                         if holdLoser then showsEventually(recorder, Seq("2", "0"), "runs:")
                         else showsEventually(recorder, Seq("1"), "empty-left")
+                    // The waiting place paints the snapshot, then sends its hold: wait for the hold, while the losing region is still held.
+                    _         <- if holdLoser then assertEventually(recorder.holds.map(_.nonEmpty)) else Kyo.unit
                     contested <- recorder.holds
                     _         <- Kyo.foreachDiscard(1 to ticks)(n => tick.set(n))
                     _         <- gate.completeUnitDiscard
@@ -1546,7 +1559,7 @@ class MountedTest extends kyo.test.Test[Any]:
             ui       = div(
                 button("hide").onClick(left.set(false)),
                 left.render(l => if l then div(node) else div(span("empty-left"))),
-                right.render(p => if p._1 then div(node) else div(span("empty-right")))
+                right.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}")))
             )
             undecided <- mountWith(recorder, ui) { handle =>
                 for
@@ -1613,7 +1626,7 @@ class MountedTest extends kyo.test.Test[Any]:
             inner    = UI.mounted(Scope.ensure(released.set(true)).andThen(span("inner"))).keyed("inner-transit")
             owner    = UI.mounted(Kyo.lift(div(
                 left.render(l => if l then div(inner) else div(span("empty-left"))),
-                right.render(p => if p._1 then div(inner) else div(span("empty-right")))
+                right.render(p => if p._1 then div(inner) else div(span(s"empty-right:${p._2}")))
             )))
             ui = div(button("hide").onClick(left.set(false)), outer.render(n => if n == 0 then div(owner) else div(span("owner gone"))))
             _ <- mountWith(recorder, ui) { handle =>
@@ -1819,6 +1832,11 @@ class MountedTest extends kyo.test.Test[Any]:
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    // The value region has run its first pass and waits for the next write, and its keyless mount's effect has run, so its
+                    // finalizer is registered: the write and its revert are meant for that pass, not for a first pass that would read them
+                    // both at once, and the revert only happens if the finalizer exists when the pass closes.
+                    _ <- showsEventually(recorder, Seq("0", "1"), "keyless")
+                    _ <- assertEventually(Sync.Unsafe.defer(value.unsafe.waiters() == 1))
                     _ <- armed.set(true)
                     _ <- value.set(1)
                     _ <- reverted.await
@@ -1857,7 +1875,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     ui = div(
                         button("move").onClick(UI.batch(left.set(false).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
                         left.render(l => if l then div(node) else div(span("empty-left"))),
-                        rawRight.render(p => if p._1 then div(node) else div(span("empty-right")))
+                        rawRight.render(p => if p._1 then div(node) else div(span(s"empty-right:${p._2}")))
                     )
                     _ <- mountWith(recorder, ui) { handle =>
                         for
