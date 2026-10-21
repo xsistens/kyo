@@ -1090,10 +1090,20 @@ class MountedTest extends kyo.test.Test[Any]:
             a    <- Signal.initRef("a")
             b    <- Signal.initRef("b")
             ui = div(mode.render(m => withNeighbour(m, a, b, runs)))
+            // After each change the box shows an instance's content, then the count says whether it was the first instance. Waiting
+            // for "runs:1" instead would wait forever on the restart this test guards against.
             _ <- mount(ui) { (recorder, _) =>
                 Kyo.foreachDiscard(Seq(1, 2, 0, 2, 1)) { next =>
-                    afterRepaint(recorder, Seq("0"))(mode.set(next)).andThen(showsEventually(recorder, Seq("0", "1", "0"), "runs:"))
-                }.andThen(showsEventually(recorder, Seq("0", "1", "0"), "runs:1"))
+                    for
+                        _     <- afterRepaint(recorder, Seq("0"))(mode.set(next))
+                        _     <- showsEventually(recorder, Seq("0", "1", "0"), "runs:")
+                        total <- runs.get
+                        shown <- recorder.shown(Seq("0", "1", "0"))
+                    yield assert(
+                        total == 1,
+                        s"the neighbour turning into mode $next restarted the keyed instance: $total runs, the box shows $shown"
+                    )
+                }
             }
             total <- runs.get
         yield assert(total == 1, s"a neighbour changing kind restarted the keyed instance: $total runs")
