@@ -783,6 +783,68 @@ class UIServerWsTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // A drop is handled after the events that arrived before it, here a drag start queued behind a click handler that waits for a
+    // measure reply. The reply arrives after the drop, so the drop is read while the handler still holds the event drain: a drop
+    // that overtook the start would find no drag session and be rejected. Run several sessions, since an overtaking drop wins its
+    // race with the drain only most of the time.
+    "a drop is handled after a drag start that arrived before it, also while an earlier handler holds the event drain".notNative in {
+        val start = UIEvent.DragStart(
+            Seq("0"),
+            DragProtocol.StartData("ws-drag", Chunk.empty, Drag.Operation.Move, Present("source"), Drag.Point(1, 1), UI.Modifiers.none)
+        )
+        val drop = UIEvent.Drop(
+            Seq("0"),
+            DragProtocol.TargetData(
+                "ws-drag",
+                Drag.Operation.Move,
+                Present("target"),
+                Drag.Point(2, 2),
+                UI.Modifiers.none,
+                Present(Drag.Position.On)
+            )
+        )
+        val click                                        = UIEvent.Click(Seq("2"), MouseEventData(UI.Modifiers.none, Absent))
+        val missing                                      = UIEvent.MeasureMissing(Seq.empty, "held")
+        def text(payload: HttpWebSocket.Payload): String =
+            payload match
+                case HttpWebSocket.Payload.Text(data) => data
+                case other                            => other.toString
+        def session(ready: Signal[String]): (String, String) < (Async & Abort[Closed] & Scope) =
+            val app = UI.div(
+                UI.div
+                    .dragSource(Drag.Source("source", Chunk.empty))
+                    .dropTarget(Drag.Target("target", Drag.Accept()))
+                    .onDrop(Drag.Decision.Accept),
+                ready.map(UI.span(_)),
+                UI.button("hold").onClick(UI.commands.map(_.requestMeasureById("held")).unit)
+            )
+            AtomicRef.init(("", "")).map { frames =>
+                HttpWebSocket.connect(
+                    serverWs => UIServer.serveSession(serverWs, app),
+                    clientWs =>
+                        for
+                            _       <- awaitSessionStart(clientWs)
+                            _       <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](click)))
+                            request <- clientWs.take()
+                            _       <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](start)))
+                            _       <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](drop)))
+                            _       <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](missing)))
+                            decided <- clientWs.take()
+                            _       <- frames.set((text(request), text(decided)))
+                        yield ()
+                ).andThen(frames.get)
+            }
+        end session
+        for
+            ready   <- Signal.initRef("ready")
+            results <- Kyo.foreach(1 to 10)(_ => Scope.run(session(ready)))
+        yield
+            val request  = Json.encode[HtmlOp](HtmlOp.RequestMeasureById("held"))
+            val accepted = Json.encode[HtmlOp](HtmlOp.ResolveDrag("ws-drag", Drag.Decision.Accept))
+            assert(results.forall(_ == (request, accepted)), s"frames per session (measure request, drop decision): $results")
+        end for
+    }
+
     "malformed drag-start media is rejected without invoking handlers or terminating the session".notNative in {
         val invalidStart = UIEvent.DragStart(
             Seq("0"),
