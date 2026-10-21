@@ -407,9 +407,21 @@ private[kyo] object UIServer:
                 // when it reaches it: the handler may await lazy file reads served by later frames, and those
                 // frames may queue behind it, so running it on the drain would deadlock the session. The client
                 // models concurrent decisions (AwaitingDecisionAfterEnd), and session close unblocks a forked
-                // handler because the file service fails its pending reads with Disconnected.
+                // handler because the file service fails its pending reads with Disconnected. Unlike other events,
+                // one that finds the drain full is not dropped silently: the client waits for its decision, so it
+                // is rejected at once.
                 case Result.Success(validated: (DragProtocol.ValidatedEvent.Drop | DragProtocol.ValidatedEvent.SortMove)) =>
-                    Abort.runPartial[Closed](events.offer(Fiber.initUnscoped(handle(event.path, validated).unit).unit)).unit
+                    val sessionId = validated match
+                        case DragProtocol.ValidatedEvent.Drop(wire)     => wire.event.sessionId
+                        case DragProtocol.ValidatedEvent.SortMove(wire) => wire.sessionId
+                    Abort.runPartial[Closed](events.offer(Fiber.initUnscoped(handle(event.path, validated).unit).unit)).map {
+                        case Result.Success(false) =>
+                            DragCommands.resolve(
+                                sessionId,
+                                Drag.Decision.Reject(Drag.Rejection.Application("Too many events are waiting in this session."))
+                            )
+                        case _ => Kyo.unit
+                    }
                 case Result.Success(validated) =>
                     Abort.runPartial[Closed](events.offer(handle(event.path, validated).unit)).unit
                 case _ => ()
