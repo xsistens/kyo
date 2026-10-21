@@ -676,5 +676,31 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     }
                 }
         }
+
+        "one close caller's interrupt does not end another close caller's wait for the owner" in Clock.withTimeControl { control =>
+            // Every close caller waits for the owner's exit, and one caller going away is not the owner exiting:
+            // the other caller still returns only once the connection is released and the owner is gone.
+            Kyo.foreachDiscard(Chunk.from(1 to 10)) { _ =>
+                Scope.run {
+                    for
+                        // Releasing the connection's Scope takes 5s here.
+                        f      <- fixture(releaseDelay = 5.seconds)
+                        _      <- StreamProbe.Pull.open(f.transport.subscribe(request()))
+                        _      <- established(f.conn, "0")
+                        first  <- Fiber.initUnscoped(f.transport.closeNow)
+                        second <- Fiber.initUnscoped(f.transport.closeNow)
+                        _      <- control.awaitPendingSleepers(1) // the release has begun
+                        _      <- assertEventually(first.waiters.map(_ == 1))
+                        _      <- assertEventually(second.waiters.map(_ == 1))
+                        _      <- first.interrupt
+                        _      <- first.getResult
+                        _      <- control.advance(5.seconds, Duration.Zero)
+                        result <- second.getResult
+                        _      <- f.conn.awaitReleased
+                    yield assert(result == Result.succeed(()), s"the other close caller ended with $result")
+                    end for
+                }
+            }
+        }
     }
 end WebSocketNetworkTransportSpec
