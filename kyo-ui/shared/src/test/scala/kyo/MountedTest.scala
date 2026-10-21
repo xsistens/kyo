@@ -1532,6 +1532,8 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    // The gaining region is held in a pass and is behind on a write it has not read yet, so the cut cannot be reached: the panel
+    // the losing region dropped is still in transit, undecided, when the session ends.
     "an instance in transit when the session ends is released" in {
         for
             released <- AtomicBoolean.init(false)
@@ -1546,19 +1548,57 @@ class MountedTest extends kyo.test.Test[Any]:
                 left.render(l => if l then div(node) else div(span("empty-left"))),
                 right.render(p => if p._1 then div(node) else div(span("empty-right")))
             )
-            _ <- mountWith(recorder, ui) { handle =>
+            undecided <- mountWith(recorder, ui) { handle =>
                 for
                     _ <- showsEventually(recorder, Seq("1", "0"), "panel")
                     _ <- Sync.defer(recorder.arm())
                     _ <- right.getAndUpdate(p => (p._1, p._2 + 1))
                     _ <- entered.get
+                    // A write the held region has not read: it is behind until a later pass of it, which never comes.
+                    _ <- right.getAndUpdate(p => (p._1, p._2 + 1))
                     _ <- handle(Seq("0"), click("0"))
                     _ <- showsEventually(recorder, Seq("1"), "empty-left")
-                yield ()
+                    r <- released.get
+                yield !r
             }
-            // The held region never finished its pass: the session ended with the panel undecided.
             r <- released.get
-        yield assert(r, "the instance in transit outlived its session")
+        yield
+            assert(undecided, "the panel was released before the session ended: it was not in transit")
+            assert(r, "the instance in transit outlived its session")
+        end for
+    }
+
+    // A cut has started releasing a panel no region shows any more, and the release waits on the panel's own finalizer when the
+    // session closes. The session must not end before the release has: virtual time shows whether its close waited.
+    "closing the session waits for a release a cut has already started" in {
+        val ri = Signal.defaultRepairInterval
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    _         <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                    releasing <- Latch.init(1)
+                    gate      <- Latch.init(1)
+                    released  <- AtomicBoolean.init(false)
+                    show      <- Signal.initRef(true)
+                    node = UI.mounted(
+                        Scope.ensure(releasing.release.andThen(gate.await).andThen(released.set(true))).andThen(span("panel"))
+                    ).keyed("slow-release")
+                    ui = div(show.render(s => if s then div(node) else div(span("hidden"))))
+                    bodyDone <- Latch.init(1)
+                    session  <- Fiber.init(mount(ui) { (recorder, _) =>
+                        showsEventually(recorder, Seq("0", "0"), "panel")
+                            .andThen(show.set(false))
+                            .andThen(releasing.await)
+                            .andThen(bodyDone.release)
+                    })
+                    _ <- bodyDone.await
+                    // Only the close is timed: a close that waits for the release cannot end before the gate opens.
+                    closed <- Abort.run[Timeout](Async.timeout(ri * 600)(session.get))
+                    _      <- gate.release
+                    _      <- assertEventually(released.get)
+                yield assert(closed.isFailure, s"the session closed while a release it owned was still running: $closed")
+            }
+        }
     }
 
     "an instance in transit when the mount that owns its table goes away is released" in {
@@ -1876,6 +1916,35 @@ class MountedTest extends kyo.test.Test[Any]:
                     total == 1 && gone == 0 && shown.contains("runs:1"),
                     s"runs: $total, released: $gone, shown: $shown"
                 )
+            }
+        yield succeed
+    }
+
+    // The second place's claim is held in its paint, so the cut that finds the identity in two regions runs before that claim is
+    // filed. The report still names both places: they come from what the regions' passes recorded, not from the claims filed so far.
+    "a duplicate found across separate regions names every place, also one whose claim is not filed yet" in {
+        for
+            showA   <- Signal.initRef(true)
+            showB   <- Signal.initRef(false)
+            entered <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            recorder = new Gated(Seq("2"), entered, gate)
+            node     = UI.mounted(Kyo.lift(span("panel"))).keyed("named-twice")
+            ui       = div(
+                button("both").onClick(showB.set(true)),
+                showA.render(a => if a then div(node) else div(span("no a"))),
+                showB.render(b => if b then div(node) else div(span("no b")))
+            )
+            _ <- mountWith(recorder, ui) { handle =>
+                for
+                    _     <- showsEventually(recorder, Seq("1", "0"), "panel")
+                    _     <- Sync.defer(recorder.arm())
+                    _     <- handle(Seq("0"), click("0"))
+                    _     <- entered.get
+                    _     <- showsEventually(recorder, Seq("1", "0"), "kyo-mount-error")
+                    shown <- recorder.shown(Seq("1", "0"))
+                    _     <- gate.completeUnitDiscard
+                yield assert(shown.contains("shown in 2 places at once: 1.0, 2.0"), shown)
             }
         yield succeed
     }
