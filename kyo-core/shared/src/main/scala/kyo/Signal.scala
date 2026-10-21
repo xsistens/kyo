@@ -262,8 +262,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                         case Absent     => true
             def startRepairing(b: B): Unit =
                 if probe != null then
-                    probe.repairing(repairingBehind(b))
                     watch.get.started(probe.behind)
+                    probe.repairing(repairingBehind(b))
             // Cleared by the first read that is not exact, after which the observation stays on the repairing loop: without that
             // a signal over `initRaw` would run its exact parts twice per wakeup, once for the attempt and once for `currentWith`.
             var exact = true
@@ -316,8 +316,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                                     read.awaitChange.andThen(loop(last))
                                 else
                                     if probe != null then
-                                        probe.exact(read)
                                         watch.get.started(probe.behind)
+                                        probe.exact(read)
                                     Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
                                 end if
                             case Absent =>
@@ -580,7 +580,9 @@ object Signal:
       */
     private[kyo] trait PassWatch:
         /** A pass for a new value starts. `behind` answers, from any thread and without suspending, whether a write landed since the
-          * pass read its value. For a signal observed through the repairing loop it compares the projection of the suspension-free
+          * pass read its value. The observation reports the pass before the probe answers for its read: until then the probe still
+          * answers for the read of the pass before, which a new value makes behind, so a reader that sees no new pass yet never sees
+          * the observer current. For a signal observed through the repairing loop it compares the projection of the suspension-free
           * current value where there is one, and answers `true` where there is none, since it cannot tell: such an observation counts as
           * behind, and only its re-reads ([[started]] and [[rested]], the latter at least once per repair interval) say it has caught up.
           */
@@ -1311,8 +1313,8 @@ object Signal:
                                     nextSince(v0).andThen(loop(last))
                                 else
                                     if watch.nonEmpty then
-                                        seen.set(v0)
                                         watch.get.started(behind)
+                                        seen.set(v0)
                                     Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
                                 end if
                             }
