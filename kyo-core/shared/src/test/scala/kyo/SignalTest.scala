@@ -2047,6 +2047,43 @@ class SignalTest extends kyo.test.Test[Any]:
         "an exact combinator observation whose value comes back while its pass closes is current again" in {
             Signal.initRef(0).map(other => revertsWhileClosing(ref => ref.combineLatest(other).map(_._1)))
         }
+
+        // The engine reads the pass count and the probe from other threads. Until a new pass is reported, the probe must still answer
+        // for the read of the pass before it: answering for the new read first makes the observer look current for a pass that has
+        // not been counted, let alone run.
+        def reportsBeforeReading(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
+            final class AtStart extends Signal.PassWatch:
+                val starts                               = new java.util.concurrent.atomic.AtomicInteger(0)
+                val seen                                 = new java.util.concurrent.atomic.AtomicReference(Chunk.empty[Boolean])
+                @volatile var probe: () => Boolean       = () => false
+                def started(behind: () => Boolean): Unit =
+                    // What the probe of the pass before answers while this one is not counted yet.
+                    discard(seen.getAndUpdate(_.append(probe())))
+                    probe = behind
+                    discard(starts.incrementAndGet())
+                end started
+                def rested(): Unit = ()
+            end AtStart
+            for
+                ref <- Signal.initRef(0)
+                watch = new AtStart
+                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe(_ => Kyo.unit)))
+                _     <- assertEventually(Sync.defer(watch.starts.get == 1))
+                _     <- ref.set(1)
+                _     <- assertEventually(Sync.defer(watch.starts.get == 2))
+                seen  <- Sync.defer(watch.seen.get)
+                _     <- fiber.interrupt
+            yield assert(seen.drop(1) == Chunk(true), s"the observer looked current before its new pass was reported: $seen")
+            end for
+        end reportsBeforeReading
+
+        "a SignalRef observation reports a new pass before its probe answers for the new read" in {
+            reportsBeforeReading(ref => ref)
+        }
+
+        "an exact combinator observation reports a new pass before its probe answers for the new read" in {
+            Signal.initRef(0).map(other => reportsBeforeReading(ref => ref.combineLatest(other).map(_._1)))
+        }
     }
 
 end SignalTest
