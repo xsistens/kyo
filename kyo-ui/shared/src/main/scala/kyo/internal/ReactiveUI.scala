@@ -2411,7 +2411,8 @@ private[kyo] object ReactiveUI:
         val rowUI: UI,
         val kids: Seq[ReactiveUI],
         val handler: Maybe[Handler],
-        val scope: RowScope
+        val scope: RowScope,
+        val holdsMount: Boolean
     )
 
     /** What keeps one keyed row's subscriptions open, closed by the registry when the row is evicted.
@@ -2547,8 +2548,15 @@ private[kyo] object ReactiveUI:
             java.util.Arrays.fill(finalRows.asInstanceOf[Array[AnyRef]], null)
             rebuilt = Chunk.from(0 until size)
 
-        /** The reactive kids of every row, the region's walk for this emission. */
+        /** The reactive kids of every row, the region's walk for this emission. Built only when the region's pass plans. */
         lazy val allKids: Seq[ReactiveUI] = built.toSeq.flatMap(_.kids)
+
+        /** Whether a mount is in any row's walk, from the flag each row took when it was walked, without collecting the walk. */
+        def holdsMount: Boolean =
+            var i = 0
+            while i < size && !built(i).holdsMount do i += 1
+            i < size
+        end holdsMount
 
         def fragmentChildren(using Frame): Chunk[UI] =
             val out = new Array[UI](size)
@@ -2589,8 +2597,12 @@ private[kyo] object ReactiveUI:
             val rowUI: UI,
             val kids: Seq[ReactiveUI],
             val handler: Maybe[Handler],
-            val retained: Maybe[RowInstance]
+            val retained: Maybe[RowInstance],
+            val holdsMount: Boolean
         )
+
+        /** Whether a mount is at or below `kids`, a row's walk: fixed by the walk, so a row takes it once and keeps it. */
+        def holdsMount(kids: Seq[ReactiveUI]): Boolean = kids.exists(_.containsMount)
 
         /** Reads an emission once: the key at each position, and the live row kept there. A key that repeats within the emission
           * disables reuse for all of it.
@@ -2605,7 +2617,7 @@ private[kyo] object ReactiveUI:
             val size      = items.length
             val keys      = new Array[String](size)
             val kept      = new Array[RowInstance](size)
-            val seen      = scala.collection.mutable.HashSet.empty[String]
+            val seen      = presized(size)
             var dup       = false
             var keptCount = 0
             var i         = 0
@@ -2626,7 +2638,7 @@ private[kyo] object ReactiveUI:
                 java.util.Arrays.fill(kept.asInstanceOf[Array[AnyRef]], null)
                 keptCount = 0
             val built        = new Array[Built](size)
-            val retainedKeys = scala.collection.mutable.HashSet.empty[String]
+            val retainedKeys = presized(keptCount)
             val rebuilt      = new Array[Int](size - keptCount)
             var j            = 0
             i = 0
@@ -2637,12 +2649,17 @@ private[kyo] object ReactiveUI:
                     j += 1
                 else
                     retainedKeys += inst.key
-                    built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst))
+                    built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst), inst.holdsMount)
                 end if
                 i += 1
             end while
             new RowPlan(items, keys, dup, built, kept, Chunk.from(rebuilt), retainedKeys, prev)
         end decide
+
+        /** A set that holds `n` keys without growing. */
+        private def presized(n: Int): scala.collection.mutable.HashSet[String] =
+            val loadFactor = scala.collection.mutable.HashSet.defaultLoadFactor
+            new scala.collection.mutable.HashSet[String](math.max(16, (n / loadFactor).toInt + 1), loadFactor)
     end RowPlan
 
     /** Subscribe a reusable keyed Foreach region: rows are owned by a RowRegistry instead of the per-value
@@ -2722,7 +2739,9 @@ private[kyo] object ReactiveUI:
                                 built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
                                     val key  = keyFn(item)
                                     val kids = grouped.getOrElse(key, Seq.empty)
-                                    rowRunner(kids, pass).map(scope => new RowInstance(key, item, renderFn(i, item), kids, Absent, scope))
+                                    rowRunner(kids, pass).map(scope =>
+                                        new RowInstance(key, item, renderFn(i, item), kids, Absent, scope, RowPlan.holdsMount(kids))
+                                    )
                                 }
                                 _ <- regionMounts.endWalk
                                 // No paint here: the enclosing render already put exactly this fragment in the
@@ -2770,11 +2789,12 @@ private[kyo] object ReactiveUI:
                                             rui.rows,
                                             rui.deepRows
                                         )
-                                        plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
+                                        plan.built(i) =
+                                            new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent, RowPlan.holdsMount(kids))
                                     }
                                 })
                                 // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
-                                firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows)
+                                firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows, Present(plan.holdsMount))
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
@@ -2812,11 +2832,15 @@ private[kyo] object ReactiveUI:
                                 // Every row is subscribed again, so a pass covers the regions of all of them.
                                 pass <-
                                     if kept then Kyo.lift(firstPass)
-                                    else rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(plan.allKids))
+                                    else
+                                        rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(
+                                            plan.allKids,
+                                            holdsMount = Present(plan.holdsMount)
+                                        ))
                                 _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
                                     val b = plan.built(i)
                                     rowRunner(b.kids, pass).map(scope =>
-                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope)
+                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope, b.holdsMount)
                                     )
                                 }
                                 _ <- regionMounts.endWalk
@@ -3595,21 +3619,30 @@ private[kyo] object ReactiveUI:
           * those inside `retained` rows of a keyed list, whose subscriptions carry on. An instance no region shows any more goes in
           * transit, and leaves its snapshot for a `KeepLatest` successor in the region that showed it; a cut decides it (see
           * [[MountTable]]). A pass whose walk has no mount, in a region with nothing recorded below it, records nothing.
+          *
+          * `kids` is read only when the pass needs it. `holdsMount`, when the caller knows it, answers whether a mount is in the walk
+          * without reading it, so a keyed list without mounts never collects its rows' walks.
           */
-        def openWalk(kids: Seq[ReactiveUI], retained: scala.collection.Set[String] = Set.empty)(using
-            Frame
-        ): (MountPass, () => Unit < Async) < Sync =
+        def openWalk(
+            kids: => Seq[ReactiveUI],
+            retained: scala.collection.Set[String] = Set.empty,
+            holdsMount: Maybe[Boolean] = Absent
+        )(using Frame): (MountPass, () => Unit < Async) < Sync =
             Sync.Unsafe.defer {
+                lazy val walk  = kids
+                lazy val mount = holdsMount match
+                    case Present(known) => known
+                    case Absent         => walk.exists(_.containsMount)
                 val id     = MountPass.fresh()
                 val opened = table.modify { s =>
                     entryIn(s) match
                         case Absent => (s, Opened(MountPass.stale, Chunk.empty, false, Chunk.empty, 0))
                         // The first pass of a subscription over the walk the pass that subscribed it already decided.
-                        case Present(entry) if retained.isEmpty && entry.complete && entry.walked.exists(_ eq kids) =>
+                        case Present(entry) if retained.isEmpty && entry.complete && entry.walked.exists(_ eq walk) =>
                             (s, Opened(entry.pass, Chunk.empty, false, Chunk.empty, 0))
-                        case Present(entry) if !kids.exists(_.containsMount) && nothingBelow(s, entry) =>
+                        case Present(entry) if !mount && nothingBelow(s, entry) =>
                             (s, Opened(MountPass.clean(id), Chunk.empty, false, Chunk.empty, 1))
-                        case Present(entry) => plan(s, entry, kids, retained, id)
+                        case Present(entry) => plan(s, entry, walk, retained, id)
                 }
                 if opened.work == 1 then discard(table.session.counters.skipped.incrementAndGet())
                 else if opened.work == 2 then discard(table.session.counters.planned.incrementAndGet())
@@ -3722,8 +3755,12 @@ private[kyo] object ReactiveUI:
             }
 
         /** [[openWalk]], with the release run and awaited at once. */
-        def beginWalk(kids: Seq[ReactiveUI], retained: scala.collection.Set[String] = Set.empty)(using Frame): MountPass < Async =
-            openWalk(kids, retained).map((pass, release) => release().andThen(pass))
+        def beginWalk(
+            kids: => Seq[ReactiveUI],
+            retained: scala.collection.Set[String] = Set.empty,
+            holdsMount: Maybe[Boolean] = Absent
+        )(using Frame): MountPass < Async =
+            openWalk(kids, retained, holdsMount).map((pass, release) => release().andThen(pass))
 
         /** `ui` as this pass paints it, rooted at `path`: a mount among `kids` that starts from the snapshot of the instance before it
           * shows that snapshot in its slot already, as the instance will once it starts, rather than an empty slot until then.
