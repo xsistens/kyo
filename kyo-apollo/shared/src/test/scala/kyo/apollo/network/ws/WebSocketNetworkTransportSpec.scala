@@ -702,5 +702,47 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 }
             }
         }
+
+        "one close caller's interrupt during the grace period does not cut another caller's grace period" in
+            Clock
+                .withTimeControl { control =>
+                    // Every close caller waits on the same subscriptions' ends for its grace period. A caller that
+                    // goes away during its grace period ends its own wait, not the subscription's, so the other
+                    // caller still lets the subscription finish on its own.
+                    Kyo.foreachDiscard(Chunk.from(1 to 10)) { _ =>
+                        Scope.run {
+                            fixture().map { f =>
+                                val subscription = f.transport.subscribe(request())
+                                for
+                                    done   <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
+                                    _      <- established(f.conn, "0")
+                                    first  <- Fiber.initUnscoped(f.transport.close(10.seconds))
+                                    second <- Fiber.initUnscoped(f.transport.close(10.seconds))
+                                    _      <- control.awaitPendingSleepers(2) // both grace periods are running
+                                    _      <- first.interrupt
+                                    _      <- first.getResult
+                                    // A round trip through the owner before the subscription's last frames,
+                                    // unless the subscription has been cut already: a cut transport answers no
+                                    // ping. The subscription is awaited through a mirror that refuses the race's
+                                    // interrupt, so losing the race does not end it.
+                                    _   <- Sync.defer(f.conn.server(ping))
+                                    cut <- Async.raceFirst(
+                                        f.conn.awaitSent(_ == pong).andThen(Maybe.empty[List[ApolloResponse[Int]]]),
+                                        done.uninterruptible.map(_.get).map(Maybe(_))
+                                    )
+                                    seen <- cut match
+                                        case Present(early) => Kyo.lift(early)
+                                        case Absent         =>
+                                            Sync.defer { f.conn.server(next("0", 5)); f.conn.server(complete("0")) }
+                                                .andThen(done.get)
+                                    _ <- second.get // without the clock moving
+                                yield
+                                    assert(seen.flatMap(_.data) == List(5))
+                                    assert(seen.forall(_.error.isEmpty), s"the subscription was cut before it completed: $seen")
+                                end for
+                            }
+                        }
+                    }
+                }
     }
 end WebSocketNetworkTransportSpec
