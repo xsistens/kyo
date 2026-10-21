@@ -2528,19 +2528,17 @@ private[kyo] object ReactiveUI:
         val built: Array[RowPlan.Built],
         val finalRows: Array[RowInstance],
         var rebuilt: Chunk[Int],
-        retainedKeys: java.util.HashSet[String],
+        retainedKeys: scala.collection.mutable.HashSet[String],
         prev: Vector[RowInstance]
     ):
         def size: Int = keys.length
 
         def isRetained(key: String): Boolean = retainedKeys.contains(key)
 
-        /** The keys of the rows this emission keeps as they are. */
-        def retainedRows: Set[String] =
-            val out = Set.newBuilder[String]
-            retainedKeys.forEach(key => discard(out += key))
-            out.result()
-        end retainedRows
+        /** The keys of the rows this emission keeps as they are, read only: no copy, since a list emission pays for this whether or not
+          * anything below it reads them.
+          */
+        def retainedRows: scala.collection.Set[String] = retainedKeys
 
         /** Every row gets a new instance: the transport repainted the retained rows too, so their subscriptions start
           * again from their cached UI and walk.
@@ -2607,7 +2605,7 @@ private[kyo] object ReactiveUI:
             val size      = items.length
             val keys      = new Array[String](size)
             val kept      = new Array[RowInstance](size)
-            val seen      = new java.util.HashSet[String]()
+            val seen      = scala.collection.mutable.HashSet.empty[String]
             var dup       = false
             var keptCount = 0
             var i         = 0
@@ -2628,7 +2626,7 @@ private[kyo] object ReactiveUI:
                 java.util.Arrays.fill(kept.asInstanceOf[Array[AnyRef]], null)
                 keptCount = 0
             val built        = new Array[Built](size)
-            val retainedKeys = new java.util.HashSet[String]()
+            val retainedKeys = scala.collection.mutable.HashSet.empty[String]
             val rebuilt      = new Array[Int](size - keptCount)
             var j            = 0
             i = 0
@@ -2638,7 +2636,7 @@ private[kyo] object ReactiveUI:
                     rebuilt(j) = i
                     j += 1
                 else
-                    discard(retainedKeys.add(inst.key))
+                    retainedKeys += inst.key
                     built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst))
                 end if
                 i += 1
@@ -2776,8 +2774,7 @@ private[kyo] object ReactiveUI:
                                     }
                                 })
                                 // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
-                                retained  <- Sync.defer(plan.retainedRows)
-                                firstPass <- regionMounts.beginWalk(plan.allKids, retained)
+                                firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows)
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
@@ -3599,7 +3596,9 @@ private[kyo] object ReactiveUI:
           * transit, and leaves its snapshot for a `KeepLatest` successor in the region that showed it; a cut decides it (see
           * [[MountTable]]). A pass whose walk has no mount, in a region with nothing recorded below it, records nothing.
           */
-        def openWalk(kids: Seq[ReactiveUI], retained: Set[String] = Set.empty)(using Frame): (MountPass, () => Unit < Async) < Sync =
+        def openWalk(kids: Seq[ReactiveUI], retained: scala.collection.Set[String] = Set.empty)(using
+            Frame
+        ): (MountPass, () => Unit < Async) < Sync =
             Sync.Unsafe.defer {
                 val id     = MountPass.fresh()
                 val opened = table.modify { s =>
@@ -3624,7 +3623,13 @@ private[kyo] object ReactiveUI:
         private def nothingBelow(s: TableState, entry: RegionEntry): Boolean =
             entry.holds.isEmpty && s.regions.foldLeft(true)((ok, key, _) => ok && (key == region || !region.encloses(key)))
 
-        private def plan(s: TableState, entry: RegionEntry, kids: Seq[ReactiveUI], retained: Set[String], id: Long): (TableState, Opened) =
+        private def plan(
+            s: TableState,
+            entry: RegionEntry,
+            kids: Seq[ReactiveUI],
+            retained: scala.collection.Set[String],
+            id: Long
+        ): (TableState, Opened) =
             val rowDepth                               = region.path.size
             def inRetainedRow(key: RegionKey): Boolean =
                 retained.nonEmpty && key.path.size > rowDepth && key.path.startsWith(region.path) && retained.contains(key.path(rowDepth))
@@ -3717,7 +3722,7 @@ private[kyo] object ReactiveUI:
             }
 
         /** [[openWalk]], with the release run and awaited at once. */
-        def beginWalk(kids: Seq[ReactiveUI], retained: Set[String] = Set.empty)(using Frame): MountPass < Async =
+        def beginWalk(kids: Seq[ReactiveUI], retained: scala.collection.Set[String] = Set.empty)(using Frame): MountPass < Async =
             openWalk(kids, retained).map((pass, release) => release().andThen(pass))
 
         /** `ui` as this pass paints it, rooted at `path`: a mount among `kids` that starts from the snapshot of the instance before it
