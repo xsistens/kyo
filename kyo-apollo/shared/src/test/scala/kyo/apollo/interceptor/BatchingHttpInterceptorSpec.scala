@@ -17,7 +17,9 @@ import kyo.apollo.network.http.HttpRequestBody
   * shared as that failure, malformed array fails all with an engine failure, a
   * throwing send panics all), and the two ownership contracts from
   * P1-40: an interrupted caller is not sent on its behalf, and ending the owning
-  * `Scope` stops the window and answers whoever is still waiting.
+  * `Scope` stops the window and answers whoever is still waiting. One leaf runs on
+  * real worker threads: a batch member interrupted while the batch is cut must not
+  * leave the others without a lead.
   */
 class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
 
@@ -67,6 +69,58 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
         }
 
     private val interval = 10.millis
+
+    private val queryName = """"query":"(\w+)"""".r
+
+    /** Answers every query with its own name, `{"data":{"echo":"<name>"}}`, as an array for a batch, so each caller can tell
+      * its own share from another's.
+      */
+    private def echoEngine: RecordingEngine =
+        RecordingEngine { req =>
+            req.fields.body match
+                case HttpRequestBody.Text(b) =>
+                    val echoes = queryName.findAllMatchIn(b).map(m => s"""{"data":{"echo":"${m.group(1)}"}}""").toList
+                    HttpEngine.response(HttpStatus.OK, if b.startsWith("[") then echoes.mkString("[", ",", "]") else echoes.mkString)
+                case _ => HttpEngine.response(HttpStatus(400), "not a JSON body")
+        }
+
+    /** Advance the controlled clock one window at a time, yielding between ticks, until `fiber` is done: a batch given
+      * back to the queue gets its next window without any wall delay.
+      */
+    private def advanceUntilDone[A, S](control: Clock.TimeControl, fiber: Fiber[A, S])(using Frame): Unit < Async =
+        fiber.done.map { done =>
+            if done then ()
+            else
+                for
+                    _ <- control.advance(interval, Duration.Zero)
+                    _ <- Fiber.use(())(_.get)
+                    _ <- advanceUntilDone(control, fiber)
+                yield ()
+        }
+
+    /** One round of the cut-versus-interrupt race on real worker threads: `a` waits alone, then `b` arrives and fills the
+      * batch (the size cap cuts it in `b`'s fiber) while another fiber interrupts `a` after `lag` suspension steps, both
+      * released by one latch. Returns `b`'s response; a `b` that no member leads never gets one.
+      */
+    private def interruptWhileCut(lag: Int)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 2)
+                    chain = chainOf(batching, echoEngine)
+                    fa    <- Fiber.init(chain.proceed(post("""{"query":"a"}""")))
+                    _     <- untilQueued(batching, 1)
+                    start <- Latch.init(1)
+                    fb    <- Fiber.init(start.await.andThen(chain.proceed(post("""{"query":"b"}"""))))
+                    fi    <- Fiber.init(start.await.andThen(Loop.repeat(lag)(Sync.defer(()))).andThen(fa.interrupt))
+                    _     <- start.release
+                    _     <- fi.get
+                    _     <- fa.getResult
+                    _     <- advanceUntilDone(control, fb)
+                    rb    <- fb.get
+                yield rb
+            }
+        }
 
     "BatchingHttpInterceptor" - {
 
@@ -159,6 +213,17 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 assert(rb.fields.body == """{"data":{"value":9}}""")
                 assert(ra.isPanic)
             end for
+        }
+
+        "a member interrupted while its batch is cut never strands the others" in {
+            // The cut and the interrupt race on two worker threads, so one round rarely lands in the narrow window
+            // between them (on JVM about 1 round in 1000 did before the fix). Many rounds, 8 at a time, and an interrupt
+            // shifted by a few more suspension steps each round cover every order. A stranded b never completes, so a
+            // regression shows as this leaf reaching its timeout.
+            val rounds = 40000
+            Async.foreach(0 until rounds, 8)(i => interruptWhileCut((i % 50) * 4)).map { responses =>
+                assert(responses.map(_.fields.body).distinct == Chunk("""{"data":{"echo":"b"}}"""))
+            }
         }
 
         "ending the owning Scope stops the window and answers waiting callers with Closed" in Clock.withTimeControl {
