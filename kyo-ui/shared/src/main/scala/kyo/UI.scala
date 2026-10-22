@@ -1532,6 +1532,11 @@ object UI:
               *
               * Unlike [[focusAuto]] it re-fires as the flag moves between elements, since that is the movement it
               * follows; a re-render that leaves the flag where it was scrolls nothing.
+              *
+              * The first paint is the one place the two scrollers differ. A flag the DOCUMENT would have to scroll to is
+              * left alone, because the document's position is what the browser restores on reload and on back. A flag
+              * inside a scroll container of the page's own (a list opened on its selected row, a navigation rail opened
+              * on a deep link) is brought into view, and only that container moves.
               */
             def scrollAuto(v: Boolean): Self = withAttrs(attrs.copy(scrollAuto = Present(v)))
 
