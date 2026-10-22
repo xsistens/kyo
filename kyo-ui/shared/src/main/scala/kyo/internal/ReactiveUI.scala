@@ -1657,12 +1657,17 @@ private[kyo] object ReactiveUI:
                 case Absent     => MountDispatch.init
             audited <- MountSession.audited.get
             session = new MountSession(audited)
-            (rootTable, rootMounts) <- MountTable.root(rui.path, session)
-            _                       <- Scope.ensure(rootTable.evictAll)
-            // The root's pass covers the whole tree, so every identity shown twice anywhere in it is found here.
-            rootPass <- rootMounts.beginWalk(Seq(rui))
-            _        <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, dispatch, rootPass)
-            _        <- rootMounts.endWalk
+            // The session is a group of its own, released before anything it subscribed is.
+            _ <- ReleaseGroup.owning { group =>
+                for
+                    (rootTable, rootMounts) <- MountTable.root(rui.path, session, group)
+                    _                       <- Scope.ensure(rootTable.evictAll)
+                    // The root's pass covers the whole tree, so every identity shown twice anywhere in it is found here.
+                    rootPass <- rootMounts.beginWalk(Seq(rui))
+                    _        <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, dispatch, rootPass)
+                    _        <- rootMounts.endWalk
+                yield ()
+            }
             // Keyboard activation is synthesized at the bottom, on the tree's own handler, because the
             // two transports enter at different heights: the browser mount goes through `handle`, and
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
@@ -2299,7 +2304,8 @@ private[kyo] object ReactiveUI:
                         Signal.passWatch.let(Present(watch))(observed { current =>
                             val isFirst = first
                             first = false
-                            step(current, isFirst)
+                            // Each value is a group of its own, released before anything it subscribed is.
+                            ReleaseGroup.owning(_ => step(current, isFirst))
                         })
                     }.map { result =>
                         result.fold(
@@ -2421,9 +2427,10 @@ private[kyo] object ReactiveUI:
       * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each released by one call. On a
       * Scope finalizer each would be an effect of its own, an `Abort` handler around a deferred call, run by the finalizer's close and
       * await. So bare releases collect here and run in one pass; the finalizer keeps only what is not a bare release (a nested
-      * region's fiber, a mount), which for a plain row is nothing.
+      * region's fiber, a mount), which for a plain row is nothing. `group` is the row's release group, marked before any of it is
+      * released.
       */
-    final private[kyo] class RowScope(val finalizer: Scope.Finalizer):
+    final private[kyo] class RowScope(val finalizer: Scope.Finalizer, val group: ReleaseGroup):
         private var releases: List[() => Unit] = Nil
 
         def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
@@ -2495,6 +2502,7 @@ private[kyo] object ReactiveUI:
 
         private def release(scopes: Seq[RowScope])(using Frame): Unit < Async =
             for
+                _        <- Sync.Unsafe.defer(scopes.foreach(_.group.release()))
                 failures <- Sync.Unsafe.defer(scopes.flatMap(_.releaseAll()))
                 _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
                 _        <- Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
@@ -2700,9 +2708,11 @@ private[kyo] object ReactiveUI:
                 val keyFn = keyFnMaybe.get // reusable guarantees a key function
                 val rows  = spec.rows
                 for
-                    _     <- Scope.ensure(rows.evictAll)
-                    watch <- regionMounts.register
-                    _     <- startOwnedFiber {
+                    // Rows outlive the emission that made them, so each is a group inside the list's, not inside an emission's.
+                    around <- ReleaseGroup.current.use(group => group.getOrElse(regionMounts.table.group))
+                    _      <- Scope.ensure(rows.evictAll)
+                    watch  <- regionMounts.register
+                    _      <- startOwnedFiber {
                         // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
                         // scoped children still die with it, since a nested region's or mount's release is
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
@@ -2713,7 +2723,7 @@ private[kyo] object ReactiveUI:
                         def rowRunner(kids: Seq[ReactiveUI], pass: MountPass): RowScope < Async =
                             Sync.Unsafe.defer {
                                 val fin   = Scope.Finalizer.Unsafe.initInline()
-                                val scope = new RowScope(fin)
+                                val scope = new RowScope(fin, around.child())
                                 // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
                                 rows.track(scope).andThen(ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
                                     Tag[Scope],
@@ -2721,9 +2731,9 @@ private[kyo] object ReactiveUI:
                                     fork = (parent: Scope.Finalizer) => parent.forked,
                                     join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
                                 ) {
-                                    Kyo.foreachDiscard(kids)(
+                                    ReleaseGroup.current.let(Present(scope.group))(Kyo.foreachDiscard(kids)(
                                         subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(scope))
-                                    )
+                                    ))
                                 }).andThen(scope)
                             }
 
@@ -2873,6 +2883,120 @@ private[kyo] object ReactiveUI:
 
     // ---- Mounted nodes ----
 
+    /** A lifetime the engine ends as one: a value of a region, a row of a keyed list, what a keyed node shows for one state of its claim,
+      * a value of a mount's content, a mount instance with the keyed mounts nested in it, a session. Whatever releases a group marks it
+      * before it interrupts anything in it, so an effect that ends with an interrupt can tell whether a release it belongs to has begun:
+      * a group is released when it or a group around it is marked.
+      *
+      * The groups form a tree that points outwards only, so a group nothing is in any more is collected with what it held. A group that
+      * belongs to a scope is opened with [[ReleaseGroup.owning]]: marking it at the first of the scope's own releases would be too late, since
+      * a scope closes its nested scopes and its newer registrations first, and one of them can interrupt an effect the group holds.
+      */
+    final private[kyo] class ReleaseGroup private (initial: Maybe[ReleaseGroup]):
+        private val around = new java.util.concurrent.atomic.AtomicReference[Maybe[ReleaseGroup]](initial)
+        private val marked = new java.util.concurrent.atomic.AtomicBoolean()
+
+        def release(): Unit = marked.set(true)
+
+        def released: Boolean = ReleaseGroup.releasedFrom(this)
+
+        def child(): ReleaseGroup = new ReleaseGroup(Present(this))
+
+        /** Puts this group inside `outer`: for an instance's group, placed once its owner is known, before its effect runs. */
+        private[ReactiveUI] def placeIn(outer: ReleaseGroup): Unit = around.set(Present(outer))
+    end ReleaseGroup
+
+    private[kyo] object ReleaseGroup:
+        def root(): ReleaseGroup = new ReleaseGroup(Absent)
+
+        @scala.annotation.tailrec
+        private def releasedFrom(group: ReleaseGroup): Boolean =
+            group.marked.get() ||
+                (group.around.get() match
+                    case Present(outer) => releasedFrom(outer)
+                    case Absent         => false)
+
+        /** The group what runs now belongs to, inherited by the fibers it forks. Absent outside every subscription. */
+        val current: Local[Maybe[ReleaseGroup]] = Local.init(Maybe.empty[ReleaseGroup])
+
+        /** Runs `v` in a new group inside the current one (a root when there is none) and in a scope of its own, whose one release in the
+          * current scope marks the group and then closes what `v` registered.
+          */
+        def owning[A, S](v: ReleaseGroup => A < (S & Async & Scope))(using Frame): A < (S & Async & Scope) =
+            current.use { outer =>
+                val group = outer.fold(root())(_.child())
+                Sync.Unsafe.defer {
+                    val inner = Scope.Finalizer.Unsafe.initInline()
+                    ContextEffect.suspendWith(Tag[Scope])(_.ensure(error =>
+                        Sync.Unsafe.defer(group.release()).andThen(inner.close(error)).andThen(inner.await)
+                    )).andThen(
+                        ContextEffect.handle[Scope.Finalizer, Scope, A, S & Async](
+                            Tag[Scope],
+                            derive = (_: Maybe[Scope.Finalizer]) => inner,
+                            fork = (parent: Scope.Finalizer) => parent.forked,
+                            join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
+                        )(current.let(Present(group))(v(group)))
+                    )
+                }
+            }
+    end ReleaseGroup
+
+    /** Where a mount instance belongs, which decides what an interrupt that ends its effect means: nowhere yet (its effect has not
+      * run), to a scope that releases it with a group, or to its table under `identity`, which releases it at a cut.
+      */
+    private[kyo] enum Placement derives CanEqual:
+        case Unplaced
+        case Scoped
+        case Filed(identity: MountIdentity)
+    end Placement
+
+    /** Tells what an interrupt that ends an instance's effect means. An interrupt of the instance's own release, or of a release of a
+      * group around it, is silent; any other is a failure, which shows the node's error view like any other.
+      *
+      * An instance a scope owns is released with its group, which is marked before anything in it is interrupted, so the answer is there
+      * at once. One its table owns may be on its way to a cut: while it waits for one, or no live claim of a region that holds it shows
+      * it (its region is between two values, or the claim of its new pass is not filed yet), the answer waits for the table's next
+      * change, and the instance's own release settles it too.
+      */
+    final private[kyo] class MountFate(val group: ReleaseGroup, table: MountTable):
+        private val placement = new java.util.concurrent.atomic.AtomicReference[Placement](Placement.Unplaced)
+
+        /** The instance belongs to a scope that releases it with `home`. */
+        def scoped(home: ReleaseGroup): Unit =
+            group.placeIn(home)
+            placement.set(Placement.Scoped)
+
+        /** The instance belongs to its table under `identity`. */
+        def filed(identity: MountIdentity): Unit =
+            group.placeIn(table.group)
+            placement.set(Placement.Filed(identity))
+
+        /** The instance is being released: what is in it is released with it, and a verdict that waited is settled. */
+        def condemn(): Unit =
+            group.release()
+            table.settleVerdicts()
+
+        /** Whether the interrupt was a failure, when `s` can tell. */
+        private[ReactiveUI] def judge(s: TableState): Maybe[Boolean] =
+            if group.released then Present(false)
+            else
+                placement.get() match
+                    case Placement.Filed(identity) =>
+                        if s.releasing.exists(_.fate eq this) then Present(false)
+                        else
+                            s.instances.get(identity) match
+                                case Present(slot) if slot.instance.fate eq this =>
+                                    val held  = s.holding(identity)
+                                    val shown = s.views.get(identity).getOrElse(Chunk.empty).filter(v => held.contains(v.region))
+                                    if s.waiting.contains(identity) || shown.isEmpty || shown.exists(_.group.released) then Absent
+                                    else Present(true)
+                                case _ => Absent
+                    case _ => Present(true)
+
+        /** Whether the interrupt that ended the effect is a failure, once that can be told. */
+        def interrupted(using Frame): Boolean < Async = table.verdict(this)
+    end MountFate
+
     /** What a mounted node's content cell holds.
       *
       *   - `Pending(Absent)`: the effect has not published, and the node shows its placeholder.
@@ -2908,7 +3032,8 @@ private[kyo] object ReactiveUI:
         val children: MountTable,
         runner: Fiber[Unit, Any],
         scope: Scope.Finalizer,
-        go: Promise[Unit, Any]
+        go: Promise[Unit, Any],
+        val fate: MountFate
     ):
         /** Lets the effect run. An instance claimed while its table settles what is in transit is made before it may run, so it shows in
           * its place at once, and runs once the cut has released what had to go.
@@ -2943,10 +3068,12 @@ private[kyo] object ReactiveUI:
             }
 
         /** Stops the effect if it still runs, then releases nested mounts and everything the effect acquired, waiting for all of it.
-          * The wait is explicit because an interrupted `Scope` releases on a fiber of its own that nothing awaits.
+          * The wait is explicit because an interrupted `Scope` releases on a fiber of its own that nothing awaits. The instance is marked
+          * released first, so an interrupt this release causes anywhere in it is its own.
           */
         def teardown(using Frame): Unit < Async =
-            runner.interrupt
+            Sync.Unsafe.defer(fate.condemn())
+                .andThen(runner.interrupt)
                 .andThen(runner.getResult.unit)
                 .andThen(children.evictAll)
                 .andThen(scope.close(Absent))
@@ -2954,23 +3081,33 @@ private[kyo] object ReactiveUI:
     end MountInstance
 
     private[kyo] object MountInstance:
-        /** `frames` are the boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one. */
-        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, launch: Boolean = true)(using
-            Frame
+        /** An instance a scope owns, released with `home` (the group of `parent` when Absent), its effect running. `frames` are the
+          * boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one.
+          */
+        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, home: Maybe[ReleaseGroup] = Absent)(
+            using Frame
         ): MountInstance < Sync =
+            make(spec, seed, frames, parent).map { instance =>
+                Sync.Unsafe.defer(instance.fate.scoped(home.getOrElse(parent.group))).andThen(instance.launch).andThen(instance)
+            }
+
+        /** An instance whose owner is still to be settled: its effect runs once it is placed (see [[MountFate]]) and launched. */
+        def make(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
             for
                 cell <- Signal.initRef[MountState](MountState.Pending(seed))
                 supervision = MountSupervision(spec, cell, frames)
                 inner       = FailureFrame.Mount(supervision) :: frames
+                fate        = new MountFate(ReleaseGroup.root(), parent)
                 scope  <- Scope.Finalizer.init(1)
                 go     <- Promise.init[Unit, Any]
-                _      <- if launch then go.completeUnitDiscard else Kyo.unit
-                runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session)))
-            yield new MountInstance(cell, supervision, childTable(supervision, parent), runner, scope, go)
+                runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session, fate)))
+            yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
 
-        /** The table of the content of an instance supervised by `supervision`: its mounts meet the instance and what is around it now. */
-        private def childTable(supervision: MountSupervision, parent: MountTable): MountTable =
-            new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames)
+        /** The table of the content of an instance supervised by `supervision`: its mounts meet the instance and what is around it now,
+          * and its keyed instances are released with the instance's `group`.
+          */
+        private def childTable(supervision: MountSupervision, parent: MountTable, group: ReleaseGroup): MountTable =
+            new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames, group)
 
         /** An instance that runs no effect and shows its node's error view for `message` from the start: what each place of an identity
           * shown more than once in one pass gets.
@@ -2979,20 +3116,25 @@ private[kyo] object ReactiveUI:
             for
                 cell <- Signal.initRef[MountState](MountState.Pending(Absent))
                 supervision = MountSupervision(spec, cell, frames)
+                fate        = new MountFate(ReleaseGroup.root(), parent)
                 _      <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
+                _      <- Sync.Unsafe.defer(fate.scoped(parent.group))
                 scope  <- Scope.Finalizer.init(1)
                 go     <- Promise.init[Unit, Any]
                 runner <- Fiber.initUnscoped(Kyo.unit)
-            yield new MountInstance(cell, supervision, childTable(supervision, parent), runner, scope, go)
+            yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
 
-        /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. */
+        /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. An interrupt
+          * that ends the effect fails the node unless `fate` finds it is the instance's own release.
+          */
         private def runEffect(
             spec: MountedSpec,
             cell: SignalRef[MountState],
             scope: Scope.Finalizer,
             supervision: MountSupervision,
             frames: Failures.Scope,
-            session: MountSession
+            session: MountSession,
+            fate: MountFate
         )(using Frame): Unit < Async =
             val effect = MountSession.current.let(Present(session))(
                 Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
@@ -3003,10 +3145,15 @@ private[kyo] object ReactiveUI:
                     Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
                         .andThen(supervision.fail(failure, UI.MountErrorSource.Effect))
                 case Result.Panic(t) =>
-                    if t.isInstanceOf[Interrupted] then Kyo.unit
-                    else
-                        Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
-                            .andThen(supervision.fail(t, UI.MountErrorSource.Panic))
+                    val failed = t match
+                        case _: Interrupted => fate.interrupted
+                        case _              => Kyo.lift(true)
+                    failed.map { failure =>
+                        if !failure then Kyo.unit
+                        else
+                            Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
+                                .andThen(supervision.fail(t, UI.MountErrorSource.Panic))
+                    }
             }
         end runEffect
     end MountInstance
@@ -3261,15 +3408,20 @@ private[kyo] object ReactiveUI:
     private[kyo] object ClaimState:
         given CanEqual[ClaimState, ClaimState] = CanEqual.derived
 
-    /** One keyed node's claim on its identity, which a cut can switch. */
+    /** One keyed node's claim on its identity, which a cut can switch. `group` is the group of the pass that made the claim, and
+      * `showing` the group of what the node shows for its current state, which a switch releases.
+      */
     final private[kyo] class ClaimView(
         val node: ReactiveUI,
         val spec: MountedSpec,
         val region: RegionKey,
         val frames: () => Failures.Scope,
         val seed: Maybe[UI],
-        val state: SignalRef[ClaimState]
-    )
+        val state: SignalRef[ClaimState],
+        val group: ReleaseGroup
+    ):
+        val showing = new java.util.concurrent.atomic.AtomicReference[Maybe[ReleaseGroup]](Absent)
+    end ClaimView
 
     /** What opening a pass changed: the pass, the instances it put in transit, and the duplicate reports it made, with how many
       * live instances it examined for whether a region still shows them.
@@ -3285,17 +3437,19 @@ private[kyo] object ReactiveUI:
 
     /** Work counts of one session, for measuring what the tables cost: regions registered and unregistered, region passes that planned
       * their walk and passes that skipped it (no mount in it and none recorded below), cuts recorded and settled, regions a cut check
-      * looked at, and live instances a planned pass examined for whether a region still shows them.
+      * looked at, live instances a planned pass examined for whether a region still shows them, and the verdicts on an interrupted
+      * effect that wait for a cut now (see [[MountFate]]).
       */
     final private[kyo] class MountCounters:
-        val registered   = new java.util.concurrent.atomic.AtomicLong()
-        val unregistered = new java.util.concurrent.atomic.AtomicLong()
-        val planned      = new java.util.concurrent.atomic.AtomicLong()
-        val skipped      = new java.util.concurrent.atomic.AtomicLong()
-        val cuts         = new java.util.concurrent.atomic.AtomicLong()
-        val settled      = new java.util.concurrent.atomic.AtomicLong()
-        val scanned      = new java.util.concurrent.atomic.AtomicLong()
-        val examined     = new java.util.concurrent.atomic.AtomicLong()
+        val pendingVerdicts = new java.util.concurrent.atomic.AtomicLong()
+        val registered      = new java.util.concurrent.atomic.AtomicLong()
+        val unregistered    = new java.util.concurrent.atomic.AtomicLong()
+        val planned         = new java.util.concurrent.atomic.AtomicLong()
+        val skipped         = new java.util.concurrent.atomic.AtomicLong()
+        val cuts            = new java.util.concurrent.atomic.AtomicLong()
+        val settled         = new java.util.concurrent.atomic.AtomicLong()
+        val scanned         = new java.util.concurrent.atomic.AtomicLong()
+        val examined        = new java.util.concurrent.atomic.AtomicLong()
     end MountCounters
 
     /** The invariant checks of one session's tables, for tests (see `TableState.inconsistency`): how many states were checked, and what
@@ -3427,15 +3581,17 @@ private[kyo] object ReactiveUI:
       * All of it is one immutable state behind one atomic reference, changed by compare-and-set: regions of a table run their passes on
       * fibers of their own.
       */
-    final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope):
+    final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope, val group: ReleaseGroup):
         import AllowUnsafe.embrace.danger
 
-        private val state   = AtomicRef.Unsafe.init(TableState.empty)
-        private val watches = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
-        private val cut     = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
-        private val wake    = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
-        private val running = new java.util.concurrent.atomic.AtomicBoolean()
-        private val closed  = new java.util.concurrent.atomic.AtomicBoolean()
+        private val state = AtomicRef.Unsafe.init(TableState.empty)
+        // Verdicts on interrupted effects of filed instances that wait for the table to change (see MountFate).
+        private val verdicts = AtomicRef.Unsafe.init(Chunk.empty[(MountFate, Promise.Unsafe[Boolean, Any])])
+        private val watches  = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
+        private val cut      = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
+        private val wake     = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
+        private val running  = new java.util.concurrent.atomic.AtomicBoolean()
+        private val closed   = new java.util.concurrent.atomic.AtomicBoolean()
 
         def frames: Failures.Scope = framesOf()
 
@@ -3448,10 +3604,51 @@ private[kyo] object ReactiveUI:
             if after eq before then out
             else if state.compareAndSet(before, after) then
                 session.audit.foreach(_.check(after))
+                if verdicts.get().nonEmpty then settleVerdicts()
                 out
             else modify(f)
             end if
         end modify
+
+        /** Whether the interrupt that ended the effect of `fate`'s instance is a failure: at once when the table can tell, else after the
+          * change that lets it.
+          */
+        private[ReactiveUI] def verdict(fate: MountFate)(using Frame): Boolean < Async =
+            Sync.Unsafe.defer {
+                fate.judge(state.get()) match
+                    case Present(failed) => Kyo.lift(failed)
+                    case Absent          =>
+                        val answer = Promise.Unsafe.init[Boolean, Any]()
+                        discard(verdicts.getAndUpdate(_.append((fate, answer))))
+                        discard(session.counters.pendingVerdicts.incrementAndGet())
+                        // The table may have changed between the judgement and the filing.
+                        settleVerdicts()
+                        answer.safe.get
+            }
+
+        /** Gives every waiting verdict the table can tell now its answer. */
+        private[ReactiveUI] def settleVerdicts(): Unit =
+            val waiting = verdicts.get()
+            if waiting.nonEmpty then
+                val s = state.get()
+                waiting.foreach { entry =>
+                    entry._1.judge(s).foreach { failed =>
+                        if take(entry) then
+                            discard(session.counters.pendingVerdicts.decrementAndGet())
+                            entry._2.completeDiscard(Result.succeed(failed))
+                    }
+                }
+            end if
+        end settleVerdicts
+
+        /** Removes the waiting verdict `entry`; true for the one caller that removed it. */
+        @scala.annotation.tailrec
+        private def take(entry: (MountFate, Promise.Unsafe[Boolean, Any])): Boolean =
+            val now = verdicts.get()
+            if !now.exists(_ eq entry) then false
+            else if verdicts.compareAndSet(now, now.filterNot(_ eq entry)) then true
+            else take(entry)
+        end take
 
         /** A scope for one subscription of the table's content, shown at `path` with transparent depth `depth`. The table follows the
           * newest one that `follow`s: a subscription made by a region the table around it no longer follows shows the content and
@@ -3602,11 +3799,14 @@ private[kyo] object ReactiveUI:
                 end if
             }
 
-        /** Releases what a decision released, then lets the instances it kept run, switches the nodes, and starts what was still to start. */
+        /** Releases what a decision released, then lets the instances it kept run, switches the nodes, and starts what was still to start.
+          * What the switched nodes show is released by the switch, so it is marked released before the first instance goes.
+          */
         private def carryOut(decision: Decision)(using Frame): Unit < Async =
             val released = decision.released
             Async.uninterruptible(
-                Kyo.foreachDiscard(released)(_.instance.teardown)
+                Sync.Unsafe.defer(decision.switches.foreach((view, _) => view.showing.get().foreach(_.release())))
+                    .andThen(Kyo.foreachDiscard(released)(_.instance.teardown))
                     .andThen(Sync.Unsafe.defer(modify(s =>
                         (s.copy(releasing = s.releasing.filterNot(i => released.exists(_.instance eq i))), ())
                     )))
@@ -3619,11 +3819,14 @@ private[kyo] object ReactiveUI:
                         case _ => view.state.set(next)
                 })
                 .andThen(Kyo.foreachDiscard(decision.starts) { (identity, view) =>
-                    MountInstance.start(view.spec, view.seed, view.frames(), this).map { fresh =>
-                        Sync.Unsafe.defer(modify { s =>
-                            if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
-                            else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
-                        }).map(kept => if kept then view.state.set(ClaimState.Live(fresh)) else fresh.teardown)
+                    MountInstance.make(view.spec, view.seed, view.frames(), this).map { fresh =>
+                        Sync.Unsafe.defer {
+                            fresh.fate.filed(identity)
+                            modify { s =>
+                                if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
+                                else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
+                            }
+                        }.map(kept => if kept then fresh.launch.andThen(view.state.set(ClaimState.Live(fresh))) else fresh.teardown)
                     }
                 })
         end carryOut
@@ -3633,6 +3836,7 @@ private[kyo] object ReactiveUI:
           */
         def evictAll(using Frame): Unit < Async =
             Sync.Unsafe.defer {
+                group.release()
                 closed.set(true)
                 val all = modify(s =>
                     (TableState.empty, s.instances.foldLeft(s.releasing)((acc, _, slot) => acc.append(slot.instance)))
@@ -3646,10 +3850,13 @@ private[kyo] object ReactiveUI:
     private[kyo] object MountTable:
         val nothingToRelease: () => Unit < Async = () => Kyo.unit
 
-        /** The table of a session rooted at `path`, and the scope of its one subscription. */
-        def root(path: Seq[String], session: MountSession = new MountSession)(using Frame): (MountTable, MountScope) < Sync =
-            val table = new MountTable(session, () => Nil)
+        /** The table of a session rooted at `path`, whose keyed instances are released with `group`, and the scope of its one subscription. */
+        def root(path: Seq[String], session: MountSession = new MountSession, group: ReleaseGroup = ReleaseGroup.root())(using
+            Frame
+        ): (MountTable, MountScope) < Sync =
+            val table = new MountTable(session, () => Nil, group)
             table.content(path, 0).map(scope => (table, scope))
+        end root
     end MountTable
 
     /** One subscription's handle on a [[MountTable]]: the region it renders, the pass it was born in, and where the table's content is shown,
@@ -3918,7 +4125,9 @@ private[kyo] object ReactiveUI:
             Frame
         ): ClaimView < (Async & Scope) =
             def view(state: ClaimState, seed: Maybe[UI]): ClaimView < Sync =
-                Signal.initRef[ClaimState](state).map(ref => new ClaimView(rui, spec, region, () => frames, seed, ref))
+                here.map(group =>
+                    Signal.initRef[ClaimState](state).map(ref => new ClaimView(rui, spec, region, () => frames, seed, ref, group))
+                )
             pass.duplicate(rui) match
                 case Present(message) => view(ClaimState.Duplicate(message), Absent)
                 case Absent           =>
@@ -3929,7 +4138,7 @@ private[kyo] object ReactiveUI:
                                 live match
                                     case Present(slot) => view(ClaimState.Live(slot.instance), Absent)
                                     case Absent        =>
-                                        MountInstance.start(spec, Absent, frames, table).map(i =>
+                                        here.map(group => MountInstance.start(spec, Absent, frames, table, Present(group))).map(i =>
                                             Scope.ensure(i.teardown).andThen(view(ClaimState.Live(i), Absent))
                                         )
                             case Present(entry) =>
@@ -3964,27 +4173,33 @@ private[kyo] object ReactiveUI:
                                         // and shown but its effect waits for the cut: what is released goes first, and a duplicate never runs.
                                         // The effect is let go only once the instance is filed with nothing unsettled in the table.
                                         val launch = !others && !pending
-                                        MountInstance.start(spec, seed, frames, table, launch = false).map { fresh =>
-                                            Sync.Unsafe.defer(table.modify[(Maybe[MountInstance], Boolean)] { now =>
-                                                now.instances.get(identity) match
-                                                    case Present(other) => (now, (Present(other.instance), false))
-                                                    case Absent         =>
-                                                        if now.holders(identity) == 0 then (now, (Absent, false))
-                                                        else
-                                                            val waits = !launch || now.unsettled
-                                                            (
-                                                                now.copy(instances =
-                                                                    now.instances.update(identity, MountSlot(fresh, spec.path, region))
-                                                                ),
-                                                                (Present(fresh), waits)
-                                                            )
-                                            }).map { (kept, waits) =>
+                                        MountInstance.make(spec, seed, frames, table).map { fresh =>
+                                            Sync.Unsafe.defer {
+                                                // Placed as the table's before the table holds it, so a cut that launches it finds it placed;
+                                                // the other outcomes place it again, or release it, before it runs.
+                                                fresh.fate.filed(identity)
+                                                table.modify[(Maybe[MountInstance], Boolean)] { now =>
+                                                    now.instances.get(identity) match
+                                                        case Present(other) => (now, (Present(other.instance), false))
+                                                        case Absent         =>
+                                                            if now.holders(identity) == 0 then (now, (Absent, false))
+                                                            else
+                                                                val waits = !launch || now.unsettled
+                                                                (
+                                                                    now.copy(instances =
+                                                                        now.instances.update(identity, MountSlot(fresh, spec.path, region))
+                                                                    ),
+                                                                    (Present(fresh), waits)
+                                                                )
+                                                }
+                                            }.map { (kept, waits) =>
                                                 if kept.isEmpty then
                                                     // No region holds it any more: a scope that ends with this node.
-                                                    fresh.launch.andThen(Scope.ensure(fresh.teardown)).andThen(view(
-                                                        ClaimState.Live(fresh),
-                                                        seed
-                                                    ))
+                                                    here.map(group => Sync.Unsafe.defer(fresh.fate.scoped(group)))
+                                                        .andThen(fresh.launch).andThen(Scope.ensure(fresh.teardown)).andThen(view(
+                                                            ClaimState.Live(fresh),
+                                                            seed
+                                                        ))
                                                 else if kept.get eq fresh then
                                                     (if waits then Kyo.unit else fresh.launch)
                                                         .andThen(view(ClaimState.Live(fresh), seed))
@@ -4025,13 +4240,16 @@ private[kyo] object ReactiveUI:
                 val seed = spec.node.pendingPolicy match
                     case UI.PendingPolicy.Placeholder => Absent
                     case UI.PendingPolicy.KeepLatest  => entry.flatMap(_.handoff.get(spec.path))
-                MountInstance.start(spec, seed, frames, table).map { instance =>
+                here.map(group => MountInstance.start(spec, seed, frames, table, Present(group))).map { instance =>
                     Scope.ensure(current.map(still => if still then leaveSnapshot(instance, region, spec.path) else Kyo.unit).andThen(
                         instance.teardown
                     ))
                         .andThen(instance)
                 }
             }
+
+        /** The group what runs now belongs to: the value, row or claim state being subscribed, or the table's own outside all of them. */
+        private def here(using Frame): ReleaseGroup < Sync = ReleaseGroup.current.use(group => group.getOrElse(table.group))
     end MountScope
 
     /** The message each place of an identity shown in several places at once shows. */
@@ -4071,20 +4289,26 @@ private[kyo] object ReactiveUI:
                                     MountInstance.failed(spec, message, mounts.frames, mounts.table)
                                         .map(failed => Scope.ensure(failed.teardown).andThen(show(failed, follow)))
                         // The state the claim starts in is shown in this pass, like any node; a cut that switches it later closes what
-                        // that showed and shows the next state in a scope of its own.
+                        // that showed and shows the next state in a scope of its own. What a state shows is a group of its own, released
+                        // before it closes.
                         for
                             first <- view.state.get
                             shown <- Scope.Finalizer.init(1)
-                            _     <- Scope.ensure(shown.close(Absent).andThen(shown.await))
-                            _     <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
+                            firstGroup = view.group.child()
+                            closeFirst = Sync.Unsafe.defer(firstGroup.release()).andThen(shown.close(Absent)).andThen(shown.await)
+                            _ <- Sync.Unsafe.defer(view.showing.set(Present(firstGroup)))
+                            _ <- Scope.ensure(closeFirst)
+                            _ <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
                                 Tag[Scope],
                                 derive = (_: Maybe[Scope.Finalizer]) => shown,
                                 fork = (parent: Scope.Finalizer) => parent.forked,
                                 join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
-                            )(showClaim(first))
+                            )(ReleaseGroup.current.let(Present(firstGroup))(showClaim(first)))
                             _ <- startOwnedFiber(
                                 Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
-                                    shown.close(Absent).andThen(shown.await).andThen(showClaim(next))
+                                    closeFirst.andThen(ReleaseGroup.owning { group =>
+                                        Sync.Unsafe.defer(view.showing.set(Present(group))).andThen(showClaim(next))
+                                    })
                                 }).unit
                             )
                         yield ()
@@ -4226,7 +4450,10 @@ private[kyo] object ReactiveUI:
                         }
                     end for
             _ <- startOwnedFiber(
-                Abort.run[Throwable](Signal.passWatch.let(Present(watch))(instance.cell.observe(observed))).map { result =>
+                // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
+                Abort.run[Throwable](Signal.passWatch.let(Present(watch))(instance.cell.observe(state =>
+                    ReleaseGroup.owning(_ => observed(state))
+                ))).map { result =>
                     result.fold(
                         _ => (),
                         err => Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", err),
