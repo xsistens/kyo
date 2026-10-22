@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.internal.HtmlRenderer
+import kyo.internal.ReactiveRegion
 import org.scalajs.dom
 import scala.scalajs.js as scalajs
 
@@ -306,6 +307,56 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         assert(evalString("String(document.getElementById('returned-row').rangeprobe)") == "returned")
         assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes", evalString("__kyoLifecycle.join(',')"))
         assert(evalString("__kyoLifecycle.indexOf('animate:returned-row')>=0?'yes':'no'") == "yes")
+    }
+
+    private val list                                  = ReactiveRegion.htmlId(Seq("list"))
+    private def row(i: Int)                           = ReactiveRegion.htmlId(Seq("list", i.toString))
+    private def cell(i: Int)                          = ReactiveRegion.htmlId(Seq("list", i.toString, "cell"))
+    private def rowHtml(i: Int, text: String): String =
+        s"<!--kyo-rs:${row(i)}--><li><!--kyo-rs:${cell(i)}-->$text<!--kyo-re:${cell(i)}--></li><!--kyo-re:${row(i)}-->"
+    private def installList(rows: Int): Unit =
+        install(s"<ul><!--kyo-rs:$list-->${(0 until rows).map(i => rowHtml(i, s"r$i")).mkString}<!--kyo-re:$list--></ul>")
+
+    // Counts every registry entry a replacement reads: each `get` and `has`, and each entry a `forEach` visits.
+    private val countRegistryReads =
+        """(function(){var m=__kyoRanges,g=m.get,h=m.has,f=m.forEach;window.__kyoRead=0;
+          |m.get=function(k){window.__kyoRead++;return g.call(m,k);};
+          |m.has=function(k){window.__kyoRead++;return h.call(m,k);};
+          |m.forEach=function(cb,t){return f.call(m,function(v,k,mm){window.__kyoRead++;return cb.call(t,v,k,mm);});};})()""".stripMargin
+
+    "embedded registry reads the same entries replacing one row of ten rows and of a thousand" in {
+        def patchOneRow(rows: Int): (String, String, String) =
+            installList(rows)
+            val k = rows / 2
+            discard(scalajs.Dynamic.global.eval(countRegistryReads))
+            discard(scalajs.Dynamic.global.eval(
+                s"kyoRangeReplace('${row(k)}',\"<li><!--kyo-rs:${cell(k)}-->new<!--kyo-re:${cell(k)}--></li>\")"
+            ))
+            val read = evalString("String(window.__kyoRead)")
+            discard(scalajs.Dynamic.global.eval(s"kyoRangeReplace('${cell(k)}','newer')"))
+            (read, evalString("String(__kyoRanges.size)"), dom.document.querySelectorAll("li")(k).textContent)
+        end patchOneRow
+        val small = patchOneRow(10)
+        val large = patchOneRow(1000)
+        assert((small, large) == (("3", "21", "newer"), ("3", "2001", "newer")), s"ten rows: $small, a thousand rows: $large")
+    }
+
+    "embedded registry follows a wholesale repaint of a list to the new markers of every row" in {
+        val rows = 300
+        installList(rows)
+        val repaint = (0 until rows).map(i => rowHtml(i, s"p$i")).mkString
+        discard(scalajs.Dynamic.global.eval(s"kyoRangeReplace('$list',\"$repaint\")"))
+        val ids = (Seq(list) ++ (0 until rows).flatMap(i => Seq(row(i), cell(i)))).map(id => s"'$id'").mkString("[", ",", "]")
+        // Every id names the marker pair standing in the document now, not one the repaint removed.
+        val stale = evalString(
+            s"""String($ids.filter(function(id){var e=__kyoRanges.get(id);
+               |return !e||!document.body.contains(e.start)||!document.body.contains(e.end)||e.start.data!=="kyo-rs:"+id;}).length)""".stripMargin
+        )
+        assert(stale == "0")
+        assert(evalString("String(__kyoRanges.size)") == (2 * rows + 1).toString)
+        discard(scalajs.Dynamic.global.eval(s"kyoRangeReplace('${cell(7)}','seven')"))
+        assert(dom.document.querySelectorAll("li")(7).textContent == "seven")
+        assert(dom.document.querySelectorAll("li")(8).textContent == "p8")
     }
 
 end HtmlRendererReactiveRangesJsTest

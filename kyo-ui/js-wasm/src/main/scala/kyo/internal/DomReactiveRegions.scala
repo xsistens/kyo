@@ -3,7 +3,6 @@ package kyo.internal
 import kyo.*
 import org.scalajs.dom
 import scala.collection.mutable
-import scala.scalajs.js
 
 /** Mount-scoped registry of live HTML reactive range anchors. */
 final private[kyo] class DomReactiveRegions private (
@@ -13,6 +12,9 @@ final private[kyo] class DomReactiveRegions private (
 ):
 
     private var open = true
+
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private var examinedEntries = 0L
 
     /** The fingerprint of what each range was last painted with, filled only while a devtools sink observes (see
       * `DomBackend.noteWasted`). Kept here because this is where a range's end is known: an entry leaves with its range.
@@ -188,13 +190,11 @@ final private[kyo] class DomReactiveRegions private (
         //
         // The test is "same tree", not "in the document": a whole mount can legitimately be patched while it is
         // still detached, and a live portal twin under `<body>` shares the document with the range being
-        // patched, so both stay.
-        val liveRoot = treeRoot(endpoints.start)
-        val removed  = ranges.iterator.collect {
-            case (id, nested)
-                if id != regionId && (intersects(range, nested.start) || !(treeRoot(nested.start) eq liveRoot)) =>
-                id
-        }.toSet
+        // patched, so both stay. It is asked only of the ids the payload brings back, since only those can be
+        // refused, so a patch pays for its own range and its own payload, never for the rest of the registry.
+        val inside        = nestedIn(endpoints)
+        lazy val liveRoot = treeRoot(endpoints.start)
+        val stranded      = Set.newBuilder[String]
 
         // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
         // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
@@ -203,9 +203,13 @@ final private[kyo] class DomReactiveRegions private (
         // nothing inside the live range re-registers it, so dropping it would leave the next write to that region
         // with an unknown id.
         incoming.keysIterator.foreach { id =>
-            if ranges.contains(id) && !removed.contains(id) && !inPortalTwin(ranges(id).start) then
-                fail(s"Duplicate reactive range id: $id")
+            ranges.get(id).foreach { live =>
+                if !inside.contains(id) then
+                    if !(treeRoot(live.start) eq liveRoot) then stranded += id
+                    else if !inPortalTwin(live.start) then fail(s"Duplicate reactive range id: $id")
+            }
         }
+        val removed = inside ++ stranded.result()
 
         val oldElements                                        = elementsBetween(endpoints)
         val newElements                                        = incomingContent.semanticRoots
@@ -360,6 +364,10 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def entries(using Frame): Map[String, DomReactiveRegions.Endpoints] < Sync =
         Sync.defer(ranges.iterator.toMap)
 
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private[kyo] def examined(using Frame): Long < Sync =
+        Sync.defer(examinedEntries)
+
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
 
@@ -460,8 +468,29 @@ final private[kyo] class DomReactiveRegions private (
     private def fail(message: String)(using Frame): Nothing =
         throw UIException(message)
 
-    private def intersects(range: dom.Range, node: dom.Node): Boolean =
-        range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+    /** The ids of the registered ranges inside the range `endpoints` delimits, nested at any depth.
+      *
+      * Ranges nest properly, so a range lies inside exactly when its opening marker does, and the opening markers
+      * inside are the comments between the two anchors in document order. Reading them off the DOM costs the size
+      * of the range rather than the size of the registry: a row patch in a list of a thousand rows no longer looks
+      * at every other row's entries. An id counts only when the registry's entry for it opens at the very marker
+      * found, so a marker the registry does not name (a portal twin's inline original, a stale copy) is not taken
+      * for the range it names, and a region registered inside a portal twin under `<body>` stays out.
+      */
+    private def nestedIn(endpoints: DomReactiveRegions.Endpoints): Set[String] =
+        val found  = Set.newBuilder[String]
+        val walker = DomReactiveRegions.commentWalker(document, endpoints.start.parentNode)
+        walker.currentNode = endpoints.start
+        var node = walker.nextNode()
+        while node != null && (node ne endpoints.end) do
+            DomReactiveRegions.startMarkerId(node).foreach { id =>
+                examinedEntries += 1
+                if ranges.get(id).exists(_.start eq node) then found += id
+            }
+            node = walker.nextNode()
+        end while
+        found.result()
+    end nestedIn
 
     /** The topmost node above this one: the Document for anything attached, the detached subtree's own root
       * otherwise. Two nodes share a tree exactly when this returns the same node for both.

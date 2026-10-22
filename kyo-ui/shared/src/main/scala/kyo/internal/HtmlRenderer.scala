@@ -1881,6 +1881,17 @@ private[kyo] object HtmlRenderer:
           |  var s=pn.closest("select");if(s&&s.__kyoProps&&s.__kyoProps.value&&s.value!==s.__kyoProps.value.value)
           |    s.value=s.__kyoProps.value.value;
           |}
+          |// The ids of the registered ranges inside the range, nested at any depth, read off the comments between its
+          |// anchors: the cost is the size of the range, not of the registry. An id counts only when its entry opens at
+          |// the marker found. Twin of nestedIn in DomReactiveRegions.
+          |function kyoRangeNested(endpoints){
+          |  var found=new Set(),walker=document.createTreeWalker(endpoints.start.parentNode,128,null,false);
+          |  walker.currentNode=endpoints.start;
+          |  for(var node=walker.nextNode();node&&node!==endpoints.end;node=walker.nextNode()){
+          |    var key=__kyoSpanId(node);if(key===null)continue;
+          |    var pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
+          |  return found;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1892,7 +1903,7 @@ private[kyo] object HtmlRenderer:
           |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
           |  var parent=endpoints.start.parentNode,synthetic=parent.tagName==="TBODY"&&parent.getAttribute("data-kyo-range-host")===id;
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
-          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
+          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=kyoRangeNested(endpoints);
           |  // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
           |  // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
           |  // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
@@ -1900,19 +1911,19 @@ private[kyo] object HtmlRenderer:
           |  // same region's corpse, and keeping it would refuse the live one.
           |  //
           |  // The test is "same tree", not "in the document": a live portal twin under <body> shares the document
-          |  // with the range being patched and therefore stays, which is what the twin check below relies on.
+          |  // with the range being patched and therefore stays, which is what the twin check below relies on. It is
+          |  // asked only of the ids the payload brings back, the only ones that can be refused.
           |  // Twin of the `removed` computation in DomReactiveRegions.
-          |  var liveRoot=__kyoTreeRoot(endpoints.start);
-          |  __kyoRanges.forEach(function(pair,key){
-          |    if(key!==id&&(range.intersectsNode(pair.start)||__kyoTreeRoot(pair.start)!==liveRoot))removed.push(key);});
           |  // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
           |  // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
           |  // and so the registration, untouched) or replaces the range wholesale, in which case the incoming markers
           |  // take the id over and the sweep retires the stale twin. It must not join `removed` either: nothing inside
           |  // the live range re-registers it, so deleting it would leave the next write to that region unknown.
-          |  incoming.forEach(function(pair,key){
-          |    if(__kyoRanges.has(key)&&removed.indexOf(key)<0&&!__kyoInPortalTwin(__kyoRanges.get(key).start))
-          |      kyoRangeFail("duplicate id: "+key);});
+          |  var liveRoot=null;
+          |  incoming.forEach(function(pair,key){var live=__kyoRanges.get(key);if(!live||removed.has(key))return;
+          |    if(liveRoot===null)liveRoot=__kyoTreeRoot(endpoints.start);
+          |    if(__kyoTreeRoot(live.start)!==liveRoot)removed.add(key);
+          |    else if(!__kyoInPortalTwin(live.start))kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
           |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is
@@ -1928,11 +1939,11 @@ private[kyo] object HtmlRenderer:
           |  var hostWrapped=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
           |  var finalRoots,morphed=!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment);
           |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
-          |    for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |    removed.forEach(function(key){__kyoRanges.delete(key);});
           |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});
           |    for(var i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
           |  }else{
-          |  range.deleteContents();for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |  range.deleteContents();removed.forEach(function(key){__kyoRanges.delete(key);});
           |  finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
           |    var incomingHost=newRoots[0];kyoRangeSyncHost(parent,incomingHost,id);while(incomingHost.firstChild)parent.insertBefore(incomingHost.firstChild,endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  }else if(synthetic){var table=parent.parentNode;if(!table)kyoRangeFail("table range host is detached: "+id);
