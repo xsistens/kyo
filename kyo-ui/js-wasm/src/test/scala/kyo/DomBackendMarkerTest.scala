@@ -43,7 +43,8 @@ class DomBackendMarkerTest extends kyo.test.Test[Any]:
             "animate"           -> (Svg.svg(Svg.rect(Svg.animate)), Marker.SvgAnim),
             "animate transform" -> (Svg.svg(Svg.rect(Svg.animateTransform)), Marker.SvgAnim),
             "animate motion"    -> (Svg.svg(Svg.rect(Svg.animateMotion)), Marker.SvgAnim),
-            "portal"            -> (UI.div("x").portal(true), Marker.Portal)
+            "portal"            -> (UI.div("x").portal(true), Marker.Portal),
+            "attach"            -> (UI.div("x").onAttached(_ => Kyo.unit), Marker.Attach)
         )
         Kyo.foreach(cases) { case (name, (ui, marker)) =>
             HtmlRenderer.render(ui, Seq.empty).map { html =>

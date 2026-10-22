@@ -190,6 +190,9 @@ sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange
     override def onFreshInstance(region: ReactiveRegion)(using Frame): Unit < Async =
         forward(_.onFreshInstance(region))
 
+    /** Sends `command` once everything that reached this hold before it is on the page, and drops it when that never will be. */
+    def afterShown(command: HeldCommand)(using Frame): Unit < Async
+
     /** A pass that is due now and ends with [[BoundaryPass.end]]. */
     def pass(using Frame): BoundaryPass < Sync =
         Sync.Unsafe.defer {
@@ -241,6 +244,7 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
     @volatile private var waited                      = false
     private val waitEnded                             = AtomicBoolean.Unsafe.init(false)
     private var held                                  = Chunk.empty[UIExchange => Unit < Async]
+    private var commands                              = Chunk.empty[HeldCommand]
 
     private val holding = AtomicBoolean.Unsafe.init(false)
 
@@ -275,6 +279,14 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
             else Sync.Unsafe.defer { held = held.append(patch) }
         }
 
+    // A command goes up with the group's paints, behind them, once the group is through.
+    def afterShown(command: HeldCommand)(using Frame): Unit < Async =
+        locked {
+            if closed.get() then command.drop
+            else if done then parent.afterShown(command)
+            else Sync.Unsafe.defer { commands = commands.append(command) }
+        }
+
     // Once the group is through, what runs below it is due on the holds above, like the pass of any later sibling.
     override def pass(using Frame): BoundaryPass < Sync = if done then parent.pass else super.pass
 
@@ -286,8 +298,15 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
     def close(using Frame): Unit < Async =
         Sync.Unsafe.defer(closed.compareAndSet(false, true)).map { first =>
             if !first then Kyo.unit
-            else unhold.andThen(endWait).andThen(up.end)
+            else dropCommands.andThen(unhold).andThen(endWait).andThen(up.end)
         }
+
+    private def dropCommands(using Frame): Unit < Sync =
+        Sync.Unsafe.defer {
+            val dropped = commands
+            commands = Chunk.empty
+            dropped
+        }.map(Kyo.foreachDiscard(_)(_.drop))
 
     /** Ends a wait this group began: the range is no longer marked on the page, and the boundary no longer counts it. */
     private def endWait(using Frame): Unit < Async =
@@ -315,7 +334,10 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
                 out.andThen(Sync.Unsafe.defer {
                     done = true
                     held = Chunk.empty
-                }).andThen(unhold).andThen(endWait).andThen(up.end)
+                    val waiting = commands
+                    commands = Chunk.empty
+                    waiting
+                }).map(Kyo.foreachDiscard(_)(parent.afterShown)).andThen(unhold).andThen(endWait).andThen(up.end)
             else if !waited then
                 // The range keeps what it shows; it is marked on the page so that nobody types into what will not reach the server.
                 Sync.Unsafe.defer {
@@ -350,6 +372,7 @@ final private[kyo] class BoundaryGate(
     @volatile private var revealed         = initiallyRevealed
     @volatile private var shown: Maybe[UI] = if initiallyRevealed then Absent else Present(placeholder)
     @volatile private var seedPainted      = false
+    private var commands                   = Chunk.empty[HeldCommand]
 
     private def placeholder: UI = node.settings.placeholderView.getOrElse(UI.empty(using node.frame))
 
@@ -388,7 +411,26 @@ final private[kyo] class BoundaryGate(
     override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
         locked(if closed.get() || !revealed then Kyo.unit else outer.onHold(region, held))
 
-    def close(using Frame): Unit < Sync = Sync.Unsafe.defer(closed.set(true))
+    def close(using Frame): Unit < Sync =
+        Sync.Unsafe.defer {
+            closed.set(true)
+            val dropped = commands
+            commands = Chunk.empty
+            dropped
+        }.map(Kyo.foreachDiscard(_)(_.drop))
+
+    // Until the reveal nothing below is on the page, so a command waits for it; after it, it follows the paints out as they go.
+    def afterShown(command: HeldCommand)(using Frame): Unit < Async =
+        locked {
+            if closed.get() then command.drop
+            else if revealed then sendOut(command)
+            else Sync.Unsafe.defer { commands = commands.append(command) }
+        }
+
+    private def sendOut(command: HeldCommand)(using Frame): Unit < Async =
+        outer.gate match
+            case Present(hold) => hold.afterShown(command)
+            case Absent        => command.send
 
     /** What the boundary shows now, resolved like [[Boundaries.resolveLive]]. */
     def displayed(using Frame): UI < Sync =
@@ -435,7 +477,10 @@ final private[kyo] class BoundaryGate(
                 displayedContent.map(paintRange).andThen(Sync.Unsafe.defer {
                     revealed = true
                     shown = Absent
-                })
+                    val waiting = commands
+                    commands = Chunk.empty
+                    waiting
+                }).map(Kyo.foreachDiscard(_)(sendOut))
             else if passes.get() == 0 && !seedPainted then
                 (seed, policy) match
                     case (Present(snapshot), UI.PendingPolicy.KeepLatest) =>

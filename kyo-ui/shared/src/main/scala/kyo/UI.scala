@@ -705,6 +705,12 @@ object UI:
       * Example: an overlay that flips above its anchor when it would overflow the viewport: on open, measure the panel and
       * bind the returned `rect`, so that if `rect.y + rect.height > rect.viewportHeight`, it sets a `flip` Signal the panel
       * reads and re-renders from.
+      *
+      * A command sent from a `UI.mounted` effect, or a fiber it forked, goes out once that mount's own content is on the page,
+      * behind the paints that bring it there and after any boundary holding it back has revealed it, so an effect can address the
+      * element it yields. If that content never shows, the command is dropped and a measure waiting for it answers `Absent`. A
+      * measure sent while the effect still runs goes out at once, since an effect that waits for it before yielding can only be
+      * measuring something already on the page, and so does a command from an event handler.
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,
@@ -731,7 +737,7 @@ object UI:
           * client-side via `document.getElementById`). Unknown verbs are ignored by the client (forward-compatible).
           */
         def commandById(id: String, verb: String)(using Frame): Unit < Async =
-            emit(internal.HtmlOp.CommandById(id, verb))
+            sendAbout(internal.HtmlOp.CommandById(id, verb))
 
         /** `commandById(id, "focus")`: move DOM focus to the element with id `id`. */
         def focusId(id: String)(using Frame): Unit < Async = commandById(id, "focus")
@@ -746,7 +752,7 @@ object UI:
         def requestMeasureById(id: String)(using Frame): Maybe[Rect] < Async =
             Promise.init[Maybe[Rect], Any].map { p =>
                 pendingById.getAndUpdate(_.updated(id, p))
-                    .andThen(emit(internal.HtmlOp.RequestMeasureById(id)))
+                    .andThen(sendMeasure(id))
                     .andThen(p.get)
             }
 
@@ -764,7 +770,7 @@ object UI:
             val wanted = ids.distinct
             Kyo.foreach(wanted)(_ => Promise.init[Maybe[Rect], Any]).map { promises =>
                 pendingById.getAndUpdate(_ ++ wanted.zip(promises))
-                    .andThen(Kyo.foreachDiscard(wanted)(id => emit(internal.HtmlOp.RequestMeasureById(id))))
+                    .andThen(Kyo.foreachDiscard(wanted)(sendMeasure))
                     .andThen(Kyo.foreach(promises)(_.get))
                     .map(rects => Chunk.from(ids.map(id => rects(wanted.indexOf(id)))))
             }
@@ -810,7 +816,7 @@ object UI:
           * bound to the current [[kyo.Scope]] and cancelled on scope close. Idempotent with any baked-in initial class.
           */
         def bindClassById(id: String, className: String, on: Signal[Boolean])(using Frame): Unit < (Async & Scope) =
-            Fiber.init(on.observe(v => emit(internal.HtmlOp.SetClassById(id, className, v)))).unit
+            Fiber.init(on.observe(v => sendAbout(internal.HtmlOp.SetClassById(id, className, v)))).unit
 
         /** Bind the inline style of the element with DOM id `id` to `style`: fork a mount-lifetime fiber that observes the
           * signal and emits [[internal.HtmlOp.SetStyleById]] with the serialized declaration string on every emission
@@ -818,7 +824,7 @@ object UI:
           * inline props (no full `style=""` clobber), so transitions fire. Cancelled on scope close.
           */
         def bindStyleById(id: String, style: Signal[Style])(using Frame): Unit < (Async & Scope) =
-            Fiber.init(style.observe(v => emit(internal.HtmlOp.SetStyleById(id, internal.CssStyleRenderer.render(v))))).unit
+            Fiber.init(style.observe(v => sendAbout(internal.HtmlOp.SetStyleById(id, internal.CssStyleRenderer.render(v))))).unit
 
         /** Bind attribute `name` on the element with DOM id `id` to `value`, emitting [[internal.HtmlOp.SetAttrById]]
           * on every emission (current value included). The client sets the attribute WITHOUT replacing the element, so
@@ -827,7 +833,7 @@ object UI:
           * Cancelled on scope close.
           */
         def bindAttrById(id: String, name: String, value: Signal[String])(using Frame): Unit < (Async & Scope) =
-            Fiber.init(value.observe(v => emit(internal.HtmlOp.SetAttrById(id, name, v)))).unit
+            Fiber.init(value.observe(v => sendAbout(internal.HtmlOp.SetAttrById(id, name, v)))).unit
 
         /** Continuously observe the viewport geometry of the element with DOM id `id`, RETURNING a [[kyo.Signal]] that holds
           * the latest [[kyo.UI.Rect]] (`Absent` until the first measurement lands). Registers a backing SignalRef in the
@@ -839,13 +845,48 @@ object UI:
           * sig.map(toStyle)))`).
           */
         def observeViewportById(id: String)(using Frame): Signal[Maybe[Rect]] < (Async & Scope) =
-            Signal.initRef[Maybe[Rect]](Absent).map { ref =>
-                observers.getAndUpdate(_.updated(id, ref))
-                    .andThen(emit(internal.HtmlOp.ObserveViewportById(id)))
-                    .andThen(Scope.ensure(
-                        emit(internal.HtmlOp.UnobserveViewportById(id)).andThen(observers.getAndUpdate(_.removed(id)))
-                    ))
-                    .andThen(ref)
+            // The start may wait for its element (see sendAbout) and runs on a fiber of its own, so the stop must never overtake it:
+            // a start still waiting never goes out, one that is out is stopped, and one caught while sending stops itself once sent.
+            val unobserve = emit(internal.HtmlOp.UnobserveViewportById(id))
+            for
+                ref   <- Signal.initRef[Maybe[Rect]](Absent)
+                phase <- AtomicInt.init(0) // 0 waiting, 1 sending, 2 out, 3 stopped
+                start = phase.compareAndSet(0, 1).map { sending =>
+                    if !sending then Kyo.unit
+                    else
+                        emit(internal.HtmlOp.ObserveViewportById(id))
+                            .andThen(phase.compareAndSet(1, 2))
+                            .map(out => if out then Kyo.unit else unobserve)
+                }
+                _ <- observers.getAndUpdate(_.updated(id, ref))
+                _ <- sendWhenShown(internal.HeldCommand(start, Kyo.unit))
+                _ <- Scope.ensure(
+                    phase.getAndSet(3).map(was => if was == 2 then unobserve else Kyo.unit)
+                        .andThen(observers.getAndUpdate(_.removed(id)))
+                )
+            yield ref
+            end for
+        end observeViewportById
+
+        /** Sends `op`, which addresses an element by id. From a `UI.mounted` effect, or a fiber it forked, it goes out once the content
+          * that mount shows is on the page, behind the paints that bring it there, and is dropped with that content if it never shows;
+          * `missing` then answers it the way a page without the element would. From anywhere else it goes out at once.
+          */
+        private def sendAbout(op: internal.HtmlOp)(using Frame): Unit < Async =
+            sendWhenShown(internal.HeldCommand(emit(op), Kyo.unit))
+
+        /** A measure its caller waits for; dropped, it answers `Absent`. */
+        private def sendMeasure(id: String)(using Frame): Unit < Async =
+            sendWhenShown(internal.HeldCommand(
+                emit(internal.HtmlOp.RequestMeasureById(id)),
+                deliverMeasureMissing(id),
+                answered = true
+            ))
+
+        private def sendWhenShown(command: internal.HeldCommand)(using Frame): Unit < Async =
+            internal.ReactiveUI.MountSupervision.local.use {
+                case Present(supervision) => supervision.afterShown.send(command)
+                case Absent               => command.send
             }
     end Commands
 
@@ -2065,6 +2106,9 @@ object UI:
             onPointerUp: Maybe[PointerEvent => Action] = Absent,
             onFileSelect: Maybe[Seq[UI.FilePayload] => Action] = Absent,
             onScrollPos: Maybe[ScrollPositionEvent => Action] = Absent,
+            // The browser mount's element-in-the-document hook. The element is typed `Any` here because the shared
+            // AST names no DOM type; the typed setter lives in the Scala.js sources (kyo.onAttached).
+            onAttached: Maybe[Any => Any < (Async & Scope & Abort[Any])] = Absent,
             ariaAttrs: Map[String, String] = Map.empty,
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
