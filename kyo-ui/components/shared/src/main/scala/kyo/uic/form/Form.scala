@@ -150,7 +150,7 @@ final class Form private[form] (
       */
     private var anchorId: Maybe[String] = Absent
 
-    /** Set this scope's focus ANCHOR — the id of an element that an [[errorSummary]] row for a
+    /** Set this scope's focus ANCHOR — the id of an element that an [[Form.errorSummary]] row for a
       * form-level error ([[satisfy]] / [[raise]]) jumps focus to. Set it once; every satisfy/raise
       * on this scope inherits it (like a field's id owns all its validators). Stamp the same id
       * on a wrapping element — e.g. `uic.InputGroup().id(theId)(...)`: because a wrapper is not
@@ -194,7 +194,7 @@ final class Form private[form] (
       *     per submit (so it may suspend — a REST/mutation round-trip); on `false` it blocks submit.
       *
       * Pure + chainable (like [[anchor]]); inherits this scope's [[anchor]] for the summary
-      * focus-jump. `reveal` controls only WHEN `code` is auto-shown in an [[errorSummary]]
+      * focus-jump. `reveal` controls only WHEN `code` is auto-shown in an [[Form.errorSummary]]
       * ([[Reveal.OnSubmit]] default / [[Reveal.Immediate]] / [[Reveal.Manual]]).
       */
     def satisfy(code: String, reveal: Reveal)(valid: Signal[Boolean]): Form =
@@ -277,7 +277,7 @@ final class Form private[form] (
       *
       * Form-level errors (`raise`) deliberately do NOT gate: they can only be resolved by
       * re-submitting, so blocking submit on them would deadlock the button that produced
-      * them; they surface in [[errorSummary]] instead. Field server errors ([[FormField.setError]])
+      * them; they surface in [[Form.errorSummary]] instead. Field server errors ([[FormField.setError]])
       * do gate, but they are value-scoped, so the first edit hides them and re-opens submit.
       */
     def submitDisabled(using Frame): uic.SubmitGate < Sync =
@@ -565,7 +565,7 @@ object Form:
       * `ErrorTranslator.default` for English fallbacks / no i18n. `focusInvalidOnSubmit`
       * defaults on (opt-out): a failed submit moves focus (and scroll) to the first invalid
       * field in declaration order; pass `false` to disable, or exclude a single field with
-      * [[FormField.focusable]]`(false)`.
+      * [[FieldSpec.focusable]]`(false)`.
       *
       * The form is a mount, and its state lives as long as the mount's instance, so everything
       * a `UI.mounted` takes applies to it directly: `.keyed(issueId)` gives each issue a form of
