@@ -125,6 +125,22 @@ to say so. Contrast `HasElementId`, where each component genuinely was its own d
   `HasAccessibleName` for the 21 of 38 that carry the reference), never an abstract member the
   others cannot answer.
 
+## A list setter takes `AEntry*` (an `Entry[A, AScope]`)
+
+Every setter that takes a list of model entries (`items`, `nodes`, `panels`, `tabs`, `optionGroups`,
+`column`) is `def x(es: AEntry*)`, where `type AEntry = Entry[A, AScope]` sits next to the scope, so
+callers write `_.item("Save")` or `uic.MenuItem("Save")`, mixed, and still splat a prepared `Seq`.
+Rules a new one follows:
+
+- **One setter over the union, never an overload** beside the plain `A*`: with two alternatives the
+  lambda is typed without an expected type and `_` has nothing to complete against.
+- **The scope mirrors the entry's own constructors** (`XScope.item` = `X.apply`), and offers a reactive
+  label where the component's single-entry builder does (`Tabs.tab`, `Accordion.panel`). It offers
+  nothing else: a builder from another scope must not compile (`EntriesTest`).
+- **Entries that nest take entries too** (`TreeNodeScope.node(children = Seq(_.node(...)))`), so a whole
+  tree reads one way.
+- Not for enum-valued lists (`Paginator.template`, `FileUpload.accept`): there is nothing to build.
+
 ## Typed builders: where inference dies
 
 A setter that takes a projection of the component's own element type (`Column`'s

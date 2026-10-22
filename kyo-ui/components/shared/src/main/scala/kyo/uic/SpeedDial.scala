@@ -71,8 +71,8 @@ final case class SpeedDial private (
 ) extends Node:
     type Self = SpeedDial
 
-    /** Appends actions ([[MenuItem]] — `icon` + `label` + `onSelect`). */
-    def items(is: MenuItem*): SpeedDial = copy(itemsV = itemsV ++ is.toList)
+    /** Appends actions ([[MenuItem]]: `icon` + `label` + `onSelect`), each built directly or from `_` (see [[MenuItemScope]]). */
+    def items(is: MenuItemEntry*): SpeedDial = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Fan direction (default `Up`). */
     def direction(v: SpeedDialDirection): SpeedDial = copy(directionV = v)

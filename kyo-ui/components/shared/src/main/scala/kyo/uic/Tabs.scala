@@ -63,6 +63,30 @@ object Tab:
     ): Tab = new Tab(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent)
 end Tab
 
+/** A tab, built directly or as `_.tab(...)` (see [[TabScope]]). */
+type TabEntry = Entry[Tab, TabScope]
+
+/** What `_` stands for in [[Tabs.tabs]]: `_.tab("Profile", profileForm, "profile")`. The label takes a `Signal[String]` too, as
+  * [[Tabs.tab]] does.
+  */
+final class TabScope private ():
+    /** A tab keyed by `id`, as [[Tab.apply]], with a constant or reactive label. */
+    def tab(
+        text: String | Signal[String],
+        content: UI,
+        id: String,
+        icon: Maybe[IconGlyph] = Absent,
+        additionalText: Maybe[String] = Absent,
+        disabled: Boolean = false
+    ): Tab = new Tab(ReactiveValue(text), content, id, icon, additionalText, disabled, Absent)
+end TabScope
+
+object TabScope:
+    private val scope = new TabScope
+
+    private[uic] def resolve(entries: Seq[TabEntry]): List[Tab] = Entry.resolve(scope, entries)
+end TabScope
+
 /** Tabs — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
   * Tabs anatomy: `div.p-tabs.p-component` > `div.p-tablist` >
   * `div.p-tablist-content.p-tablist-viewport` > `div.p-tablist-tab-list[role=tablist]`
@@ -106,8 +130,8 @@ final case class Tabs private (
 ) extends Node, HasElementId:
     type Self = Tabs
 
-    /** Appends the given tabs. */
-    def tabs(ts: Tab*): Tabs = copy(tabList = tabList ++ ts.toList)
+    /** Appends the given tabs, each built directly or from `_` (see [[TabScope]]). */
+    def tabs(ts: TabEntry*): Tabs = copy(tabList = tabList ++ TabScope.resolve(ts))
 
     /** Appends a single tab from bare content children (ergonomic builder). */
     def tab(text: String | Signal[String], id: String)(content: UI*)(using Frame): Tabs =

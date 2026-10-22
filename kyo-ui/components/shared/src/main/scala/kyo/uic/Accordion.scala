@@ -30,6 +30,30 @@ object AccordionPanel:
     ): AccordionPanel = new AccordionPanel(TextValue.Const(header), content, id, disabled, headerUI)
 end AccordionPanel
 
+/** An Accordion panel, built directly or as `_.panel(...)` (see [[AccordionPanelScope]]). */
+type AccordionPanelEntry = Entry[AccordionPanel, AccordionPanelScope]
+
+/** What `_` stands for in [[Accordion.panels]]: `_.panel("Shipping", shippingForm, "shipping")`. The header takes a `Signal[String]`
+  * too, as [[Accordion.panel]] does.
+  */
+final class AccordionPanelScope private ():
+    /** A panel keyed by `id`, as [[AccordionPanel.apply]], with a constant or reactive header. */
+    def panel(
+        header: String | Signal[String],
+        content: UI,
+        id: String,
+        disabled: Boolean = false,
+        headerUI: Maybe[UI] = Absent
+    ): AccordionPanel = new AccordionPanel(ReactiveValue(header), content, id, disabled, headerUI)
+end AccordionPanelScope
+
+object AccordionPanelScope:
+    private val scope = new AccordionPanelScope
+
+    private[uic] def resolve(entries: Seq[AccordionPanelEntry]): List[AccordionPanel] =
+        Entry.resolve(scope, entries)
+end AccordionPanelScope
+
 /** Accordion — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Accordion anatomy: `div.p-accordion.p-component` >
   * `div.p-accordionpanel[.p-accordionpanel-active][.p-disabled]` entries, each a
@@ -79,8 +103,9 @@ final case class Accordion private (
 ) extends Node:
     type Self = Accordion
 
-    /** Appends the given panels. */
-    def panels(ps: AccordionPanel*): Accordion = copy(panelList = panelList ++ ps.toList)
+    /** Appends the given panels, each built directly or from `_` (see [[AccordionPanelScope]]). */
+    def panels(ps: AccordionPanelEntry*): Accordion =
+        copy(panelList = panelList ++ AccordionPanelScope.resolve(ps))
 
     /** Appends a single panel (ergonomic builder — no need to construct
       * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on

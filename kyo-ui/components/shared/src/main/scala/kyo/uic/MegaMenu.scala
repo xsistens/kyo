@@ -30,8 +30,8 @@ final case class MegaMenuItem private (
     def onSelect(action: => UI.Action)(using Frame): MegaMenuItem =
         copy(actionV = Present(Callback(action)))
 
-    /** Appends one panel column holding the given groups. */
-    def column(groups: MenuGroup*): MegaMenuItem = copy(columnsV = columnsV :+ groups.toList)
+    /** Appends one panel column holding the given groups, each built directly or from `_` (see [[MenuGroupScope]]). */
+    def column(groups: MenuGroupEntry*): MegaMenuItem = copy(columnsV = columnsV :+ MenuGroupScope.resolve(groups))
 
     /** Package-internal: replaces the columns wholesale (see [[MenuItem.withItems]]). */
     private[uic] def withColumns(cs: List[List[MenuGroup]]): MegaMenuItem = copy(columnsV = cs)
@@ -53,6 +53,21 @@ object MegaMenuItem:
     def apply(label: String | Signal[String]): MegaMenuItem = new MegaMenuItem(ReactiveValue(label))
 
 end MegaMenuItem
+
+/** A MegaMenu root item, built directly or as `_.item(...)` (see [[MegaMenuItemScope]]). */
+type MegaMenuItemEntry = Entry[MegaMenuItem, MegaMenuItemScope]
+
+/** What `_` stands for in [[MegaMenu.items]]: `_.item("Products")`, as [[MegaMenuItem.apply]]. */
+final class MegaMenuItemScope private ():
+    /** A root item labelled `label`, as [[MegaMenuItem.apply]]. */
+    def item(label: String | Signal[String]): MegaMenuItem = MegaMenuItem(label)
+end MegaMenuItemScope
+
+object MegaMenuItemScope:
+    private val scope = new MegaMenuItemScope
+
+    private[uic] def resolve(entries: Seq[MegaMenuItemEntry]): List[MegaMenuItem] = Entry.resolve(scope, entries)
+end MegaMenuItemScope
 
 /** MegaMenu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * MegaMenu anatomy: `div.p-megamenu.p-component.p-megamenu-horizontal|-vertical`
@@ -90,8 +105,8 @@ final case class MegaMenu private (
 ) extends Node, HasElementId:
     type Self = MegaMenu
 
-    /** Appends root items ([[MegaMenuItem]]). */
-    def items(is: MegaMenuItem*): MegaMenu = copy(itemsV = itemsV ++ is.toList)
+    /** Appends root items ([[MegaMenuItem]]), each built directly or from `_` (see [[MegaMenuItemScope]]). */
+    def items(is: MegaMenuItemEntry*): MegaMenu = copy(itemsV = itemsV ++ MegaMenuItemScope.resolve(is))
 
     /** Bar orientation: `Horizontal` (default) or the sheet's `Vertical` variant. */
     def orientation(v: Orientation): MegaMenu = copy(orientationV = v)

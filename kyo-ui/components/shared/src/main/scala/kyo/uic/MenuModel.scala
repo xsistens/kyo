@@ -85,9 +85,9 @@ final case class MenuItem private (
         copy(actionV = Present(Callback(action)))
 
     /** Nested items: a labelled flat section in the plain Menu, a nested floating
-      * submenu in Menubar/TieredMenu.
+      * submenu in Menubar/TieredMenu. Each is an item or `_.item(...)` (see [[MenuItemScope]]).
       */
-    def items(is: MenuItem*): MenuItem = copy(itemsV = itemsV ++ is.toList)
+    def items(is: MenuItemEntry*): MenuItem = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Package-internal: hosts (MegaMenu) carry an already-deferred effect over. */
     private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = copy(actionV = eff)
@@ -126,8 +126,8 @@ final case class MenuGroup private (
     labelV: TextValue,
     itemsV: List[MenuItem] = Nil
 ):
-    /** Appends items to the group. */
-    def items(is: MenuItem*): MenuGroup = copy(itemsV = itemsV ++ is.toList)
+    /** Appends items to the group. Each is an item or `_.item(...)` (see [[MenuItemScope]]). */
+    def items(is: MenuItemEntry*): MenuGroup = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Package-internal: replaces the items wholesale (see [[MenuItem.withItems]]). */
     private[uic] def withItems(is: List[MenuItem]): MenuGroup = copy(itemsV = is)
@@ -140,6 +140,45 @@ object MenuGroup:
     def apply(label: String | Signal[String]): MenuGroup = new MenuGroup(ReactiveValue(label))
 
 end MenuGroup
+
+/** A menu item, built directly or as `_.item(...)` or `_.item.separator` (see [[MenuItemScope]]). */
+type MenuItemEntry = Entry[MenuItem, MenuItemScope]
+
+/** What `_` stands for in a setter that takes menu items: `_.item("Save")` and `_.item.separator`, the same as [[MenuItem]]'s own
+  * constructors. Taken by every host of [[MenuItem]] (Menu, Menubar, TieredMenu, ContextMenu, SplitButton, SpeedDial) and by the
+  * nested `items` of an item or a [[MenuGroup]].
+  */
+final class MenuItemScope private ():
+    /** `item(label)` builds an item, `item.separator` the divider row. */
+    object item:
+        /** An item labelled `label`, as [[MenuItem.apply]]. */
+        def apply(label: String | Signal[String]): MenuItem = MenuItem(label)
+
+        /** The divider row, as [[MenuItem.separator]]. */
+        def separator: MenuItem = MenuItem.separator
+    end item
+end MenuItemScope
+
+object MenuItemScope:
+    private val scope = new MenuItemScope
+
+    private[uic] def resolve(entries: Seq[MenuItemEntry]): List[MenuItem] = Entry.resolve(scope, entries)
+end MenuItemScope
+
+/** A titled group of a MegaMenu column, built directly or as `_.group(...)` (see [[MenuGroupScope]]). */
+type MenuGroupEntry = Entry[MenuGroup, MenuGroupScope]
+
+/** What `_` stands for in [[MegaMenuItem.column]]: `_.group("Heading")`, as [[MenuGroup.apply]]. */
+final class MenuGroupScope private ():
+    /** A group headed by `label`, as [[MenuGroup.apply]]. */
+    def group(label: String | Signal[String]): MenuGroup = MenuGroup(label)
+end MenuGroupScope
+
+object MenuGroupScope:
+    private val scope = new MenuGroupScope
+
+    private[uic] def resolve(entries: Seq[MenuGroupEntry]): List[MenuGroup] = Entry.resolve(scope, entries)
+end MenuGroupScope
 
 /** Package-internal machinery shared by the menu family. */
 private[uic] object MenuRender:
