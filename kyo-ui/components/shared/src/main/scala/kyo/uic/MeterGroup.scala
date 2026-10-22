@@ -189,8 +189,8 @@ object MeterGroup:
         color: Maybe[String],
         icon: Maybe[IconGlyph]
     ):
-        /** The label as plain text, `""` for a reactive one. What a [[meterTemplate]] or
-          * [[labelTemplate]] reads when it composes its own label string: the carrier itself is
+        /** The label as plain text, `""` for a reactive one. What a [[MeterGroup.meterTemplate]] or
+          * [[MeterGroup.labelTemplate]] reads when it composes its own label string: the carrier itself is
           * package-private, and a template that wants the reactive text should take the signal it
           * built the meter from rather than read it back out here.
           */

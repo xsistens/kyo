@@ -900,7 +900,7 @@ final case class DataTable[A] private (
       * region enclosing it, so a page that re-renders around the table re-allocates the anchor
       * and a shift-click reads one no click ever wrote. That is not a fault in the mount: keyed
       * continuity spans re-renders of the immediately enclosing region and ends with it, by
-      * design. It is the same reason [[sort]], [[page]], the column filters and the column
+      * design. It is the same reason [[sort]], the page (bound through [[paginator]]), the column filters and the column
       * widths are all bindable — state that has to outlive the table's own render belongs to
       * the caller.
       *

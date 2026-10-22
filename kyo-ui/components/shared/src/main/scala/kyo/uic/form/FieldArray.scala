@@ -19,7 +19,7 @@ import kyo.UI.*
   * The set of arrays a form declares is fixed at build time; only the ROWS change at
   * runtime — which is why the aggregation stays correct even for nested arrays: every
   * array exposes a signal reactive over its own rows, and a row's pre-computed signals
-  * (captured in [[RowEntry]] when the row is added) already fold in that row's own arrays.
+  * (captured in a `RowEntry` when the row is added) already fold in that row's own arrays.
   *
   * Constructed by [[Form.fieldArray]] / [[Form.fieldArrayOf]] — never directly.
   */
