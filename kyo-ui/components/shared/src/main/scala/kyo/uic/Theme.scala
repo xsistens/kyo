@@ -298,6 +298,16 @@ object Theme:
       |/* A navigation Menu's root is a <nav>, which kyo-ui's base CSS lays out as a centered row;
       |   the menu stacks its list like the <div> root of the ordinary form does. */
       |nav.p-menu { flex-direction: column; align-items: stretch; }
+      |/* Every link of a navigation Menu is its own tab stop, so the roving .p-focus that carries
+      |   Prime's keyboard highlight is never set, and Prime's sheet clears the link's outline.
+      |   The row takes the item-focus tokens plus the global ring instead, inset because the
+      |   menu usually sits in a scroller that would clip a ring drawn outside the row. */
+      |nav.p-menu .p-menu-item-content:has(> .p-menu-item-link:focus-visible) {
+      |  color: var(--p-menu-item-focus-color);
+      |  background: var(--p-menu-item-focus-background);
+      |  outline: var(--p-focus-ring-width, 1px) var(--p-focus-ring-style, solid) var(--p-focus-ring-color, var(--p-primary-color));
+      |  outline-offset: calc(-1 * var(--p-focus-ring-width, 1px));
+      |}
       |.p-uic-menu-item-current { font-weight: 600; }
       |.p-uic-menu-item-current a { color: var(--p-primary-color, inherit); }
       |.p-uic-label { display: inline-flex; align-items: baseline; }
