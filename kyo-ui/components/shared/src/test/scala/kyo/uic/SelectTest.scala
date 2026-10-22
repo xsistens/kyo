@@ -251,4 +251,138 @@ class SelectTest extends UicTest:
         yield assert(picked == "a" && !still, s"the select finished its own work; value=$picked open=$still")
     }
 
+    /** All the text an element holds, however deeply. */
+    private def textOf(e: UI.Ast.Element)(using Frame): String =
+        def walk(u: UI): String = u match
+            case t: UI.Ast.Text     => t.value
+            case el: UI.Ast.Element => el.children.map(walk).mkString
+            case _                  => ""
+        e.children.map(walk).mkString
+    end textOf
+
+    /** The select wired with its panel open, so its rows are on the tree. */
+    private def opened(s: uic.Select[?])(using Frame): UI < Async =
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(-1)
+            query <- Signal.initRef("")
+        yield s.wired(open, hi, query, Present("sel"))
+
+    private def rows(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elementsWithClass(ui, "p-select-option")
+
+    "selection binds the option itself: the ref picks the row, and a pick writes the option" in {
+        for
+            ref <- Signal.initRef(fruit(2))
+            ui  <- opened(select.selection(ref))
+            rs  <- rows(ui)
+            _   <- click(rs(3))
+            got <- ref.get
+        yield
+            assert(rs.map(_.attrs.cssClasses.contains("p-select-option-selected")) == Chunk(false, false, true, false))
+            assert(got == fruit(3))
+    }
+
+    "a selection over Maybe starts empty under its placeholder, and clearing it writes Absent" in {
+        for
+            ref <- Signal.initRef(Maybe.empty[Fruit])
+            base = select.placeholder("Pick one").showClear(true).selection(ref)
+            ui   <- opened(base)
+            lbl  <- elementWithClass(ui, "p-select-label")
+            rs   <- rows(ui)
+            _    <- click(rs(0))
+            got  <- ref.get
+            ui2  <- opened(base)
+            x    <- elementWithClass(ui2, "p-select-clear-icon")
+            _    <- click(x)
+            gone <- ref.get
+        yield
+            assert(lbl.attrs.cssClasses.contains("p-placeholder") && textOf(lbl) == "Pick one")
+            assert(got == Present(fruit(0)))
+            assert(gone == Absent)
+    }
+
+    "a selection that always holds an option offers no clear, since there is nothing to clear it to" in {
+        for
+            ref <- Signal.initRef(fruit(0))
+            ui  <- opened(select.showClear(true).selection(ref))
+            xs  <- elementsWithClass(ui, "p-select-clear-icon")
+        yield assert(xs.isEmpty)
+    }
+
+    "the option is matched by its key, not by the option type's own equality" in {
+        // Reference equality: the ref holds an instance that equals none of the options.
+        final class Plain(val id: String, val name: String)
+        given CanEqual[Plain, Plain] = CanEqual.derived
+        val plain                    = List(Plain("a", "Apple"), Plain("c", "Cherry"))
+        for
+            ref <- Signal.initRef(Plain("c", "a copy of Cherry"))
+            ui  <- opened(uic.Select[Plain]().options(plain)(_.name).optionKey(_.id).selection(ref))
+            lbl <- elementWithClass(ui, "p-select-label")
+            rs  <- rows(ui)
+            _   <- click(rs(1))
+            got <- ref.get
+        yield
+            assert(textOf(lbl) == "Cherry")
+            assert(got.name == "a copy of Cherry", "picking the row already chosen keeps the value the app holds")
+        end for
+    }
+
+    "optionsWithNone puts the none option first and names it, and picking it writes Absent" in {
+        for
+            ref <- Signal.initRef(Maybe("Closed"))
+            ui  <- opened(uic.Select[Maybe[String]]().optionsWithNone("All", Seq("Open", "Closed"))(_.toUpperCase).selection(ref))
+            rs  <- rows(ui)
+            _   <- click(rs(0))
+            got <- ref.get
+        yield
+            assert(rs.map(textOf) == Chunk("All", "OPEN", "CLOSED"))
+            assert(rs.map(_.attrs.cssClasses.contains("p-select-option-selected")) == Chunk(false, false, true))
+            assert(got == Absent)
+    }
+
+    "optionsWithNone takes only a select whose options are Maybe" in {
+        typeCheckFailure(
+            "import kyo.*\nimport kyo.uic\ndef x = uic.Select[String]().optionsWithNone(\"All\", Seq(\"a\"))(identity)"
+        )
+    }
+
+    "the binding set last wins, whether it is a key or the option" in {
+        for
+            keys  <- Signal.initRef("")
+            typed <- Signal.initRef(fruit(0))
+            ui    <- opened(select.selection(typed).value(keys))
+            rs    <- rows(ui)
+            _     <- click(rs(2))
+            k     <- keys.get
+            t     <- typed.get
+            ui2   <- opened(select.value(keys).selection(typed))
+            rs2   <- rows(ui2)
+            _     <- click(rs2(3))
+            k2    <- keys.get
+            t2    <- typed.get
+        yield
+            assert(k == "c" && t == fruit(0))
+            assert(k2 == "c" && t2 == fruit(3))
+    }
+
+    "itemTemplate draws each row and the chosen value, and the label stays their name" in {
+        for
+            ref <- Signal.initRef(fruit(2))
+            ui  <- opened(select.itemTemplate(f => span.cssClass("fruit-tpl")(f.name.toUpperCase)).selection(ref))
+            rs  <- rows(ui)
+            lbl <- elementWithClass(ui, "p-select-label")
+        yield
+            assert(rs.map(textOf) == Chunk("APPLE", "BANANA", "CHERRY", "DATE"))
+            assert(rs.map(_.attrs.ariaAttrs.getOrElse("label", "-")) == Chunk("Apple", "Banana", "Cherry", "Date"))
+            assert(textOf(lbl) == "CHERRY")
+    }
+
+    "with nothing chosen the trigger shows the placeholder, not a template" in {
+        for
+            ref <- Signal.initRef(Maybe.empty[Fruit])
+            ui  <- opened(select.placeholder("Pick one").itemTemplate(f => span(f.name.toUpperCase)).selection(ref))
+            lbl <- elementWithClass(ui, "p-select-label")
+        yield assert(textOf(lbl) == "Pick one")
+    }
+
 end SelectTest

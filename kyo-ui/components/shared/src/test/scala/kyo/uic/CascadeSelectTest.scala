@@ -89,4 +89,47 @@ class CascadeSelectTest extends UicTest:
         yield assert(at == List(1), "Sydney, the second root option")
     }
 
+    /** The chain wired open with every group open too, so every leaf row is on the tree. */
+    private def allOpen(c: uic.CascadeSelect[String])(using Frame): UI < Async =
+        for
+            open  <- Signal.initRef(true)
+            refs  <- Kyo.foreach(c.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            focus <- Signal.initRef(List.empty[Int])
+        yield c.wired(open, refs, focus, Present("cs"))
+
+    private def leaf(ui: UI, text: String)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(ui, "p-cascadeselect-option-content").map(_.find(_.children.exists {
+            case el: UI.Ast.Element => el.children.exists {
+                    case t: UI.Ast.Text => t.value == text
+                    case _              => false
+                }
+            case _ => false
+        }).getOrElse(throw new AssertionError(s"no leaf $text")))
+
+    "selection binds the leaf itself, and a pick writes it" in {
+        for
+            ref    <- Signal.initRef("Bern")
+            ui     <- allOpen(cascade.selection(ref))
+            chosen <- elementsWithClass(ui, "p-cascadeselect-option-selected")
+            target <- leaf(ui, "Hamburg")
+            _      <- click(target)
+            got    <- ref.get
+        yield
+            assert(chosen.size == 1)
+            assert(got == "Hamburg")
+    }
+
+    "a selection over Maybe starts empty and takes the leaf picked" in {
+        for
+            ref    <- Signal.initRef(Maybe.empty[String])
+            ui     <- allOpen(cascade.placeholder("City").selection(ref))
+            chosen <- elementsWithClass(ui, "p-cascadeselect-option-selected")
+            target <- leaf(ui, "Sydney")
+            _      <- click(target)
+            got    <- ref.get
+        yield
+            assert(chosen.isEmpty)
+            assert(got == Present("Sydney"))
+    }
+
 end CascadeSelectTest

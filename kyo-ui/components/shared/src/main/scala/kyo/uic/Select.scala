@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** Select — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Select
   * anatomy: `div.p-select.p-component[.p-invalid][.p-disabled][.p-select-sm|-lg]
@@ -32,16 +33,18 @@ import kyo.UI.*
   * instead, rendering each group under a labelled header; grouping is a panel
   * concern only, so the value model, the key projection and the keyboard address
   * the same flat option sequence either way, and a filter that empties a group
-  * removes its header with it. `value(ref)` binds two-way; `open(ref)` optionally
-  * exposes the panel visibility (it is self-managed otherwise). The interaction
+  * removes its header with it. `value(ref)` binds the chosen key two-way,
+  * `selection(ref)` the chosen option itself (over `A`, or over `Maybe[A]` for a
+  * field that may stay empty), and `optionsWithNone` adds a labelled none row to a
+  * select over `Maybe`; `itemTemplate` draws the rows and the chosen value. `open(ref)`
+  * optionally exposes the panel visibility (it is self-managed otherwise). The interaction
   * state (open/highlight/filter query) lives in signals allocated by an
   * effectful `UI.mounted` region; static projections (SSG, the SSR page HTML)
   * render the same closed anatomy inert until the client transport attaches.
   * Form participation: `name(...)` emits a hidden `<input>` carrying the current
   * key (a div trigger has no native form value).
   *
-  * Honest deferrals: editable mode, virtual scrolling, and per-option templates
-  * are not implemented yet. Arrow keys on the open panel no longer scroll the
+  * Honest deferrals: editable mode and virtual scrolling are not implemented yet. Arrow keys on the open panel no longer scroll the
   * page underneath: the panel declares `preventScrollKeys`.
   */
 final case class Select[A] private (
@@ -49,7 +52,8 @@ final case class Select[A] private (
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
     optionDisabledF: Maybe[A => Boolean] = Absent,
-    valueRef: Maybe[SignalRef[String]] = Absent,
+    choice: Maybe[SingleChoice[A]] = Absent,
+    itemTemplateF: Maybe[A => UI] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
     filterableFlag: Boolean = false,
@@ -140,10 +144,39 @@ final case class Select[A] private (
       */
     def optionDisabled(f: A => Boolean): Select[A] = copy(optionDisabledF = Present(f))
 
+    /** Appends `none` and then `is` as the options of a select over `Maybe[B]`: `Absent` first, labelled `none`, then
+      * `Present(b)` for each value, labelled `label(b)`.
+      *
+      * The none option is a row like any other, so a filter's "all" is one the reader picks; a field that may be left empty
+      * binds `selection` over a `Maybe` with a placeholder instead. Only a select whose options are `Maybe[B]` takes it.
+      */
+    def optionsWithNone[B](none: String, is: Seq[B])(label: B => String)(using ev: Maybe[B] =:= A): Select[A] =
+        val all: Seq[Maybe[B]] = (Absent: Maybe[B]) +: is.map(b => Present(b): Maybe[B])
+        copy(optionsV = optionsV ++ all.map(m => OptionItem.Item(ev(m))), labelF = a => ev.flip(a).fold(none)(label))
+    end optionsWithNone
+
+    /** Custom option content: arbitrary UI drawn in each option row and, for the chosen option, in the trigger, in place of
+      * the text projection. The label projection stays each row's accessible name and the text the filter and the
+      * printable keys match, and through [[optionKey]] the key.
+      */
+    def itemTemplate(f: A => UI): Select[A] = copy(itemTemplateF = Present(f))
+
     /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: picks write the
       * key back into the ref, ref changes reselect the matching option.
       */
-    def value(ref: SignalRef[String]): Select[A] = copy(valueRef = Present(ref))
+    def value(ref: SignalRef[String]): Select[A] = copy(choice = Present(SingleChoice.Keys(ref)))
+
+    /** Binds the selection two-way to the option itself: a pick writes the option, a write to `ref` selects the row whose
+      * [[optionKey]] it carries. The ref always holds an option, so there is no clear (`showClear` draws nothing).
+      * Replaces a [[value]] binding, as [[value]] replaces this one.
+      */
+    def selection(ref: SignalRef[A]): Select[A] = copy(choice = Present(SingleChoice.Value(ref)))
+
+    /** Binds the selection two-way to the option or none: `Absent` shows the placeholder, a pick writes `Present(option)`,
+      * the clear writes `Absent`. `@targetName` because both `selection` bindings erase to one signature.
+      */
+    @targetName("selectionMaybe")
+    def selection(ref: SignalRef[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ref)))
 
     /** Binds the panel visibility two-way to `ref` (optional — the panel is
       * self-managed otherwise): writes open and close it, trigger/outside-click/
@@ -313,9 +346,9 @@ final case class Select[A] private (
         currentV match
             case Present(cur) => f(cur)
             case Absent       =>
-                valueRef match
-                    case Present(ref) => ref.render(f)
-                    case Absent       => f("")
+                choice match
+                    case Present(c) => c.render(key)(f)
+                    case Absent     => f("")
 
     private def body(current: String, st: Maybe[State])(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
@@ -335,6 +368,9 @@ final case class Select[A] private (
         val all     = items
         val selIdx  = all.indexWhere(a => key(a) == current)
         val selText = if selIdx >= 0 then labelF(all(selIdx)) else ""
+        // The chosen option drawn by the template, where there is one and an option is chosen.
+        val selDrawn: Maybe[UI] =
+            if selIdx >= 0 then itemTemplateF.map(_(all(selIdx))) else Absent
 
         /** Where an opening key lands: the selected option, or the first one a highlight may sit
           * on where nothing is selected. Opening has to land ON an option, or the arrow that
@@ -348,8 +384,8 @@ final case class Select[A] private (
         def pick(a: A)(s: State): UI.Action =
             val k = key(a)
             for
-                _ <- valueRef match
-                    case Present(r) => r.set(k)
+                _ <- choice match
+                    case Present(c) => c.update(items, key)(_ => k)
                     case Absent     => (): UI.Action
                 _ <- onChangeF match
                     case Present(g) => g(k)
@@ -380,7 +416,10 @@ final case class Select[A] private (
         if labelText.isEmpty then lbl = lbl.cssClass("p-select-label-empty")
         st.foreach(s => if interactive then lbl = lbl.onClick(toggle(s)))
         // NBSP keeps the empty label's line box (Prime renders &nbsp;).
-        val labelUI: UI = lbl(if labelText.isEmpty then " " else labelText)
+        val labelUI: UI =
+            selDrawn match
+                case Present(drawn) if !showPlaceholder => lbl(toChild(drawn))
+                case _                                  => lbl(if labelText.isEmpty then " " else labelText)
 
         // Explicitly typed effect: an untyped match would infer `Any`, passing the
         // effect as an inert VALUE into the by-name handler (never executed).
@@ -388,8 +427,8 @@ final case class Select[A] private (
             st match
                 case Present(_) =>
                     for
-                        _ <- valueRef match
-                            case Present(r) => r.set("")
+                        _ <- choice match
+                            case Present(c) => c.update(items, key)(_ => "")
                             case Absent     => (): UI.Action
                         _ <- onChangeF match
                             case Present(g) => g("")
@@ -398,7 +437,7 @@ final case class Select[A] private (
                 case Absent => ()
 
         val clearUI: List[UI] =
-            if showClearFlag && interactive && current.nonEmpty then
+            if showClearFlag && interactive && current.nonEmpty && choice.forall(_.clearable) then
                 List(
                     button
                         .cssClass("p-select-clear-icon")
@@ -492,8 +531,8 @@ final case class Select[A] private (
             // Focus-loss on the trigger reports the currently bound key (or the resolved
             // current value when unbound) — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
-                el = el.onBlur(valueRef match
-                    case Present(r) => r.use(f)
+                el = el.onBlur(choice match
+                    case Present(c) => c.read(key)(f)
                     case Absent     => f(current))
             }
         end if
@@ -596,7 +635,13 @@ final case class Select[A] private (
             // in the document whichever row the highlight is on.
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(pick(a)(s))
-            row((checkSlot :+ (span.cssClass("p-select-option-label")(labelF(a)): UI)).map(toChild)*)
+            val content: UI = itemTemplateF match
+                case Present(t) =>
+                    // The template may hold no text at all, so the row names itself.
+                    row = row.aria("label", labelF(a))
+                    t(a)
+                case Absent => span.cssClass("p-select-option-label")(labelF(a))
+            row((checkSlot :+ content).map(toChild)*)
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then

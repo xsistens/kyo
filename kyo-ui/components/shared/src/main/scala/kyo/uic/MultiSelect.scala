@@ -26,7 +26,8 @@ enum MultiSelectDisplay derives CanEqual:
   * [[Select]]'s multi-value sibling: the same [[Overlay]]-based floating panel
   * (outside click / Escape close it, and the panel takes no focus: the trigger
   * keeps it, or a filter header's input does), but the
-  * value binds to a `SignalRef[Set[String]]` of option keys and PICKING DOES NOT
+  * value binds to a `SignalRef[Set[String]]` of option keys (or, through
+  * `selection`, a `SignalRef[Set[A]]` of the options themselves) and PICKING DOES NOT
   * CLOSE — clicking a row (or Enter on the `.p-focus` highlight) toggles the key
   * and the panel stays open, exactly Prime's multiselect semantics.
   *
@@ -54,7 +55,7 @@ final case class MultiSelect[A] private (
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
     optionDisabledF: Maybe[A => Boolean] = Absent,
-    valueRef: Maybe[SignalRef[Set[String]]] = Absent,
+    choice: Maybe[MultiChoice[A]] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
     displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
@@ -123,7 +124,14 @@ final case class MultiSelect[A] private (
       * the updated key set back, ref changes reselect the matching options.
       */
     @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): MultiSelect[A] = copy(valueRef = Present(ref))
+    def value(ref: SignalRef[Set[String]]): MultiSelect[A] = copy(choice = Present(MultiChoice.Keys(ref)))
+
+    /** Binds the selection two-way to the set of chosen options: toggles write the options that carry the chosen
+      * [[optionKey]]s, ref changes reselect the rows whose keys its members carry. A member no option carries stays in
+      * the set while the others toggle. Replaces a [[value]] binding, as [[value]] replaces this one.
+      */
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice.Values(ref)))
 
     /** Binds the panel visibility two-way to `ref` (optional — the panel is
       * self-managed otherwise).
@@ -282,15 +290,15 @@ final case class MultiSelect[A] private (
         }
 
     private def withValue(f: Set[String] => UI)(using Frame): UI =
-        valueRef match
-            case Present(ref) => ref.render(f)
-            case Absent       => f(Set.empty)
+        choice match
+            case Present(c) => c.render(key)(f)
+            case Absent     => f(Set.empty)
 
     /** Writes `next` into the bound set and fires `onChange` with it. */
     private def write(next: Set[String])(using Frame): UI.Action =
         for
-            _ <- valueRef match
-                case Present(r) => r.set(next)
+            _ <- choice match
+                case Present(c) => c.update(items, key)(_ => next)
                 case Absent     => (): UI.Action
             _ <- onChangeF match
                 case Present(g) => g(next)
@@ -484,8 +492,8 @@ final case class MultiSelect[A] private (
             }
             // Focus-loss on the trigger reports the current selection — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
-                el = el.onBlur(valueRef match
-                    case Present(r) => r.use(f)
+                el = el.onBlur(choice match
+                    case Present(c) => c.read(key)(f)
                     case Absent     => f(current))
             }
         end if
