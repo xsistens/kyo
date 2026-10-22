@@ -42,9 +42,11 @@ import kyo.apollo.network.http.HttpRequestBody
   * when that `Scope` ends the fiber stops, callers still waiting fail with a
   * [[kyo.Closed]] panic, and later calls fail the same way instead of hanging.
   * The pending queue is an `AtomicRef` updated by CAS — no locks, no second
-  * runtime. A caller that is interrupted while waiting leaves the queue before
-  * the batch is cut, so nothing is sent on its behalf; once its batch is in
-  * flight the answer is simply discarded.
+  * runtime. A caller that is interrupted while waiting leaves the queue, so a
+  * batch cut after that sends nothing on its behalf; once its batch is cut the
+  * answer is simply discarded. Each caller's `turn` promise is the single point
+  * where the cut and the caller's leaving meet: whichever settles it first wins,
+  * so a batch whose first member has just left passes to the next member.
   *
   * The wire round trip always runs in a caller's fiber, never in the window
   * fiber: the window (or the size cap) only cuts the batch and hands it to its
@@ -80,6 +82,8 @@ final class BatchingHttpInterceptor private (
         chain: HttpInterceptorChain
     )(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         for
+            // Interruptible on purpose: this caller is its only waiter, so an interrupt that settles it is this caller
+            // leaving, and `dispatch` passes over it exactly as over a turn `withdraw` settled.
             turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
             claimed <- AtomicBoolean.init
             me = Pending(request, json, chain, turn, claimed)
@@ -121,27 +125,48 @@ final class BatchingHttpInterceptor private (
     private def open(using Frame): Unit < Sync =
         Abort.run[Closed](window.offer(())).unit
 
-    /** Cut whatever is queued as one batch (atomically) and hand it to its first
-      * member, who becomes the lead and sends it. Nothing is sent from here.
+    /** Cut whatever is queued as one batch (atomically) and hand it to its lead.
+      * Nothing is sent from here.
+      *
+      * A member's `turn` decides whether it leads: the lead is the first member
+      * whose turn this call completes with `Lead`. A member whose turn is already
+      * settled has left (its finalizer withdrew it, or the interrupt that ended
+      * its wait settled the turn), so it is dropped and the batch passes to the
+      * next member. When no member's turn is still open, nothing is sent.
       */
     private def dispatch(using Frame): Unit < Sync =
         pending.getAndUpdate(_.map(_ => Chunk.empty)).map {
-            case Present(batch) if !batch.isEmpty =>
-                batch(0).turn.completeDiscard(Result.succeed(Turn.Lead(batch)))
-            case _ => ()
+            case Present(batch) => lead(batch)
+            case Absent         => ()
         }
 
+    /** Make the first member of `rest` whose turn is still open the lead of the members from it on. */
+    private def lead(rest: Chunk[Pending])(using Frame): Unit < Sync =
+        if rest.isEmpty then ()
+        else
+            rest(0).turn.complete(Result.succeed(Turn.Lead(rest))).map { led =>
+                if led then () else lead(rest.drop(1))
+            }
+
     /** Finalizer of a caller that did not complete normally (interrupted, or its
-      * send failed). Leaves the queue if still queued; and if the caller had been
-      * made lead but never claimed the batch, gives the batch back to the queue so
-      * the other members are not stranded.
+      * send failed). Leaves the queue if still queued, then settles its own turn
+      * as withdrawn. The turn is the one point both sides decide on: if this
+      * settles it, no dispatch can make the caller lead any more; if it was
+      * already settled with `Lead` but the caller never claimed the batch, the
+      * batch goes back to the queue so the other members are not stranded. Any
+      * other settled turn (an answer, or the interrupt that ended the wait) means
+      * the caller is out already.
       */
     private def withdraw(me: Pending)(using Frame): Unit < Sync =
         pending.getAndUpdate(_.map(_.filter(_ ne me))).andThen {
-            me.turn.poll.map {
-                case Present(Result.Success(Turn.Lead(batch))) =>
-                    claim(me).map(won => if won then requeue(batch.filter(_ ne me)) else ())
-                case _ => ()
+            me.turn.complete(Withdrawn.result).map { left =>
+                if left then ()
+                else
+                    me.turn.poll.map {
+                        case Present(Result.Success(Turn.Lead(batch))) =>
+                            claim(me).map(won => if won then requeue(batch.filter(_ ne me)) else ())
+                        case _ => ()
+                    }
             }
         }
 
@@ -221,6 +246,13 @@ object BatchingHttpInterceptor:
     private enum Turn:
         case Lead(batch: Chunk[Pending])
         case Done(response: HttpEngine.Response)
+
+    /** The outcome a caller's finalizer settles its own turn with, so that no
+      * dispatch can make it lead after it left. Nobody waits on that turn any
+      * more, so no caller ever receives it.
+      */
+    private object Withdrawn extends Exception("batch member withdrawn", null, false, false):
+        val result: Result.Panic = Result.Panic(this)
 
     /** One queued request awaiting its batch: the wire request and its JSON body, the
       * chain that will carry the (merged) request onward, the promise it waits on, and
