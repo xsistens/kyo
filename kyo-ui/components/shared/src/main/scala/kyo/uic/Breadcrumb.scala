@@ -29,6 +29,27 @@ object BreadcrumbItem:
     ): BreadcrumbItem = new BreadcrumbItem(ReactiveValue(text), href, target, icon)
 end BreadcrumbItem
 
+/** A crumb, built directly or as `_.item(...)` (see [[BreadcrumbItemScope]]). */
+type BreadcrumbItemEntry = Entry[BreadcrumbItem, BreadcrumbItemScope]
+
+/** What `_` stands for in [[Breadcrumb.items]]: `_.item("Docs", href = Present("/docs"))`, as [[BreadcrumbItem.apply]]. */
+final class BreadcrumbItemScope private ():
+    /** A crumb, as [[BreadcrumbItem.apply]]. */
+    def item(
+        text: String | Signal[String],
+        href: Maybe[String] = Absent,
+        target: Maybe[String] = Absent,
+        icon: Maybe[IconGlyph] = Absent
+    ): BreadcrumbItem = BreadcrumbItem(text, href, target, icon)
+end BreadcrumbItemScope
+
+object BreadcrumbItemScope:
+    private val scope = new BreadcrumbItemScope
+
+    private[uic] def resolve(entries: Seq[BreadcrumbItemEntry]): List[BreadcrumbItem] =
+        Entry.resolve(scope, entries)
+end BreadcrumbItemScope
+
 /** Breadcrumb — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Breadcrumb anatomy: `nav.p-breadcrumb.p-component` > `ol.p-breadcrumb-list`
   * with interleaved `li.p-breadcrumb-item` entries — each an
@@ -50,8 +71,8 @@ final case class Breadcrumb private (
 ) extends Node, HasAccessibleName:
     type Self = Breadcrumb
 
-    /** Appends the given crumbs to the trail. */
-    def items(is: BreadcrumbItem*): Breadcrumb = copy(itemsV = itemsV ++ is.toList)
+    /** Appends the given crumbs to the trail, each built directly or from `_` (see [[BreadcrumbItemScope]]). */
+    def items(is: BreadcrumbItemEntry*): Breadcrumb = copy(itemsV = itemsV ++ BreadcrumbItemScope.resolve(is))
 
     /** Appends a linked crumb. A `Signal[String]` label re-renders in place on emission. */
     def item(text: String | Signal[String], href: String): Breadcrumb =

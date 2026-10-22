@@ -10,6 +10,23 @@ import kyo.UI.Ast.HtmlChildVal
   */
 final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Nil)
 
+/** A TreeTable row node, built directly or as `_.node(...)` (see [[TreeTableNodeScope]]). */
+type TreeTableNodeEntry[A] = Entry[TreeTableNode[A], TreeTableNodeScope[A]]
+
+/** What `_` stands for in [[TreeTable.nodes]]: `_.node(row, children = Seq(_.node(child)))`, as [[TreeTableNode.apply]], with the
+  * children in the same two spellings.
+  */
+final class TreeTableNodeScope[A] private ():
+    /** A row node over `data`, as [[TreeTableNode.apply]]. */
+    def node(data: A, children: Seq[TreeTableNodeEntry[A]] = Nil): TreeTableNode[A] =
+        TreeTableNode(data, TreeTableNodeScope.resolve(children))
+end TreeTableNodeScope
+
+object TreeTableNodeScope:
+    private[uic] def resolve[A](entries: Seq[TreeTableNodeEntry[A]]): List[TreeTableNode[A]] =
+        Entry.resolve(new TreeTableNodeScope[A], entries)
+end TreeTableNodeScope
+
 /** TreeTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * TreeTable anatomy: `div.p-treetable.p-component[.p-treetable-hoverable]
   * [.p-treetable-gridlines][.p-treetable-sm|-lg]` >
@@ -63,8 +80,9 @@ final case class TreeTable[A] private (
 ) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = TreeTable[A]
 
-    /** Appends root nodes. */
-    def nodes(ns: TreeTableNode[A]*): TreeTable[A] = copy(nodeList = nodeList ++ ns.toList)
+    /** Appends root nodes, each built directly or from `_` (see [[TreeTableNodeScope]]). */
+    def nodes(ns: TreeTableNodeEntry[A]*): TreeTable[A] =
+        copy(nodeList = nodeList ++ TreeTableNodeScope.resolve(ns))
 
     /** Stable row identity — the expansion/selection key and the event payloads.
       * Required for reliable expansion/selection (the fallback is the row's

@@ -66,8 +66,8 @@ final case class SplitButton private (
     /** Glyph of the dropdown segment (default chevron-down). */
     def dropdownIcon(glyph: IconGlyph): SplitButton = copy(dropdownIconV = Present(glyph))
 
-    /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`). */
-    def items(is: MenuItem*): SplitButton = copy(itemsV = itemsV ++ is.toList)
+    /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]). */
+    def items(is: MenuItemEntry*): SplitButton = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Binds the panel visibility two-way to `ref` (optional — self-managed
       * otherwise).

@@ -42,9 +42,9 @@ final case class TieredMenu private (
     type Self = TieredMenu
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open side
-      * submenus).
+      * submenus), each built directly or from `_` (see [[MenuItemScope]]).
       */
-    def items(is: MenuItem*): TieredMenu = copy(itemsV = itemsV ++ is.toList)
+    def items(is: MenuItemEntry*): TieredMenu = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Popup mode: the whole menu renders as a floating [[Overlay]] panel bound
       * two-way to `ref` (Prime's `.p-tieredmenu-overlay`).

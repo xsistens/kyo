@@ -69,9 +69,9 @@ final case class ContextMenu private (
     type Self = ContextMenu
 
     /** Appends menu items ([[MenuItem]] rows, `MenuItem.separator` dividers;
-      * nested `items(...)` open side submenus).
+      * nested `items(...)` open side submenus), each built directly or from `_` (see [[MenuItemScope]]).
       */
-    def items(is: MenuItem*): ContextMenu = copy(itemsV = itemsV ++ is.toList)
+    def items(is: MenuItemEntry*): ContextMenu = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Adds target children — the region whose right-click opens the menu. */
     def apply(cs: UI*): ContextMenu = copy(kids = kids ++ cs)
@@ -383,9 +383,10 @@ end ContextMenu
 
 object ContextMenu:
     /** A context menu over `items`, wrapping the target region given via
-      * `apply(...)` — right-click inside it opens the menu.
+      * `apply(...)`: right-click inside it opens the menu. Each item is built directly or from `_`
+      * (`Seq(_.item("Copy"), _.item.separator)`, see [[MenuItemScope]]).
       */
-    def apply(items: Seq[MenuItem]): ContextMenu = new ContextMenu(itemsV = items.toList)
+    def apply(items: Seq[MenuItemEntry]): ContextMenu = new ContextMenu(itemsV = MenuItemScope.resolve(items))
 
     /** An empty context menu — add items via [[ContextMenu.items]] and target
       * children via `apply(...)`.
