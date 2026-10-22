@@ -222,4 +222,22 @@ class MultiSelectTest extends UicTest:
             assert(filterEl.attrs.ariaAttrs.get("activedescendant").contains("ms-option-2"))
     }
 
+    "selection binds the options themselves, and a toggle keeps a member no option carries" in {
+        val gone = Fruit("z", "Zucchini", false)
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(2)
+            query <- Signal.initRef("")
+            ref   <- Signal.initRef(Set(fruit(0), gone))
+            ui = multi.selection(ref).wired(open, hi, query, Present("ms"))
+            rows    <- elementsWithClass(ui, "p-multiselect-option")
+            trigger <- elementWithClass(ui, "p-multiselect")
+            _       <- press(trigger, UI.Keyboard.Enter)
+            got     <- ref.get
+        yield
+            assert(rows.map(_.attrs.ariaAttrs.getOrElse("selected", "-")) == Chunk("true", "false", "false", "false"))
+            assert(got == Set(fruit(0), fruit(2), gone))
+        end for
+    }
+
 end MultiSelectTest
