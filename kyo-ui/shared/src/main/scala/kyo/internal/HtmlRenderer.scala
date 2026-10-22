@@ -2504,7 +2504,18 @@ private[kyo] object HtmlRenderer:
            |  __scrollAutoPaths=now;
            |  // block:"nearest" moves the nearest scrollable ancestor by the least it can, and not at all when the
            |  // element is already visible, which is what a highlight walking within view wants.
-           |  if(scroll&&fresh&&typeof fresh.scrollIntoView==='function')fresh.scrollIntoView({block:"nearest",inline:"nearest"});
+           |  if(!fresh||typeof fresh.scrollIntoView!=='function')return;
+           |  if(scroll)fresh.scrollIntoView({block:"nearest",inline:"nearest"});
+           |  // The first paint leaves the document where the browser restores it, and brings a flag in a scroll
+           |  // container of the page's own into view, scrolling that container only. Mirrors DomBackend.sweepScrollAuto.
+           |  else if(__kyoInOwnScroller(fresh))fresh.scrollIntoView({block:"nearest",inline:"nearest",container:"nearest"});
+           |}
+           |function __kyoInOwnScroller(el){
+           |  for(var p=el.parentElement;p&&p!==document.body&&p!==document.documentElement;p=p.parentElement){
+           |    var o=getComputedStyle(p).overflowY;
+           |    if(o==="auto"||o==="scroll"||o==="overlay")return true;
+           |  }
+           |  return false;
            |}
            |// Focus seeding/restore for [data-kyo-focus-auto]/[data-kyo-focus-restore]; __focusReturnStack stacks {fa, ret|null, restore}.
            |// Mirrors DomBackend.focusReturnStack for the SPA transport.

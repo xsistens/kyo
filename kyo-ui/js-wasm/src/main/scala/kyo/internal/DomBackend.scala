@@ -1556,14 +1556,41 @@ private[kyo] object DomBackend:
             p != null && !scrollAutoPaths.contains(p)
         }
         scrollAutoPaths = now
-        // The first paint only records what is already carrying the flag: a page that arrives with a
-        // highlight has not moved it, and scrolling on load would fight the browser's own restoration.
         if scroll then
             fresh.foreach(el =>
                 discard(el.asInstanceOf[js.Dynamic].scrollIntoView(js.Dynamic.literal(block = "nearest", inline = "nearest")))
             )
+        else
+            // The first paint leaves the document where the browser puts it: its position is the one restored on
+            // reload and on back, and scrolling it at load would fight that. A scroll container of the page's own
+            // has nothing restored into it, so a flag there (a list opened on its selected row, a rail opened on a
+            // deep link) is brought into view, and `container: "nearest"` keeps the scroll inside that container.
+            fresh.filter(inOwnScroller).foreach(el =>
+                discard(el.asInstanceOf[js.Dynamic].scrollIntoView(
+                    js.Dynamic.literal(block = "nearest", inline = "nearest", container = "nearest")
+                ))
+            )
         end if
     end sweepScrollAuto
+
+    /** Whether something between `el` and the document scrolls on its own. Twin of `__kyoInOwnScroller` in
+      * HtmlRenderer.clientJs.
+      */
+    private def inOwnScroller(el: dom.Element): Boolean =
+        val body: AnyRef = document.body
+        val root: AnyRef = document.documentElement
+        // `parentElement` is declared on Node subtypes this facade does not give an Element, so it is read off the
+        // object the way the rest of this file reads DOM members the facade lacks.
+        def parentOf(e: dom.Element): dom.Element = e.asInstanceOf[js.Dynamic].parentElement.asInstanceOf[dom.Element]
+        @tailrec
+        def loop(p: dom.Element): Boolean =
+            if (p eq null) || (p eq body) || (p eq root) then false
+            else
+                dom.window.getComputedStyle(p).overflowY match
+                    case "auto" | "scroll" | "overlay" => true
+                    case _                             => loop(parentOf(p))
+        loop(parentOf(el))
+    end inOwnScroller
 
     /** Whether the patch that removed the seeded element took the focus with it.
       *
