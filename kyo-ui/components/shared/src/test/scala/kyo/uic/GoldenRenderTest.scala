@@ -234,6 +234,12 @@ class GoldenRenderTest extends UicTest:
             uic.Theme.primeExtraCss.contains(".p-uic-overlay-panel:focus-visible .p-tree-node-content.p-focus"),
             "and the same inside a TreeSelect panel, which is the focus holder there (remainder)"
         )
+        // A navigation Menu makes every link its own tab stop, so no .p-focus is ever set, and
+        // Prime's sheet clears the link outline: without this rule a keyboard user sees nothing.
+        assert(
+            uic.Theme.primeExtraCss.contains("nav.p-menu .p-menu-item-content:has(> .p-menu-item-link:focus-visible)"),
+            "navigation menu rings the keyboard-focused row (remainder)"
+        )
         assert(
             uic.Theme.primeExtraCss.contains(".p-tree-root-children:focus { outline: none; }"),
             "tree list draws no ring of its own (remainder — the node ring is the indicator)"
