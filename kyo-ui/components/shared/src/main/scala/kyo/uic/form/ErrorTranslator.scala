@@ -7,7 +7,7 @@ import kyo.*
   * i18n `t(code, args)` typically returns a `Signal[String]`).
   *
   * Provided once at the app root as an `Env` service (mirroring `ToastService`);
-  * `Form.mounted` resolves it at build time. A form with no i18n uses [[default]].
+  * `Form.mounted` resolves it at build time. A form with no i18n uses [[ErrorTranslator.default]].
   */
 trait ErrorTranslator:
     def translate(err: FieldError)(using Frame): Signal[String]

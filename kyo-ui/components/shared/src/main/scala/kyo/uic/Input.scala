@@ -139,7 +139,7 @@ final case class Input private (
       * visible. The already-filtered value is what reaches `onInput`/the ref.
       *
       * The string stays this library's surface; kyo takes a typed
-      * [[kyo.UI.InputFilter]], which [[asInputFilter]] maps onto.
+      * [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto.
       */
     def inputFilter(pattern: String): Input = copy(inputFilterV = Present(pattern))
 
