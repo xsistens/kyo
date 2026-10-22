@@ -80,16 +80,30 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
 
+    /** Subscribes `root` with its mount tables checking every state they take against their invariants (see `ReactiveUI.MountAudit`). */
+    private def subscribeAudited(root: ReactiveUI, exchange: UIExchange)(using Frame): ReactiveUI.Subscription < (Async & Scope) =
+        ReactiveUI.MountSession.audited.let(true)(ReactiveUI.subscribe(root, exchange))
+
+    /** Asserts that the mount tables of `sub` checked their states and found every one consistent. */
+    private def assertConsistent(sub: ReactiveUI.Subscription)(using Frame, kyo.test.AssertScope): Unit < Sync =
+        Sync.defer {
+            val audit = sub.mountSession.audit
+            assert(audit.nonEmpty, "the subscription was not audited")
+            val found = audit.get.inconsistencies
+            assert(audit.get.checked.get > 0 && found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
+        }
+
     private def mount[A](ui: UI, keepsRows: Boolean = false)(
         f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
-    )(using Frame): A < Async =
+    )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             val recorder = new Recorder(keepsRows)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                sub  <- ReactiveUI.subscribe(root, recorder)
+                sub  <- subscribeAudited(root, recorder)
                 a    <- f(recorder, sub.handle)
+                _    <- assertConsistent(sub)
             yield a
             end for
         }
@@ -320,7 +334,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 node     = mountedNodes(root).head
                 spec     = node.mounted.get
                 identity = spec.identity.get
-                (table, top) <- ReactiveUI.MountTable.root(Seq.empty)
+                (table, top) <- ReactiveUI.MountTable.root(Seq.empty, new ReactiveUI.MountSession(audited = true))
                 outerFirst   <- top.beginWalk(Seq(root))
                 older = top.child(outerFirst, region)
                 olderPass <- older.beginWalk(region.children)
@@ -339,9 +353,11 @@ class MountedTest extends kyo.test.Test[Any]:
                 againPass <- newer.beginWalk(region.children)
                 again     <- newer.claim(node, identity, spec, againPass).map(liveOf)
                 _         <- newer.endWalk
+                found     <- Sync.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
                 _         <- table.evictAll
                 after     <- released.get
             yield
+                assert(found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
                 def same(a: Maybe[ReactiveUI.MountInstance]) = a.nonEmpty && first.exists(_ eq a.get)
                 assert(same(kept), "the newer subscription did not find the kept instance")
                 assert(!gone, "the older subscription released the instance the newer one shows")
@@ -1006,7 +1022,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 for
                     _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, holding(entered, forever))
+                    sub  <- subscribeAudited(root, holding(entered, forever))
                     _    <- assertEventually(Sync.defer(published.get()))
                     _    <- Sync.defer(armed.set(true))
                     _    <- items.set(Chunk(("a", 1)))
@@ -1014,6 +1030,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _    <- open.set(false)
                     _    <- assertEventually(recorder.shown(Seq("0")).map(_.contains("closed")))
                     _    <- assertEventually(Sync.Unsafe.defer(probe.unsafe.waiters() == 0))
+                    _    <- assertConsistent(sub)
                 yield ()
             }
         yield succeed
@@ -1461,13 +1478,14 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def mountWith[A](recorder: Recorder, ui: UI)(
         f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
-    )(using Frame): A < Async =
+    )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                sub  <- ReactiveUI.subscribe(root, recorder)
+                sub  <- subscribeAudited(root, recorder)
                 a    <- f(sub.handle)
+                _    <- assertConsistent(sub)
             yield a
         }
 
@@ -1774,7 +1792,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 for
                     _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
-                    sub  <- ReactiveUI.subscribe(root, recorder)
+                    sub  <- subscribeAudited(root, recorder)
                     c = sub.mountSession.counters
                     _ <- assertEventually(Sync.defer(c.registered.get == rows + 1))
                     _ <- assertEventually(Sync.defer(c.skipped.get >= rows + 1))
@@ -1786,6 +1804,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     // The new row's region registers as its row subscribes, which may be after the list painted it.
                     _ <- assertEventually(Sync.defer(c.registered.get == before._1 + 1))
                     after = (c.registered.get, c.planned.get, c.scanned.get, c.cuts.get, c.skipped.get)
+                    _ <- assertConsistent(sub)
                 yield (before, after)
             }
         yield
@@ -1799,6 +1818,162 @@ class MountedTest extends kyo.test.Test[Any]:
             assert(scannedAfter == 0 && cutsAfter == 0, s"a cut scanned regions with nothing in transit: ${counts}")
             assert(regAfter == regBefore + 1, s"a re-render or a new row registered more than the new row's region: ${counts}")
             assert(skippedAfter - skippedBefore >= rows, s"the tick did not reach every row: ${counts}")
+        end for
+    }
+
+    /** A keyed list of `rows` rows with a keyed mount in each, two rows swapped, then the first row removed: the live instances the
+      * planned passes examined for whether a region still shows them, for the swap and for the removal, and how often an effect ran and
+      * was released.
+      */
+    private def examinedForMountedRows(rows: Int)(using Frame, kyo.test.AssertScope) =
+        val order   = (0 until rows).map(i => s"r$i").toVector
+        val swapped = order.updated(1, order(rows - 2)).updated(rows - 2, order(1))
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            items    <- Signal.initRef(Chunk.from(order))
+            row = (id: String) =>
+                UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.andThen(span(id)))).keyed("m")
+            ui       = div(items.foreachKeyed(identity)(id => div(row(id))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- subscribeAudited(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- assertEventually(runs.get.map(_ == rows))
+                    examinedBefore = c.examined.get
+                    plannedBefore  = c.planned.get
+                    _ <- items.set(Chunk.from(swapped))
+                    _ <- assertEventually(Sync.defer(c.planned.get > plannedBefore))
+                    examinedSwap = c.examined.get
+                    _ <- items.set(Chunk.from(swapped.drop(1)))
+                    _ <- assertEventually(released.get.map(_ == 1))
+                    examinedRemove = c.examined.get
+                    total <- runs.get
+                    gone  <- released.get
+                    _     <- assertConsistent(sub)
+                yield (examinedSwap - examinedBefore, examinedRemove - examinedSwap, total, gone)
+            }
+        yield counts
+        end for
+    end examinedForMountedRows
+
+    "a swap and a removal in a keyed list with a keyed mount in every row examine as many instances for 500 rows as for 50" in {
+        for
+            small <- examinedForMountedRows(50)
+            large <- examinedForMountedRows(500)
+        yield
+            java.lang.System.out.println(s"MOUNTEXAMINED (swap, remove, runs, released) rows=50 $small rows=500 $large")
+            assert(small._3 == 50 && small._4 == 1 && large._3 == 500 && large._4 == 1, s"runs and releases: $small, $large")
+            assert(
+                small._1 == large._1 && small._2 == large._2,
+                s"instances examined (swap, remove): ${(small._1, small._2)} for 50 rows, ${(large._1, large._2)} for 500 rows"
+            )
+    }
+
+    /** `steps` states of two keyed lists over the ids `r0` to `r15`, each one step from the one before: two rows swapped, a row removed,
+      * an absent id inserted, a row moved within its list, or a row moved to the other list. Fixed by `seed`; an id is in one list at most.
+      */
+    private def listSteps(seed: Long, steps: Int): Vector[(Vector[String], Vector[String])] =
+        val random                                                   = new scala.util.Random(seed)
+        val pool                                                     = (0 until 16).map(i => s"r$i").toVector
+        def insert(rows: Vector[String], id: String): Vector[String] =
+            val at = random.nextInt(rows.size + 1)
+            (rows.take(at) :+ id) ++ rows.drop(at)
+        def next(lists: (Vector[String], Vector[String])): (Vector[String], Vector[String]) =
+            val (left, right)                                        = lists
+            val toLeft                                               = random.nextBoolean()
+            val (from, to)                                           = if toLeft then (right, left) else (left, right)
+            def pair(changed: Vector[String], other: Vector[String]) = if toLeft then (other, changed) else (changed, other)
+            val absent                                               = pool.filterNot(id => left.contains(id) || right.contains(id))
+            random.nextInt(5) match
+                case 0 if from.size >= 2 =>
+                    val i = random.nextInt(from.size)
+                    val j = (i + 1 + random.nextInt(from.size - 1)) % from.size
+                    pair(from.updated(i, from(j)).updated(j, from(i)), to)
+                case 1 if from.nonEmpty =>
+                    pair(from.patch(random.nextInt(from.size), Nil, 1), to)
+                case 2 if absent.nonEmpty =>
+                    pair(insert(from, absent(random.nextInt(absent.size))), to)
+                case 3 if from.size >= 2 =>
+                    val i = random.nextInt(from.size)
+                    pair(insert(from.patch(i, Nil, 1), from(i)), to)
+                case 4 if from.nonEmpty =>
+                    val i = random.nextInt(from.size)
+                    pair(from.patch(i, Nil, 1), insert(to, from(i)))
+                case _ => next(lists)
+            end match
+        end next
+        Vector.iterate(((0 until 6).map(pool).toVector, (6 until 10).map(pool).toVector), steps + 1)(next)
+    end listSteps
+
+    "random swaps, removals, insertions and moves within and between two keyed lists keep one instance per row and a consistent table" in {
+        val states = listSteps(seed = 20261022L, steps = 60)
+        // Each step starts the ids it adds and releases the ids it takes away; one that moves keeps its instance.
+        val expected = states.sliding(2).foldLeft(Vector((states.head._1 ++ states.head._2).map(_ -> 1).toMap -> Map.empty[String, Int])) {
+            (acc, pair) =>
+                val (runs, released) = acc.last
+                val before           = pair(0)._1 ++ pair(0)._2
+                val after            = pair(1)._1 ++ pair(1)._2
+                val started          = after.filterNot(before.contains)
+                val stopped          = before.filterNot(after.contains)
+                acc :+ (
+                    started.foldLeft(runs)((m, id) => m.updated(id, m.getOrElse(id, 0) + 1)),
+                    stopped.foldLeft(released)((m, id) => m.updated(id, m.getOrElse(id, 0) + 1))
+                )
+        }
+        def order(html: String, list: String): Vector[String] =
+            s"""data-kyo-path="$list\\.([^".]+)"""".r.findAllMatchIn(html).map(_.group(1)).toVector
+        for
+            runs     <- AtomicRef.init(Map.empty[String, Int])
+            released <- AtomicRef.init(Map.empty[String, Int])
+            next     <- AtomicRef.init(states.head)
+            left     <- Signal.initRef(Chunk.from(states.head._1))
+            right    <- Signal.initRef(Chunk.from(states.head._2))
+            row = (id: String) =>
+                UI.mounted(
+                    Scope.ensure(released.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).unit)
+                        .andThen(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"[$id:${m(id)}]")))
+                ).keyed("row")
+            ui = div(
+                // Both lists change in one click, as one change: a row moved between them keeps its instance.
+                button("go").onClick(next.get.map((l, r) => UI.batch(left.set(Chunk.from(l)).andThen(right.set(Chunk.from(r))))).unit),
+                left.foreachKeyed(identity)(id => div(row(id))),
+                right.foreachKeyed(identity)(id => div(row(id)))
+            )
+            _ <- mount(ui) { (recorder, handle) =>
+                def settled(at: Int)(using Frame, kyo.test.AssertScope): Unit < Async =
+                    val ((l, r), (wantRuns, wantReleased)) = (states(at), expected(at))
+                    for
+                        _ <- assertEventually(runs.get.map(_ == wantRuns))
+                        _ <- assertEventually(released.get.map(_ == wantReleased))
+                        _ <- Kyo.foreachDiscard(Seq(("1", l, r), ("2", r, l))) { (list, rows, others) =>
+                            for
+                                _ <- assertEventually(recorder.shown(Seq(list)).map(html => order(html, list) == rows))
+                                _ <- Kyo.foreachDiscard(rows)(id => showsEventually(recorder, Seq(list, id, "0"), s"[$id:${wantRuns(id)}]"))
+                                _ <- Kyo.foreachDiscard(others)(id =>
+                                    assertEventually(recorder.shown(Seq(list, id, "0")).map(html => !html.contains(s"[$id:")))
+                                )
+                            yield ()
+                        }
+                    yield ()
+                    end for
+                end settled
+                for
+                    _ <- settled(0)
+                    _ <- Kyo.foreachDiscard(1 until states.size) { at =>
+                        next.set(states(at)).andThen(handle(Seq("0"), click("0"))).andThen(settled(at))
+                    }
+                    finalRuns     <- runs.get
+                    finalReleased <- released.get
+                yield
+                    assert(finalRuns == expected.last._1, s"runs: $finalRuns")
+                    assert(finalReleased == expected.last._2, s"released: $finalReleased")
+                end for
+            }
+        yield succeed
         end for
     }
 
