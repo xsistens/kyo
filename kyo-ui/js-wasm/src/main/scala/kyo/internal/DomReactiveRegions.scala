@@ -3,7 +3,6 @@ package kyo.internal
 import kyo.*
 import org.scalajs.dom
 import scala.collection.mutable
-import scala.scalajs.js
 
 /** Mount-scoped registry of live HTML reactive range anchors. */
 final private[kyo] class DomReactiveRegions private (
@@ -13,6 +12,9 @@ final private[kyo] class DomReactiveRegions private (
 ):
 
     private var open = true
+
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private var examinedEntries = 0L
 
     def replace(regionId: String, html: String)(using Frame): Unit < Sync =
         replaceWith(regionId, html, keepCurrent = false)((_, _, _) => false)((_, _) => ())((_, _) => ())
@@ -102,9 +104,7 @@ final private[kyo] class DomReactiveRegions private (
         after: (A, Seq[dom.Element]) => Unit
     )(using Frame): Unit =
         val incoming = DomReactiveRegions.scan(document, fragment)
-        val removed  = ranges.iterator.collect {
-            case (id, nested) if id != regionId && intersects(range, nested.start) => id
-        }.toSet
+        val removed  = nestedIn(endpoints)
 
         incoming.keysIterator.foreach { id =>
             if ranges.contains(id) && !removed.contains(id) then
@@ -168,6 +168,10 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
 
+    /** How many registry entries the replacements so far looked at to find the ranges they remove. */
+    private[kyo] def examined(using Frame): Long < Sync =
+        Sync.defer(examinedEntries)
+
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
 
@@ -200,8 +204,30 @@ final private[kyo] class DomReactiveRegions private (
     private def fail(message: String)(using Frame): Nothing =
         throw UIException(message)
 
-    private def intersects(range: dom.Range, node: dom.Node): Boolean =
-        range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+    /** The ids of the registered ranges inside the range `endpoints` delimits, nested at any depth.
+      *
+      * Ranges nest properly, so a range lies inside exactly when its opening marker does, and the opening markers
+      * inside are the comments between the two anchors in document order. Reading them off the DOM costs the size
+      * of the range rather than the size of the registry: a row patch in a list of a thousand rows no longer looks
+      * at every other row's entries. An id counts only when the registry's entry for it opens at the very marker
+      * found, so a marker the registry does not name is not taken for the range it names.
+      */
+    private def nestedIn(endpoints: DomReactiveRegions.Endpoints): Set[String] =
+        val found  = Set.newBuilder[String]
+        val walker = DomReactiveRegions.commentWalker(document, endpoints.start.parentNode)
+        walker.currentNode = endpoints.start
+        var node = walker.nextNode()
+        while node != null && (node ne endpoints.end) do
+            val data = node.asInstanceOf[dom.Comment].data
+            if data.startsWith(DomReactiveRegions.StartPrefix) then
+                val id = data.substring(DomReactiveRegions.StartPrefix.length)
+                examinedEntries += 1
+                if ranges.get(id).exists(_.start eq node) then found += id
+            end if
+            node = walker.nextNode()
+        end while
+        found.result()
+    end nestedIn
 
     private def elementsBetween(endpoints: DomReactiveRegions.Endpoints): Seq[dom.Element] =
         val elements = mutable.ArrayBuffer.empty[dom.Element]

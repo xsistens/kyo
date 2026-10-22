@@ -1134,6 +1134,17 @@ private[kyo] object HtmlRenderer:
           |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
           |  applyJsProps(active);return true;
           |}
+          |// The ids of the registered ranges inside the range, nested at any depth, read off the comments between its
+          |// anchors: the cost is the size of the range, not of the registry. An id counts only when its entry opens at
+          |// the marker found. Twin of nestedIn in DomReactiveRegions.
+          |function kyoRangeNested(endpoints){
+          |  var found=new Set(),walker=document.createTreeWalker(endpoints.start.parentNode,128,null,false);
+          |  walker.currentNode=endpoints.start;
+          |  for(var node=walker.nextNode();node&&node!==endpoints.end;node=walker.nextNode()){
+          |    if(node.data.indexOf("kyo-rs:")!==0)continue;
+          |    var key=node.data.slice(7),pair=__kyoRanges.get(key);if(pair&&pair.start===node)found.add(key);}
+          |  return found;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1145,9 +1156,8 @@ private[kyo] object HtmlRenderer:
           |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
           |  var parent=endpoints.start.parentNode,synthetic=parent.tagName==="TBODY"&&parent.getAttribute("data-kyo-range-host")===id;
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
-          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
-          |  __kyoRanges.forEach(function(pair,key){if(key!==id&&range.intersectsNode(pair.start))removed.push(key);});
-          |  incoming.forEach(function(pair,key){if(__kyoRanges.has(key)&&removed.indexOf(key)<0)kyoRangeFail("duplicate id: "+key);});
+          |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=kyoRangeNested(endpoints);
+          |  incoming.forEach(function(pair,key){if(__kyoRanges.has(key)&&!removed.has(key))kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  if(kyoRangeMorph(active,oldRoots,newSemanticRoots,incoming))return;
           |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
@@ -1156,7 +1166,7 @@ private[kyo] object HtmlRenderer:
           |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
           |  var oldEnter=kyoEnterPathsRoots(oldRoots),ghosts=kyoLeavePrepareRoots(oldRoots,kyoLeavePathsRoots(newSemanticRoots));
           |  var oldFocus=kyoFocusPathsRoots(oldRoots);
-          |  range.deleteContents();for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
+          |  range.deleteContents();removed.forEach(function(key){__kyoRanges.delete(key);});
           |  var finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
           |    var incomingHost=newRoots[0];kyoRangeSyncHost(parent,incomingHost,id);while(incomingHost.firstChild)parent.insertBefore(incomingHost.firstChild,endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  }else if(synthetic){var table=parent.parentNode;if(!table)kyoRangeFail("table range host is detached: "+id);
