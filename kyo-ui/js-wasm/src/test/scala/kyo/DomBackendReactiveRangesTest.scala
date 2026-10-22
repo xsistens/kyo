@@ -1354,4 +1354,42 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         end for
     }
 
+    /** How many entries of the mount's registry name markers that are no longer in the document. */
+    private def stranded(ready: DomTestEnv.MountReady)(using Frame): Int < Sync =
+        ready.regions.get.entries.map(_.count((_, e) => !dom.document.contains(e.start) || !dom.document.contains(e.end)))
+
+    /** The id of the first range opening under the element `id`. */
+    private def firstRangeUnder(id: String): String =
+        val walker = dom.document.createTreeWalker(dom.document.getElementById(id), 128, null, false)
+        var found  = ""
+        while found.isEmpty && walker.nextNode() != null do
+            found = kyo.internal.DomReactiveRegions.startMarkerId(walker.currentNode).getOrElse("")
+        found
+    end firstRangeUnder
+
+    "a region in a row a list patch inserted keeps updating, and a removed row takes its regions with it" in {
+        for
+            rows  <- Signal.initRef(Chunk(1, 2))
+            count <- Signal.initRef(0)
+            ui = UI.div(UI.ul(rows.foreachKeyed(_.toString)(i => UI.li.id(s"rn-$i")(count.map(c => UI.span(s"$i:$c").id(s"rnc-$i"): UI)))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("rnc-2") == "2:0"))
+            _     <- rows.set(Chunk(1, 2, 3))
+            _     <- assertEventually(Sync.defer(text("rnc-3") == "3:0"))
+            _     <- count.set(1)
+            _     <- assertEventually(Sync.defer(text("rnc-1") == "1:1" && text("rnc-3") == "3:1"))
+            first = firstRangeUnder("rn-1")
+            _        <- rows.set(Chunk(2, 3))
+            _        <- assertEventually(Sync.defer(dom.document.getElementById("rn-1") == null))
+            released <- ready.regions.get.contains(first)
+            left     <- stranded(ready)
+            _        <- count.set(2)
+            _        <- assertEventually(Sync.defer(text("rnc-3") == "3:2"))
+            _        <- fiber.interrupt
+            _        <- fiber.getResult
+        yield assert((first.nonEmpty, released, left) == (true, false, 0), s"first=$first released=$released stranded=$left")
+        end for
+    }
+
 end DomBackendReactiveRangesTest

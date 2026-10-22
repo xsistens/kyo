@@ -1723,7 +1723,12 @@ private[kyo] object HtmlRenderer:
           |// survived and clones or drops the rest, so the registry cannot be updated from the payload the way the
           |// wholesale path does it. Twin of rescanRange in DomReactiveRegions.
           |function kyoRangeRescan(id,endpoints){
-          |  var found=new Map(),open=[];
+          |  var found=new Map();__kyoRangeScanRun(id,endpoints.start.nextSibling,endpoints.end,found);return found;
+          |}
+          |// The ranges of the sibling run [first,until) into found, nested ones included. Twin of scanSiblings in
+          |// DomReactiveRegions.
+          |function __kyoRangeScanRun(id,first,until,found){
+          |  var open=[];
           |  function visit(node){
           |    var sid=__kyoSpanId(node);
           |    if(sid!==null)open.push({id:sid,node:node});
@@ -1734,10 +1739,14 @@ private[kyo] object HtmlRenderer:
           |    var child=node.firstChild;
           |    while(child){var next=child.nextSibling;visit(child);child=next;}
           |  }
-          |  var n=endpoints.start.nextSibling;
-          |  while(n&&n!==endpoints.end){var next=n.nextSibling;visit(n);n=next;}
+          |  var n=first;
+          |  while(n&&n!==until){var next=n.nextSibling;visit(n);n=next;}
           |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
-          |  return found;
+          |}
+          |// Every range id opening at or under node. Twin of collectStartIds in DomReactiveRegions.
+          |function __kyoCollectStartIds(node,into){
+          |  var sid=__kyoSpanId(node);if(sid!==null)into.push(sid);
+          |  for(var child=node.firstChild;child;child=child.nextSibling)__kyoCollectStartIds(child,into);
           |}
           |// Reconcile a list region against a row order rather than a rendered document: the payload holds only the
           |// rows that changed, every other row is named by key and stays where it is. The walk is the same
@@ -1787,9 +1796,16 @@ private[kyo] object HtmlRenderer:
           |  var oldEnter=kyoEnterPathsRoots(__kyoLogicalElements(repainted));
           |  var oldFocus=kyoFocusPathsRoots(__kyoLogicalElements(repainted));
           |  var ghosts=kyoLeavePrepareRoots(__kyoLogicalElements(disturbed),survivors);
+          |  // The registry follows the patch as DomReactiveRegions.PatchScope does: the ranges of every row leaving or
+          |  // repainted are retired before anything moves (a morph may drop markers, and a dropped marker's id is
+          |  // unreadable afterwards), and the ranges standing where a row was painted or inserted are read right after.
+          |  var retired=[],found=new Map();
+          |  for(i=0;i<disturbed.length;i++)__kyoEachSpanNode(disturbed[i],function(n){__kyoCollectStartIds(n,retired);});
           |  var touched=[];
           |  // Patches a row in place or replaces it, and answers the node that now starts it.
-          |  function place(from,ti){var to=toNodes[ti];if(!to)return from;var at=__kyoPatchLogical(parent,from,to);
+          |  function place(from,ti){var to=toNodes[ti];if(!to)return from;
+          |    var before=from.previousSibling,until=__kyoLogicalNext(from),at=__kyoPatchLogical(parent,from,to);
+          |    __kyoRangeScanRun(id,before?before.nextSibling:parent.firstChild,until,found);
           |    if(at!==from){var els=__kyoLogicalElements([at]);for(var q=0;q<els.length;q++)touched.push(els[q]);}
           |    else if(from.nodeType===1)touched.push(from);
           |    return at;}
@@ -1812,7 +1828,9 @@ private[kyo] object HtmlRenderer:
           |    if(live2){if(live2!==cursor)__kyoMoveLogicalBefore(parent,live2,cursor);else cursor=__kyoLogicalNext(cursor);
           |      place(live2,i);}
           |    else if(toNodes[i]){
-          |      var ins=__kyoLogicalElements([__kyoInsertLogicalClone(parent,toNodes[i],cursor)]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);}
+          |      var prior=cursor.previousSibling;
+          |      var ins=__kyoLogicalElements([__kyoInsertLogicalClone(parent,toNodes[i],cursor)]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);
+          |      __kyoRangeScanRun(id,prior?prior.nextSibling:parent.firstChild,cursor,found);}
           |    else kyoRangeFail("row is neither retained nor rendered: "+key);
           |  }
           |  for(i=0;i<fromKeys.length;i++){
@@ -1820,6 +1838,8 @@ private[kyo] object HtmlRenderer:
           |    if((lk===null||!Object.prototype.hasOwnProperty.call(targetKeys,lk))&&document.contains(fromNodes[i]))
           |      __kyoRemoveLogical(parent,fromNodes[i]);
           |  }
+          |  for(i=0;i<retired.length;i++)__kyoRanges.delete(retired[i]);
+          |  found.forEach(function(pair,key){__kyoRanges.set(key,pair);});
           |  var finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  for(i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
           |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);
@@ -1987,6 +2007,8 @@ private[kyo] object HtmlRenderer:
         s"""var ws=null,__wsRetries=0,__wsGone=false,__live=false,__liveWaiters=[];
            |// Read-only test hook on the current socket; it follows each reconnect.
            |Object.defineProperty(window,"__kyoWs",{get:function(){return ws;},configurable:true});
+           |// Read-only test hook on the range registry, so a test can check that it names only markers in the document.
+           |Object.defineProperty(window,"__kyoRanges",{get:function(){return __kyoRanges;},configurable:true});
            |// Test hook: resolves once the session is live, at once when it already is. The first server frame is the only
            |// signal that the page can take an interaction, and no document readiness state carries it.
            |window.__kyoLive=function(){return __live?Promise.resolve(true):new Promise(function(r){__liveWaiters.push(r);});};

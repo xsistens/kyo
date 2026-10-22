@@ -1186,4 +1186,46 @@ class DomBackendTest extends UITest:
         }
     }
 
+    /** The id of the first range opening under the element `id`, read off its comments. */
+    private def firstRangeUnder(id: String): String =
+        s"""(function(){var w=document.createTreeWalker(document.getElementById('$id'),128,null,false),n;
+           |while((n=w.nextNode()))if(n.data.indexOf('kyo-rs:')===0){var r=n.data.slice(7),s=r.indexOf(' ');return s<0?r:r.slice(0,s);}
+           |return '';})()""".stripMargin
+
+    /** How many registry entries name markers that are no longer in the document. */
+    private val strandedEntries =
+        "(function(){var n=0;__kyoRanges.forEach(function(p){if(!document.contains(p.start)||!document.contains(p.end))n++;});return String(n);})()"
+
+    "a region in a row a list patch inserted keeps updating, and a removed row takes its regions with it" in {
+        val app: UI < Async =
+            for
+                rows  <- Signal.initRef(Chunk(1, 2))
+                count <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("add").id("rnadd").onClick(rows.set(Chunk(1, 2, 3))),
+                UI.button("drop").id("rndrop").onClick(rows.set(Chunk(2, 3))),
+                UI.button("bump").id("rnbump").onClick(count.getAndUpdate(_ + 1).unit),
+                UI.ul(rows.foreachKeyed(_.toString)(i => UI.li.id(s"rn-$i")(count.map(c => UI.span(s"$i:$c").id(s"rnc-$i"): UI))))
+            )
+        withUI(app) {
+            for
+                _        <- Browser.click(Selector.id("rnadd"))
+                _        <- Browser.assertText(Selector.id("rnc-3"), "3:0")
+                _        <- Browser.click(Selector.id("rnbump"))
+                _        <- Browser.assertText(Selector.id("rnc-1"), "1:1")
+                _        <- Browser.assertText(Selector.id("rnc-3"), "3:1")
+                first    <- Browser.eval(firstRangeUnder("rn-1"))
+                _        <- Browser.click(Selector.id("rndrop"))
+                _        <- Browser.assertNotExists(Selector.id("rn-1"))
+                released <- Browser.eval(s"String(__kyoRanges.has('$first'))")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("rnbump"))
+                _        <- Browser.assertText(Selector.id("rnc-3"), "3:2")
+            yield assert(
+                (first.nonEmpty, released, stranded) == (true, "false", "0"),
+                s"first=$first released=$released stranded=$stranded"
+            )
+        }
+    }
+
 end DomBackendTest

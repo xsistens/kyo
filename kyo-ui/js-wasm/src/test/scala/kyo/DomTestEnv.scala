@@ -69,12 +69,14 @@ private[kyo] object DomTestEnv:
     class MountReady extends kyo.internal.DomBackend.MountDiagnostics:
         private var ready                                                                    = false
         var applied: Int                                                                     = 0
+        var regions: Maybe[kyo.internal.DomReactiveRegions]                                  = Absent
         def installed: Boolean                                                               = ready
         def channelClosed(): Unit                                                            = ()
         def drainInterrupting(): Unit                                                        = ()
         def drainJoined(): Unit                                                              = ()
         override def dragRuntimeInstalled(runtime: kyo.internal.DomDragRuntime.Handle): Unit = ready = true
         override def regionApplied(): Unit                                                   = applied += 1
+        override def regionsOpened(opened: kyo.internal.DomReactiveRegions): Unit            = regions = Present(opened)
     end MountReady
 
 end DomTestEnv

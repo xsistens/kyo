@@ -21,6 +21,7 @@ private[kyo] object DomBackend:
         def drainInstalled(drain: Fiber[Unit, Any]): Unit              = ()
         def drainStarted(): Unit                                       = ()
         def regionApplied(): Unit                                      = ()
+        def regionsOpened(regions: DomReactiveRegions): Unit           = ()
     end MountDiagnostics
 
     private object NoMountDiagnostics extends MountDiagnostics:
@@ -794,6 +795,7 @@ private[kyo] object DomBackend:
             html    <- HtmlRenderer.render(ui, Seq.empty)
             _       <- Sync.defer { noteMarkers(html); container.innerHTML = html }
             regions <- DomReactiveRegions.init(container)
+            _       <- Sync.defer(diagnostics.regionsOpened(regions))
             _       <- applyJsProps(container)
             _       <- Sync.defer(seedEnter(container, Set.empty))
             _       <- Sync.defer(seedFocusAuto(container, Set.empty))
