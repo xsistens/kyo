@@ -18,6 +18,30 @@ final case class TreeNode(
     accessibleName: Maybe[String] = Absent
 )
 
+/** A tree node, built directly or as `_.node(...)` (see [[TreeNodeScope]]). */
+type TreeNodeEntry = Entry[TreeNode, TreeNodeScope]
+
+/** What `_` stands for in [[Tree.nodes]] and [[TreeSelect.nodes]]: `_.node("Documents", "docs", children = Seq(_.node(...)))`. The
+  * children take the same two spellings, so a whole tree reads one way.
+  */
+final class TreeNodeScope private ():
+    /** A node keyed by `id`, as [[TreeNode.apply]]. */
+    def node(
+        text: String,
+        id: String,
+        icon: Maybe[IconGlyph] = Absent,
+        children: Seq[TreeNodeEntry] = Nil,
+        tooltip: Maybe[String] = Absent,
+        accessibleName: Maybe[String] = Absent
+    ): TreeNode = TreeNode(text, id, icon, TreeNodeScope.resolve(children), tooltip, accessibleName)
+end TreeNodeScope
+
+object TreeNodeScope:
+    private val scope = new TreeNodeScope
+
+    private[uic] def resolve(entries: Seq[TreeNodeEntry]): List[TreeNode] = Entry.resolve(scope, entries)
+end TreeNodeScope
+
 /** Tree — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tree
   * anatomy: `div.p-tree.p-component` > `div.p-tree-root` >
   * `ul.p-tree-root-children[role=tree]` of `li.p-tree-node[role=treeitem]`
@@ -72,8 +96,8 @@ final case class Tree private (
 ) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = Tree
 
-    /** Appends the given root nodes. */
-    def nodes(ns: TreeNode*): Tree = copy(nodeList = nodeList ++ ns.toList)
+    /** Appends the given root nodes, each built directly or from `_` (see [[TreeNodeScope]]). */
+    def nodes(ns: TreeNodeEntry*): Tree = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
 
     /** Binds expansion two-way to `ref`: toggles update the set, ref changes re-render `aria-expanded`. */
     def expanded(ref: SignalRef[Set[String]]): Tree = copy(expandedRef = Present(ref))
