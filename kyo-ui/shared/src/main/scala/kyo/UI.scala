@@ -414,8 +414,12 @@ object UI:
       *
       * A mount effect returns once it has set things up, so a feed it forked keeps running after the node shows its content. Forked with
       * `Fiber.init`, a feed that dies leaves that content on screen with nothing behind it. Forked with `UI.fork`, its first terminal
-      * failure that is not an interrupt goes to the `onFailure` rules around the node, and when none matches it switches the node to its
-      * error rendering, with [[kyo.UI.MountError.source]] set to `Fork`.
+      * failure goes to the `onFailure` rules around the node, and when none matches it switches the node to its error rendering, with
+      * [[kyo.UI.MountError.source]] set to `Fork`.
+      *
+      * An interrupt that reaches the fiber is a cancel and reports nothing: one you send it, one passed on from a fiber that waits on it
+      * and is interrupted, and the node's release. An interrupt the fiber's own work ends with, without one reaching the fiber (it waited
+      * on a promise that someone else's interrupt completed), is reported like any failure, unless the node is being released.
       *
       * This reaches `UI.fork` calls made from fibers the effect already forked with `UI.fork`. A plain `Fiber.init` does not take part,
       * which is the way to fork a fiber whose failure the effect handles itself, and outside a mount effect `UI.fork` is `Fiber.init`.
@@ -434,7 +438,14 @@ object UI:
         ReactiveUI.MountSupervision.local.use {
             case Absent               => Fiber.init[E, A, S, S2](v)
             case Present(supervision) =>
-                Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(supervision.report(_)).andThen(fiber))
+                Fiber.init[E, A, S, S2](v).map { fiber =>
+                    for
+                        cancelled <- AtomicBoolean.init(false)
+                        _         <- fiber.onComplete(result => cancelled.get.map(supervision.report(result, _)))
+                        // Registered after the report: a fiber runs its newest callback first, so the report sees the cancel.
+                        _ <- fiber.onInterrupt(_ => cancelled.set(true))
+                    yield fiber
+                }
         }
 
     /** Reports a failure that should be surfaced without replacing any content: a background feed that died while its last

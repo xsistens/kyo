@@ -2995,6 +2995,9 @@ private[kyo] object ReactiveUI:
 
         /** Whether the interrupt that ended the effect is a failure, once that can be told. */
         def interrupted(using Frame): Boolean < Async = table.verdict(this)
+
+        /** Counts a decision on an interrupt that ended a [[kyo.UI.fork]] fiber of the instance. */
+        def forkInterruptJudged(): Unit = discard(table.session.counters.forkInterrupts.incrementAndGet())
     end MountFate
 
     /** What a mounted node's content cell holds.
@@ -3095,9 +3098,9 @@ private[kyo] object ReactiveUI:
         def make(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
             for
                 cell <- Signal.initRef[MountState](MountState.Pending(seed))
-                supervision = MountSupervision(spec, cell, frames)
-                inner       = FailureFrame.Mount(supervision) :: frames
                 fate        = new MountFate(ReleaseGroup.root(), parent)
+                supervision = MountSupervision(spec, cell, frames, fate)
+                inner       = FailureFrame.Mount(supervision) :: frames
                 scope  <- Scope.Finalizer.init(1)
                 go     <- Promise.init[Unit, Any]
                 runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session, fate)))
@@ -3115,8 +3118,8 @@ private[kyo] object ReactiveUI:
         def failed(spec: MountedSpec, message: String, frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
             for
                 cell <- Signal.initRef[MountState](MountState.Pending(Absent))
-                supervision = MountSupervision(spec, cell, frames)
                 fate        = new MountFate(ReleaseGroup.root(), parent)
+                supervision = MountSupervision(spec, cell, frames, fate)
                 _      <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
                 _      <- Sync.Unsafe.defer(fate.scoped(parent.group))
                 scope  <- Scope.Finalizer.init(1)
@@ -3165,7 +3168,8 @@ private[kyo] object ReactiveUI:
     final private[kyo] class MountSupervision(
         initialSpec: MountedSpec,
         cell: SignalRef[MountState],
-        initialFrames: Failures.Scope
+        initialFrames: Failures.Scope,
+        fate: MountFate
     ):
         // Unsafe: written by the claim that adopts the instance, read wherever a failure is routed.
         private val at      = AtomicRef.Unsafe.init((initialSpec, initialFrames))(using AllowUnsafe.embrace.danger)
@@ -3193,16 +3197,24 @@ private[kyo] object ReactiveUI:
             val (s, f) = at.get()(using AllowUnsafe.embrace.danger)
             s.errorUI(s.mountError(raised, source), Failures.views(f))
 
-        /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt goes to the `onFailure` rules
-          * around the node, and fails the node when none matches.
+        /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure goes to the `onFailure` rules around the node, and fails
+          * the node when none matches. An interrupt is a failure only when none reached the fiber (`cancelled`) and the instance is not
+          * being released: then the fiber's own work ended on an interrupt someone else caused, as a mount effect's can (see [[MountFate]]).
           */
-        def report[E, A](result: Result[E, A])(using Frame): Unit < Sync =
+        def report[E, A](result: Result[E, A], cancelled: Boolean)(using Frame): Unit < Sync =
             result match
-                case Result.Panic(_: Interrupted)   => Kyo.unit
-                case Result.Failure(_: Interrupted) => Kyo.unit
+                case Result.Panic(t: Interrupted)   => interrupted(t, cancelled)
+                case Result.Failure(t: Interrupted) => interrupted(t, cancelled)
                 case Result.Panic(t)                => forked(t)
                 case Result.Failure(failure)        => forked(failure)
                 case _                              => Kyo.unit
+
+        /** Decides on an interrupt that ended a fork fiber; the verdict may wait for a cut, so it is taken on a fiber of its own. */
+        private def interrupted(failure: Interrupted, cancelled: Boolean)(using Frame): Unit < Sync =
+            val judged = Sync.Unsafe.defer(fate.forkInterruptJudged())
+            if cancelled then judged
+            else Fiber.initUnscoped(fate.interrupted.map(failed => (if failed then forked(failure) else Kyo.unit).andThen(judged))).unit
+        end interrupted
 
         /** The rules may notify or run an action, which suspends, so they run on a fiber of their own. */
         private def forked(failure: Any)(using Frame): Unit < Sync =
@@ -3437,11 +3449,12 @@ private[kyo] object ReactiveUI:
 
     /** Work counts of one session, for measuring what the tables cost: regions registered and unregistered, region passes that planned
       * their walk and passes that skipped it (no mount in it and none recorded below), cuts recorded and settled, regions a cut check
-      * looked at, live instances a planned pass examined for whether a region still shows them, and the verdicts on an interrupted
-      * effect that wait for a cut now (see [[MountFate]]).
+      * looked at, live instances a planned pass examined for whether a region still shows them, the verdicts on an interrupted
+      * effect that wait for a cut now (see [[MountFate]]), and the decisions taken on interrupts that ended a [[kyo.UI.fork]] fiber.
       */
     final private[kyo] class MountCounters:
         val pendingVerdicts = new java.util.concurrent.atomic.AtomicLong()
+        val forkInterrupts  = new java.util.concurrent.atomic.AtomicLong()
         val registered      = new java.util.concurrent.atomic.AtomicLong()
         val unregistered    = new java.util.concurrent.atomic.AtomicLong()
         val planned         = new java.util.concurrent.atomic.AtomicLong()

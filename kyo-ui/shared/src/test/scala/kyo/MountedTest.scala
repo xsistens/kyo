@@ -1653,6 +1653,117 @@ class MountedTest extends kyo.test.Test[Any]:
         }
     }
 
+    /** How many interrupts that ended a `UI.fork` fiber the session has decided on, silent or reported. */
+    private def forkDecisions(session: ReactiveUI.MountSession)(using Frame): Long < Sync =
+        Sync.defer(session.counters.forkInterrupts.get)
+
+    private def reportsNoForkFailure(errors: ErrorLog)(using Frame, kyo.test.AssertScope): Unit < Async =
+        errors.logged.map(logged => assert(!logged.exists(_.contains("background fiber")), s"a cancel was reported as a failure: $logged"))
+
+    "a UI.fork fiber whose work ends on a promise another mount's release interrupted reports its failure to the node" in {
+        for
+            shared    <- Promise.init[Unit, Any]
+            entered   <- Latch.init(2)
+            releasedA <- AtomicBoolean.init(false)
+            showA     <- Signal.initRef(true)
+            reached   <- AtomicBoolean.init(false)
+            // No interrupt reaches the fork fiber: its own work ends with the interrupt the awaited promise took from A's release.
+            effect = UI.fork(entered.release.andThen(shared.get))
+                .map(fiber => fiber.onInterrupt(_ => reached.set(true)))
+                .andThen(span("up"))
+            ui = div(
+                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+            )
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- entered.await
+                    _     <- showsEventually(recorder, Seq("1", "0"), "up")
+                    _     <- showA.set(false)
+                    _     <- assertEventually(releasedA.get)
+                    _     <- showsEventually(recorder, Seq("1", "0"), "error:Fork")
+                    there <- reached.get
+                yield assert(!there, "an interrupt reached the fork fiber, though only the promise it awaited took one")
+            }
+        yield succeed
+    }
+
+    "a UI.fork fiber the effect interrupts itself is a cancel and reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                reached <- AtomicBoolean.init(false)
+                effect = UI.fork(never.get).map { fiber =>
+                    fiber.onInterrupt(_ => reached.set(true)).andThen(fiber.interrupt).andThen(fiber.getResult)
+                }.andThen(span("up"))
+                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _     <- showsEventually(recorder, Seq("0"), "up")
+                        _     <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _     <- reportsNoForkFailure(errors)
+                        shown <- recorder.shown(Seq("0"))
+                        there <- reached.get
+                    yield assert(there && !shown.contains("error:"), s"the interrupt reached the fiber: $there, the node shows $shown")
+                }
+            yield succeed
+        }
+    }
+
+    "a UI.fork fiber interrupted through a fiber that awaits it is a cancel and reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                reached <- AtomicBoolean.init(false)
+                // The waiter is interrupted only once it waits on the fork fiber, so the interrupt is passed on to it.
+                effect = UI.fork(never.get).map { fiber =>
+                    for
+                        _      <- fiber.onInterrupt(_ => reached.set(true))
+                        before <- fiber.waiters
+                        waiter <- Fiber.initUnscoped(fiber.get)
+                        _      <- assertEventually(fiber.waiters.map(_ > before))
+                        _      <- waiter.interrupt
+                        _      <- fiber.getResult
+                    yield ()
+                }.andThen(span("up"))
+                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _     <- showsEventually(recorder, Seq("0"), "up")
+                        _     <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _     <- reportsNoForkFailure(errors)
+                        shown <- recorder.shown(Seq("0"))
+                        there <- reached.get
+                    yield assert(there && !shown.contains("error:"), s"the interrupt reached the fiber: $there, the node shows $shown")
+                }
+            yield succeed
+        }
+    }
+
+    "a UI.fork fiber interrupted by the release of its node reports nothing" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                never   <- Promise.init[Unit, Any]
+                started <- Latch.init(1)
+                show    <- Signal.initRef(true)
+                effect = UI.fork(started.release.andThen(never.get)).andThen(span("up"))
+                ui     = div(show.render(s => if s then div(UI.mounted(effect).keyed("F")) else span("gone")))
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _ <- started.await
+                        _ <- show.set(false)
+                        _ <- showsEventually(recorder, Seq("0"), "gone")
+                        _ <- assertEventually(forkDecisions(sub.mountSession).map(_ == 1))
+                        _ <- reportsNoForkFailure(errors)
+                    yield ()
+                }
+            yield succeed
+        }
+    }
+
     "an instance released while its effect is pending does not end failed" in {
         val errors = new ErrorLog
         Log.let(Log(errors)) {
