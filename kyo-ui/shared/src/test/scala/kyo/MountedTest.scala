@@ -2317,6 +2317,55 @@ class MountedTest extends kyo.test.Test[Any]:
             )
     }
 
+    /** A keyed list of `rows` table rows, each with a region without a mount in one cell and a keyed mount in the other, filled after
+      * the list subscribed, then every row's region re-rendered once: from before the re-render until every row shows it, the regions
+      * the passes looked at for whether one lies inside their own, and how many passes skipped and planned their walk.
+      */
+    private def belowForRegionRows(rows: Int)(using Frame, kyo.test.AssertScope) =
+        for
+            runs  <- AtomicInt.init(0)
+            items <- Signal.initRef(Chunk.empty[String])
+            tick  <- Signal.initRef(0)
+            row = (id: String) =>
+                tr(
+                    td(tick.render(n => span(s"$id:$n"))),
+                    td(UI.mounted(runs.incrementAndGet.andThen(span(id))).keyed("m").placeholder(span("...")))
+                )
+            ui       = div(table(tbody(items.foreachKeyed(identity)(row))))
+            recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
+            counts <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- subscribeAudited(root, recorder)
+                    c = sub.mountSession.counters
+                    _ <- items.set(Chunk.from((0 until rows).map(i => s"r$i")))
+                    _ <- assertEventually(runs.get.map(_ == rows))
+                    _ <- assertEventually(Sync.defer(c.registered.get == 2 * rows + 1 && c.skipped.get >= rows))
+                    before = (c.below.get, c.skipped.get, c.planned.get)
+                    _ <- tick.set(1)
+                    _ <- Kyo.foreachDiscard(0 until rows)(i => showsEventually(recorder, Seq("0", "0", "0", s"r$i", "0", "0"), s"r$i:1"))
+                    after = (c.below.get, c.skipped.get, c.planned.get)
+                    _ <- assertConsistent(sub)
+                yield (after._1 - before._1, after._2 - before._2, after._3 - before._3)
+            }
+        yield counts
+        end for
+    end belowForRegionRows
+
+    "a region without a mount in every row of a keyed list with mounts looks at one region at most per pass for 50 and for 500 rows" in {
+        for
+            small <- belowForRegionRows(50)
+            large <- belowForRegionRows(500)
+        yield
+            java.lang.System.out.println(s"MOUNTBELOW (regions looked at, passes skipped, planned) rows=50 $small rows=500 $large")
+            assert(small._2 >= 50 && large._2 >= 500, s"the re-render did not skip a pass in every row: $small, $large")
+            assert(
+                small._1 <= small._2 + small._3 && large._1 <= large._2 + large._3,
+                s"regions looked at for one inside, against passes: $small for 50 rows, $large for 500 rows"
+            )
+    }
+
     /** `steps` states of two keyed lists over the ids `r0` to `r15`, each one step from the one before: two rows swapped, a row removed,
       * an absent id inserted, a row moved within its list, or a row moved to the other list. Fixed by `seed`; an id is in one list at most.
       */

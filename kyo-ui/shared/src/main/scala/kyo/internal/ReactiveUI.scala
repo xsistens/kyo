@@ -3270,6 +3270,26 @@ private[kyo] object ReactiveUI:
     private[kyo] object RegionKey:
         val top: RegionKey = RegionKey(Vector.empty, -1)
 
+        /** Tree order: by path, segment by segment and a path before every path below it, then by depth. The keys a region encloses
+          * come right after its own, before any key it does not enclose, so the first key after a region's tells whether any region
+          * lies inside it.
+          */
+        given treeOrder: Ordering[RegionKey] with
+            def compare(a: RegionKey, b: RegionKey): Int =
+                val shared = math.min(a.path.size, b.path.size)
+                @scala.annotation.tailrec
+                def from(i: Int): Int =
+                    if i == shared then
+                        if a.path.size != b.path.size then java.lang.Integer.compare(a.path.size, b.path.size)
+                        else java.lang.Integer.compare(a.depth, b.depth)
+                    else
+                        val c = a.path(i).compareTo(b.path(i))
+                        if c != 0 then c else from(i + 1)
+                from(0)
+            end compare
+        end treeOrder
+    end RegionKey
+
     /** The nodes one render pass of a region owns: its reactive children, and through a constant child (an element that only
       * carries reactive attributes) that child's own, which the constant node subscribes in the same pass and the same table.
       */
@@ -3330,10 +3350,14 @@ private[kyo] object ReactiveUI:
       * instance is held by a region or waits for a cut: a claim files one only while a region holds it, a pass puts one whose last
       * holder it took in waiting, and a cut releases what it finds held by none. So a pass finds what it put in transit among the
       * identities it took from a region.
+      *
+      * `ordered` is the keys of `regions` in tree order (see [[RegionKey.treeOrder]]), changed together with `regions` by every entry a
+      * change adds or drops, so whether a region lies inside another, and which ones do, is a lookup and not a scan of every region.
       */
     final private case class TableState(
         instances: Dict[MountIdentity, MountSlot],
         regions: Dict[RegionKey, RegionEntry],
+        ordered: scala.collection.immutable.TreeSet[RegionKey],
         heldBy: Dict[MountIdentity, Set[RegionKey]],
         waiting: Set[MountIdentity],
         views: Dict[MountIdentity, Chunk[ClaimView]],
@@ -3350,21 +3374,50 @@ private[kyo] object ReactiveUI:
 
         def holders(identity: MountIdentity): Int = holding(identity).size
 
-        /** This state with `entry` at `key`, `heldBy` following its `holds`. */
-        def withEntry(key: RegionKey, entry: RegionEntry): TableState =
-            val before = regions.get(key).fold(Set.empty[MountIdentity])(_.holds)
-            copy(regions = regions.update(key, entry), heldBy = TableState.reindex(heldBy, key, before, entry.holds))
+        /** The first region after `key` in tree order: one that lies inside `key` when any does. */
+        def next(key: RegionKey): Maybe[RegionKey] = Maybe.fromOption(ordered.minAfter(RegionKey(key.path, key.depth + 1)))
 
-        /** What contradicts the invariants: a `heldBy` that differs from the `holds` of the entries, or a live instance that no region
-          * holds and that waits for no cut. A check for tests, which scans every region and instance.
+        /** The regions that lie inside `key`, in tree order. */
+        def inside(key: RegionKey): Iterator[RegionKey] =
+            ordered.iteratorFrom(RegionKey(key.path, key.depth + 1)).takeWhile(key.encloses)
+
+        /** This state with `entry` at `key`, `heldBy` following its `holds` and `ordered` its key. */
+        def withEntry(key: RegionKey, entry: RegionEntry): TableState =
+            val old = regions.get(key)
+            copy(
+                regions = regions.update(key, entry),
+                ordered = if old.isEmpty then ordered + key else ordered,
+                heldBy = TableState.reindex(heldBy, key, old.fold(Set.empty[MountIdentity])(_.holds), entry.holds)
+            )
+        end withEntry
+
+        /** What contradicts the invariants: a `heldBy` that differs from the `holds` of the entries, an `ordered` that differs from the
+          * keys of the entries or tells another region than a recount from the paths whether one lies inside it, or a live instance that
+          * no region holds and that waits for no cut. A check for tests, which scans every region and instance.
           */
         def inconsistency: Maybe[String] =
             val recounted = regions.foldLeft(Dict.empty[MountIdentity, Set[RegionKey]])((acc, key, e) =>
                 TableState.reindex(acc, key, Set.empty, e.holds)
             )
+            // The paths some region lies below, and the deepest region at each path: a region lies inside `key` when one lies below its
+            // path or deeper at it.
+            val (below, deepest) = regions.foldLeft((Set.empty[Seq[String]], Dict.empty[Seq[String], Int])) { (acc, key, _) =>
+                val (paths, depths) = acc
+                (
+                    paths ++ (0 until key.path.size).map(key.path.take),
+                    depths.update(key.path, depths.getOrElse(key.path, key.depth).max(key.depth))
+                )
+            }
             def same(a: Set[RegionKey], b: Set[RegionKey]): Boolean = a.size == b.size && a.forall(b.contains)
             if recounted.size != heldBy.size || !recounted.forall((identity, keys) => same(keys, holding(identity))) then
                 Present(s"heldBy ${heldBy.mkString(", ")} differs from the entries' holds ${recounted.mkString(", ")}")
+            else if ordered.size != regions.size || !regions.forall((key, _) => ordered.contains(key)) then
+                Present(s"the regions in tree order ${ordered.mkString(", ")} differ from the entries' keys ${regions.mkString(", ")}")
+            else if !regions.forall((key, _) =>
+                    next(key).exists(key.encloses) == (below.contains(key.path) || deepest(key.path) > key.depth)
+                )
+            then
+                Present(s"the tree order ${ordered.mkString(", ")} tells a region whether one lies inside it otherwise than its paths do")
             else
                 instances.foldLeft(Maybe.empty[String]) { (found, identity, _) =>
                     if found.isEmpty && holders(identity) == 0 && !waiting.contains(identity) then
@@ -3376,7 +3429,17 @@ private[kyo] object ReactiveUI:
     end TableState
 
     private object TableState:
-        val empty: TableState = TableState(Dict.empty, Dict.empty, Dict.empty, Set.empty, Dict.empty, Chunk.empty, Chunk.empty)
+        val empty: TableState =
+            TableState(
+                Dict.empty,
+                Dict.empty,
+                scala.collection.immutable.TreeSet.empty,
+                Dict.empty,
+                Set.empty,
+                Dict.empty,
+                Chunk.empty,
+                Chunk.empty
+            )
 
         /** `heldBy` after the entry at `key` went from holding `before` to holding `after`. */
         def reindex(
@@ -3436,7 +3499,7 @@ private[kyo] object ReactiveUI:
     end ClaimView
 
     /** What opening a pass changed: the pass, the instances it put in transit, and the duplicate reports it made, with how many
-      * live instances it examined for whether a region still shows them.
+      * live instances it examined for whether a region still shows them, and how many regions it looked at for one inside its own.
       */
     final private case class Opened(
         pass: MountPass,
@@ -3444,13 +3507,15 @@ private[kyo] object ReactiveUI:
         waits: Boolean,
         duplicates: Chunk[String],
         work: Int,
-        examined: Int = 0
+        examined: Int = 0,
+        below: Int = 0
     )
 
     /** Work counts of one session, for measuring what the tables cost: regions registered and unregistered, region passes that planned
       * their walk and passes that skipped it (no mount in it and none recorded below), cuts recorded and settled, regions a cut check
-      * looked at, live instances a planned pass examined for whether a region still shows them, the verdicts on an interrupted
-      * effect that wait for a cut now (see [[MountFate]]), and the decisions taken on interrupts that ended a [[kyo.UI.fork]] fiber.
+      * looked at, live instances a planned pass examined for whether a region still shows them, regions a pass without a mount looked
+      * at for whether one lies inside its own, the verdicts on an interrupted effect that wait for a cut now (see [[MountFate]]), and the
+      * decisions taken on interrupts that ended a [[kyo.UI.fork]] fiber.
       */
     final private[kyo] class MountCounters:
         val pendingVerdicts = new java.util.concurrent.atomic.AtomicLong()
@@ -3463,6 +3528,7 @@ private[kyo] object ReactiveUI:
         val settled         = new java.util.concurrent.atomic.AtomicLong()
         val scanned         = new java.util.concurrent.atomic.AtomicLong()
         val examined        = new java.util.concurrent.atomic.AtomicLong()
+        val below           = new java.util.concurrent.atomic.AtomicLong()
     end MountCounters
 
     /** The invariant checks of one session's tables, for tests (see `TableState.inconsistency`): how many states were checked, and what
@@ -3951,11 +4017,28 @@ private[kyo] object ReactiveUI:
                         // The first pass of a subscription over the walk the pass that subscribed it already decided.
                         case Present(entry) if retained.isEmpty && entry.complete && entry.walked.exists(_ eq walk) =>
                             (s, Opened(entry.pass, Chunk.empty, false, Chunk.empty, 0))
-                        case Present(entry) if !mount && nothingBelow(s, entry) =>
-                            (s, Opened(MountPass.clean(id), Chunk.empty, false, Chunk.empty, 1))
+                        // A walk without a mount, in a region that holds nothing: a region inside it would be the first after it in tree order.
+                        case Present(entry) if !mount && entry.holds.isEmpty =>
+                            s.next(region) match
+                                case Present(key) if region.encloses(key) =>
+                                    val (next, opened) = plan(s, entry, walk, retained, id)
+                                    (next, opened.copy(below = 1))
+                                case found =>
+                                    (
+                                        s,
+                                        Opened(
+                                            MountPass.clean(id),
+                                            Chunk.empty,
+                                            false,
+                                            Chunk.empty,
+                                            1,
+                                            below = if found.isEmpty then 0 else 1
+                                        )
+                                    )
                         case Present(entry) => plan(s, entry, walk, retained, id)
                 }
                 if opened.examined > 0 then discard(table.session.counters.examined.addAndGet(opened.examined))
+                if opened.below > 0 then discard(table.session.counters.below.addAndGet(opened.below))
                 if opened.work == 1 then discard(table.session.counters.skipped.incrementAndGet())
                 else if opened.work == 2 then discard(table.session.counters.planned.incrementAndGet())
                 watch.foreach(_.recorded())
@@ -3964,9 +4047,6 @@ private[kyo] object ReactiveUI:
                 val waits    = if opened.waits then table.awaitCut() else Kyo.unit
                 reported.andThen(dropped).andThen(waits).andThen((opened.pass, MountTable.nothingToRelease))
             }
-
-        private def nothingBelow(s: TableState, entry: RegionEntry): Boolean =
-            entry.holds.isEmpty && s.regions.foldLeft(true)((ok, key, _) => ok && (key == region || !region.encloses(key)))
 
         private def plan(
             s: TableState,
@@ -4014,12 +4094,16 @@ private[kyo] object ReactiveUI:
             val pass    = new MountPass(id, duplicates)
             var lost    = Set.empty[MountIdentity]
             var heldBy  = s.heldBy
-            var regions = s.regions.filter { (key, e) =>
-                val keep = !(region.encloses(key) && !covered.containsKey(key) && !inRetainedRow(key))
-                if !keep then
-                    lost ++= e.holds
-                    heldBy = TableState.reindex(heldBy, key, e.holds, Set.empty)
-                keep
+            var regions = s.regions
+            var ordered = s.ordered
+            s.inside(region).foreach { key =>
+                if !covered.containsKey(key) && !inRetainedRow(key) then
+                    s.regions.get(key).foreach { e =>
+                        lost ++= e.holds
+                        heldBy = TableState.reindex(heldBy, key, e.holds, Set.empty)
+                    }
+                    regions = regions.remove(key)
+                    ordered = ordered - key
             }
             var inside = Set.empty[MountIdentity]
             covered.forEach { (key, value) =>
@@ -4027,7 +4111,8 @@ private[kyo] object ReactiveUI:
                 val kept            = found.iterator.filterNot((identity, _) => doubled.contains(identity)).toSeq
                 val holds           = kept.iterator.map(_._1).toSet
                 val places          = Dict.from(kept.toMap)
-                val before          = s.regions.get(key).fold(Set.empty[MountIdentity])(_.holds)
+                val old             = s.regions.get(key)
+                val before          = old.fold(Set.empty[MountIdentity])(_.holds)
                 inside ++= holds
                 lost ++= before.diff(holds)
                 heldBy = TableState.reindex(heldBy, key, before, holds)
@@ -4041,12 +4126,13 @@ private[kyo] object ReactiveUI:
                             Present(walked),
                             complete = true,
                             pass,
-                            s.regions.get(key).fold(Dict.empty[Seq[String], UI])(_.handoff),
+                            old.fold(Dict.empty[Seq[String], UI])(_.handoff),
                             places
                         )
+                if old.isEmpty then ordered = ordered + key
                 regions = regions.update(key, next)
             }
-            val next     = s.copy(regions = regions, heldBy = heldBy)
+            val next     = s.copy(regions = regions, ordered = ordered, heldBy = heldBy)
             var examined = 0
             // In transit: instances no region shows any more, which are among the identities this pass took from a region, since every
             // other live instance is held or waits (see TableState). Contested: identities this pass shows that a region outside it shows
