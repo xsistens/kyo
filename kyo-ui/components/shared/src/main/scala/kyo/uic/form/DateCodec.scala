@@ -17,8 +17,8 @@ import kyo.*
   * date or the empty string, so parse failures do not arise in practice.
   *
   * On Scala.js the `java.time` API comes from `scala-java-time`; the zone-aware
-  * [[zoned]] codec additionally needs the zone's rules at runtime, which the app must
-  * bundle (see the demo's `sbt-tzdb` setup). [[local]] needs no timezone data.
+  * [[DateCodec.zoned]] codec additionally needs the zone's rules at runtime, which the app must
+  * bundle (see the demo's `sbt-tzdb` setup). [[DateCodec.local]] needs no timezone data.
   */
 trait DateCodec[A]:
     def toInput(a: A): String

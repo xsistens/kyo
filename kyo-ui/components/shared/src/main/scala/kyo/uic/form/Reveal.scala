@@ -1,7 +1,7 @@
 package kyo.uic.form
 
 /** When a failing validation is DISPLAYED — orthogonal to its [[Activation]] (which says
-  * when it is re-COMPUTED). The same knob applies to fields ([[FormField.revealWhen]]) and to
+  * when it is re-COMPUTED). The same knob applies to fields ([[FieldSpec.revealWhen]]) and to
   * form-level reactive invariants and submit checks (both [[Form.satisfy]]); not every value is
   * meaningful for every binding, so each notes where it applies.
   */
