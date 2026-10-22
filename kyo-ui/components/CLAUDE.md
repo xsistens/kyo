@@ -219,20 +219,26 @@ hatch for the two things a render diff cannot express: imperative DOM commands
   busy flag) still happens. A new setter does the same.
   `UI.commands` works inside a handler, but capturing `cmds` once in the outer
   mount and passing it down keeps the inner code free of the lookup.
-- **A self-command MUST fire AFTER the element is inserted.** The client resolves
-  `getElementById` immediately (no rAF, no retry) and the command op can reach it
-  BEFORE the render/insert op. So never `focusId`/`scrollIntoViewId`/`requestMeasureById`
-  in the same effect that also yields the element: it races the publish and
-  misses. The robust pattern is a nested `UI.mounted` whose effect runs after the
-  enclosing content is published:
-  - Overlay flip: a `measureTrigger` sibling `UI.mounted` requests the measure
-    once the panel (with its stamped id) is in the DOM (`Overlay.scala`).
+- **A command from a mount waits for that mount's content; one from a handler does not.**
+  kyo-ui holds a command sent from a `UI.mounted` effect (or a fiber it forked) until
+  the instance's own content is on the page, behind whatever boundary holds it back,
+  and drops it (a measure then answers `Absent`) if the content never shows. So an
+  effect may focus the element it yields, and a fiber it forked may measure it. A
+  measure the effect awaits BEFORE it yields goes out at once (holding it would hold
+  the effect forever), so it can only see what is already on the page. A HANDLER's command goes out at
+  once, and the client resolves `getElementById` immediately (no rAF, no retry): a
+  handler that addresses an element its own write is about to insert can miss it.
   - Terminal auto-scroll: the newest row carries an invisible on-mount child that
-    scrolls ITSELF into view after insertion, not a scroll from the append
-    handler (that races the re-render; `scrollTop` stays 0 even though the
-    container is scrollable). See `Terminal.scala`.
+    scrolls ITSELF into view, not a scroll from the append handler (that races the
+    re-render; `scrollTop` stays 0 even though the container is scrollable). See
+    `Terminal.scala`.
   - OTP auto-advance advances from the input handler (the target cell already
     exists from the prior render), so no nested mount is needed there.
+- **An effect never touches the DOM itself.** Even in the browser mount, a mount's
+  effect runs before its content is on the page, and inside a boundary (a mount's
+  own `.placeholder` is one) necessarily so, since the boundary waits for it. Code
+  that needs the real element uses `onAttached`, which runs once the element is in
+  the document; a nested mount is not a substitute and broke the demo's editor.
 
 ## Pointer and drag: the stable-surface idiom
 

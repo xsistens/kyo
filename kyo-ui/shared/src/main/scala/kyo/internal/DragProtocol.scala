@@ -152,6 +152,7 @@ private[kyo] object DragProtocol:
         final case class PointerUp private[DragProtocol] (wire: UIEvent.PointerUp)                      extends ValidatedEvent
         final case class MeasureById private[DragProtocol] (wire: UIEvent.MeasureById)                  extends ValidatedEvent
         final case class MeasureMissing private[DragProtocol] (wire: UIEvent.MeasureMissing)            extends ValidatedEvent
+        final case class Attach private[DragProtocol] (wire: UIEvent.Attach)                            extends ValidatedEvent
     end ValidatedEvent
 
     /** Browser-bound drag source configuration with safe file byte quantities. */
@@ -650,6 +651,7 @@ private[kyo] object DragProtocol:
                             .map(_ => ValidatedEvent.MeasureById(event))
                     case event: UIEvent.MeasureMissing =>
                         validateIdentifier(event.id, "id", limits).map(_ => ValidatedEvent.MeasureMissing(event))
+                    case event: UIEvent.Attach    => Result.succeed(ValidatedEvent.Attach(event))
                     case event: UIEvent.DragStart =>
                         validateStartAndDomain(event.event, limits).map(ValidatedEvent.Start(event, _))
                     case event: UIEvent.DragEnd   => validateEnd(event.event, limits).map(_ => ValidatedEvent.End(event))

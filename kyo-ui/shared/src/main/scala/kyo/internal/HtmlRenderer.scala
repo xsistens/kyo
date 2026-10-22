@@ -425,6 +425,11 @@ private[kyo] object HtmlRenderer:
                             elem.isInstanceOf[Svg.SvgElement],
                             cssRules
                         )
+                        // Which element value this is: the browser mount starts the onAttached hook again for a rebuilt
+                        // element, and leaves the content of one shown again unchanged, which the hook may own, alone.
+                        if elem.attrs.onAttached.nonEmpty then
+                            discard(sb.append(" data-kyo-attach=\"")
+                                .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
                     end openTag
                     openTag(reactiveTrueClasses(elem.attrs))
                     renderElementAttrs(sb, elem)
@@ -1240,7 +1245,7 @@ private[kyo] object HtmlRenderer:
             attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
             attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
             attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
-            attrs.jsProps.nonEmpty
+            attrs.jsProps.nonEmpty || attrs.onAttached.nonEmpty
 
     // ---- Helpers ----
 

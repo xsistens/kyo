@@ -80,4 +80,8 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     )
     // Reply to HtmlOp.RequestMeasureById when no element carries the id; `path` as in MeasureById.
     case MeasureMissing(path: Seq[String], id: String)
+    // The browser mount found the element at `path` newly in the document; its `onAttached` hook starts. Only that
+    // transport sends it, with the element and the scope it lives in beside the event (see AttachSite); arriving
+    // from anywhere else it finds neither and starts nothing.
+    case Attach(path: Seq[String])
 end UIEvent

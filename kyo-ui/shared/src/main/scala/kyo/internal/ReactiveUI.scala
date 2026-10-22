@@ -1294,6 +1294,9 @@ private[kyo] object ReactiveUI:
                         .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
                         .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
                 }
+            case _: UIEvent.Attach =>
+                if isTarget && attrs.onAttached.nonEmpty then AttachSite.start(attrs.onAttached.get).andThen(true)
+                else true
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
@@ -1760,6 +1763,7 @@ private[kyo] object ReactiveUI:
                 case event: DragProtocol.ValidatedEvent.PointerUp      => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Hover          => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Unhover        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Attach         => safeDispatch(handle, path, event.wire)
                 // A measure reply is the client's answer to a `requestMeasureById`, not an element event: the session
                 // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
                 // tree. Bubbling is the right answer for an event no element declared.
@@ -1883,7 +1887,8 @@ private[kyo] object ReactiveUI:
                 _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
                 _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
                 _: DragProtocol.ValidatedEvent.PointerUp |
-                _: DragProtocol.ValidatedEvent.ScrollPosition | _: DragProtocol.ValidatedEvent.FileSelect =>
+                _: DragProtocol.ValidatedEvent.ScrollPosition | _: DragProtocol.ValidatedEvent.FileSelect |
+                _: DragProtocol.ValidatedEvent.Attach =>
                 safeDispatch(handle, path, event.wire)
 
     private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =
@@ -3122,6 +3127,7 @@ private[kyo] object ReactiveUI:
                 .andThen(children.evictAll)
                 .andThen(scope.close(Absent))
                 .andThen(scope.await)
+                .andThen(supervision.afterShown.drop)
     end MountInstance
 
     private[kyo] object MountInstance:
@@ -3183,7 +3189,9 @@ private[kyo] object ReactiveUI:
             val effect = MountSession.current.let(Present(session))(
                 Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
             )
-            Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
+            Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map { result =>
+                supervision.afterShown.built.andThen(result)
+            }.map {
                 case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
                 case Result.Failure(failure) =>
                     Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
@@ -3215,6 +3223,9 @@ private[kyo] object ReactiveUI:
         // Unsafe: written by the claim that adopts the instance, read wherever a failure is routed.
         private val at      = AtomicRef.Unsafe.init((initialSpec, initialFrames))(using AllowUnsafe.embrace.danger)
         private val failure = AtomicRef.Unsafe.init(Maybe.empty[(Any, UI.MountErrorSource)])(using AllowUnsafe.embrace.danger)
+
+        /** The commands the instance sent that wait for its content to be on the page. */
+        val afterShown = new AfterShown
 
         private def spec: MountedSpec = at.get()(using AllowUnsafe.embrace.danger)._1
 
@@ -4562,6 +4573,10 @@ private[kyo] object ReactiveUI:
                                 )
                             )
                     )
+                    // The instance's own content is on its way to the page, so the commands it sent about it follow this paint.
+                    _ <- state match
+                        case MountState.Ready(_) | MountState.Failed(_) => instance.supervision.afterShown.shown(through)
+                        case MountState.Pending(_)                      => Kyo.unit
                 yield ()
             _ <- first match
                 case MountState.Pending(Absent) => Kyo.unit

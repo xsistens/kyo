@@ -103,11 +103,15 @@ private[kyo] object DomBackend:
         else morphEl(fromNode.asInstanceOf[dom.Element], toNode.asInstanceOf[dom.Element])
 
     private def morphEl(fromEl: dom.Element, toEl: dom.Element)(using Frame): Unit =
+        // The same element value shown again, with an onAttached hook that may have put content of its own inside: kyo's
+        // children of it are unchanged too, and reconciling them would remove what the hook put there.
+        val attached  = fromEl.getAttribute("data-kyo-attach")
+        val unchanged = attached != null && attached == toEl.getAttribute("data-kyo-attach")
         morphAttrs(fromEl, toEl)
         // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its subtree
         // alone (INPUT and TEXTAREA have no element children, so they need no such guard).
         val editing = (fromEl eq document.activeElement) && fromEl.hasAttribute("contenteditable")
-        if !editing then morphChildren(fromEl, toEl)
+        if !editing && !unchanged then morphChildren(fromEl, toEl)
     end morphEl
 
     private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
@@ -729,6 +733,88 @@ private[kyo] object DomBackend:
             new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
     end LocalSession
 
+    /** The elements in the document whose `onAttached` hook runs, each with the scope it lives in and the element value it started for.
+      *
+      * Attached means in the document, so this is decided here and nowhere else: after every patch the page took, an element carrying
+      * the marker that is not tracked yet starts its hook, and a tracked one that is no longer connected closes its scope. Content a
+      * boundary holds back never reaches the page and is never seen. A node a morph kept that now shows a rebuilt element value closes
+      * the old scope and starts the hook again, so whether the morph happened to keep the node never decides what runs.
+      *
+      * Both go through the session's event drain, the attach as an [[UIEvent.Attach]] dispatched to the element's path, so the hook
+      * meets what a handler there meets; one drain also keeps an element's close after its start.
+      */
+    final private class Attachments(container: dom.Element):
+        private val live = new js.WrappedMap(js.Map.empty[dom.Element, (Scope.Finalizer, String)])
+        // Set once the session's dispatch and drain exist; a patch before that (the initial subscription's) is swept again then.
+        var dispatch: Maybe[(Seq[String], UIEvent) => Boolean < Async] = Absent
+        var events: Maybe[Channel[Unit < Async]]                       = Absent
+
+        def sweep()(using Frame): Unit =
+            if saw(Marker.Attach) && dispatch.nonEmpty && events.nonEmpty then
+                val handle = dispatch.get
+                val queue  = events.get
+                val gone   = js.Array[dom.Element]()
+                live.keysIterator.foreach(el => if !el.isConnected then discard(gone.push(el)))
+                gone.foreach(close(queue, _))
+                val found = document.querySelectorAll("[data-kyo-attach]")
+                var i     = 0
+                while i < found.length do
+                    val el    = found(i).asInstanceOf[dom.Element]
+                    val value = el.getAttribute("data-kyo-attach")
+                    val known = live.get(el).map(_._2)
+                    // A leave ghost is a copy of an element that has already gone; it is not that element arriving. An element
+                    // another mount on the page shows is that mount's to start.
+                    if !known.contains(value) && el.closest("[data-kyo-ghost]") == null && owns(el) then
+                        if known.nonEmpty then close(queue, el)
+                        // Unsafe: a sweep runs synchronously inside a patch, outside any kyo computation; the scope is a
+                        // fresh allocation that only this entry and the hook it starts ever hold.
+                        import AllowUnsafe.embrace.danger
+                        val scope = Sync.Unsafe.evalOrThrow(Scope.Finalizer.init(1))
+                        live.update(el, (scope, value))
+                        val path = parsePath(el.getAttribute("data-kyo-path"))
+                        // The element may have left, or shown a rebuilt value, by the time the drain gets here; it then starts
+                        // nothing, and the close queued behind this releases the scope.
+                        fireFromJs(
+                            queue,
+                            Sync.defer(el.isConnected && live.get(el).exists(_._1 eq scope)).map { still =>
+                                if still then
+                                    AttachSite.local.let(Present(AttachSite.Site(el, scope)))(handle(path, UIEvent.Attach(path))).unit
+                                else Kyo.unit
+                            }
+                        )
+                    end if
+                    i += 1
+                end while
+            end if
+        end sweep
+
+        /** Whether this session shows `el`: inside its container, or inside a portal it moved to the body, whose slot is in the
+          * container. Paths are per session, so another mount's element dispatched here would reach the wrong handler.
+          */
+        private def owns(el: dom.Element): Boolean =
+            container.contains(el) || {
+                val portal = el.closest("[data-kyo-portal]")
+                portal != null && (portal.parentNode eq document.body) && {
+                    val slot = document.querySelector(attrSelector("data-kyo-portal-slot", portal.getAttribute("data-kyo-path")))
+                    slot != null && container.contains(slot)
+                }
+            }
+
+        private def close(queue: Channel[Unit < Async], el: dom.Element)(using Frame): Unit =
+            val scope = live(el)._1
+            live -= el
+            fireFromJs(queue, scope.close(Absent).andThen(scope.await))
+        end close
+
+        /** Closes every scope still open: the session is ending, and so is every element it showed. */
+        def closeAll(using Frame): Unit < Async =
+            val scopes = js.Array[Scope.Finalizer]()
+            live.valuesIterator.foreach(entry => discard(scopes.push(entry._1)))
+            live.clear()
+            Kyo.foreachDiscard(scopes.toSeq)(scope => scope.close(Absent).andThen(scope.await))
+        end closeAll
+    end Attachments
+
     /** The attribute names on `el` the imperative id-addressed channel owns (see [[markOwned]]), read in place: `Absent` for the
       * element it owns nothing on, which is nearly every one a morph visits.
       */
@@ -798,7 +884,8 @@ private[kyo] object DomBackend:
         DomStyleSheet.injectBase().andThen(Sync.defer(DomStyleSheet.injectStylesheet(sheet.render)))
 
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
-        val session = new LocalSession
+        val session     = new LocalSession
+        val attachments = new Attachments(container)
         for
             _       <- DomStyleSheet.injectBase()
             root    <- ReactiveUI.normalize(ui, Seq.empty)
@@ -821,7 +908,7 @@ private[kyo] object DomBackend:
             // forks and the event drain all start inside it.
             _ <- UICommands.commands.let(Present(commands)) {
                 for
-                    exchange <- Kyo.lift(LocalExchange(regions, diagnostics))
+                    exchange <- Kyo.lift(LocalExchange(regions, diagnostics, attachments))
                     dispatch <- ReactiveUI.subscribe(root, exchange)
                     // A subscription interrupt is asynchronous. Stop accepting publications before the Scope begins
                     // interrupting region fibers, so an already-woken observer cannot publish into the registry after its
@@ -854,10 +941,19 @@ private[kyo] object DomBackend:
                     _ <- Sync.defer(diagnostics.drainInstalled(drain))
                     // Finalizers are LIFO. Register the drain first, then the channel, then listeners, so teardown
                     // removes callbacks before closing their queue and finally interrupts and joins the drain.
-                    _           <- Scope.ensure(events.close.andThen(Sync.defer(diagnostics.channelClosed())).unit)
-                    _           <- setupEventDelegation(dispatch.handle, events)
-                    _           <- setupPointerDelegation(dispatch.handle, events)
-                    _           <- setupInputMasking()
+                    _ <- Scope.ensure(events.close.andThen(Sync.defer(diagnostics.channelClosed())).unit)
+                    _ <- setupEventDelegation(dispatch.handle, events)
+                    _ <- setupPointerDelegation(dispatch.handle, events)
+                    _ <- setupInputMasking()
+                    // Hooks start through the drain, so they can start only now; what the first paint and the initial
+                    // subscription put on the page is found by this first sweep. Registered after the drain, the close runs
+                    // before it is interrupted, so every hook ends inside a live session.
+                    _ <- Scope.ensure(attachments.closeAll)
+                    _ <- Sync.defer {
+                        attachments.dispatch = Present(dispatch.handle)
+                        attachments.events = Present(events)
+                        attachments.sweep()
+                    }
                     dragRuntime <- DomDragRuntime.install(
                         container,
                         event =>
@@ -1067,7 +1163,8 @@ private[kyo] object DomBackend:
     end unregisterViewportObserver
 
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
-    private class LocalExchange(regions: DomReactiveRegions, diagnostics: MountDiagnostics) extends UIExchange:
+    private class LocalExchange(regions: DomReactiveRegions, diagnostics: MountDiagnostics, attachments: Attachments)
+        extends UIExchange:
 
         private var open = true
 
@@ -1198,7 +1295,10 @@ private[kyo] object DomBackend:
                                             for fingerprint <- noted; element <- shown do
                                                 element.asInstanceOf[scalajs.js.Dynamic].__kyoFingerprint = fingerprint.toString
                                         )
-                                applied.andThen(Sync.defer(diagnostics.regionApplied()))
+                                applied.andThen(Sync.defer {
+                                    attachments.sweep()
+                                    diagnostics.regionApplied()
+                                })
                         }
                     }
             }
@@ -1235,7 +1335,7 @@ private[kyo] object DomBackend:
                                 regions.withRegionFragment(regionId, changed)(applyListPatch(_, _, path, rows)).flatMap {
                                     applied =>
                                         if applied then
-                                            Sync.defer(regions.forgetFingerprint(regionId))
+                                            Sync.defer { regions.forgetFingerprint(regionId); attachments.sweep() }
                                                 .andThen(Devtools.notePaint(changed.length, wasted = false))
                                                 .andThen(true)
                                         else repaint
@@ -2087,7 +2187,8 @@ private[kyo] object DomBackend:
         inline val JsProp     = 16
         inline val SvgAnim    = 32
         inline val Portal     = 64
-        inline val All        = 127
+        inline val Attach     = 128
+        inline val All        = 255
     end Marker
 
     /** The markers `html` carries, among those not already in `known`. */
@@ -2101,6 +2202,7 @@ private[kyo] object DomBackend:
         // Covers <animate, <animateTransform and <animateMotion in one search.
         if (known & Marker.SvgAnim) == 0 && html.contains("<animate") then found |= Marker.SvgAnim
         if (known & Marker.Portal) == 0 && html.contains("data-kyo-portal") then found |= Marker.Portal
+        if (known & Marker.Attach) == 0 && html.contains("data-kyo-attach") then found |= Marker.Attach
         found
     end markersIn
 
