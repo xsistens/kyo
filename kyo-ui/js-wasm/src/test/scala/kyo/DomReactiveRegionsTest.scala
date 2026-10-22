@@ -726,4 +726,23 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "forgetting a subtree drops exactly the ranges whose opening markers stand in it" in {
+        val root = host(s"<!--kyo-rs:$One-->one<!--kyo-re:$One--><div id='leaving'><!--kyo-rs:$Two-->two<!--kyo-re:$Two--></div>")
+        // A detached copy carrying a marker for One: the registry does not name it, so it takes nothing with it.
+        val copy = host(s"<!--kyo-rs:$One-->copy<!--kyo-re:$One-->")
+        Scope.run {
+            for
+                regions      <- DomReactiveRegions.init(root)
+                _            <- Sync.defer(DomReactiveRegions.forgetRangesUnder(copy))
+                afterCopy    <- regions.entries.map(_.keySet)
+                _            <- Sync.defer(DomReactiveRegions.forgetRangesUnder(root.querySelector("#leaving")))
+                afterLeaving <- regions.entries.map(_.keySet)
+                _            <- regions.replace(One, "again")
+            yield
+                assert(afterCopy == Set(One, Two))
+                assert(afterLeaving == Set(One))
+                assert(root.innerHTML.startsWith(s"<!--kyo-rs:$One-->again<!--kyo-re:$One-->"))
+        }
+    }
+
 end DomReactiveRegionsTest

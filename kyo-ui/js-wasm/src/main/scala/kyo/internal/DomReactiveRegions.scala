@@ -184,10 +184,11 @@ final private[kyo] class DomReactiveRegions private (
     )(using Frame): Unit =
         val incoming = DomReactiveRegions.scan(document, fragment)
         // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
-        // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
-        // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
-        // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the same
-        // region's corpse, and keeping it would refuse the live one.
+        // this one no longer shares. Every change that takes registered markers out of the document outside a
+        // range patch drops their entries as it does it (a retired portal twin through forgetRangesUnder, a
+        // rewritten twin or SVG region through rewrite), so a stranded entry is not expected; the test stays as the
+        // net for one that slipped through. A dead entry is not a duplicate of the region coming back; it is the
+        // same region's corpse, and keeping it would refuse the live one.
         //
         // The test is "same tree", not "in the document": a whole mount can legitimately be patched while it is
         // still detached, and a live portal twin under `<body>` shares the document with the range being
@@ -337,6 +338,15 @@ final private[kyo] class DomReactiveRegions private (
             adoptLive(before, live, live.iterator.map((id, endpoints) => id -> serializeBetween(endpoints)).toSeq)
             after
     end rewrite
+
+    /** Drops the ranges registered under `node`, which is about to leave the document. */
+    private def forgetUnder(node: dom.Node): Unit =
+        if open then
+            registeredUnder(node).foreach { id =>
+                ranges.remove(id)
+                discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
+            }
 
     /** The ids of the registered ranges whose opening marker is `node` or lies under it. */
     private def registeredUnder(node: dom.Node): Set[String] =
@@ -819,6 +829,14 @@ private[kyo] object DomReactiveRegions:
         opened.find(registry => registry.root.contains(owner)) match
             case Some(registry) => registry.rewrite(subtree)(change)
             case None           => change
+
+    /** Drops, from every open registry, the ranges whose opening marker is `node` or lies under it, for a node about to
+      * leave the document outside any range patch: a portal twin the sweep retires. Each registry keeps only entries
+      * whose markers stand in its mount's tree, so nothing has to find and drop a dead entry later. Only an entry whose
+      * opening marker IS the node found goes, so a marker the registry does not name leaves its id's entry alone.
+      */
+    private[kyo] def forgetRangesUnder(node: dom.Node): Unit =
+        opened.foreach(_.forgetUnder(node))
 
     def init(root: dom.Element)(using Frame): DomReactiveRegions < (Sync & Scope) =
         for

@@ -1196,6 +1196,40 @@ class DomBackendTest extends UITest:
     private val strandedEntries =
         "(function(){var n=0;__kyoRanges.forEach(function(p){if(!document.contains(p.start)||!document.contains(p.end))n++;});return String(n);})()"
 
+    "a region inside a portal leaves the registry with its twin and comes back under its id" in {
+        val app: UI < Async =
+            for
+                open  <- Signal.initRef(true)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("toggle").id("fgt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("fgi").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("fgpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("fgtxt"): UI)): UI
+                    else UI.span("closed").id("fgclosed"): UI
+                )
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:0")
+                id       <- Browser.eval(firstRangeUnder("fgpanel"))
+                held     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                _        <- Browser.click(Selector.id("fgt"))
+                _        <- Browser.assertText(Selector.id("fgclosed"), "closed")
+                released <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("fgt"))
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:0")
+                _        <- Browser.click(Selector.id("fgi"))
+                _        <- Browser.assertText(Selector.id("fgtxt"), "v:1")
+                back     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+            yield assert(
+                (id.nonEmpty, held, released, stranded, back) == (true, "true", "false", "0", "true"),
+                s"id=$id held=$held released=$released stranded=$stranded back=$back"
+            )
+        }
+    }
+
     "a region in a row a list patch inserted keeps updating, and a removed row takes its regions with it" in {
         val app: UI < Async =
             for

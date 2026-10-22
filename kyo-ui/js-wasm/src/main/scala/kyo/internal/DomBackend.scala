@@ -2437,7 +2437,9 @@ private[kyo] object DomBackend:
                 if path != null && el.parentNode != null && (el.parentNode ne document.body) then
                     // A stale twin from a lost placeholder would collide on the path: drop it first (defensive).
                     val stale = portalTwin(path)
-                    if stale != null && (stale ne el) then discard(document.body.removeChild(stale))
+                    if stale != null && (stale ne el) then
+                        DomReactiveRegions.forgetRangesUnder(stale)
+                        discard(document.body.removeChild(stale))
                     val slot =
                         if el.namespaceURI == SvgNs then document.createElementNS(SvgNs, "g")
                         else document.createElement("span")
@@ -2474,6 +2476,7 @@ private[kyo] object DomBackend:
                 val p    = twin.getAttribute("data-kyo-path")
                 if document.querySelector(attrSelector("data-kyo-portal-slot", p)) == null then
                     val ghosts = prepareLeaveGhosts(twin, Set.empty)
+                    DomReactiveRegions.forgetRangesUnder(twin)
                     discard(document.body.removeChild(twin))
                     spawnGhosts(ghosts)
                 end if

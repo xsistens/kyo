@@ -1367,6 +1367,41 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         found
     end firstRangeUnder
 
+    "a region inside a portal leaves the registry with its twin and comes back under its id" in {
+        for
+            open  <- Signal.initRef(true)
+            inner <- Signal.initRef(0)
+            ui = UI.div(
+                UI.button("toggle").id("fgt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("fgi").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("fgpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("fgtxt"): UI)): UI
+                    else UI.span("closed").id("fgclosed"): UI
+                )
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("fgtxt") == "v:0"))
+            id = firstRangeUnder("fgpanel")
+            held     <- ready.regions.get.contains(id)
+            _        <- click("fgt")
+            _        <- assertEventually(Sync.defer(text("fgclosed") == "closed"))
+            released <- ready.regions.get.contains(id)
+            left     <- stranded(ready)
+            _        <- click("fgt")
+            _        <- assertEventually(Sync.defer(text("fgtxt") == "v:0"))
+            _        <- click("fgi")
+            _        <- assertEventually(Sync.defer(text("fgtxt") == "v:1"))
+            back     <- ready.regions.get.contains(id)
+            _        <- fiber.interrupt
+            _        <- fiber.getResult
+        yield assert(
+            (id.nonEmpty, held, released, left, back) == (true, true, false, 0, true),
+            s"id=$id held=$held released=$released stranded=$left back=$back"
+        )
+        end for
+    }
+
     "a region in a row a list patch inserted keeps updating, and a removed row takes its regions with it" in {
         for
             rows  <- Signal.initRef(Chunk(1, 2))

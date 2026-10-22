@@ -1757,6 +1757,13 @@ private[kyo] object HtmlRenderer:
           |      found.forEach(function(pair,key){__kyoRanges.set(key,pair);});}}
           |  return after;
           |}
+          |// Drops the ranges registered under node, which is about to leave the document outside any range patch (a
+          |// retired portal twin), so the registry names only markers in the document. Twin of
+          |// DomReactiveRegions.forgetRangesUnder.
+          |function __kyoRangeForget(node){
+          |  if(!__kyoRanges)return;
+          |  var ids=__kyoRangesUnder(node);for(var i=0;i<ids.length;i++)__kyoRanges.delete(ids[i]);
+          |}
           |// The ids of the registered ranges whose opening marker is node or lies under it.
           |function __kyoRangesUnder(node){
           |  var out=[];
@@ -1947,10 +1954,11 @@ private[kyo] object HtmlRenderer:
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
           |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=kyoRangeNested(endpoints);
           |  // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
-          |  // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
-          |  // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
-          |  // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the
-          |  // same region's corpse, and keeping it would refuse the live one.
+          |  // this one no longer shares. Every change that takes registered markers out of the document outside a
+          |  // range patch drops their entries as it does it (__kyoRangeForget, __kyoRangeRewrite), so a stranded
+          |  // entry is not expected; the test stays as the net for one that slipped through. A dead entry is not a
+          |  // duplicate of the region coming back; it is the same region's corpse, and keeping it would refuse the
+          |  // live one.
           |  //
           |  // The test is "same tree", not "in the document": a live portal twin under <body> shares the document
           |  // with the range being patched and therefore stays, which is what the twin check below relies on. It is
@@ -2147,7 +2155,7 @@ private[kyo] object HtmlRenderer:
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector(__kyoPathSel(p));
            |    var __rgh=el?kyoLeavePrepare(el,{}):[];
-           |    if(el)el.remove();
+           |    if(el){__kyoRangeForget(el);el.remove();}
            |    kyoSpawnGhosts(__rgh);
            |    // The removed subtree may have held portal placeholders: retire their body twins.
            |    __kyoRetireOrphanTwins();
@@ -2449,7 +2457,7 @@ private[kyo] object HtmlRenderer:
            |      // the sweep idempotent, since an adopted twin is a direct body child and never under a region again.
            |      if(p!==null&&el.parentNode&&el.parentNode!==document.body){
            |        var stale=__kyoPortalTwin(p);
-           |        if(stale&&stale!==el)document.body.removeChild(stale);
+           |        if(stale&&stale!==el){__kyoRangeForget(stale);document.body.removeChild(stale);}
            |        var svgNs="http://www.w3.org/2000/svg";
            |        var slot=(el.namespaceURI===svgNs)?document.createElementNS(svgNs,"g"):document.createElement("span");
            |        slot.setAttribute("data-kyo-portal-slot",p);
@@ -2475,6 +2483,7 @@ private[kyo] object HtmlRenderer:
            |      var tp=tw.getAttribute("data-kyo-path");
            |      if(!document.querySelector(__kyoAttrSel('data-kyo-portal-slot',tp))){
            |        var tg=kyoLeavePrepare(tw,{});
+           |        __kyoRangeForget(tw);
            |        document.body.removeChild(tw);
            |        kyoSpawnGhosts(tg);
            |      }
