@@ -372,17 +372,42 @@ A handler, a mount effect and a feed can all fail with any `Abort`, and none of 
 | `Escalate` | The enclosing `UI.mounted` node fails and shows its error view, with `source` set to `Handler` for a handler. Outside any mount it is `Notify`. |
 | `Run(action)` | Runs `action`, a redirect say. If the action fails in turn, that failure is notified. |
 
+<!-- doctest:setup
+```scala
+import kyo.*
+enum ApiError derives CanEqual:
+    case Unauthorized
+    case Conflict(reason: String)
+    case TooLong
+end ApiError
+object Login
+object navigator:
+    def go(page: Any): Unit < Async = Kyo.unit
+object toasts:
+    def error(message: String): Unit < Async = Kyo.unit
+object api:
+    def addComment(id: String, text: String < Sync): Unit < (Async & Abort[ApiError]) = Kyo.unit
+    def skipToNext: Unit < (Async & Abort[ApiError])                                  = Kyo.unit
+    def queue(track: String): Unit < (Async & Abort[ApiError])                        = Kyo.unit
+end api
+val shell: UI                = UI.div()
+val draft: SignalRef[String] = ???
+val hint: SignalRef[String]  = ???
+val id: String               = "1"
+val selected: Chunk[String]  = Chunk.empty
+```
+-->
+
 ```scala
 val root = UI.boundary
     .onFailure {
-        case ApiError.Unauthorized => UI.Reaction.Run(router.go(Login))
+        case ApiError.Unauthorized => UI.Reaction.Run(navigator.go(Login))
         case _: ApiError.Conflict  => UI.Reaction.Escalate
     }
-    .onNotice(err => toasts.error(err.getMessage))
-    (app)
+    .onNotice(err => toasts.error(err.getMessage))(shell)
 
 UI.form(UI.textarea.value(draft), UI.button("Send"))
-    .onSubmit(api.addComment(id, draft.get))                         // fails with Abort[ApiError]
+    .onSubmit(api.addComment(id, draft.get)) // fails with Abort[ApiError]
     .onFailure { case ApiError.TooLong => UI.Reaction.Run(hint.set("Too long")) }
 ```
 
