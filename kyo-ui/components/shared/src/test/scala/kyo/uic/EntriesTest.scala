@@ -1,0 +1,121 @@
+package kyo.uic.test
+
+import kyo.*
+import kyo.UI.*
+import kyo.uic
+import kyo.uic.UicTest
+import scala.language.implicitConversions
+
+/** [[kyo.uic.Entry]]: every list setter takes its entries built directly or from `_`, the two give the same model, they mix in one call
+  * and a prepared sequence splats in, and `_` offers only the builders of the entry type that setter takes.
+  */
+class EntriesTest extends UicTest:
+
+    private inline val preamble =
+        "import kyo.*\nimport kyo.UI.*\nimport kyo.uic\nimport scala.language.implicitConversions\n"
+
+    private val content: UI = span("content")
+
+    // The entry models are plain case classes compared structurally; nothing here compares across types.
+    private given [A]: CanEqual[A, A] = CanEqual.derived
+
+    "menu items: every host of MenuItem, and the nested items of an item and a group" in {
+        val direct = List(uic.MenuItem("Update").icon(uic.Icons.refresh), uic.MenuItem.separator, uic.MenuItem("Homepage").url("/"))
+        val scoped = Seq[uic.MenuItemEntry](
+            _.item("Update").icon(uic.Icons.refresh),
+            _.item.separator,
+            _.item("Homepage").url("/")
+        )
+        assert(uic.Menu().items(scoped*).itemsV == direct)
+        assert(uic.Menubar().items(scoped*).itemsV == direct)
+        assert(uic.TieredMenu().items(scoped*).itemsV == direct)
+        assert(uic.ContextMenu().items(scoped*).itemsV == direct)
+        assert(uic.SplitButton("Save").items(scoped*).itemsV == direct)
+        assert(uic.SpeedDial().items(scoped*).itemsV == direct)
+        assert(uic.MenuItem("File").items(scoped*).itemsV == direct)
+        assert(uic.MenuGroup("File").items(scoped*).itemsV == direct)
+        assert(uic.ContextMenu(scoped).itemsV == direct)
+        assert(uic.ContextMenu(Seq(_.item("Update").icon(uic.Icons.refresh), _.item.separator, _.item("Homepage").url("/"))).itemsV ==
+            direct)
+    }
+
+    "the two spellings mix in one call, and a prepared sequence splats in" in {
+        val mixed = uic.SplitButton("Save").items(
+            uic.MenuItem("Update"),
+            _.item.separator,
+            _.item("Delete")
+        )
+        val prepared: Seq[uic.MenuItem] = Seq(uic.MenuItem("A"), uic.MenuItem("B"))
+        val splat                       = uic.SplitButton("Save").items(prepared*)
+        assert(mixed.itemsV == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
+        assert(splat.itemsV == prepared.toList)
+    }
+
+    "mega menu: root items and the groups of a column" in {
+        val group = uic.MenuGroup("Laptops").items(_.item("Pro"))
+        val item  = uic.MegaMenuItem("Products").column(_.group("Laptops").items(_.item("Pro")))
+        assert(item == uic.MegaMenuItem("Products").column(group))
+        assert(uic.MegaMenu().items(_.item("Products")).itemsV == List(uic.MegaMenuItem("Products")))
+    }
+
+    "breadcrumb crumbs" in {
+        val scoped = uic.Breadcrumb().items(_.item("Docs", href = Present("/docs")), _.item("Menu"))
+        assert(scoped.itemsV == List(uic.BreadcrumbItem("Docs", href = Present("/docs")), uic.BreadcrumbItem("Menu")))
+    }
+
+    "listbox options, and options with groups whose entries take the same spellings" in {
+        val items = uic.Listbox().items(_.item("Paris", "par"), _.item("Rome", "rom", additionalText = Present("IT")))
+        assert(items.optionsV == uic.Listbox().item("Paris", "par").items(
+            uic.ListItem.of("Rome", "rom", additionalText = Present("IT"))
+        ).optionsV)
+        val groups = uic.Listbox().optionGroups(
+            _.item("Anywhere", "any"),
+            _.group("Europe")(_.item("Paris", "par"), uic.ListItem.of("Rome", "rom"))
+        )
+        assert(groups.optionsV == List(
+            uic.OptionItem.item(uic.ListItem.of("Anywhere", "any")),
+            uic.OptionItem.group("Europe")(uic.ListItem.of("Paris", "par"), uic.ListItem.of("Rome", "rom"))
+        ))
+    }
+
+    "tree nodes, nested through their children" in {
+        val direct = List(uic.TreeNode("Documents", "docs", children = List(uic.TreeNode("CV", "cv"))))
+        assert(uic.Tree().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+        assert(uic.TreeSelect().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+    }
+
+    "tree table nodes" in {
+        val scoped = uic.TreeTable[String]().nodes(_.node("root", children = Seq(_.node("leaf"))))
+        assert(scoped.nodeList == List(uic.TreeTableNode("root", List(uic.TreeTableNode("leaf")))))
+    }
+
+    "galleria images" in {
+        val scoped = uic.Galleria().items(_.item("/a.jpg", alt = "A"), _.item("/b.jpg"))
+        assert(scoped.itemList == List(uic.GalleriaItem("/a.jpg", alt = "A"), uic.GalleriaItem("/b.jpg")))
+    }
+
+    "accordion panels and tabs, with a constant label" in {
+        val panels = uic.Accordion().panels(_.panel("Shipping", content, "ship", disabled = true))
+        assert(panels.panelList == List(uic.AccordionPanel("Shipping", content, "ship", disabled = true)))
+        val tabs = uic.Tabs().tabs(_.tab("Profile", content, "profile", disabled = true))
+        assert(tabs.tabList == List(uic.Tab("Profile", content, "profile", disabled = true)))
+    }
+
+    "accordion panels and tabs take a reactive label too, as their single-entry builders do" in {
+        val label = Signal.initConst("Live")
+        assert(uic.Accordion().panels(_.panel(label, content, "a")).panelList == uic.Accordion().panel(label, "a")(content).panelList)
+        // Tabs.tab wraps its content in a fragment; the label is what is compared here.
+        assert(uic.Tabs().tabs(_.tab(label, content, "t")).tabList.map(t => (t.text, t.id)) ==
+            uic.Tabs().tab(label, "t")(content).tabList.map(t => (t.text, t.id)))
+    }
+
+    "`_` offers only what that setter takes" in {
+        typeCheckFailure(preamble + """def x = uic.SplitButton("Save").items(_.group("A"))""")
+        typeCheckFailure(preamble + """def x = uic.Breadcrumb().items(_.item.separator)""")
+        typeCheckFailure(preamble + """def x = uic.Tree().nodes(_.item("a", "a"))""")
+        typeCheckFailure(preamble + """def x = uic.Tabs().tabs(_.panel("a", span("x"), "a"))""")
+        typeCheckFailure(preamble + """def x = uic.MegaMenuItem("P").column(_.item("A"))""")
+        typeCheck(preamble + """def x = uic.SplitButton("Save").items(_.item("A"), _.item.separator)""")
+    }
+
+end EntriesTest

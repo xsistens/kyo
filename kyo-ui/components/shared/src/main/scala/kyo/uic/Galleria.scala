@@ -23,6 +23,29 @@ final case class GalleriaItem(
     subtitleDyn: Maybe[Signal[String]] = Absent
 )
 
+/** A Galleria image, built directly or as `_.item(...)` (see [[GalleriaItemScope]]). */
+type GalleriaItemEntry = Entry[GalleriaItem, GalleriaItemScope]
+
+/** What `_` stands for in [[Galleria.items]]: `_.item("/img/1.jpg", alt = "Harbour")`, as [[GalleriaItem.apply]]. */
+final class GalleriaItemScope private ():
+    /** An image, as [[GalleriaItem.apply]]. */
+    def item(
+        src: String,
+        alt: String = "",
+        thumbnailSrc: Maybe[String] = Absent,
+        title: Maybe[String] = Absent,
+        subtitle: Maybe[String] = Absent,
+        titleDyn: Maybe[Signal[String]] = Absent,
+        subtitleDyn: Maybe[Signal[String]] = Absent
+    ): GalleriaItem = GalleriaItem(src, alt, thumbnailSrc, title, subtitle, titleDyn, subtitleDyn)
+end GalleriaItemScope
+
+object GalleriaItemScope:
+    private val scope = new GalleriaItemScope
+
+    private[uic] def resolve(entries: Seq[GalleriaItemEntry]): List[GalleriaItem] = Entry.resolve(scope, entries)
+end GalleriaItemScope
+
 /** Galleria — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Galleria anatomy: `div.p-galleria.p-component` > `div.p-galleria-content` >
   * `div.p-galleria-items-container` > `div.p-galleria-items` with the plain
@@ -66,8 +89,8 @@ final case class Galleria private (
 ) extends Node:
     type Self = Galleria
 
-    /** Appends the given images. */
-    def items(is: GalleriaItem*): Galleria = copy(itemList = itemList ++ is.toList)
+    /** Appends the given images, each built directly or from `_` (see [[GalleriaItemScope]]). */
+    def items(is: GalleriaItemEntry*): Galleria = copy(itemList = itemList ++ GalleriaItemScope.resolve(is))
 
     /** Binds the active image index two-way (0-based, clamped at render). */
     def activeIndex(ref: SignalRef[Int]): Galleria = copy(activeRef = Present(ref))

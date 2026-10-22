@@ -72,9 +72,9 @@ final case class Menu private (
     type Self = Menu
 
     /** Appends items ([[MenuItem]] rows, `MenuItem.separator` dividers, and
-      * grouped sections via nested `items`).
+      * grouped sections via nested `items`), each built directly or from `_` (see [[MenuItemScope]]).
       */
-    def items(is: MenuItem*): Menu = copy(itemsV = itemsV ++ is.toList)
+    def items(is: MenuItemEntry*): Menu = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Menu = copy(idV = v)

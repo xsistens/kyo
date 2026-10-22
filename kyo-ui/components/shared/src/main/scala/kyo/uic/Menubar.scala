@@ -45,8 +45,10 @@ final case class Menubar private (
 ) extends Node, HasElementId:
     type Self = Menubar
 
-    /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus). */
-    def items(is: MenuItem*): Menubar = copy(itemsV = itemsV ++ is.toList)
+    /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus), each built directly or from `_` (see
+      * [[MenuItemScope]]).
+      */
+    def items(is: MenuItemEntry*): Menubar = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
     /** Content before the root list (`div.p-menubar-start` — logo slot). */
     def start(ui: UI): Menubar = copy(startV = Present(ui))

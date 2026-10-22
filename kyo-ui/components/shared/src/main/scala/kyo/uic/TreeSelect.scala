@@ -97,9 +97,10 @@ final case class TreeSelect private (
 
     /** Appends root nodes of the hand-authored [[TreeNode]] model — the escape hatch
       * from [[options]] when a node needs an icon, a tooltip or its own accessible
-      * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]].
+      * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]]. Each node is built
+      * directly or from `_` (see [[TreeNodeScope]]).
       */
-    def nodes(ns: TreeNode*): TreeSelect = copy(nodeList = nodeList ++ ns.toList)
+    def nodes(ns: TreeNodeEntry*): TreeSelect = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
 
     /** Binds the selected node id set two-way to `ref`: picks write the updated
       * set back, ref changes reselect the matching nodes.

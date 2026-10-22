@@ -179,6 +179,23 @@ val statuses: UI =
 
 Each component declares only the cases it means, and the *cases* are typed as narrowly as the setters. `Size` has three values; `Size.XLarge` is a fourth that is deliberately not one of them, so `uic.Avatar.size` and `uic.Badge.size` take it (the design system defines an extra-large avatar and badge) and every other `size` refuses it at compile time rather than quietly rendering large. In the same way, a setter a component does not have does not exist on its type at all, so it does not compile and does not show up in autocomplete. Discovering a component's surface is a matter of typing `.` after it.
 
+### Entries built from `_`
+
+A setter that takes a list of entries (menu items, crumbs, options, tree nodes, images, panels, tabs) takes each one either built directly or as a function of the setter's scope, which is what `_` stands for there. The two read the same, mix in one call, and a prepared `Seq` still splats in with `*`:
+
+```scala
+def actions(last: SignalRef[String])(using Frame): UI =
+    uic.SplitButton("Save")
+        .onClick(last.set("Save"))
+        .items(
+            _.item("Update").icon(uic.Icons.refresh).onSelect(last.set("Update")),
+            _.item.separator,
+            uic.MenuItem("Homepage").url("https://kyo.dev")
+        )
+```
+
+The scope offers the builders of that setter's entry type and nothing else, so `_.` completes to exactly what fits: `_.item(...)` and `_.item.separator` in every menu (the `ContextMenu(Seq(...))` constructor included), `_.group(...)` in a `MegaMenuItem.column`, `_.item(...)` in `Breadcrumb.items`, `Listbox.items` and `Galleria.items`, `_.item(...)` and `_.group(...)(...)` in `Listbox.optionGroups`, `_.node(...)` in `Tree`, `TreeSelect` and `TreeTable` (whose `children` take the same two spellings), `_.panel(...)` in `Accordion.panels`, and `_.tab(...)` in `Tabs.tabs`. A builder from the wrong scope does not compile, the same contract as a setter a component does not have.
+
 ### Icons are typed glyph values
 
 An icon is never a CSS class string. `IconGlyph` is a value carrying the glyph's name, its raw SVG path data, and its viewBox, and it is rendered inline as an `<svg>` with `fill=currentColor`. Two sets ship: `uic.Icons`, the 309 PrimeIcons, and `uic.FioriIcons`, the 705-glyph SAP-icons-v5 set kept for migrations. Each glyph is a separate `def`, so Scala.js method-level dead-code elimination strips the path strings of every icon you did not reference.

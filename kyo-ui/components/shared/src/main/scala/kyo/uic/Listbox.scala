@@ -34,6 +34,57 @@ object ListItem:
     ): ListItem = ListItem(TextValue.Const(text), id, icon, additionalText, tooltip)
 end ListItem
 
+/** A Listbox option, built directly or as `_.item(...)` (see [[ListItemScope]]). */
+type ListItemEntry = Entry[ListItem, ListItemScope]
+
+/** What `_` stands for in [[Listbox.items]] and inside a group of [[Listbox.optionGroups]]: `_.item("Paris", "par")`. The label
+  * takes a `Signal[String]` too, as [[Listbox.item]] does.
+  */
+final class ListItemScope private ():
+    /** An option keyed by `id`, as [[ListItem.of]], with a constant or reactive label. */
+    def item(
+        text: String | Signal[String],
+        id: String,
+        icon: Maybe[IconGlyph] = Absent,
+        additionalText: Maybe[String] = Absent,
+        tooltip: Maybe[String] = Absent
+    ): ListItem = ListItem(ReactiveValue(text), id, icon, additionalText, tooltip)
+end ListItemScope
+
+object ListItemScope:
+    private val scope = new ListItemScope
+
+    private[uic] def resolve(entries: Seq[ListItemEntry]): List[ListItem] = Entry.resolve(scope, entries)
+end ListItemScope
+
+/** An option or a group of options, built directly or as `_.item(...)` or `_.group(...)(...)` (see [[ListOptionScope]]). */
+type ListOptionEntry = Entry[OptionItem[ListItem], ListOptionScope]
+
+/** What `_` stands for in [[Listbox.optionGroups]]: `_.item(...)` for an option beside the groups and `_.group("Europe")(...)` for a
+  * labelled group, whose own entries are built the way [[Listbox.items]] builds them.
+  */
+final class ListOptionScope private ():
+    /** An ungrouped option, as [[OptionItem.item]] over [[ListItemScope.item]]. */
+    def item(
+        text: String | Signal[String],
+        id: String,
+        icon: Maybe[IconGlyph] = Absent,
+        additionalText: Maybe[String] = Absent,
+        tooltip: Maybe[String] = Absent
+    ): OptionItem[ListItem] = OptionItem.Item(ListItem(ReactiveValue(text), id, icon, additionalText, tooltip))
+
+    /** A group labelled `label`, as [[OptionItem.group]]. */
+    def group(label: String)(items: ListItemEntry*): OptionItem[ListItem] =
+        OptionItem.Group(label, ListItemScope.resolve(items))
+end ListOptionScope
+
+object ListOptionScope:
+    private val scope = new ListOptionScope
+
+    private[uic] def resolve(entries: Seq[ListOptionEntry]): List[OptionItem[ListItem]] =
+        Entry.resolve(scope, entries)
+end ListOptionScope
+
 /** Listbox — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Listbox anatomy: `div.p-listbox.p-component` > `div.p-listbox-list-container`
   * > `ul.p-listbox-list[role=listbox]` of `li.p-listbox-option[role=option]`
@@ -112,8 +163,8 @@ final case class Listbox private (
       */
     private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox = copy(hostKeyF = Present(f))
 
-    /** Appends the given options. */
-    def items(is: ListItem*): Listbox = copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)))
+    /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]). */
+    def items(is: ListItemEntry*): Listbox = copy(optionsV = optionsV ++ ListItemScope.resolve(is).map(OptionItem.Item(_)))
 
     /** Appends a single option (ergonomic builder — no need to construct [[ListItem]]). A
       * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
@@ -127,9 +178,9 @@ final case class Listbox private (
       *
       * Grouping changes the list only. Selection stays keyed by each item's `id`
       * across the whole listbox, and the filter drops a group once it has
-      * emptied it.
+      * emptied it. Each entry is built directly or from `_` (see [[ListOptionScope]]).
       */
-    def optionGroups(is: OptionItem[ListItem]*): Listbox = copy(optionsV = optionsV ++ is.toList)
+    def optionGroups(is: ListOptionEntry*): Listbox = copy(optionsV = optionsV ++ ListOptionScope.resolve(is))
 
     /** Selection semantics: `None` (default — rows inert unless `onItemClick` is
       * set), `Single` (picking replaces the selection; re-picking clears it), or
