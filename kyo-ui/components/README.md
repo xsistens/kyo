@@ -636,7 +636,7 @@ val handRolled: UI < Async =
 
 ## Choosing from options
 
-Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the *keys*, not as `A`, because keys are what a control can persist and round-trip. `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
+Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. `value` binds the selection as the *keys*, which is what a form field and a hidden `<input name>` carry; `selection` binds the options themselves (see [Binding the option itself](#binding-the-option-itself)). `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
 
 ```scala
 val categoryPicker: UI < Async =
@@ -650,6 +650,33 @@ val categoryPicker: UI < Async =
 ```
 
 > **Caution:** `optionKey` defaults to the label projection, so two options that render the same text collapse onto one selection key. Set it whenever the label is not unique, which is most of the time for a real domain. The same default applies to `MultiSelect`, `SelectButton`, and `CascadeSelect`. This one used to fail silently on exactly the data that triggers it; now the panel renders a loud `.p-uic-key-error` card naming the colliding keys, so a duplicate-label data set shows up the first time it is rendered rather than the first time someone picks the wrong row.
+
+### Binding the option itself
+
+`Select`, `CascadeSelect` and `SelectButton` also bind the chosen option itself: `selection(ref)` over a `SignalRef[A]` for a choice that always holds an option, or over a `SignalRef[Maybe[A]]` for one that may stay empty under its placeholder. `MultiSelect` and a `multiple(true)` `SelectButton` take a `SignalRef[Set[A]]`. The option is still matched by its key, so a copy of an option the app holds picks that option's row, and the instance the app wrote survives a pick of the row already chosen.
+
+A filter's "all" is a real choice rather than an empty field, so `optionsWithNone` gives a select (or a button group) over `Maybe[B]` a labelled `Absent` row ahead of the values, and the app keeps a `Maybe[B]` with no string in between:
+
+```scala
+enum SortBy derives CanEqual:
+    case Rank, Priority
+
+val viewControls: UI < Async =
+    for
+        order    <- Signal.initRef(SortBy.Rank)
+        category <- Signal.initRef(Maybe.empty[Category])
+    yield div(
+        uic.Select[SortBy]().options(SortBy.values.toSeq)(_.toString).selection(order),
+        uic.Select[Maybe[Category]]()
+            .optionsWithNone("All categories", categories)(_.label)
+            .optionKey(_.fold("all")(_.id))
+            .selection(category)
+    ): UI
+```
+
+A ref over `A` has no none to clear to, so `showClear` draws nothing on it, and a `SelectButton` bound that way keeps its option when the chosen one is clicked again. `value` and `selection` fill the same slot: the one set last wins.
+
+`itemTemplate(A => UI)` draws each option, and on a `Select` the chosen value in the trigger too, while the label projection stays the option's accessible name and the text the filter and the printable keys match. With `optionsWithNone` the template sees `Absent` like any other option.
 
 ### Grouping options
 
@@ -674,7 +701,7 @@ The group is a real `li[role=group]` carrying its label as its accessible name, 
 
 ### The family
 
-Which picker you reach for follows from three questions the shared shape leaves open: one selection or many, floating panel or always visible, flat options or a nested tree. `Select[A]` picks one option from a floating panel. `MultiSelect[A]` picks many, binding a `SignalRef[Set[String]]` and displaying the selection as chips or as a summary label. `SelectButton[A]` is the same choice rendered as a button group, single or multiple. `AutoComplete[A]` is a text field that matches its options against what you type. `CascadeSelect[A]` walks a nested option tree through side panels. `TreeSelect` puts a real `Tree` in the panel.
+Which picker you reach for follows from three questions the shared shape leaves open: one selection or many, floating panel or always visible, flat options or a nested tree. `Select[A]` picks one option from a floating panel. `MultiSelect[A]` picks many, binding a `SignalRef[Set[String]]` (or a `SignalRef[Set[A]]`) and displaying the selection as chips or as a summary label. `SelectButton[A]` is the same choice rendered as a button group, single or multiple. `AutoComplete[A]` is a text field that matches its options against what you type. `CascadeSelect[A]` walks a nested option tree through side panels. `TreeSelect` puts a real `Tree` in the panel.
 
 ```scala
 val pickers: UI < Async =

@@ -14,7 +14,9 @@ import scala.annotation.targetName
   * its visible text; `optionKey` (defaults to the label projection) supplies
   * the stable key written into the bound ref(s). Single-select binds
   * `value(SignalRef[String])`; `multiple(true)` switches to Set semantics bound
-  * via `value(SignalRef[Set[String]])`. `allowEmpty(false)` blocks clearing the
+  * via `value(SignalRef[Set[String]])`. `selection(ref)` binds the options
+  * themselves instead (`A`, `Maybe[A]` or `Set[A]`), and `optionsWithNone` adds a
+  * labelled none option to a group over `Maybe`. `allowEmpty(false)` blocks clearing the
   * last selection (Prime semantics).
   *
   * Both arities are form controls — [[TextFormControl]] single,
@@ -28,8 +30,8 @@ final case class SelectButton[A] private (
     keyF: Maybe[A => String] = Absent,
     itemTemplateF: Maybe[A => UI] = Absent,
     optionDisabledF: Maybe[A => Boolean] = Absent,
-    valueRef: Maybe[SignalRef[String]] = Absent,
-    valuesRef: Maybe[SignalRef[Set[String]]] = Absent,
+    single: Maybe[SingleChoice[A]] = Absent,
+    multi: Maybe[MultiChoice[A]] = Absent,
     multipleFlag: Boolean = false,
     allowEmptyFlag: Boolean = true,
     sizeV: Size = Size.Normal,
@@ -74,8 +76,34 @@ final case class SelectButton[A] private (
     /** Renders matching options disabled. */
     def optionDisabled(f: A => Boolean): SelectButton[A] = copy(optionDisabledF = Present(f))
 
+    /** Appends `none` and then `is` as the options of a group over `Maybe[B]`: `Absent` first, labelled `none`, then
+      * `Present(b)` for each value, labelled `label(b)`. An [[itemTemplate]] sees the none option too. Only a group whose
+      * options are `Maybe[B]` takes it.
+      */
+    def optionsWithNone[B](none: String, is: Seq[B])(label: B => String)(using ev: Maybe[B] =:= A): SelectButton[A] =
+        val all: Seq[Maybe[B]] = (Absent: Maybe[B]) +: is.map(b => Present(b): Maybe[B])
+        copy(items = items ++ all.map(ev).toList, labelF = a => ev.flip(a).fold(none)(label))
+    end optionsWithNone
+
     /** Binds the SINGLE selection two-way to `ref` (empty string = no selection). */
-    def value(ref: SignalRef[String]): SelectButton[A] = copy(valueRef = Present(ref))
+    def value(ref: SignalRef[String]): SelectButton[A] = copy(single = Present(SingleChoice.Keys(ref)))
+
+    /** Binds the SINGLE selection two-way to the option itself, matched by [[optionKey]]. The ref always holds an
+      * option, so a click on the chosen one keeps it whatever [[allowEmpty]] says. Replaces a single [[value]] binding.
+      */
+    def selection(ref: SignalRef[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ref)))
+
+    /** Binds the SINGLE selection two-way to the option or none: a click on the chosen option writes `Absent` where
+      * [[allowEmpty]] allows it.
+      */
+    @targetName("selectionMaybe")
+    def selection(ref: SignalRef[Maybe[A]]): SelectButton[A] = copy(single = Present(SingleChoice.Optional(ref)))
+
+    /** Binds the MULTI selection two-way to the set of chosen options (pair with [[multiple]]). A member no option
+      * carries stays in the set while the others toggle.
+      */
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[A]]): SelectButton[A] = copy(multi = Present(MultiChoice.Values(ref)))
 
     /** Switches to multi-select semantics (pair with the `Set` [[value]] binding). */
     def multiple(v: Boolean): SelectButton[A] = copy(multipleFlag = v)
@@ -85,7 +113,7 @@ final case class SelectButton[A] private (
       * they are one concept at two arities, and the type already says which is which.
       */
     @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): SelectButton[A] = copy(valuesRef = Present(ref))
+    def value(ref: SignalRef[Set[String]]): SelectButton[A] = copy(multi = Present(MultiChoice.Keys(ref)))
 
     /** Whether clicking the selected option may clear the selection entirely
       * (Prime default true).
@@ -159,9 +187,9 @@ final case class SelectButton[A] private (
             copy(disabledFlag = d).renderResolved(nav)
 
     private def renderResolved(nav: Nav)(using Frame): UI =
-        (valueRef, valuesRef) match
-            case (Present(r), _) if !multipleFlag => r.render(v => body(if v.isEmpty then Set.empty else Set(v), nav))
-            case (_, Present(r)) if multipleFlag  => r.render(body(_, nav))
+        (single, multi) match
+            case (Present(c), _) if !multipleFlag => c.render(key)(v => body(if v.isEmpty then Set.empty else Set(v), nav))
+            case (_, Present(c)) if multipleFlag  => c.render(key)(body(_, nav))
             case _                                => body(Set.empty, nav)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
@@ -170,9 +198,9 @@ final case class SelectButton[A] private (
       * option and clear it: Home pressed on the option already chosen would empty the group.
       */
     private def selectOnly(k: String)(using Frame): UI.Action =
-        val write: UI.Action = valueRef match
-            case Present(ref) => ref.set(k)
-            case Absent       => ()
+        val write: UI.Action = single match
+            case Present(c) => c.update(items, key)(_ => k)
+            case Absent     => ()
         val fire: UI.Action = onChangeF match
             case Present(f) => f(k)
             case Absent     => ()
@@ -206,14 +234,14 @@ final case class SelectButton[A] private (
         val blurHandler: Maybe[UI.Action] =
             if multipleFlag then
                 onBlurSetF.map(f =>
-                    valuesRef match
-                        case Present(r) => r.use(f)
+                    multi match
+                        case Present(c) => c.read(key)(f)
                         case Absent     => f(Set.empty)
                 )
             else
                 onBlurF.map(f =>
-                    valueRef match
-                        case Present(r) => r.use(f)
+                    single match
+                        case Present(c) => c.read(key)(f)
                         case Absent     => f("")
                 )
         blurHandler.foreach(h => el = el.onBlur(h))
@@ -286,17 +314,17 @@ final case class SelectButton[A] private (
     private def activate(k: String)(using Frame): UI.Action =
         val write: UI.Action =
             if multipleFlag then
-                valuesRef match
-                    case Present(ref) =>
-                        ref.getAndUpdate { cur =>
+                multi match
+                    case Present(c) =>
+                        c.update(items, key) { cur =>
                             if cur.contains(k) then if allowEmptyFlag || cur.size > 1 then cur - k else cur
                             else cur + k
                         }
                     case Absent => ()
             else
-                valueRef match
-                    case Present(ref) =>
-                        ref.getAndUpdate(cur => if cur == k then (if allowEmptyFlag then "" else cur) else k)
+                single match
+                    case Present(c) =>
+                        c.update(items, key)(cur => if cur == k then (if allowEmptyFlag then "" else cur) else k)
                     case Absent => ()
         val fire: UI.Action = onChangeF match
             case Present(f) => f(k)

@@ -152,4 +152,57 @@ class SelectButtonTest extends UicTest:
             assert(os.forall(_.attrs.tabIndex.isEmpty), "each keeps the tab stop a button has by itself")
     }
 
+    enum Size derives CanEqual:
+        case S, M, L
+
+    private def typed(using Frame) = uic.SelectButton[Size]().options(Size.values.toSeq)(_.toString)
+
+    "selection binds the option itself, and a click on the chosen one keeps it, since the ref has no none" in {
+        for
+            ref    <- Signal.initRef(Size.M)
+            os     <- options(typed.selection(ref).wired(ids, _ => ()))
+            _      <- click(os(2))
+            picked <- ref.get
+            os2    <- options(typed.selection(ref).wired(ids, _ => ()))
+            _      <- click(os2(2))
+            kept   <- ref.get
+        yield
+            assert(os.map(_.attrs.ariaAttrs.getOrElse("checked", "-")) == Chunk("false", "true", "false"))
+            assert(picked == Size.L && kept == Size.L)
+    }
+
+    "a selection over Maybe clears to Absent on a click on the chosen one, as allowEmpty says" in {
+        for
+            ref <- Signal.initRef(Maybe(Size.S))
+            os  <- options(typed.selection(ref).wired(ids, _ => ()))
+            _   <- click(os(0))
+            got <- ref.get
+        yield assert(got == Absent)
+    }
+
+    "a selection over a Set toggles options, and keeps a member no option carries" in {
+        for
+            ref <- Signal.initRef(Set(Size.S))
+            os  <- options(uic.SelectButton[Size]().options(Seq(Size.M, Size.L))(_.toString).multiple(true).selection(ref).render)
+            _   <- click(os(1))
+            got <- ref.get
+        yield assert(got == Set(Size.S, Size.L))
+    }
+
+    "optionsWithNone gives the template the none option too" in {
+        for
+            ref <- Signal.initRef(Maybe.empty[Size])
+            ui = uic.SelectButton[Maybe[Size]]()
+                .optionsWithNone("Any", Size.values.toSeq)(_.toString)
+                .itemTemplate(m => span(m.fold("any size")(s => s"size $s")))
+                .selection(ref)
+                .wired(ids :+ "sb-3", _ => ())
+            os  <- options(ui)
+            _   <- click(os(2))
+            got <- ref.get
+        yield
+            assert(os.map(_.attrs.ariaAttrs.getOrElse("label", "-")) == Chunk("Any", "S", "M", "L"))
+            assert(got == Present(Size.M))
+    }
+
 end SelectButtonTest

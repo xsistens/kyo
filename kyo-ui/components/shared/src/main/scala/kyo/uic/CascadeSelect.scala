@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** One entry of a [[CascadeSelect]] option tree — the typed nested analogue of
   * Select's flat options: a `Leaf` carries a pickable value `A` (projected to
@@ -55,7 +56,8 @@ end CascadeItem
   * Options are a TYPED tree of [[CascadeItem]]s: `options(items)(label)`
   * projects leaf values to text, groups carry their own label; `optionKey`
   * (default: the label projection) supplies the stable key written into the
-  * bound ref. Clicking a group row opens exactly its chain (the Menubar
+  * bound ref; `selection(ref)` binds the leaf itself (over `A`, or over `Maybe[A]`)
+  * instead. Clicking a group row opens exactly its chain (the Menubar
   * `openExactly` machinery — sibling branches close); clicking a LEAF writes
   * the key, fires `onChange`, and closes the whole chain. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
@@ -79,7 +81,7 @@ final case class CascadeSelect[A] private (
     items: List[CascadeItem[A]],
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
-    valueRef: Maybe[SignalRef[String]] = Absent,
+    choice: Maybe[SingleChoice[A]] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
     disabledFlag: Boolean = false,
@@ -117,7 +119,18 @@ final case class CascadeSelect[A] private (
     /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: leaf picks
       * write the key back, ref changes reselect the matching leaf.
       */
-    def value(ref: SignalRef[String]): CascadeSelect[A] = copy(valueRef = Present(ref))
+    def value(ref: SignalRef[String]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Keys(ref)))
+
+    /** Binds the selection two-way to the leaf itself: a pick writes the leaf, a write to `ref` selects the leaf whose
+      * [[optionKey]] it carries. Replaces a [[value]] binding, as [[value]] replaces this one.
+      */
+    def selection(ref: SignalRef[A]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Value(ref)))
+
+    /** Binds the selection two-way to the leaf or none: `Absent` shows the placeholder, a pick writes `Present(leaf)`.
+      * `@targetName` because both `selection` bindings erase to one signature.
+      */
+    @targetName("selectionMaybe")
+    def selection(ref: SignalRef[Maybe[A]]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Optional(ref)))
 
     /** Binds the ROOT panel visibility two-way to `ref` (optional — self-managed
       * otherwise); the nested group panels stay component-internal.
@@ -177,6 +190,16 @@ final case class CascadeSelect[A] private (
         loop(items, Nil)
     end groupPaths
 
+    /** Every leaf value of the tree, in tree order: the options a typed binding writes back. */
+    private def leaves: List[A] =
+        def loop(is: List[CascadeItem[A]]): List[A] =
+            is.flatMap {
+                case CascadeItem.Leaf(a)            => List(a)
+                case CascadeItem.Group(_, children) => loop(children)
+            }
+        loop(items)
+    end leaves
+
     /** The label of the leaf whose key is `k` (searched over the whole tree). */
     private def labelForKey(k: String): Maybe[String] =
         def loop(is: List[CascadeItem[A]]): Maybe[String] =
@@ -225,9 +248,9 @@ final case class CascadeSelect[A] private (
         }
 
     private def withValue(f: String => UI)(using Frame): UI =
-        valueRef match
-            case Present(ref) => ref.render(f)
-            case Absent       => f("")
+        choice match
+            case Present(c) => c.render(key)(f)
+            case Absent     => f("")
 
     private def body(
         current: String,
@@ -284,8 +307,8 @@ final case class CascadeSelect[A] private (
         def pick(a: A): UI.Action =
             val k = key(a)
             for
-                _ <- valueRef match
-                    case Present(r) => r.set(k)
+                _ <- choice match
+                    case Present(c) => c.update(leaves, key)(_ => k)
                     case Absent     => (): UI.Action
                 _ <- onChangeF match
                     case Present(g) => g(k)
@@ -410,8 +433,8 @@ final case class CascadeSelect[A] private (
             // Focus-loss on the trigger reports the currently bound key (or the resolved
             // current value when unbound) — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
-                el = el.onBlur(valueRef match
-                    case Present(r) => r.use(f)
+                el = el.onBlur(choice match
+                    case Present(c) => c.read(key)(f)
                     case Absent     => f(current))
             }
         end if
