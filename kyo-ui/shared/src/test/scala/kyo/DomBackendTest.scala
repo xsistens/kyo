@@ -1262,25 +1262,34 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // The SVG region's first paint already replaces its element (the page serializes it differently from the payload), so an
+    // HTML region under a foreignObject in it has to keep updating from the start, not only once the region repaints.
     "an SVG region repaint forgets the HTML ranges it removes and registers the ones it inserts" in {
         val app: UI < Async =
-            for gate <- Signal.initRef(true)
+            for
+                gate  <- Signal.initRef(true)
+                inner <- Signal.initRef(0)
             yield UI.div(
                 UI.button("gate").id("fogate").onClick(gate.getAndUpdate(!_).unit),
-                Svg.svg(UI.when(gate)(Svg.g(Svg.foreignObject(UI.div.id("foin-host")(gate.map(g => UI.span(s"g:$g").id("foin"): UI))))))
+                UI.button("inner").id("foinc").onClick(inner.getAndUpdate(_ + 1).unit),
+                Svg.svg(UI.when(gate)(Svg.g(Svg.foreignObject(UI.div.id("foin-host")(inner.map(i => UI.span(s"i:$i").id("foin"): UI))))))
             )
         withUI(app) {
             for
-                _        <- Browser.assertText(Selector.id("foin"), "g:true")
+                _        <- Browser.assertText(Selector.id("foin"), "i:0")
+                _        <- Browser.click(Selector.id("foinc"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:1")
                 id       <- Browser.eval(firstRangeUnder("foin-host"))
                 _        <- Browser.click(Selector.id("fogate"))
                 _        <- Browser.assertNotExists(Selector.id("foin"))
                 released <- Browser.eval(s"String(__kyoRanges.has('$id'))")
                 stranded <- Browser.eval(strandedEntries)
                 _        <- Browser.click(Selector.id("fogate"))
-                _        <- Browser.assertExists(Selector.id("foin"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:1")
                 back     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
                 after    <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("foinc"))
+                _        <- Browser.assertText(Selector.id("foin"), "i:2")
             yield assert(
                 (id.nonEmpty, released, stranded, back, after) == (true, "false", "0", "true", "0"),
                 s"id=$id released=$released stranded=$stranded back=$back strandedAfter=$after"

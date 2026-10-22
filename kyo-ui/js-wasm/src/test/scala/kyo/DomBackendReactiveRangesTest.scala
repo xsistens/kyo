@@ -1427,6 +1427,8 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // The SVG region's first paint already replaces its element (the page serializes it differently from the payload), so an
+    // HTML region under a foreignObject in it has to keep updating from the start, not only once the region repaints.
     "an SVG region repaint forgets the HTML ranges it removes and registers the ones it inserts" in {
         for
             gate  <- Signal.initRef(true)
@@ -1437,15 +1439,19 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             ready = new DomTestEnv.MountReady
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
             _     <- assertEventually(Sync.defer(ready.installed && text("foin") == "i:0"))
+            _     <- inner.set(1)
+            _     <- assertEventually(Sync.defer(text("foin") == "i:1"), 5.seconds)
             id = firstRangeUnder("foin-host")
             _        <- gate.set(false)
             _        <- assertEventually(Sync.defer(dom.document.getElementById("foin") == null))
             released <- ready.regions.get.contains(id)
             left     <- stranded(ready)
             _        <- gate.set(true)
-            _        <- assertEventually(Sync.defer(text("foin") == "i:0"))
+            _        <- assertEventually(Sync.defer(text("foin") == "i:1"))
             back     <- ready.regions.get.contains(id)
             leftBack <- stranded(ready)
+            _        <- inner.set(2)
+            _        <- assertEventually(Sync.defer(text("foin") == "i:2"), 5.seconds)
             _        <- fiber.interrupt
             _        <- fiber.getResult
         yield assert(
