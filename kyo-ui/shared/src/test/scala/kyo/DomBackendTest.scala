@@ -1228,4 +1228,57 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "an SVG region repaint forgets the HTML ranges it removes and registers the ones it inserts" in {
+        val app: UI < Async =
+            for gate <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gate").id("fogate").onClick(gate.getAndUpdate(!_).unit),
+                Svg.svg(UI.when(gate)(Svg.g(Svg.foreignObject(UI.div.id("foin-host")(gate.map(g => UI.span(s"g:$g").id("foin"): UI))))))
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("foin"), "g:true")
+                id       <- Browser.eval(firstRangeUnder("foin-host"))
+                _        <- Browser.click(Selector.id("fogate"))
+                _        <- Browser.assertNotExists(Selector.id("foin"))
+                released <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("fogate"))
+                _        <- Browser.assertExists(Selector.id("foin"))
+                back     <- Browser.eval(s"String(__kyoRanges.has('$id'))")
+                after    <- Browser.eval(strandedEntries)
+            yield assert(
+                (id.nonEmpty, released, stranded, back, after) == (true, "false", "0", "true", "0"),
+                s"id=$id released=$released stranded=$stranded back=$back strandedAfter=$after"
+            )
+        }
+    }
+
+    "a portal whose content swaps one region for another keeps the new one updating" in {
+        val app: UI < Async =
+            for
+                mode <- Signal.initRef(true)
+                b    <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("mode").id("swmode").onClick(mode.set(false)),
+                UI.button("b").id("swbump").onClick(b.getAndUpdate(_ + 1).unit),
+                mode.map(m =>
+                    UI.div.id("swpanel").portal(true)(
+                        if m then UI.div(b.map(i => UI.span(s"a:$i").id("swa"): UI))
+                        else UI.p(UI.span("x"), b.map(i => UI.span(s"b:$i").id("swb"): UI))
+                    ): UI
+                )
+            )
+        withUI(app) {
+            for
+                _        <- Browser.assertText(Selector.id("swa"), "a:0")
+                _        <- Browser.click(Selector.id("swmode"))
+                _        <- Browser.assertText(Selector.id("swb"), "b:0")
+                stranded <- Browser.eval(strandedEntries)
+                _        <- Browser.click(Selector.id("swbump"))
+                _        <- Browser.assertText(Selector.id("swb"), "b:1")
+            yield assert(stranded == "0", s"stranded=$stranded")
+        }
+    }
+
 end DomBackendTest

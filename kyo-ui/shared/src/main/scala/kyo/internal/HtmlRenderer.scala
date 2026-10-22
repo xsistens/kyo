@@ -1562,7 +1562,8 @@ private[kyo] object HtmlRenderer:
           |  var p=to.getAttribute("data-kyo-path");
           |  if(p===null||!to.hasAttribute("data-kyo-portal")||from.getAttribute("data-kyo-portal-slot")!==p)return false;
           |  var twin=__kyoPortalTwin(p);if(!twin)return false;
-          |  __kyoMorphNode(twin,to);return true;
+          |  // The twin sits outside the range being patched, so the registry follows its reconciliation as a rewrite.
+          |  __kyoRangeRewrite(twin,function(){__kyoMorphNode(twin,to);return twin;});return true;
           |}
           |// ---- logical children ----
           |// A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling
@@ -1742,6 +1743,27 @@ private[kyo] object HtmlRenderer:
           |  var n=first;
           |  while(n&&n!==until){var next=n.nextSibling;visit(n);n=next;}
           |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
+          |}
+          |// Runs change, which replaces or reconciles node outside any range patch, and brings the registry in line with
+          |// what stands afterwards: the ranges registered under node are retired first (a change may drop markers, whose
+          |// ids are unreadable afterwards), and the ranges under the node change answers are read after it. A portal twin
+          |// reconciled through its slot and a replaced SVG region are such changes. Twin of DomReactiveRegions.rewrite.
+          |function __kyoRangeRewrite(node,change){
+          |  var before=__kyoRanges?__kyoRangesUnder(node):[];
+          |  var after=change();
+          |  if(__kyoRanges){
+          |    for(var i=0;i<before.length;i++)__kyoRanges.delete(before[i]);
+          |    if(after){var found=new Map();__kyoRangeScanRun("rewrite",after,after.nextSibling,found);
+          |      found.forEach(function(pair,key){__kyoRanges.set(key,pair);});}}
+          |  return after;
+          |}
+          |// The ids of the registered ranges whose opening marker is node or lies under it.
+          |function __kyoRangesUnder(node){
+          |  var out=[];
+          |  function take(n){var key=__kyoSpanId(n);if(key!==null){var pair=__kyoRanges.get(key);if(pair&&pair.start===n)out.push(key);}}
+          |  take(node);
+          |  if(node.nodeType===1){var w=document.createTreeWalker(node,128,null,false);while(w.nextNode())take(w.currentNode);}
+          |  return out;
           |}
           |// Every range id opening at or under node. Twin of collectStartIds in DomReactiveRegions.
           |function __kyoCollectStartIds(node,into){
@@ -2110,8 +2132,9 @@ private[kyo] object HtmlRenderer:
            |      var __en=faEnterPaths(el);
            |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
            |      var __fa=focusAutoPaths(el);
-           |      el.outerHTML=op.Replace.html;
-           |      var nel=document.querySelector(__kyoPathSel(p));if(nel){applyJsProps(nel);ba(nel);}
+           |      // The element may hold HTML ranges (under a foreignObject), which the replacement removes and brings anew.
+           |      var nel=__kyoRangeRewrite(el,function(){el.outerHTML=op.Replace.html;return document.querySelector(__kyoPathSel(p));});
+           |      if(nel){applyJsProps(nel);ba(nel);}
            |      if(ap){var rf=document.querySelector(__kyoPathSel(ap));if(rf){rf.focus({preventScroll:true});if(ss!==null)kyoSetCaret(rf,ss,se);}}
            |      // Seed after focus/caret restore so a newly appeared focus-auto element wins restore-to-trigger.
            |      if(nel){kyoEnterSeed(nel,__en);seedFocusAuto(nel,__fa);}

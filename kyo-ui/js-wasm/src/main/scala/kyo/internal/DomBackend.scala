@@ -60,8 +60,12 @@ private[kyo] object DomBackend:
       * it at the same path, and the twin the first sweep parked under `<body>` is still there. The twin is then the
       * node that gets reconciled; the slot stays exactly where it is. Anything else is not this case and reconciles
       * the ordinary way.
+      *
+      * The twin sits outside the range being patched, so the range's own account of its markers does not reach it:
+      * the reconciliation runs as a registry rewrite, which retires the ranges inside the twin and reads back the
+      * ones standing there afterwards.
       */
-    private def morphPortalPair(from: dom.Node, to: dom.Node): Boolean =
+    private def morphPortalPair(from: dom.Node, to: dom.Node)(using Frame): Boolean =
         (from.nodeType == dom.Node.ELEMENT_NODE && to.nodeType == dom.Node.ELEMENT_NODE) && {
             val slot     = from.asInstanceOf[dom.Element]
             val incoming = to.asInstanceOf[dom.Element]
@@ -70,7 +74,13 @@ private[kyo] object DomBackend:
             incoming.hasAttribute("data-kyo-portal") &&
             slot.getAttribute("data-kyo-portal-slot") == path && {
                 val twin = portalTwin(path)
-                (twin != null) && { morphEl(twin, incoming); true }
+                (twin != null) && {
+                    discard(DomReactiveRegions.rewriting(slot, twin) {
+                        morphEl(twin, incoming)
+                        Present(twin)
+                    })
+                    true
+                }
             }
         }
 
@@ -87,12 +97,12 @@ private[kyo] object DomBackend:
     /** Reconcile one live node toward `toNode`. A node of a different kind or tag cannot be patched into the target,
       * so it is replaced; everything else keeps its identity.
       */
-    private def morphNode(fromNode: dom.Node, toNode: dom.Node): Unit =
+    private def morphNode(fromNode: dom.Node, toNode: dom.Node)(using Frame): Unit =
         if fromNode.nodeType != dom.Node.ELEMENT_NODE then
             if fromNode.nodeValue != toNode.nodeValue then fromNode.nodeValue = toNode.nodeValue
         else morphEl(fromNode.asInstanceOf[dom.Element], toNode.asInstanceOf[dom.Element])
 
-    private def morphEl(fromEl: dom.Element, toEl: dom.Element): Unit =
+    private def morphEl(fromEl: dom.Element, toEl: dom.Element)(using Frame): Unit =
         morphAttrs(fromEl, toEl)
         // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its subtree
         // alone (INPUT and TEXTAREA have no element children, so they need no such guard).
@@ -192,7 +202,7 @@ private[kyo] object DomBackend:
         end if
     end restoreJsProps
 
-    private def morphChildren(fromParent: dom.Element, toParent: dom.Element): Unit =
+    private def morphChildren(fromParent: dom.Element, toParent: dom.Element)(using Frame): Unit =
         morphNodeRun(fromParent, fromParent.firstChild, null, toParent.firstChild, null)
 
     // ---- logical children ----------------------------------------------------------------------------------
@@ -261,7 +271,7 @@ private[kyo] object DomBackend:
         fromEnd: dom.Node,
         toStart: dom.Node,
         toEnd: dom.Node
-    ): Unit =
+    )(using Frame): Unit =
         val fromNodes = js.Array[dom.Node]()
         val fromKeys  = js.Array[String]()
         val toNodes   = js.Array[dom.Node]()
@@ -358,7 +368,7 @@ private[kyo] object DomBackend:
         toEnd: dom.Node,
         fromKeyed: js.Dictionary[dom.Node],
         toKeyed: js.Dictionary[Boolean]
-    ): Unit =
+    )(using Frame): Unit =
         var curFrom = fromStart
         var curTo   = toStart
         while curTo != null && !(curTo eq toEnd) do
@@ -421,7 +431,7 @@ private[kyo] object DomBackend:
         scope: DomReactiveRegions.PatchScope,
         path: Seq[String],
         rows: Seq[ListRow]
-    ): Boolean =
+    )(using Frame): Boolean =
         val parent   = target.parent.asInstanceOf[dom.Element]
         val pathAttr = path.mkString(".")
 
@@ -660,7 +670,7 @@ private[kyo] object DomBackend:
       * including a span against a plain node, is replaced whole, markers and all. Answers the node that starts the
       * slot afterwards: `fromNode` when it was reconciled in place, the first node of its replacement otherwise.
       */
-    private def patchLogical(parent: dom.Element, fromNode: dom.Node, toNode: dom.Node): dom.Node =
+    private def patchLogical(parent: dom.Element, fromNode: dom.Node, toNode: dom.Node)(using Frame): dom.Node =
         val fromSpan = DomReactiveRegions.startMarkerId(fromNode).flatMap(id => spanClose(fromNode, id).map((id, _)))
         val toSpan   = DomReactiveRegions.startMarkerId(toNode).flatMap(id => spanClose(toNode, id).map((id, _)))
         (fromSpan, toSpan) match
@@ -1291,7 +1301,7 @@ private[kyo] object DomBackend:
           * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
           * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
           */
-        private def tryMorphRange(target: DomReactiveRegions.MorphTarget): Boolean =
+        private def tryMorphRange(target: DomReactiveRegions.MorphTarget)(using Frame): Boolean =
             morphNodeRun(
                 target.parent.asInstanceOf[dom.Element],
                 target.start.nextSibling,
@@ -1357,8 +1367,12 @@ private[kyo] object DomBackend:
                     val oldEnter                       = enterPaths(Seq(element))
                     val ghosts                         = prepareLeaveGhosts(Seq(element), leaveSurvSet(finalHtml))
                     val oldFocus                       = focusAutoPaths(Seq(element))
-                    element.outerHTML = finalHtml
-                    val updated = Maybe(document.querySelector(pathSelector(pathAttr))).toList
+                    // The element may hold HTML ranges (under a foreignObject), which the replacement removes and
+                    // brings anew, so the registry follows it.
+                    val updated = regions.rewrite(element) {
+                        element.outerHTML = finalHtml
+                        Maybe(document.querySelector(pathSelector(pathAttr)))
+                    }.toList
                     updated.foreach { newElement =>
                         applyJsPropsSync(newElement)
                         beginAnimationsSync(newElement)

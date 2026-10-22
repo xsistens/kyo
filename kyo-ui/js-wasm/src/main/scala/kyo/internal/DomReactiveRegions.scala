@@ -7,6 +7,7 @@ import scala.collection.mutable
 /** Mount-scoped registry of live HTML reactive range anchors. */
 final private[kyo] class DomReactiveRegions private (
     private val document: dom.Document,
+    private val root: dom.Node,
     private val ranges: DomReactiveRegions.RangeTable,
     private val inserted: mutable.HashMap[String, String]
 ):
@@ -319,6 +320,37 @@ final private[kyo] class DomReactiveRegions private (
         }
     end adoptLive
 
+    /** Runs `change`, which replaces or reconciles `subtree` outside any range patch, and brings the registry in line
+      * with what stands afterwards: the ranges registered under `subtree` are retired before it runs (a change may drop
+      * markers, and a dropped marker's id is unreadable afterwards), and the ranges under the node `change` answers
+      * are read off the DOM after it. A portal twin reconciled by the morph of the range around its slot, and an SVG
+      * region whose element is replaced, are such rewrites: neither lies between the anchors of a range, so no range
+      * patch accounts for the markers they drop and bring.
+      */
+    private[kyo] def rewrite[N <: dom.Node](subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
+        if !open then change
+        else
+            val before = registeredUnder(subtree)
+            val after  = change
+            val live   =
+                after.map(DomReactiveRegions.scan(document, _)).getOrElse(mutable.HashMap.empty[String, DomReactiveRegions.Endpoints])
+            adoptLive(before, live, live.iterator.map((id, endpoints) => id -> serializeBetween(endpoints)).toSeq)
+            after
+    end rewrite
+
+    /** The ids of the registered ranges whose opening marker is `node` or lies under it. */
+    private def registeredUnder(node: dom.Node): Set[String] =
+        val found                        = Set.newBuilder[String]
+        def take(marker: dom.Node): Unit =
+            DomReactiveRegions.startMarkerId(marker).foreach { id =>
+                if ranges.get(id).exists(_.start eq marker) then found += id
+            }
+        take(node)
+        val walker = DomReactiveRegions.commentWalker(document, node)
+        while walker.nextNode() != null do take(walker.currentNode)
+        found.result()
+    end registeredUnder
+
     /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
       *
       * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
@@ -375,6 +407,7 @@ final private[kyo] class DomReactiveRegions private (
         Sync.defer {
             if open then
                 open = false
+                DomReactiveRegions.opened -= this
                 ranges.clear()
                 inserted.clear()
                 fingerprints.clear()
@@ -773,12 +806,27 @@ private[kyo] object DomReactiveRegions:
             case Synthetic(_, roots) => roots
     end IncomingContent
 
+    /** The registries of the mounts open right now. A portal twin lives under `<body>`, outside the mount whose region
+      * put it there, so a rewrite of one is matched to its registry by the slot it stands in for. JavaScript runs one
+      * thread, and every change happens inside a mount's init or close.
+      */
+    private val opened = mutable.ArrayBuffer.empty[DomReactiveRegions]
+
+    /** Runs `change` over `subtree` and keeps the registry of the mount holding `owner` true to what it leaves (see
+      * [[DomReactiveRegions.rewrite]]). Without an open registry holding `owner` it only runs `change`.
+      */
+    private[kyo] def rewriting[N <: dom.Node](owner: dom.Node, subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
+        opened.find(registry => registry.root.contains(owner)) match
+            case Some(registry) => registry.rewrite(subtree)(change)
+            case None           => change
+
     def init(root: dom.Element)(using Frame): DomReactiveRegions < (Sync & Scope) =
         for
             registry <- Sync.defer {
                 val document = ownerDocument(root)
-                val registry = new DomReactiveRegions(document, RangeTable(scan(document, root)), mutable.HashMap.empty)
+                val registry = new DomReactiveRegions(document, root, RangeTable(scan(document, root)), mutable.HashMap.empty)
                 registry.recordInserted()
+                opened += registry
                 registry
             }
             _ <- Scope.ensure(registry.close)

@@ -1392,4 +1392,57 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "an SVG region repaint forgets the HTML ranges it removes and registers the ones it inserts" in {
+        for
+            gate  <- Signal.initRef(true)
+            inner <- Signal.initRef(0)
+            ui = UI.div(Svg.svg(UI.when(gate)(Svg.g(Svg.foreignObject(UI.div.id("foin-host")(inner.map(i =>
+                UI.span(s"i:$i").id("foin"): UI
+            )))))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("foin") == "i:0"))
+            id = firstRangeUnder("foin-host")
+            _        <- gate.set(false)
+            _        <- assertEventually(Sync.defer(dom.document.getElementById("foin") == null))
+            released <- ready.regions.get.contains(id)
+            left     <- stranded(ready)
+            _        <- gate.set(true)
+            _        <- assertEventually(Sync.defer(text("foin") == "i:0"))
+            back     <- ready.regions.get.contains(id)
+            leftBack <- stranded(ready)
+            _        <- fiber.interrupt
+            _        <- fiber.getResult
+        yield assert(
+            (id.nonEmpty, released, left, back, leftBack) == (true, false, 0, true, 0),
+            s"id=$id released=$released stranded=$left back=$back strandedAfter=$leftBack"
+        )
+        end for
+    }
+
+    "a portal whose content swaps one region for another keeps the new one updating" in {
+        for
+            mode <- Signal.initRef(true)
+            a    <- Signal.initRef(0)
+            b    <- Signal.initRef(0)
+            ui = UI.div(mode.map(m =>
+                UI.div.id("swpanel").portal(true)(
+                    if m then UI.div(a.map(i => UI.span(s"a:$i").id("swa"): UI))
+                    else UI.p(UI.span("x"), b.map(i => UI.span(s"b:$i").id("swb"): UI))
+                ): UI
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("swa") == "a:0"))
+            _     <- mode.set(false)
+            _     <- assertEventually(Sync.defer(text("swb") == "b:0"))
+            left  <- stranded(ready)
+            _     <- b.set(1)
+            _     <- assertEventually(Sync.defer(text("swb") == "b:1"), 5.seconds)
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(left == 0, s"stranded=$left")
+        end for
+    }
+
 end DomBackendReactiveRangesTest
