@@ -31,14 +31,17 @@ extension (config: ApolloClient.Config)
       *                      none). Build with
       *                      [[kyo.apollo.cache.normalized.api.FieldPolicies.of]] /
       *                      [[kyo.apollo.cache.normalized.api.FieldPolicies.fromList]].
+      * @param diagnostics   development-time cache warnings (see [[CacheDiagnostics]]);
+      *                      silent by default
       */
     def normalizedCache(
         cache: NormalizedCache,
         keyGenerator: CacheKeyGenerator = CacheKeyGenerator.default,
         keyResolver: CacheKeyResolver = CacheKeyResolver.default,
-        fieldPolicies: FieldPolicies = FieldPolicies.empty
+        fieldPolicies: FieldPolicies = FieldPolicies.empty,
+        diagnostics: CacheDiagnostics = CacheDiagnostics.off
     ): ApolloClient.Config =
         config.addInterceptor(
-            new CacheInterceptor(new ApolloStore(cache, keyGenerator, keyResolver, fieldPolicies))
+            new CacheInterceptor(new ApolloStore(cache, keyGenerator, keyResolver, fieldPolicies, diagnostics))
         )
 end extension
