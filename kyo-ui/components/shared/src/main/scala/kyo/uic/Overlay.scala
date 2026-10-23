@@ -126,6 +126,7 @@ final case class Overlay private (
     pointerAnchorV: Maybe[Signal[Maybe[UI.Point]]] = Absent,
     panelIdV: Maybe[String] = Absent,
     backdropCtxV: Maybe[MouseEvent => UI.Action] = Absent,
+    containClicksV: Boolean = false,
     triggerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
@@ -203,6 +204,24 @@ final case class Overlay private (
       */
     private[uic] def onBackdropContextMenu(f: MouseEvent => UI.Action): Overlay =
         copy(backdropCtxV = Present(f))
+
+    /** Package-internal: ends every click from inside the panel at the panel itself.
+      *
+      * The pickers render their panel INSIDE their field, and the field is what listens for the
+      * click that opens and closes it. Dispatch walks the innermost target first and then every
+      * ancestor, so without this an option click would run its pick and then reach the field's
+      * toggle, and a click on a group header, a filter input or empty panel space would toggle the
+      * panel shut. With it the panel declares a no-op click handler and kyo's `stopPropagation`, so
+      * whatever an element inside does with the click it does first, and the click goes no further.
+      *
+      * Opt-in rather than always on because the panel is shared: a menu, a popover or a date
+      * picker hosted in a clickable container keeps its clicks bubbling as before. `stopPropagation`
+      * is per element, so it also ends a keydown on the panel where the panel declares one (a
+      * `dismissOnEscape` panel already stops there, for its own reasons); the pickers declare none.
+      * The backdrop stops there too: an outside click closes the overlay at the backdrop and goes no
+      * further, so the host's toggle does not answer it a second time.
+      */
+    private[uic] def containClicks(v: Boolean): Overlay = copy(containClicksV = v)
 
     /** How the open overlay responds to scroll input outside its panel (default
       * [[Overlay.Scroll.Close]], the Prime family's hide-on-scroll). See [[Overlay.Scroll]].
@@ -449,6 +468,9 @@ final case class Overlay private (
                 // Explicitly a lambda over the event: `onContextMenu` also has a payload-free
                 // overload, and binding to that one would register the event and drop the handler.
                 backdropCtxV.foreach(f => b = b.onContextMenu((e: MouseEvent) => f(e)))
+                // See `containClicks`: the close is the whole answer to an outside click, so the host's toggle
+                // must not hear it a second time.
+                if containClicksV then b = b.stopPropagation(true)
                 if portal then b = b.portal(true)
                 List(b)
             else Nil
@@ -479,6 +501,8 @@ final case class Overlay private (
         // this panel actually dismisses on Escape, so an Escape-inert panel stays
         // transparent to its enclosing overlay chain.
         if dismissOnEscapeV then panel = panel.stopPropagation(true)
+        // See `containClicks`: the no-op handler is what makes the stop apply to a click.
+        if containClicksV then panel = panel.onClick(()).stopPropagation(true)
         // A panel that navigates with arrow keys (Select/MultiSelect/Menu/... via onPanelKeyDown) must not let the
         // browser ALSO scroll the page underneath; the keydown is still delivered so the highlight moves.
         if keyHandlerV.isDefined then panel = panel.preventScrollKeys

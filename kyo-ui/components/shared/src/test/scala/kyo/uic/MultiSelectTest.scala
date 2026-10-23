@@ -222,6 +222,114 @@ class MultiSelectTest extends UicTest:
             assert(filterEl.attrs.ariaAttrs.get("activedescendant").contains("ms-option-2"))
     }
 
+    /** The multiselect wired with its panel `open`, holding the options keyed `held`. */
+    private def field(base: uic.MultiSelect[Fruit], open: Boolean, held: Set[String] = Set.empty, query: String = "")(using
+        Frame
+    ): (SignalRef[Boolean], SignalRef[Set[Fruit]], UI) < Async =
+        for
+            o <- Signal.initRef(open)
+            h <- Signal.initRef(-1)
+            q <- Signal.initRef(query)
+            v <- Signal.initRef(fruit.filter(f => held.contains(f.id)).toSet)
+        yield (o, v, base.selection(v).wired(o, h, q, Present("ms")))
+
+    private def classed(cls: String)(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains(cls)
+
+    private def chips(using Frame) = multi.display(uic.MultiSelectDisplay.Chip).showClear(true)
+
+    "a click anywhere on the field opens it, the element carrying its id and a chip's body included" in {
+        for
+            (byId, _, ui1)   <- field(multi, open = false)
+            _                <- clickBubbling(ui1)(_.attrs.identifier.contains("ms"))
+            viaId            <- byId.get
+            (byChip, _, ui2) <- field(chips, open = false, held = Set("a", "c"))
+            _                <- clickBubbling(ui2)(classed("p-chip-label"))
+            viaChip          <- byChip.get
+            (shut, _, ui3)   <- field(multi, open = true)
+            _                <- clickBubbling(ui3)(_.attrs.identifier.contains("ms"))
+            closed           <- shut.get
+        yield
+            assert(viaId, "the field itself is the control, so a click on its padding or by its id opens it")
+            assert(viaChip, "a chip is part of the field's face, as in Prime; only its remove button is its own")
+            assert(!closed)
+        end for
+    }
+
+    "a click on an option toggles it once and leaves the panel open" in {
+        for
+            (open, value, ui) <- field(multi, open = true)
+            _                 <- clickBubbling(ui)(_.attrs.identifier.contains("ms-option-2"))
+            picked            <- value.get.map(_.map(_.id))
+            still             <- open.get
+        yield assert(picked == Set("c") && still, "a reader picking several things keeps the list")
+    }
+
+    "a click inside the open panel that lands on no option leaves it open and picks nothing" in {
+        val grouped =
+            uic.MultiSelect[Fruit]().optionGroups(List(uic.OptionItem.group("Fruit")(fruit*)))(_.name).optionKey(_.id)
+                .optionDisabled(_.sold).filterable(true).id("ms")
+        val targets: List[(String, UI.Ast.Element => Boolean, String)] = List(
+            ("group header", classed("p-multiselect-option-group"), ""),
+            ("header", classed("p-multiselect-header"), ""),
+            ("filter input", classed("p-multiselect-filter"), ""),
+            ("empty list space", classed("p-multiselect-list-container"), ""),
+            ("panel frame", classed("p-multiselect-overlay"), ""),
+            ("sold-out option", _.attrs.identifier.contains("ms-option-1"), ""),
+            ("empty message", classed("p-multiselect-empty-message"), "zzz")
+        )
+        Kyo.foreach(targets) { (name, target, query) =>
+            for
+                (open, value, ui) <- field(grouped, open = true, query = query)
+                _                 <- clickBubbling(ui)(target)
+                still             <- open.get
+                got               <- value.get
+            yield (name, still && got.isEmpty)
+        }.map(rs => assert(rs.forall(_._2), rs.filterNot(_._2).map(_._1).mkString("toggled or picked: ", ", ", "")))
+    }
+
+    "a click on the clear button empties the field, and one on a chip's remove button drops that chip, neither opening it" in {
+        for
+            (open1, value1, ui1) <- field(chips, open = false, held = Set("a", "c"))
+            _                    <- clickBubbling(ui1)(classed("p-multiselect-clear-icon"))
+            cleared              <- value1.get
+            opened1              <- open1.get
+            (open2, value2, ui2) <- field(chips, open = false, held = Set("a", "c"))
+            _                    <- clickBubbling(ui2)(classed("p-chip-remove-icon"))
+            left                 <- value2.get.map(_.map(_.id))
+            opened2              <- open2.get
+        yield
+            assert(cleared.isEmpty && !opened1)
+            assert(left == Set("c") && !opened2)
+        end for
+    }
+
+    "a chip's remove button keeps its keys too, so Enter on it removes the chip without opening the panel" in {
+        for
+            (_, _, ui) <- field(chips, open = false, held = Set("a", "c"))
+            remove     <- elementWithClass(ui, "p-chip-remove-icon")
+        yield assert(
+            remove.attrs.onKeyDown.nonEmpty && remove.attrs.stopPropagation.contains(true),
+            "a key the button declares ends there, so the field's opening keys never see it"
+        )
+    }
+
+    "the field is the one element listening for a click: not its label, not its chevron" in {
+        def listening(ui: UI)(using Frame): Chunk[String] < Sync =
+            elements(ui).map(_.filter(declaresClick).map(_.attrs.cssClasses.headOption.getOrElse("?")))
+        for
+            (_, _, closed) <- field(chips, open = false, held = Set("a", "c"))
+            live           <- listening(closed)
+            (_, _, off)    <- field(chips.disabled(true), open = false, held = Set("a"))
+            disabled       <- listening(off)
+        yield
+            assert(
+                live == Chunk("p-multiselect", "p-chip-remove-icon", "p-chip-remove-icon", "p-multiselect-clear-icon"),
+                live.toString
+            )
+            assert(disabled.isEmpty, s"a disabled field opens nothing and drops no chip: $disabled")
+        end for
+    }
+
     "selection binds the options themselves, and a toggle keeps a member no option carries" in {
         val gone = Fruit("z", "Zucchini", false)
         for

@@ -540,6 +540,113 @@ class SelectTest extends UicTest:
         end for
     }
 
+    /** The select wired with its panel `open`, holding `held`, and the refs a click writes. */
+    private def field(base: uic.Select[Fruit], open: Boolean, held: Maybe[Fruit] = Absent, query: String = "")(using
+        Frame
+    ): (SignalRef[Boolean], SignalRef[Maybe[Fruit]], UI) < Async =
+        for
+            o <- Signal.initRef(open)
+            h <- Signal.initRef(-1)
+            q <- Signal.initRef(query)
+            v <- Signal.initRef(held)
+        yield (o, v, base.selection(v).wired(o, h, q, Present("sel")))
+
+    private def classed(cls: String)(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains(cls)
+
+    "a click anywhere on the field opens it, on the element carrying its id as on the label or the chevron" in {
+        for
+            (byId, _, ui1)    <- field(select, open = false)
+            _                 <- clickBubbling(ui1)(_.attrs.identifier.contains("sel"))
+            viaId             <- byId.get
+            (byLabel, _, ui2) <- field(select, open = false)
+            _                 <- clickBubbling(ui2)(classed("p-select-label"))
+            viaLabel          <- byLabel.get
+            (byIcon, _, ui3)  <- field(select, open = false)
+            _                 <- clickBubbling(ui3)(classed("p-select-dropdown"))
+            viaChevron        <- byIcon.get
+            (shut, _, ui4)    <- field(select, open = true)
+            _                 <- clickBubbling(ui4)(_.attrs.identifier.contains("sel"))
+            closed            <- shut.get
+        yield
+            assert(viaId, "the field itself is the control, so a click on its padding or by its id opens it")
+            assert(viaLabel && viaChevron, "and a click on what it contains reaches it")
+            assert(!closed, "a second click closes it again")
+        end for
+    }
+
+    "a click on an option picks it once and leaves the panel closed" in {
+        for
+            seen              <- Signal.initRef(0)
+            (open, value, ui) <- field(select.onChange(_ => seen.updateAndGet(_ + 1).unit), open = true)
+            _                 <- clickBubbling(ui)(e => classed("p-select-option-label")(e) && textOf(e) == "Cherry")
+            got               <- value.get
+            changes           <- seen.get
+            still             <- open.get
+        yield assert(got.map(_.id) == Present("c") && changes == 1 && !still)
+    }
+
+    "an outside click closes the panel at the backdrop and goes no further" in {
+        for
+            heard          <- Signal.initRef(0)
+            (open, _, sel) <- field(select, open = true)
+            // A container around the field that listens too: the backdrop's close is the whole answer to an outside
+            // click, so neither the field's toggle nor anything above it may hear it as a second one.
+            ui = UI.div.onClick(heard.updateAndGet(_ + 1).unit)(sel)
+            _     <- clickBubbling(ui)(classed("p-uic-overlay-backdrop"))
+            still <- open.get
+            above <- heard.get
+        yield
+            assert(!still, "the backdrop closes the panel")
+            assert(above == 0, s"the click ends at the backdrop, but $above handler(s) above it heard it")
+    }
+
+    "a click inside the open panel that lands on no option leaves it open and picks nothing" in {
+        val grouped =
+            uic.Select[Fruit]().optionGroups(List(uic.OptionItem.group("Fruit")(fruit*)))(_.name).optionKey(_.id)
+                .optionDisabled(_.sold).filterable(true).id("sel")
+        val targets: List[(String, UI.Ast.Element => Boolean, String)] = List(
+            ("group header", classed("p-select-option-group"), ""),
+            ("filter input", classed("p-select-filter"), ""),
+            ("empty list space", classed("p-select-list-container"), ""),
+            ("panel frame", classed("p-select-overlay"), ""),
+            ("sold-out option", e => classed("p-select-option-label")(e) && textOf(e) == "Banana", ""),
+            ("empty message", classed("p-select-empty-message"), "zzz")
+        )
+        Kyo.foreach(targets) { (name, target, query) =>
+            for
+                (open, value, ui) <- field(grouped, open = true, query = query)
+                _                 <- clickBubbling(ui)(target)
+                still             <- open.get
+                got               <- value.get
+            yield (name, still && got.isEmpty)
+        }.map(rs => assert(rs.forall(_._2), rs.filterNot(_._2).map(_._1).mkString("toggled or picked: ", ", ", "")))
+    }
+
+    "a click on the clear button empties the field and does not open it" in {
+        for
+            (open, value, ui) <- field(select.showClear(true), open = false, held = Present(fruit(0)))
+            _                 <- clickBubbling(ui)(classed("p-select-clear-icon"))
+            got               <- value.get
+            opened            <- open.get
+        yield assert(got.isEmpty && !opened)
+    }
+
+    "the field is the one element listening for a click: not its label, not its chevron" in {
+        def listening(ui: UI)(using Frame): Chunk[String] < Sync =
+            elements(ui).map(_.filter(declaresClick).map(_.attrs.cssClasses.headOption.getOrElse("?")))
+        for
+            (_, _, closed) <- field(select.showClear(true), open = false, held = Present(fruit(0)))
+            live           <- listening(closed)
+            (_, _, off)    <- field(select.disabled(true), open = false)
+            disabled       <- listening(off)
+            (_, _, ro)     <- field(select.readonly(true), open = false)
+            readonly       <- listening(ro)
+        yield
+            assert(live == Chunk("p-select", "p-select-clear-icon"), live.toString)
+            assert(disabled.isEmpty && readonly.isEmpty, "a disabled or readonly field opens nothing")
+        end for
+    }
+
     "every picker's options take an Iterable" in {
         typeCheck("""
             import kyo.*
