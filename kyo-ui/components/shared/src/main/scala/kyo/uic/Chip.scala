@@ -25,7 +25,8 @@ final case class Chip private (
     removeIconV: Maybe[IconGlyph] = Absent,
     onRemoveEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil,
-    extraClassesV: List[String] = Nil
+    extraClassesV: List[String] = Nil,
+    isolateRemoveFlag: Boolean = false
 ) extends Node:
     type Self = Chip
 
@@ -33,6 +34,16 @@ final case class Chip private (
       * class (`p-multiselect-chip`) onto the chip root.
       */
     private[uic] def extraClass(cls: String): Chip = copy(extraClassesV = extraClassesV :+ cls)
+
+    /** Package-internal: ends the remove button's own events at the button (kyo's `stopPropagation`).
+      *
+      * For a host that renders the chip inside an element listening for the same events: MultiSelect's
+      * field toggles its panel on a click and opens it on Enter or Space, and a remove is neither. The
+      * stop covers both event types the button declares, so a key pressed on the focused remove button
+      * stays the button's too. Off by default, so a chip an app places in a clickable container of its
+      * own keeps bubbling as before.
+      */
+    private[uic] def isolateRemove(v: Boolean): Chip = copy(isolateRemoveFlag = v)
 
     /** Leading icon (`.p-chip-icon`); an `image` wins over it (Prime precedence). */
     def icon(glyph: IconGlyph): Chip = copy(iconV = Present(glyph))
@@ -90,6 +101,7 @@ final case class Chip private (
                             case _                  => () // Enter/Space activate the native button already
                     }
                 }
+                if isolateRemoveFlag then btn = btn.stopPropagation(true)
                 List(btn(toChild(GlyphSvg(removeIconV.getOrElse(Icons.timesCircle)))))
 
         el((lead ++ labelChild ++ kids ++ removeChild).map(toChild)*)

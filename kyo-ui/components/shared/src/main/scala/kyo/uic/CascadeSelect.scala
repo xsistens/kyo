@@ -334,11 +334,9 @@ final case class CascadeSelect[A] private (
         var lbl = span.cssClass("p-cascadeselect-label")
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if labelText.isEmpty then lbl = lbl.cssClass("p-cascadeselect-label-empty")
-        if !disabledFlag && st.isDefined then lbl = lbl.onClick(toggleRoot)
         val labelUI: UI = lbl(if labelText.isEmpty then " " else labelText)
 
-        var dd = div.cssClass("p-cascadeselect-dropdown")
-        if !disabledFlag && st.isDefined then dd = dd.onClick(toggleRoot)
+        val dd             = div.cssClass("p-cascadeselect-dropdown")
         val dropdownUI: UI =
             if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-cascadeselect-loading-icon", "p-icon", "p-icon-spin")))
             else dd(toChild(GlyphSvg(Icons.chevronDown, "p-cascadeselect-dropdown-icon", "p-icon")))
@@ -385,7 +383,10 @@ final case class CascadeSelect[A] private (
                     // the keyboard is and where the highlight is announced. A panel that seeded
                     // focus would take the announcement away from the one element reading it.
                     .seedFocus(false)
-                    .dismissOnEscape(false)(
+                    .dismissOnEscape(false)
+                    // The chain renders inside the field, whose click toggles it: every click in the
+                    // chain (a leaf, a group row, a nested panel) ends at this root panel.
+                    .containClicks(true)(
                         div.cssClass("p-cascadeselect-list-container")(
                             toChild(list(items, Nil, current, openMap, Present(state), pick))
                         )
@@ -431,6 +432,8 @@ final case class CascadeSelect[A] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            // The one click listener: a click anywhere on the field toggles the chain.
+            if st.isDefined then el = el.onClick(toggleRoot)
             // Focus never leaves the trigger, however deep the chain of panels goes, so the whole
             // cascade keyboard lives here: closed, the three opening keys; open, one [[MenuNav]]
             // walk that steps into groups, back out of them, picks a leaf and closes on Escape.

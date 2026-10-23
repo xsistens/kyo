@@ -439,7 +439,6 @@ final case class Select[A] private (
         var lbl = span.cssClass("p-select-label")
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if labelText.isEmpty then lbl = lbl.cssClass("p-select-label-empty")
-        st.foreach(s => if interactive then lbl = lbl.onClick(toggle(s)))
         // NBSP keeps the empty label's line box (Prime renders &nbsp;).
         val labelUI: UI =
             selDrawn match
@@ -461,12 +460,13 @@ final case class Select[A] private (
                         .cssClass("p-select-clear-icon")
                         .jsProp("type", "button")
                         .aria("label", "Clear")
-                        .onClick(clearEffect)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .onClick(clearEffect)
+                        // The clear sits inside the field, whose click opens the panel.
+                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
                 )
             else Nil
 
-        var dd = span.cssClass("p-select-dropdown")
-        st.foreach(s => if interactive then dd = dd.onClick(toggle(s)))
+        val dd = span.cssClass("p-select-dropdown")
         // PrimeVue's loading slot: the spinner takes the chevron's place in the dropdown cell.
         val dropdownUI: UI =
             if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin")))
@@ -540,6 +540,10 @@ final case class Select[A] private (
         if readonlyFlag && !disabledFlag then el = el.tabIndex(0)
         if interactive then
             el = el.tabIndex(0).preventScrollKeys
+            // The one click listener: the field is the control, so a click anywhere on it toggles,
+            // its padding and a click addressed by its id included. What inside does work of its
+            // own ends the click there: the clear button, and the panel (`Overlay.containClicks`).
+            st.foreach(s => el = el.onClick(toggle(s)))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard.
             // The one exception is a filter header, which takes focus into the panel and the keys
@@ -630,10 +634,6 @@ final case class Select[A] private (
         end if
     end panelKey
 
-    /** The floating option panel: Prime's `.p-select-overlay` skin on the
-      * [[Overlay]] primitive, holding the optional filter header and the option
-      * list.
-      */
     /** The options the panel is showing, the positions the highlight may land on, and where it
       * is now. Derived in one place because the TRIGGER reads it too: the keyboard lives on
       * whatever holds focus, and that is no longer the panel.
@@ -651,6 +651,10 @@ final case class Select[A] private (
         (shownGroups, shown, shown.indices.toList.filterNot(i => isOptionDisabled(shown(i))), hiEff)
     end shownState
 
+    /** The floating option panel: Prime's `.p-select-overlay` skin on the
+      * [[Overlay]] primitive, holding the optional filter header and the option
+      * list.
+      */
     private def overlayPanel(current: String, s: State, pick: A => State => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
@@ -752,7 +756,8 @@ final case class Select[A] private (
             // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
             // in it receives a key either: no seed, no key handler, and no Escape of its own.
             .seedFocus(false)
-            .dismissOnEscape(false)((header ++ keyCollisionCard ++ List(listUI))*)
+            .dismissOnEscape(false)
+            .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
 
