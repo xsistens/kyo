@@ -328,7 +328,8 @@ final case class Select[A] private (
         // by this effectful mount. Static projections (SSG, the SSR page GET,
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
-        val stat: UI = withValue(cur => body(cur, Absent))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val stat: UI = withValue(cur => body(cur, Absent, validity))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -353,13 +354,15 @@ final case class Select[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
             hi.render { h =>
                 q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base))))
+                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base)), validity))
                 }
             }
         }
+    end wired
 
     /** Renders through the value binding: hosts supply `currentV` resolved, a
       * bound ref subscribes, an unbound select is empty.
@@ -372,28 +375,22 @@ final case class Select[A] private (
                     case Present(c) => c.render(f)
                     case Absent     => f(Absent)
 
-    private def body(held: Maybe[A], st: Maybe[State])(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
-        // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
-        // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
-        // than through `copy(...)` (a copied instance's `State` would not match).
+    private def body(held: Maybe[A], st: Maybe[State], validity: FieldValidity)(using Frame): UI =
+        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). `State` is a
+        // path-dependent inner type, so the re-render threads the resolved placeholder text into `bodyStatic` directly
+        // rather than through `copy(...)` (a copied instance's `State` would not match). The validity is stamped on the
+        // field, never re-rendered.
         BoolValue.reactive(loadingV): ld =>
             val loading = ld.constTrue
             TextValue.reactive(placeholderV): ph =>
-                (invalidV.dynSig, invalidMsgDynV) match
-                    case (Absent, Absent) => bodyStatic(held, st, ph, invalidV.constTrue, invalidMsgV, loading)
-                    case _                =>
-                        FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                            bodyStatic(held, st, ph, red, msg, loading)
-                        )
+                bodyStatic(held, st, ph, loading, validity)
 
     private def bodyStatic(
         held: Maybe[A],
         st: Maybe[State],
         placeholder: Maybe[String],
-        redFlag: Boolean,
-        redMsg: Maybe[String],
-        loading: Boolean
+        loading: Boolean,
+        validity: FieldValidity
     )(using Frame): UI =
         val isOpen  = st.exists(_.isOpen)
         val all     = items
@@ -497,7 +494,7 @@ final case class Select[A] private (
             if held.isDefined || placeholder.exists(_.nonEmpty) then el = el.cssClass("p-inputwrapper-filled")
         end if
         if isOpen then el = el.cssClass("p-select-open").cssClass("p-uic-overlay-anchor")
-        if redFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         if readonlyFlag then el = el.cssClass("p-uic-select-readonly").aria("readonly", "true")
         if requiredFlag then el = el.aria("required", "true")
@@ -567,11 +564,7 @@ final case class Select[A] private (
             }
         end if
 
-        val field = FieldInvalid.withMessage(
-            el(((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
-            redFlag,
-            redMsg
-        )
+        val field = validity.follow(el(((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 

@@ -668,7 +668,7 @@ val decorated: UI < Async =
 
 ### Validity before the validation layer
 
-Every control carries `invalid` and `invalidMessage`. `invalid` takes `Boolean | Signal[Boolean]`; `invalidMessage` keeps two setters, because a constant message is always shown while the reactive one is a `Signal[Maybe[String]]` that can also clear the row. That pair is Prime's `.p-invalid` model: `invalid` stamps the red state and `invalidMessage` renders the message row beneath the field. You can drive them by hand from any signal you already have, which is the whole story for a form too small to want a validation layer.
+Every control carries `invalid` and `invalidMessage`. `invalid` takes `Boolean | Signal[Boolean]`; `invalidMessage` keeps two setters, because a constant message is always shown while the reactive one is a `Signal[Maybe[String]]` that can also clear the row. That pair is Prime's `.p-invalid` model: `invalid` stamps the red state and `invalidMessage` renders the message row beneath the field. A reactive validity never rebuilds the control: `.p-invalid` and `aria-invalid` are patched on the element in place and the message row comes and goes on its own after it, so a field that turns red while the reader types into it keeps their text, focus and caret. You can drive them by hand from any signal you already have, which is the whole story for a form too small to want a validation layer.
 
 ```scala
 val handRolled: UI < Async =

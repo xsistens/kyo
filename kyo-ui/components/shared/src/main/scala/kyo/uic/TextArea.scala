@@ -108,14 +108,8 @@ final case class TextArea private (
     def onBlur(f: String => UI.Action)(using Frame): TextArea = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
-        var b = textarea.cssClass("p-textarea").cssClass("p-component")
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        var b        = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
         sizeV match
@@ -124,7 +118,7 @@ final case class TextArea private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
-        if invalidV.constTrue then b = b.cssClass("p-invalid").aria("invalid", "true")
+        b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-textarea-fluid")
         if autoResizeFlag then b = b.cssClass("p-textarea-resizable").cssClass("p-uic-autoresize")
         valueBinding match
@@ -159,8 +153,8 @@ final case class TextArea private (
                     case Present(Input.Value.Const(v)) => f(v)
                     case Absent                        => f(""))
             case Absent => b
-        FieldInvalid.withMessage(b, invalidV.constTrue, invalidMsgV)
-    end renderStatic
+        validity.follow(b)
+    end render
 end TextArea
 
 object TextArea:
