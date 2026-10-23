@@ -13,7 +13,7 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
 
-/** End-to-end tests for the Phase 04 fetch-policy wiring: a real [[ApolloClient]]
+/** End-to-end tests for the fetch-policy wiring: a real [[ApolloClient]]
   * with a [[MemoryCache]] installed via `normalizedCache`, driven through a fake
   * [[kyo.apollo.network.http.HttpEngine]] so each [[FetchPolicy]]'s emission sequence,
   * write-back behaviour, and `cacheInfo` stamping can be observed without a
@@ -26,7 +26,7 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     // --- fixtures: the CountriesQuery, keyed by `code` ------------------------
 
     // `__typename` field named verbatim to match the GraphQL wire form (kyo-schema
-    // encodes field names as-is; the old ObjectAdapter mapped `typename` onto it).
+    // encodes field names as-is).
     final case class Country(__typename: String, code: String, name: String) derives Schema
     final case class CountriesData(countries: List[Country]) derives Schema
 

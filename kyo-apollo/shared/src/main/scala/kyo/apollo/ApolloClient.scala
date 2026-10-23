@@ -24,7 +24,7 @@ import kyo.apollo.network.ws.WebSocketNetworkTransport
 import kyo.apollo.network.ws.WsProtocol
 import kyo.apollo.runtime.ResponseStream
 
-/** The top-level facade over the whole Phase 03 stack: it wires the two-tier
+/** The top-level facade over the client stack: it wires the two-tier
   * interceptor chain to the HTTP transport once, then hands out an
   * [[ApolloCall]] per operation.
   *
@@ -184,7 +184,7 @@ end ApolloClient
   * the [[ApolloClient]] that runs it.
   *
   * It is the concrete implementation of the [[kyo.apollo.runtime.ApolloCall]]
-  * contract (Task 6): [[stream]] runs the client's interceptor chain, and the
+  * contract: [[stream]] runs the client's interceptor chain, and the
   * inherited `execute` is "take the first / only emission" over that stream.
   * The fluent setters (`.addHttpHeader`, `.httpMethod`, …) each return a **new**
   * `ApolloCall` over an updated builder, so a call is a cheap immutable value and

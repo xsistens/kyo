@@ -10,7 +10,7 @@ import kyo.apollo.network.ApolloResponse
   *
   * ==Why this shape==
   *
-  * `core` is Kyo-effect-native: the async abstraction is a Kyo [[Stream]]
+  * kyo-apollo is Kyo-effect-native: the async abstraction is a Kyo [[Stream]]
   * ([[ResponseStream]]). The
   * primitive is [[stream]]: a single network reply and the multiple emissions a
   * normalized cache or a subscription will later produce share **one** return

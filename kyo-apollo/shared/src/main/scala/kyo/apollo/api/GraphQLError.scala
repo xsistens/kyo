@@ -17,13 +17,12 @@ import kyo.apollo.json.Json
   *     to; empty when the server omits them.
   *   - `path` — locates the response field the error applies to. Segments mix
   *     field-name strings and list indices (ints), so this is a
-  *     `List[String | Int]` rather than the Phase 01 `List[String]` (which could
-  *     not represent an index into a list field).
+  *     `Chunk[String | Int]`: a string-only path could not address an index into
+  *     a list field.
   *   - `extensions` — server-specific metadata as raw JSON.
   *
-  * `locations` is appended last with a default so Phase 01 positional
-  * constructions `GraphQLError(message, path, extensions)` keep compiling until
-  * Task 7 regenerates the demo. Parse wire JSON via [[GraphQLError.parse]].
+  * Every field but `message` has an empty default, so `GraphQLError(message)`
+  * is a complete error. Parse wire JSON via [[GraphQLError.parse]].
   */
 final case class GraphQLError(
     message: String,

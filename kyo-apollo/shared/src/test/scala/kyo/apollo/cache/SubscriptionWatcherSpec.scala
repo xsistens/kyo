@@ -11,7 +11,7 @@ import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.network.ApolloResponse
 
-/** The civolution live-walk shape: a query watcher over an entity (`LobbyView`)
+/** A game-lobby shape: a query watcher over an entity (`LobbyView`)
   * whose selection nests an entity LIST (`players`), plus a subscription whose
   * events normalize into the SAME entity — all three operations built the way
   * generated code builds them (`SelectionBuilder.obj`/`scalar` + `.mapInto`).
@@ -80,7 +80,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     ) derives Schema
 
     /** The shared selection: query, mutation and subscription all use it, so every
-      * reply/event must update the same records (civolution `Model.lobby`). The
+      * reply/event must update the same records. The
       * nullable `startedGameId` guards the `Maybe = Absent` write → read round-trip
       * (kyo-schema encodes `Absent` as an ABSENT field; the cache must repair it to
       * an explicit `null` or every later read misses).
@@ -213,8 +213,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         )
 
     /** Fetch the query once over the (fake) network, then run `body` with the
-      * client and a pull over a `CacheOnly` watch whose initial read is established
-      * — the WatcherSpec harness, on the civolution selection shape.
+      * client and a pull over a `CacheOnly` watch whose initial read is established:
+      * the WatcherSpec harness, on the lobby selection shape.
       */
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[(lobby: Lobby)]]) => Unit <
@@ -290,7 +290,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
 
         "a Maybe = Absent field round-trips as an explicit null, and a push can flip it" in {
             cachedClient().map(_.apolloStore).map { store =>
-                // The civolution start-game push: the subscription event carries the id;
+                // The start-game push: the subscription event carries the id;
                 // a query re-read (the redirect observer's input) must see it.
                 val started = lobby(p1).copy(startedGameId = Present("G9"))
                 for

@@ -12,7 +12,7 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
 
-/** Phase 04 acceptance suite for the normalized cache.
+/** Acceptance suite for the normalized cache.
   *
   * Where the sibling specs test each component in isolation on flat fixtures (a
   * single `book`, or a flat `countries` list), this suite drives a deliberately

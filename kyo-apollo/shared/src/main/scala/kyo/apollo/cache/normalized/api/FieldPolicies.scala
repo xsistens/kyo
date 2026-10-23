@@ -21,8 +21,8 @@ import kyo.apollo.json.Json
   * Build one with [[FieldPolicies.of]] (varargs) or [[FieldPolicies.fromList]]
   * (handy for splicing in the multi-policy output of [[ConnectionFieldPolicy]]).
   * The empty registry ([[FieldPolicies.empty]]) is the identity policy the store
-  * uses until fields are configured — every method then behaves exactly as the
-  * unpolicied Phase 04 path did.
+  * uses until fields are configured: every method then keys, reads and merges a
+  * field as if it had no policy.
   */
 final class FieldPolicies private (
     private val keyArgsByField: Map[(String, String), Chunk[String]],
