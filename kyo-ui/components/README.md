@@ -1999,7 +1999,7 @@ That choice of setter is not left to the reader. `submitDisabled` returns a `Sub
 
 `submitDisabled` is the usual gate: blocked while submitting or while any field error is currently displayed, but open for a pristine form, so the first click runs submit-reveal.
 
-A handler that needs the values names their fields, and receives what each field's rules validated to, from the same run of the rules that decided the form was valid: `scope.submit(field)(value => ...)`, up to four fields at once. A field whose rules only check hands over its value; a `Maybe[LocalDate]` field required with `Validator.chosen()` hands over the `LocalDate`. An edit that lands while an async rule is still in flight cannot reach the handler, because the value was read once, before the rules ran. Everything else is the plain `submit`: the whole form is validated, focus goes to the first invalid field, and the handler runs only when everything holds.
+A handler that needs the values names their fields, and receives what each field's rules validated to, from the same run of the rules that decided the form was valid: `scope.submit(field)(value => ...)`, up to four fields at once (a whole form at once is a group, see [Declaring a form as a group](#declaring-a-form-as-a-group)). A field whose rules only check hands over its value; a `Maybe[LocalDate]` field required with `Validator.chosen()` hands over the `LocalDate`. An edit that lands while an async rule is still in flight cannot reach the handler, because the value was read once, before the rules ran. Everything else is the plain `submit`: the whole form is validated, focus goes to the first invalid field, and the handler runs only when everything holds.
 
 ```scala
 import java.time.LocalDate
@@ -2119,6 +2119,68 @@ val lineItems: UI =
 `rows.render` is a keyed list, so adding, removing, and moving rows preserve the DOM (and therefore the focus and caret) of the rows that stayed. Cross-row `satisfy` reads the live rows, so a deleted row never counts toward a check.
 
 A row builder runs with `Async` only and no `Scope`, because rows are added later, from a handler, long after the mount body ran. `Activation.Change` works there anyway: the array wires each row's observer on an unscoped fiber and owns it, cancelling it when the row is removed and when the form unmounts. `dependsOn` is the one thing a row cannot do, and its type says so rather than leaving you to find out: it returns `Unit < (Async & Scope)`, so it does not compile inside a row at all. Cross-field re-validation within a row falls back to `addRule`.
+
+### Declaring a form as a group
+
+Naming fields one by one in `submit(a, b)` stops at four, and a field array has no single type the form could hand over, because its rows are whatever the builder returned. A group declares the whole form at once and keeps its shape in the type. `scope.fields((name = spec, ...))` declares every spec in one effect and hands back a named tuple of the declared fields, `scope.array(initial)(row => (...))` and `scope.child(scope => (...))` nest one, and `scope.submit(group)(v => ...)` hands the handler one named tuple of what every field validated to.
+
+```scala
+import java.time.LocalDate
+import kyo.uic.DateKind.given
+import kyo.uic.form.*
+
+def placeOrder(
+    customer: String,
+    due: LocalDate,
+    lines: Chunk[(sku: String, qty: Int)],
+    shipping: (street: String, city: String)
+): UI.Action =
+    Console.printLine(s"$customer, due $due: ${lines.map(l => s"${l.qty} x ${l.sku}").mkString(", ")} to ${shipping.city}")
+
+val orderForm: UI =
+    Form.mountedWith(ErrorTranslator.default) { form =>
+        for
+            f <- form.fields((
+                customer = form.field.rules(Validator.required()),
+                due = form.field(Maybe.empty[LocalDate]).rules(Validator.chosen()),
+                lines = form.array(initial = 1)(row =>
+                    (
+                        sku = row.field.rules(Validator.required()),
+                        qty = row.numberField(1).rules(Validator.min(1))
+                    )
+                ),
+                shipping = form.child(scope =>
+                    (
+                        street = scope.field.rules(Validator.required()),
+                        city = scope.field.rules(Validator.required())
+                    )
+                )
+            ))
+            shippingErrors <- Form.errorSummary(Form.scopeOf(f.shipping))
+        yield div(
+            uic.Input().bind(f.customer),
+            uic.DatePicker[LocalDate]().bind(f.due),
+            f.lines.render((line, row) =>
+                div(
+                    uic.Input().bind(line.sku),
+                    uic.InputNumber().bind(line.qty),
+                    uic.Button("Remove").variant(uic.ButtonVariant.Text).onClick(row.remove)
+                )
+            ),
+            uic.Button("Add line").icon(uic.Icons.plus).onClick(f.lines.add),
+            uic.Input().bind(f.shipping.street),
+            uic.Input().bind(f.shipping.city),
+            shippingErrors,
+            uic.Button("Order").onClick(form.submit(f)(v => placeOrder(v.customer, v.due, v.lines, v.shipping)))
+        )
+    }
+```
+
+`v` is exactly `(customer: String, due: LocalDate, lines: Chunk[(sku: String, qty: Int)], shipping: (street: String, city: String))`: a field's `Valid`, so `due` arrives as the `LocalDate` that `Validator.chosen()` refined it to, an array as the `Chunk` of its rows' named tuples, a child as its own named tuple. A misspelled `v.custmer` is a compile error naming that type, and so is `f.custmer`, naming the group's.
+
+A group is nothing but its fields. `f` is a plain named tuple of the declared handles, `f.customer` is the `FormField[String]` that `bind` takes, and `f.shipping` is the child's own named tuple. Everything that acts on a group is a function that takes it, so no name a field may have is taken by something else: `form.submit(f)` submits it, `Form.scopeOf(f.shipping)` is the child's scope (for its own summary, `anchor`, `satisfy` or `reset`), and the controls of one row (`remove`, `moveUp`, `moveDown`, `index`) are the `FieldArray.Row` that `render` hands over beside the row's fields. The array handle `f.lines` carries `add`, `removeAt`, `move`, `rows`, `currentRows` and `satisfy` and no field names, while a row carries field names and no operations. A form with fields called `submit`, `scope`, `remove`, `index`, `add` or `rows` reads each of them by name. The only names a group refuses are the ones the named tuple answers itself (`toString`, `hashCode`, `equals`, `getClass`, `isInstanceOf`, `asInstanceOf`, `apply`, `==`, `!=`, `##`), and it refuses them at the declaration, because such a field could never be read.
+
+The submit is the plain `submit` with every field of the group named: each field's rules run once per submit, in the run that both decides validity and yields the value, the whole scope is validated, and focus goes to the first invalid field in tuple order, which is also declaration order. An array hands over the rows it holds when the submit starts, so a row added while an async rule is still in flight belongs to the next submit. Every member is declared in the scope of the group that holds it, whichever form its spec was made from; a group's members are undeclared specs, and an already declared field in the tuple is refused with the group's own message.
 
 ### Summaries
 

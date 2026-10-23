@@ -21,8 +21,12 @@ final class Form private[form] (
     focusInvalidOnSubmit: Boolean,
     private[form] val mintId: () => String < Sync,
     focusField: String => Unit < Async,
-    ownsSubmit: Boolean
+    ownsSubmit: Boolean,
+    outerV: Maybe[Form] = Absent
 ):
+
+    /** The scope this one was made in ([[child]], or an array's row), a root form being its own. */
+    private[form] def outer: Form = outerV.getOrElse(this)
 
     /** Declare a typed field in this scope, starting from `initial` (which is also the reset
       * baseline). Returns a [[FieldSpec]] (a pure description with a default for every other
@@ -98,7 +102,8 @@ final class Form private[form] (
             focusInvalidOnSubmit,
             mintId,
             focusField,
-            ownsSubmit = false
+            ownsSubmit = false,
+            outerV = Present(this)
         )
 
     /** Declare a dynamic array of repeated rows. Each row is its own sub-form scope built
@@ -135,6 +140,53 @@ final class Form private[form] (
             _ <- arraysRef.updateAndGet(_ :+ arr)
             _ <- Kyo.foreach(0 until initial)(_ => arr.add)
         yield arr
+
+    /** Declare a field group: a named tuple of specs, declared in one effect and handed back as the named tuple of what
+      * each spec declared to.
+      * {{{
+      * f <- form.fields((
+      *        customer = form.field.rules(Validator.required()),
+      *        lines    = form.array(initial = 1)(row => (sku = row.field, qty = row.numberField(1))),
+      *        shipping = form.child(scope => (street = scope.field, city = scope.field))
+      *      ))
+      * }}}
+      * `f.customer` is the declared `FormField[String] { type Valid = String }`, `f.lines` a [[GroupArray]] and
+      * `f.shipping` the child's own named tuple of fields. A group is nothing but its fields: it has no methods, so none
+      * can shadow a field. What submits it, finds its scope and lays out its rows are functions that take it
+      * ([[submit]], [[Form.scopeOf]], [[GroupArray.render]]).
+      *
+      * Each member is an UNDECLARED spec: a field or number field spec, an [[array]], or a [[child]]. Every member is
+      * declared in this scope, whichever form its spec was made from, in tuple order, which is the order
+      * focus-first-invalid and the error summary walk. A name the named tuple itself answers (`toString`, `hashCode`,
+      * `equals`, `getClass`, `isInstanceOf`, `asInstanceOf`, `apply`, and the symbolic `==`, `!=`, `##`) would not read
+      * the field, so it does not compile; neither does a group of no fields.
+      */
+    def fields[N <: Tuple, S <: NonEmptyTuple, H <: Tuple](specs: NamedTuple.NamedTuple[N, S])(using
+        frame: Frame,
+        members: FieldGroup.Specs.Aux[N, S, H]
+    ): NamedTuple.NamedTuple[N, H] < Async =
+        // `H` is a `NamedTuple[N, H]` by the named tuple's lower bound, so the handles need no conversion.
+        members.declare(specs.toTuple, this).map(hs => hs: NamedTuple.NamedTuple[N, H])
+
+    /** An array member for [[fields]]: each row is a fresh scope in which `row` declares its specs, and `initial` rows are
+      * added when the group is declared. It declares to a [[GroupArray]], whose rows are named tuples of fields like a
+      * group, and a group submit hands it over as the `Chunk` of its rows' validated values. The spec is a pure value,
+      * declared into the scope of the group that holds it.
+      */
+    def array[N <: Tuple, S <: NonEmptyTuple, H <: Tuple](initial: Int = 0)(row: Form => NamedTuple.NamedTuple[N, S])(using
+        members: FieldGroup.Specs.Aux[N, S, H]
+    ): ArraySpec[N, H] =
+        ArraySpec.of(initial, row)
+
+    /** A child group member for [[fields]]: a [[child]] scope (its own summary, anchor and reset) in which `build`
+      * declares its specs. It declares to the child's named tuple of fields, read by name like any member, and the
+      * child scope is [[Form.scopeOf]] of it. The spec is a pure value; the child scope is made in the scope of the group
+      * that holds it.
+      */
+    def child[N <: Tuple, S <: NonEmptyTuple, H <: Tuple](build: Form => NamedTuple.NamedTuple[N, S])(using
+        members: FieldGroup.Specs.Aux[N, S, H]
+    ): ChildSpec[N, H] =
+        ChildSpec.of(build)
 
     /** This scope's focus anchor id, set once via [[anchor]], inherited by every form-level
       * error ([[satisfy]] / [[raise]]) on this scope.
@@ -425,12 +477,34 @@ final class Form private[form] (
             }
         }
 
+    /** [[submit]] handing over the validated values of a whole field group ([[fields]]) as one named tuple with the
+      * group's names: each field's [[Validated.Valid]], each [[GroupArray]] as the `Chunk` of its rows' named tuples,
+      * each child as its own named tuple.
+      * {{{
+      * uic.Button("Order").onClick(form.submit(f)(v => order(v.customer, v.due, v.lines, v.shipping)))
+      * }}}
+      * An array hands over the rows it holds when the submit starts; a row added while an async rule is in flight is the
+      * next submit's. Every field of the group is validated once, by the run that both decides validity and yields its
+      * value, and the rest is [[submit]]'s: the whole subtree of this scope is validated, focus goes to the first invalid
+      * field, and `onValid` runs only when everything holds. As with a single field, the group may belong to this scope
+      * or to another; its fields' display gates are opened either way.
+      */
+    def submit[N <: Tuple, H <: Tuple, V <: Tuple](group: NamedTuple.NamedTuple[N, H])(using
+        shape: FieldGroup.Shape.Aux[H, V]
+    )(onValid: NamedTuple.NamedTuple[N, V] => UI.Action)(using Frame): UI.Action =
+        shape.snapshot(group.toTuple).map { snap =>
+            submitWith(snap.fields) {
+                // `V` is a `NamedTuple[N, V]` by the named tuple's lower bound, so the value needs no conversion.
+                snap.verdict().map((errs, value) => (errs, value.map(v => () => onValid(v))))
+            }
+        }
+
     /** The one submit every overload runs. `named` are the fields whose verdicts `runNamed` produces, in its order, with
       * the handler to run if all of them passed; the subtree walk skips exactly those fields, so each field's rules run
       * once per submit, and their verdicts are put back in declaration order for focus-first-invalid. The named run
       * and the walk go in parallel, as the subtree's own fields always have.
       */
-    private def submitWith(named: Chunk[FormField[?]])(
+    private[form] def submitWith(named: Chunk[FormField[?]])(
         runNamed: => (Chunk[Maybe[FieldError]], Maybe[() => UI.Action]) < Async
     )(using Frame): UI.Action =
         def validate: ((Chunk[Maybe[FieldError]], Maybe[() => UI.Action]), Chunk[(FormField[?], Maybe[FieldError])]) < Async =
@@ -633,6 +707,17 @@ end Form
 object Form:
 
     final private[form] case class Check(code: String, pred: () => Boolean < Async, reveal: Reveal)
+
+    /** The scope a field group's fields live in: the form for a group declared by [[Form.fields]], the child scope for a
+      * [[Form.child]] member, a row's own scope for a row of a [[GroupArray]].
+      * {{{
+      * Form.errorSummary(Form.scopeOf(f.shipping))
+      * }}}
+      * A function rather than a member of the group, because a group's only members are its fields: a field named
+      * `scope` reads the field.
+      */
+    def scopeOf[N <: Tuple, X, T <: Tuple](group: NamedTuple.NamedTuple[N, X *: T])(using head: FieldGroup.Member[X]): Form =
+        head.owner(group.toTuple.head)
 
     /** A reactive cross-field invariant: a live validity `Signal`, its display `reveal` mode,
       * and the scope's anchor id (captured at registration) for its summary focus-jump.

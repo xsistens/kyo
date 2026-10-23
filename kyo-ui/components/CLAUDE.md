@@ -235,8 +235,40 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   `FieldError.messageCode`) backs `raise(text)` and `setError(text)`. Every translator answers in the
   order table entry, then `fallback`, then code: the translator speaks first so an i18n translator can
   replace every string. A field that needs its own words under an app-wide table gets its own code.
-- **`FieldArray` has no typed submit**: a row model is the app's own type, so an array has no single
-  `Valid` the form could name; read row fields in the handler.
+- **A hand-built `FieldArray` has no typed submit**: its row model is the app's own type, so it has no
+  single `Valid` the form could name. A typed array is a group member (`form.array`, below).
+
+## A field group is a named tuple, and nothing else
+
+`form.fields((name = spec, ...))` returns `NamedTuple[N, H]` of the declared handles, `form.array` and
+`form.child` nest one, and `form.submit(group)(v => ...)` hands over `NamedTuple[N, V]` of the validated
+values (`form/FieldGroup.scala`, `FieldGroupTest`). Rules:
+
+- **A group has no members, so no field name is taken.** Everything that acts on one is a function over
+  it: `form.submit(f)`, `Form.scopeOf(f.shipping)`, and the `FieldArray.Row` that `GroupArray.render`
+  hands over beside each row. `GroupArray` carries the array's operations and no field names; a row
+  carries field names and no operations. Do not add a method to a group, a row or a child, and do not
+  wrap one in a class to hang one on.
+- **Why not a `Selectable` class**: its members shadow fields, and so does ANY extension method in
+  scope (checked on 3.9.0: an `extension [A](a: A) def submit` beat the field). A named-tuple selection
+  beats extensions. What it cannot beat is `Any`'s members, and the compiler refuses to select `apply`;
+  those are `FieldGroup.Reserved`, refused at the declaration through `FreeName`. Add to that list only
+  what an experiment shows the named tuple answers itself.
+- **Type classes, not match types.** A match type cannot bind a field's `Valid` refinement (`case
+  FieldSpec[a] { type Valid = v }` leaves `v` unbound; the alias workaround is refused by SIP-56). Take
+  the element and the rest as `Aux` with TYPE PARAMETERS, never as paths (`m.Handle`), or every message
+  shows skolems (`?1.Out`). `Specs` maps specs to handles, `Shape` handles to values, so a submit needs
+  the group and nothing else.
+- **A group's members are declared in the group's scope** (`declareIn`), whichever form the spec came
+  from. That is what makes `Form.scopeOf` answerable from the group alone: it is the scope its first
+  member was declared in, and a child member lives in its scope's `outer`. Groups are non-empty
+  (`S <: NonEmptyTuple`) so there always is a first member.
+- **The submit is `submitWith` with every leaf named**: the array rows are read once when the submit
+  starts, each field's rules run once (W32's single-run verdict), named gates open, focus-first-invalid
+  is unchanged. Never validate a group member a second time in the walk.
+- **`Specs`' `@implicitNotFound` hides `FreeName`'s**, so a reserved name reports the group's message,
+  which lists the reserved names, followed by the compiler's own `NotGiven[("toString" : String) <:<
+  ...Reserved]` line. `FieldGroupTest` pins that and the other messages.
 
 ## Typed builders: where inference dies
 
