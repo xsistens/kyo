@@ -19,8 +19,8 @@ import scala.collection.immutable.VectorMap
 /** Colocated masked fragments (Apollo Client 4 fragment colocation + data
   * masking): a spread contributes exactly one opaque ref element, the store keys
   * the ref to the record its own generator normalized, the captured slice keeps a cache
-  * write of decoded data lossless, and — the §2.5 composition — fragments read
-  * from records accumulated across separate operations.
+  * write of decoded data lossless, and fragments read from records accumulated
+  * across separate operations.
   */
 class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
@@ -263,7 +263,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         }
     }
 
-    "cross-operation composition (§2.5)" - {
+    "cross-operation composition" - {
 
         "a fragment reads from a record accumulated by two separate operations" in {
             // Query A fetches {code,name}; query B fetches {code,capital}. Neither
@@ -315,13 +315,13 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         }
     }
 
-    "the store keys a ref (K-HIGH-52)" - {
+    "the store keys a ref" - {
 
         "a ref reads through the store's own key generator, even when the store keys the type differently" in {
             // The fragment's CacheIdentity keys Country by `code`; this store keys it by
             // `name`. The response is normalized into `Country:Germany`. A key the ref
-            // computed from its own identity (`Country:DE`) names a record that was never
-            // written — before K-HIGH-52 exactly that read was a CacheMissException.
+            // computed from its own identity (`Country:DE`) would name a record that was
+            // never written, and the read would miss.
             val s = new ApolloStore(
                 MemoryCache(),
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("name")))
