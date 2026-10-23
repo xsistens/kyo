@@ -4163,8 +4163,8 @@ lazy val `kyo-apollo-codegen` =
             doctestSources := Seq.empty
         )
 
-lazy val apolloSchema = settingKey[File]("GraphQL schema SDL apolloGenerate generates kyo-apollo selectors from.")
-lazy val apolloPackage = settingKey[String]("Package the sources apolloGenerate emits declare.")
+lazy val apolloSchema         = settingKey[File]("GraphQL schema SDL apolloGenerate generates kyo-apollo selectors from.")
+lazy val apolloPackage        = settingKey[String]("Package the sources apolloGenerate emits declare.")
 lazy val apolloScalarMappings =
     settingKey[Map[String, String]]("GraphQL custom scalar name -> fully-qualified Scala type, for apolloGenerate.")
 lazy val apolloClientFields =
@@ -4181,11 +4181,11 @@ lazy val apolloGenerate =
 lazy val apolloCodegenSettings = Seq(
     apolloScalarMappings := Map.empty,
     apolloClientFields   := Seq.empty,
-    apolloGenerate := {
+    apolloGenerate       := {
         val classpath = (`kyo-apollo-codegen`.jvm / Compile / fullClasspath).value.map(_.data)
         val generator = (`kyo-apollo-codegen`.jvm / Compile / run / runner).value
         val out       = (Compile / sourceManaged).value / "kyo-apollo-codegen"
-        val options =
+        val options   =
             Seq("--schema", apolloSchema.value.getAbsolutePath, "--out", out.getAbsolutePath, "--package", apolloPackage.value) ++
                 apolloScalarMappings.value.toSeq.sorted.flatMap { case (name, tpe) => Seq("--scalar", s"$name=$tpe") } ++
                 apolloClientFields.value.flatMap(field => Seq("--client-field", field))
@@ -4209,12 +4209,12 @@ lazy val `kyo-apollo-codegen-it` =
         .jvmSettings(
             mimaCheck(false),
             publish / skip := true,
-            apolloSchema :=
+            apolloSchema   :=
                 (LocalRootProject / baseDirectory).value / "kyo-apollo-codegen" / "src" / "main" / "resources" /
                     "codegenExample" / "schema.graphql",
             apolloPackage        := "kyo.apollo.codegen.it.generated",
             apolloScalarMappings := Map("DateTime" -> "java.time.Instant"),
-            apolloClientFields := Seq(
+            apolloClientFields   := Seq(
                 "Country.isFavorite: Boolean = false",
                 "Country.tags: Chunk[String] = Chunk.empty",
                 "Query.cartOpen: Boolean = false"
