@@ -33,6 +33,15 @@ object CodegenException:
             s"`$coordinate` has type `$typeName`, which is not an input type (a scalar, enum or input object)"
         )
 
+    /** An input object field of the file scalar `Upload`. A file travels only as an
+      * operation argument; inside an input object it would be encoded as a string.
+      */
+    final case class UploadInInputObject(input: String, field: String)
+        extends CodegenException(
+            s"input field `$input.$field` has type `Upload`; a file can only be an operation argument, " +
+                "not a field of an input object"
+        )
+
     /** A field whose type is an input object type. */
     final case class NotAnOutputType(typeName: String, coordinate: String)
         extends CodegenException(s"field `$coordinate` has input object type `$typeName`, which a field cannot return")
