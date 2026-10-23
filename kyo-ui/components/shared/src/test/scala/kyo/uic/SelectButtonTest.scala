@@ -205,4 +205,43 @@ class SelectButtonTest extends UicTest:
             assert(got == Present(Size.M))
     }
 
+    "onPick fires with the option picked, after onChange, and not on a clear" in {
+        for
+            ref  <- Signal.initRef(Maybe(Size.S))
+            seen <- Signal.initRef(List.empty[String])
+            base = typed.selection(ref)
+                .onChange(m => seen.updateAndGet(_ :+ s"change ${m.fold("-")(_.toString)}").unit)
+                .onPick(s => seen.updateAndGet(_ :+ s"pick $s").unit)
+            os  <- options(base.wired(ids, _ => ()))
+            _   <- click(os(1))
+            os2 <- options(base.wired(ids, _ => ()))
+            _   <- click(os2(1))
+            got <- seen.get
+        yield assert(got == List("change M", "pick M", "change -"), "a click on the chosen option clears, which picks nothing")
+    }
+
+    "an arrow that selects is a pick too" in {
+        for
+            ref   <- Signal.initRef(Size.S)
+            picks <- Signal.initRef(List.empty[Size])
+            os    <- options(typed.selection(ref).onPick(s => picks.updateAndGet(_ :+ s).unit).wired(ids, _ => ()))
+            _     <- press(os(0), UI.Keyboard.ArrowRight)
+            got   <- picks.get
+        yield assert(got == List(Size.M))
+    }
+
+    "a one-way selection shows the signal, and a click reports through onPick without writing" in {
+        for
+            route <- Signal.initRef(Size.M)
+            picks <- Signal.initRef(List.empty[Size])
+            os    <- options(typed.selection(route.readOnly).onPick(s => picks.updateAndGet(_ :+ s).unit).wired(ids, _ => ()))
+            _     <- click(os(2))
+            held  <- route.get
+            got   <- picks.get
+        yield
+            assert(os.map(_.attrs.ariaAttrs.getOrElse("checked", "-")) == Chunk("false", "true", "false"))
+            assert(got == List(Size.L))
+            assert(held == Size.M)
+    }
+
 end SelectButtonTest
