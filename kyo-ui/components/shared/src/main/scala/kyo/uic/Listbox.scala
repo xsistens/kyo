@@ -279,16 +279,12 @@ final case class Listbox[K] private (
     private[uic] def resolved(sel: Set[K], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
-        body(sel, query, Absent, hi, idV, focused)
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(body(sel, query, Absent, hi, idV, focused)(validity))
+    end resolved
 
     private[uic] def render(using Frame): UI =
-        // The validity boundary sits OUTSIDE the query subscriptions but resolves before
-        // the `filterable` mount, so an emission never re-mounts and drops the query.
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderQuery
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderQuery
-                )
+        renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
 
     /** One mount for the two signals this listbox owns: the keyboard highlight, and the
       * filter query when `filterable` asked for a header without handing over a ref.
@@ -298,7 +294,7 @@ final case class Listbox[K] private (
       * highlight on each keystroke. The static projection renders through the placeholder,
       * where the list is already the one tab stop and carries the id, with no highlight yet.
       */
-    private def renderQuery(using Frame): UI =
+    private def renderQuery(validity: FieldValidity)(using Frame): UI =
         val ownsQuery = filterQueryRef.isEmpty && filterableFlag
         UI.mounted {
             for
@@ -311,24 +307,28 @@ final case class Listbox[K] private (
                 q    <-
                     if ownsQuery then Signal.initRef("").map(r => Present(r): Maybe[SignalRef[String]])
                     else filterQueryRef: Maybe[SignalRef[String]] < Sync
-            yield subscribed(q, Present(hi), Present(base))
-        }.placeholder(subscribed(filterQueryRef, Absent, Absent))
+            yield subscribed(q, Present(hi), Present(base), validity)
+        }.placeholder(subscribed(filterQueryRef, Absent, Absent, validity))
     end renderQuery
 
     /** The selection/query subscriptions around one [[body]] render. */
-    private def subscribed(qRef: Maybe[SignalRef[String]], hiRef: Maybe[SignalRef[Int]], idBase: Maybe[String])(using
-        Frame
-    ): UI =
+    private def subscribed(
+        qRef: Maybe[SignalRef[String]],
+        hiRef: Maybe[SignalRef[Int]],
+        idBase: Maybe[String],
+        validity: FieldValidity
+    )(using Frame): UI = validity.follow(
         (selectedRef, qRef, hiRef) match
             case (Present(s), Present(f), Present(h)) =>
-                s.render(sel => f.render(q => h.render(hi => body(sel, q, qRef, hiRef, idBase, hi))))
-            case (Present(s), Present(f), Absent) => s.render(sel => f.render(q => body(sel, q, qRef, Absent, idBase)))
-            case (Present(s), Absent, Present(h)) => s.render(sel => h.render(hi => body(sel, "", Absent, hiRef, idBase, hi)))
-            case (Present(s), Absent, Absent)     => s.render(sel => body(sel, "", Absent, Absent, idBase))
-            case (Absent, Present(f), Present(h)) => f.render(q => h.render(hi => body(Set.empty, q, qRef, hiRef, idBase, hi)))
-            case (Absent, Present(f), Absent)     => f.render(q => body(Set.empty, q, qRef, Absent, idBase))
-            case (Absent, Absent, Present(h))     => h.render(hi => body(Set.empty, "", Absent, hiRef, idBase, hi))
-            case _                                => body(Set.empty, "", Absent, Absent, idBase)
+                s.render(sel => f.render(q => h.render(hi => body(sel, q, qRef, hiRef, idBase, hi)(validity))))
+            case (Present(s), Present(f), Absent) => s.render(sel => f.render(q => body(sel, q, qRef, Absent, idBase)(validity)))
+            case (Present(s), Absent, Present(h)) => s.render(sel => h.render(hi => body(sel, "", Absent, hiRef, idBase, hi)(validity)))
+            case (Present(s), Absent, Absent)     => s.render(sel => body(sel, "", Absent, Absent, idBase)(validity))
+            case (Absent, Present(f), Present(h)) => f.render(q => h.render(hi => body(Set.empty, q, qRef, hiRef, idBase, hi)(validity)))
+            case (Absent, Present(f), Absent)     => f.render(q => body(Set.empty, q, qRef, Absent, idBase)(validity))
+            case (Absent, Absent, Present(h))     => h.render(hi => body(Set.empty, "", Absent, hiRef, idBase, hi)(validity))
+            case _                                => body(Set.empty, "", Absent, Absent, idBase)(validity)
+    )
 
     private def body(
         sel: Set[K],
@@ -337,7 +337,7 @@ final case class Listbox[K] private (
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         hi: Int = -1
-    )(using Frame): UI =
+    )(validity: FieldValidity)(using Frame): UI =
         val shownGroups =
             if query.isEmpty then optionsV
             else
@@ -455,12 +455,8 @@ final case class Listbox[K] private (
 
         var root = div.cssClass("p-listbox").cssClass("p-component")
         if disabledFlag then root = root.cssClass("p-disabled")
-        if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
-        FieldInvalid.withMessage(
-            root((headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        root = validity.mark(root)
+        root((headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*)
     end body
 
     /** The id the roving highlight addresses one option by, derived from the listbox's own. */

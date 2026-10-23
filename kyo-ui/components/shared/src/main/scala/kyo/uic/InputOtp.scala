@@ -107,6 +107,7 @@ final case class InputOtp private (
             copy(disabledFlag = d).renderResolved
 
     private def renderResolved(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         valueBinding match
             case Present(Input.Value.Ref(ref)) if interactive =>
                 // Auto-advance needs the session Commands and stable per-cell ids: mint
@@ -118,16 +119,19 @@ final case class InputOtp private (
                         cmds <- UI.commands
                         ids  <- Kyo.foreach(0 until lengthV)(_ => cmds.freshId)
                     yield wired(ref, ids.toList, id => cmds.focusId(id))
-                }.placeholder(ref.render(v => body(v, Present(ref), Absent, _ => ())))
-            case Present(Input.Value.Ref(ref)) => ref.render(v => body(v, Present(ref), Absent, _ => ()))
-            case Present(Input.Value.Const(v)) => body(v, Absent, Absent, _ => ())
-            case Absent                        => body("", Absent, Absent, _ => ())
+                }.placeholder(validity.follow(ref.render(v => body(v, Present(ref), Absent, _ => (), validity))))
+            case Present(Input.Value.Ref(ref)) => validity.follow(ref.render(v => body(v, Present(ref), Absent, _ => (), validity)))
+            case Present(Input.Value.Const(v)) => validity.follow(body(v, Absent, Absent, _ => (), validity))
+            case Absent                        => validity.follow(body("", Absent, Absent, _ => (), validity))
+        end match
+    end renderResolved
 
     /** The advancing subscription the mount publishes: the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
     private[uic] def wired(ref: SignalRef[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
-        ref.render(v => body(v, Present(ref), Present(cellIds), focus))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(ref.render(v => body(v, Present(ref), Present(cellIds), focus, validity)))
 
     /** Writes cell i's new content into the bound code: the LAST accepted
       * character wins (a second keystroke in a full cell replaces it), an empty
@@ -154,23 +158,8 @@ final case class InputOtp private (
         current: String,
         ref: Maybe[SignalRef[String]],
         cellIds: Maybe[List[String]],
-        focus: String => UI.Action
-    )(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription, never around the
-        // UI.mounted node): with a reactive slot set, re-render the cells + message
-        // through the shared helper; otherwise the untouched static form.
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => bodyStatic(current, ref, cellIds, focus)
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                        .bodyStatic(current, ref, cellIds, focus)
-                )
-
-    private def bodyStatic(
-        current: String,
-        ref: Maybe[SignalRef[String]],
-        cellIds: Maybe[List[String]],
-        focus: String => UI.Action
+        focus: String => UI.Action,
+        validity: FieldValidity
     )(using Frame): UI =
         val cells: List[UI] = (0 until lengthV).toList.map { i =>
             val ch   = current.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
@@ -179,7 +168,7 @@ final case class InputOtp private (
                 .inputType(if maskFlag then InputType.Password else InputType.Text)
                 .size(sizeV)
                 .variant(variantV)
-                .invalid(invalidV.constTrue)
+                .invalid(validity.red)
                 .maxLength(1)
                 .value(ch)
                 .accessibleName(s"Please enter OTP character ${i + 1}")
@@ -218,9 +207,8 @@ final case class InputOtp private (
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        val root = el(cells.map(toChild)*)
-        FieldInvalid.withMessage(root, invalidV.constTrue, invalidMsgV)
-    end bodyStatic
+        el(cells.map(toChild)*)
+    end body
 end InputOtp
 
 object InputOtp:

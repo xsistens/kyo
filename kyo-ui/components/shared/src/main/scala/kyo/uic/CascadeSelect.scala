@@ -217,7 +217,8 @@ final case class CascadeSelect[A] private (
     private[uic] def render(using Frame): UI =
         // One open/closed signal for the root panel plus one per group, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
-        val stat: UI = withValue(cur => body(cur, false, Map.empty.withDefaultValue(false), Absent))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val stat: UI = withValue(cur => body(cur, false, Map.empty.withDefaultValue(false), Absent, validity))
         UI.mounted {
             for
                 open <- openRefV match
@@ -240,15 +241,17 @@ final case class CascadeSelect[A] private (
         focus: SignalRef[List[Int]],
         base: Maybe[String] = Absent
     )(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
             MenuRender.renderAll(refs) { openMap =>
                 focus.render { f =>
                     withValue(cur =>
-                        body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f, base)))
+                        body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f, base)), validity)
                     )
                 }
             }
         }
+    end wired
 
     private def withValue(f: Maybe[A] => UI)(using Frame): UI =
         choice match
@@ -259,20 +262,15 @@ final case class CascadeSelect[A] private (
         held: Maybe[A],
         isOpen: Boolean,
         openMap: Map[List[Int], Boolean],
-        st: Maybe[CascadeSelect.State]
+        st: Maybe[CascadeSelect.State],
+        validity: FieldValidity
     )(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
-        // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
-        // helper; otherwise the untouched static form. The resolved placeholder text threads through.
+        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). The
+        // resolved placeholder text threads through; the validity is stamped on the field, never re-rendered.
         BoolValue.reactive(loadingV): ld =>
             val loading = ld.constTrue
             TextValue.reactive(placeholderV): ph =>
-                (invalidV.dynSig, invalidMsgDynV) match
-                    case (Absent, Absent) => bodyStatic(held, isOpen, openMap, st, ph, loading)
-                    case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                            copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                                .bodyStatic(held, isOpen, openMap, st, ph, loading)
-                        )
+                bodyStatic(held, isOpen, openMap, st, ph, loading, validity)
 
     private def bodyStatic(
         held: Maybe[A],
@@ -280,7 +278,8 @@ final case class CascadeSelect[A] private (
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State],
         placeholder: Maybe[String],
-        loading: Boolean
+        loading: Boolean,
+        validity: FieldValidity
     )(using Frame): UI =
         val current = held.fold("")(key)
         // A held leaf no leaf of the tree carries, once the tree is said to be complete.
@@ -402,7 +401,7 @@ final case class CascadeSelect[A] private (
         if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         sizeV match
             case Size.Small  => el = el.cssClass("p-cascadeselect-sm")
@@ -452,11 +451,7 @@ final case class CascadeSelect[A] private (
             }
         end if
 
-        val field = FieldInvalid.withMessage(
-            el(((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        val field = validity.follow(el(((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 
@@ -564,10 +559,6 @@ object CascadeSelect:
 
     /** The wired interaction state, allocated per mount: the root panel's open flag, the
       * per-group open refs the nested panels ride on, and the keyboard focus path.
-      *
-      * On the companion rather than inside the class, because the validity path renders through
-      * a `copy` of the field and a state typed against the original instance does not fit the
-      * copy's own path-dependent one.
       */
     final private[uic] case class State(
         open: SignalRef[Boolean],

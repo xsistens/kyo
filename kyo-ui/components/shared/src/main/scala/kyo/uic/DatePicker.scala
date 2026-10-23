@@ -316,23 +316,7 @@ final case class DatePicker[A] private (
         panel: UI,
         openSignal: Maybe[SignalRef[Boolean]] = Absent
     )(using Frame): UI =
-        // Reactive-invalid gate (BELOW every UI.mounted node: assemble runs inside the open ref's subscription or at the
-        // static projection, never around the mount). With a reactive slot set, field, root and message re-render through the
-        // shared helper; otherwise the static form.
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => assembleStatic(oref, nav, floating, panel, openSignal)
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                        .assembleStatic(oref, nav, floating, panel, openSignal)
-                )
-
-    private def assembleStatic(
-        oref: Maybe[SignalRef[Boolean]],
-        nav: Maybe[DatePicker.Nav],
-        floating: Boolean,
-        panel: UI,
-        openSignal: Maybe[SignalRef[Boolean]]
-    )(using Frame): UI =
+        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field: UI = bindingV match
             case Present(single @ DatePicker.Binding.Single(_)) =>
                 // The typed text and a rejected draft are read together, as one region: the draft is what puts a rejected
@@ -342,12 +326,13 @@ final case class DatePicker[A] private (
                     case Present(n) =>
                         held.combineLatest(n.draft).render { pair =>
                             val (text, draft) = pair
-                            fieldUI(draft.getOrElse(text), editable = true, oref, nav, floating)
+                            fieldUI(draft.getOrElse(text), editable = true, oref, nav, floating, validity)
                         }
-                    case Absent => held.render(text => fieldUI(text, editable = true, oref, nav, floating))
+                    case Absent => held.render(text => fieldUI(text, editable = true, oref, nav, floating, validity))
                 end match
-            case Present(b) => b.snapshot(kind).render(snap => fieldUI(DatePicker.displayText(snap), editable = false, oref, nav, floating))
-            case Absent     => fieldUI("", editable = true, oref, nav, floating)
+            case Present(b) =>
+                b.snapshot(kind).render(snap => fieldUI(DatePicker.displayText(snap), editable = false, oref, nav, floating, validity))
+            case Absent => fieldUI("", editable = true, oref, nav, floating, validity)
 
         // The dropdown button toggles the calendar, firing onOpen/onClose on actual transitions. Inline without an open ref
         // keeps it disabled (the always-on panel has nothing to toggle); the floating static projection renders it
@@ -361,7 +346,7 @@ final case class DatePicker[A] private (
         val dropdown: UI = dd(toChild(GlyphSvg(Icons.calendar, "p-icon")))
 
         var el = div.cssClass("p-datepicker").cssClass("p-component")
-        if invalidV.constTrue then el = el.cssClass("p-invalid")
+        el = validity.markClass(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         if fluidFlag then el = el.cssClass("p-datepicker-fluid")
         // Reactive rather than a render-time branch: the anchor class was the only thing the field's own subtree needed the
@@ -369,9 +354,8 @@ final case class DatePicker[A] private (
         openSignal match
             case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig)
             case _                        => ()
-        val root = el(toChild(field), toChild(dropdown), toChild(panel))
-        FieldInvalid.withMessage(root, invalidV.constTrue, invalidMsgV)
-    end assembleStatic
+        validity.follow(el(toChild(field), toChild(dropdown), toChild(panel)))
+    end assemble
 
     /** The text field. Under a [[value]] binding it shows the held value and reads a typed text back (`editable`); under
       * [[values]] and [[range]] it shows a derived text and is read-only. In the floating host a click on the field opens the
@@ -382,7 +366,8 @@ final case class DatePicker[A] private (
         editable: Boolean,
         oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav],
-        floating: Boolean
+        floating: Boolean,
+        validity: FieldValidity
     )(using Frame): UI =
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
         // The live render stamps `fieldId` below, which is this same id where the caller gave one.
@@ -393,7 +378,7 @@ final case class DatePicker[A] private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then i = i.cssClass("p-variant-filled")
-        if invalidV.constTrue then i = i.aria("invalid", "true")
+        i = validity.markAria(i)
         i = i.value(text)
         i = placeholderText match
             case Present(TextValue.Const(v)) => i.placeholder(v)

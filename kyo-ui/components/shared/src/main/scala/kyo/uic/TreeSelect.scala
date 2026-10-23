@@ -205,7 +205,8 @@ final case class TreeSelect[K] private (
     private[uic] def render(using Frame): UI =
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
-        val stat: UI = withValue(sel => body(sel, Set.empty, false, Absent))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val stat: UI = withValue(sel => body(sel, Set.empty, false, Absent, validity))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -229,13 +230,15 @@ final case class TreeSelect[K] private (
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
             exp.render { e =>
                 hi.render { h =>
-                    withValue(sel => body(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase))))
+                    withValue(sel => body(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), validity))
                 }
             }
         }
+    end wired
 
     private def withValue(f: Set[K] => UI)(using Frame): UI =
         valueRef match
@@ -246,20 +249,15 @@ final case class TreeSelect[K] private (
         current: Set[K],
         exp: Set[K],
         isOpen: Boolean,
-        st: Maybe[TreeSelect.State[K]]
+        st: Maybe[TreeSelect.State[K]],
+        validity: FieldValidity
     )(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
-        // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
-        // helper; otherwise the untouched static form. The resolved placeholder text threads through.
+        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). The
+        // resolved placeholder text threads through; the validity is stamped on the field, never re-rendered.
         BoolValue.reactive(loadingV): ld =>
             val loading = ld.constTrue
             TextValue.reactive(placeholderV): ph =>
-                (invalidV.dynSig, invalidMsgDynV) match
-                    case (Absent, Absent) => bodyStatic(current, exp, isOpen, st, ph, loading)
-                    case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                            copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                                .bodyStatic(current, exp, isOpen, st, ph, loading)
-                        )
+                bodyStatic(current, exp, isOpen, st, ph, loading, validity)
 
     private def bodyStatic(
         current: Set[K],
@@ -267,7 +265,8 @@ final case class TreeSelect[K] private (
         isOpen: Boolean,
         st: Maybe[TreeSelect.State[K]],
         placeholder: Maybe[String],
-        loading: Boolean
+        loading: Boolean,
+        validity: FieldValidity
     )(using Frame): UI =
         val selectedLabels = flatNodes.collect { case (id, text) if current.contains(id) => text }
         // Selected ids no node carries, once the tree is said to be complete.
@@ -391,7 +390,7 @@ final case class TreeSelect[K] private (
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         sizeV match
             case Size.Small  => el = el.cssClass("p-treeselect-sm")
@@ -448,11 +447,7 @@ final case class TreeSelect[K] private (
             }
         end if
 
-        val field = FieldInvalid.withMessage(
-            el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        val field = validity.follow(el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 end TreeSelect
@@ -462,10 +457,6 @@ object TreeSelect:
     /** The wired interaction state, allocated per mount: the panel's open flag, the expansion
       * the hosted [[Tree]] reads, and the keyboard highlight that tree roves, with the id it
       * addresses its rows by.
-      *
-      * On the companion rather than inside the class, because the validity path renders through
-      * a `copy` of the field and a state typed against the original instance does not fit the
-      * copy's own path-dependent one.
       */
     final private[uic] case class State[K](
         open: SignalRef[Boolean],

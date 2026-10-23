@@ -149,37 +149,30 @@ final case class Rating private (
     private[uic] def wired(name: String)(using Frame): UI = copy(nameV = Present(name)).renderNamed
 
     private def renderNamed(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderDisabledResolved
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
-                )
-
-    private def renderDisabledResolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
 
     /** The `Double` ref to write back to, i.e. only when the form-layer binding is two-way. */
     private def doubleWriteRef: Maybe[SignalRef[Double]] = doubleBinding match
         case Present(ReactiveVariable(r)) => Present(r)
         case _                            => Absent
 
-    private def renderResolved(using Frame): UI =
+    private def renderResolved(validity: FieldValidity)(using Frame): UI =
         doubleBinding match
             // The Double binding wins when present: it is the form layer's, and a control
             // bound to a field has no second source of truth. ReactiveVariable before Dyn,
             // since a two-way binding IS a Dyn.
-            case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(d => body(math.rint(d).toInt, Absent))
-            case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent)
+            case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent, validity))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(d => body(math.rint(d).toInt, Absent, validity))
+            case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent, validity)
             case Absent                          =>
                 valueBinding match
-                    case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref)))
-                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent))
-                    case Present(ReactiveValue.Const(v)) => body(v, Absent)
-                    case Absent                          => body(0, Absent)
+                    case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref), validity))
+                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent, validity))
+                    case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
+                    case Absent                          => body(0, Absent, validity)
 
-    private def body(value: Int, ref: Maybe[SignalRef[Int]])(using Frame): UI =
+    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity)(using Frame): UI =
         // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
         // focus, and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
         // that does. A radio group's tab stop is its checked radio, else its first.
@@ -240,7 +233,7 @@ final case class Rating private (
         var el = div.cssClass("p-rating").cssClass("p-component").role("radiogroup")
         if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         accNameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
@@ -251,7 +244,7 @@ final case class Rating private (
                 case Present(r) => r.use(d => f(math.rint(d)))
                 case Absent     => f(value.toDouble))
         }
-        FieldInvalid.withMessage(el(options.map(toChild)*), invalidV.constTrue, invalidMsgV)
+        el(options.map(toChild)*)
     end body
 
     /** Prime's select semantics: picking the current value clears to 0. */

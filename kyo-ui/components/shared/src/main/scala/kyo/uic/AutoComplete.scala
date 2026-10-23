@@ -285,7 +285,8 @@ final case class AutoComplete[A] private (
         // by this effectful mount. Static projections (SSG, the SSR page GET,
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
-        val stat: UI = withText(cur => body(cur, Absent))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val stat: UI = validity.follow(withText(cur => body(cur, Absent, validity)))
         if !interactive then stat
         else
             UI.mounted {
@@ -313,13 +314,15 @@ final case class AutoComplete[A] private (
     )(
         using Frame
     ): UI =
-        open.render { o =>
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(open.render { o =>
             hi.render { h =>
                 all.render { a =>
-                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base, focus))))
+                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base, focus)), validity))
                 }
             }
-        }
+        })
+    end wired
 
     /** Renders through the text binding: a bound ref subscribes, constants and
       * unbound fields render with a fixed query.
@@ -343,16 +346,7 @@ final case class AutoComplete[A] private (
         end match
     end matchesFilter
 
-    private def body(query: String, st: Maybe[State])(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription, never around the
-        // UI.mounted node). `State` is a path-dependent inner type, so the reactive
-        // re-render threads the resolved (red, message) into `bodyStatic` directly
-        // rather than through `copy(...)` (a copied instance's `State` would not match).
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => bodyStatic(query, st, invalidV.constTrue, invalidMsgV)
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(query, st, red, msg))
-
-    private def bodyStatic(query: String, st: Maybe[State], redFlag: Boolean, redMsg: Maybe[String])(using Frame): UI =
+    private def body(query: String, st: Maybe[State], validity: FieldValidity)(using Frame): UI =
         // The suggestion list the panel and the field's keyboard share: the full
         // list on a dropdown-trigger open, the filtered list otherwise.
         val visibleGroups: List[OptionItem[A]] =
@@ -402,7 +396,7 @@ final case class AutoComplete[A] private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then f = f.cssClass("p-variant-filled")
-        if redFlag then f = f.cssClass("p-invalid").aria("invalid", "true")
+        f = validity.mark(f)
         valueBinding match
             case Present(Input.Value.Const(v)) => f = f.value(v)
             case Present(Input.Value.Ref(r))   => f = f.value(r)
@@ -522,13 +516,12 @@ final case class AutoComplete[A] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-autocomplete").cssClass("p-component")
-        if redFlag then el = el.cssClass("p-invalid")
+        el = validity.markClass(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         if fluidFlag then el = el.cssClass("p-autocomplete-fluid")
         if panelShown then el = el.cssClass("p-uic-overlay-anchor")
-        val root = el(((field :: loader) ++ clear ++ dropdownUI ++ panel).map(toChild)*)
-        FieldInvalid.withMessage(root, redFlag, redMsg)
-    end bodyStatic
+        el(((field :: loader) ++ clear ++ dropdownUI ++ panel).map(toChild)*)
+    end body
 
     /** The floating suggestion panel: Prime's `.p-autocomplete-overlay` skin on
       * the [[Overlay]] primitive with `seedFocus(false)`, so focus stays in the input;

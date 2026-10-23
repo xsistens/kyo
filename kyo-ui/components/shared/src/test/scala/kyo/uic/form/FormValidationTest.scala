@@ -766,6 +766,41 @@ class FormValidationTest extends UicTest:
         }
     }
 
+    "a bound field that turns invalid and valid again while the reader types keeps its element" in {
+        // The keystroke that flips a field invalid must land in the element on the page. A control rebuilt by its
+        // validity replaced the textarea at that moment, and the text went into the discarded one.
+        Scope.run {
+            for
+                form <- mkForm
+                f    <- form.field.rules(Validator.required() and Validator.minLength(3)).declare
+                _    <- f.wireChange                                         // as Form.mountedWith does
+                _    <- f.error.streamChanges.filter(_.nonEmpty).take(1).run // its silent first check ran
+                ui = uic.TextArea().bind(f).render
+                regions  <- regionsAbove(ui, "p-textarea")
+                before   <- elementWithClass(ui, "p-textarea")
+                _        <- f.valueRef.set("ab")                                 // the reader types
+                _        <- f.touched.streamChanges.filter(identity).take(1).run // the edit marks the field touched
+                _        <- f.error.streamChanges.filter(_.exists(_.code == "min-length")).take(1).run
+                shownOn  <- f.visibleError.current
+                invalid  <- elementWithClass(ui, "p-textarea")
+                rowsOn   <- elementsWithClass(ui, "p-uic-invalid-message")
+                redOn    <- Kyo.foreach(invalid.attrs.reactiveClasses.get("p-invalid").toSeq)(_.current)
+                _        <- f.valueRef.set("abcd")
+                _        <- f.error.streamChanges.filter(_.isEmpty).take(1).run
+                shownOff <- f.visibleError.current
+                valid    <- elementWithClass(ui, "p-textarea")
+                rowsOff  <- elementsWithClass(ui, "p-uic-invalid-message")
+                redOff   <- Kyo.foreach(valid.attrs.reactiveClasses.get("p-invalid").toSeq)(_.current)
+            yield
+                assert(shownOn.exists(_.code == "min-length") && shownOff.isEmpty, s"the error shows, then clears: $shownOn, $shownOff")
+                assert(regions == 0, s"the textarea sits under $regions validity region(s)")
+                assert(before eq invalid, "turning invalid rebuilt the textarea")
+                assert(invalid eq valid, "turning valid again rebuilt the textarea")
+                assert(redOn == Chunk(true) && redOff == Chunk(false), s"the red state is patched on the one element: $redOn, $redOff")
+                assert(rowsOn.size == 1 && rowsOff.isEmpty, "only the message row comes and goes")
+        }
+    }
+
     "reset on a sub-form after a failed submit leaves the rest of the form showing what the submit found" in {
         for
             (count, shown) <-

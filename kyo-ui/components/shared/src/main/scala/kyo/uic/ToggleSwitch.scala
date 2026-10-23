@@ -85,17 +85,12 @@ final case class ToggleSwitch private (
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
-        checkedBinding match
-            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref))))
-            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF)
-            case Absent                             => body(false, onChangeF)
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(checkedBinding match
+            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
+            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF, validity)
+            case Absent                             => body(false, onChangeF, validity))
+    end render
 
     private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
         nb =>
@@ -107,7 +102,7 @@ final case class ToggleSwitch private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
 
         var box = checkbox
@@ -118,7 +113,7 @@ final case class ToggleSwitch private (
         box = idV.map(v => box.id(v)).getOrElse(box)
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
-        if invalidV.constTrue then box = box.aria("invalid", "true")
+        box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
         box = accNameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
@@ -154,13 +149,13 @@ final case class ToggleSwitch private (
         var root = div.cssClass("p-toggleswitch").cssClass("p-component")
         if isChecked then root = root.cssClass("p-toggleswitch-checked")
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
-        if invalidV.constTrue then root = root.cssClass("p-invalid")
+        root = validity.markClass(root)
         root = tooltipV match
             case Present(TextValue.Const(v)) => root.jsProp("title", v)
             case Present(TextValue.Dyn(s))   => root.title(s)
             case Absent                      => root
 
-        FieldInvalid.withMessage(root(List[UI](box, slider).map(toChild)*), invalidV.constTrue, invalidMsgV)
+        root(List[UI](box, slider).map(toChild)*)
     end body
 end ToggleSwitch
 

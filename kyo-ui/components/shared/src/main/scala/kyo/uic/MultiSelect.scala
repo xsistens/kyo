@@ -262,7 +262,8 @@ final case class MultiSelect[A] private (
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount; static projections render the same closed
         // anatomy inert (the Select precedent).
-        val stat: UI = withValue(cur => body(cur, Absent))
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val stat: UI = withValue(cur => body(cur, Absent, validity))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -284,13 +285,15 @@ final case class MultiSelect[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
             hi.render { h =>
                 q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base))))
+                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base)), validity))
                 }
             }
         }
+    end wired
 
     private def withValue(f: Set[A] => UI)(using Frame): UI =
         choice match
@@ -314,28 +317,22 @@ final case class MultiSelect[A] private (
         }
     end write
 
-    private def body(held: Set[A], st: Maybe[State])(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
-        // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
-        // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
-        // than through `copy(...)` (a copied instance's `State` would not match).
+    private def body(held: Set[A], st: Maybe[State], validity: FieldValidity)(using Frame): UI =
+        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). `State` is a
+        // path-dependent inner type, so the re-render threads the resolved placeholder text into `bodyStatic` directly
+        // rather than through `copy(...)` (a copied instance's `State` would not match). The validity is stamped on the
+        // field, never re-rendered.
         BoolValue.reactive(loadingV): ld =>
             val loading = ld.constTrue
             TextValue.reactive(placeholderV): ph =>
-                (invalidV.dynSig, invalidMsgDynV) match
-                    case (Absent, Absent) => bodyStatic(held, st, ph, invalidV.constTrue, invalidMsgV, loading)
-                    case _                =>
-                        FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                            bodyStatic(held, st, ph, red, msg, loading)
-                        )
+                bodyStatic(held, st, ph, loading, validity)
 
     private def bodyStatic(
         held: Set[A],
         st: Maybe[State],
         placeholder: Maybe[String],
-        redFlag: Boolean,
-        redMsg: Maybe[String],
-        loading: Boolean
+        loading: Boolean,
+        validity: FieldValidity
     )(using Frame): UI =
         val isOpen  = st.exists(_.isOpen)
         val current = held.map(key)
@@ -463,7 +460,7 @@ final case class MultiSelect[A] private (
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-multiselect-open").cssClass("p-uic-overlay-anchor")
-        if redFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         if disabledFlag then el = el.cssClass("p-disabled")
         sizeV match
             case Size.Small  => el = el.cssClass("p-multiselect-sm")
@@ -522,11 +519,7 @@ final case class MultiSelect[A] private (
             }
         end if
 
-        val field = FieldInvalid.withMessage(
-            el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
-            redFlag,
-            redMsg
-        )
+        val field = validity.follow(el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 

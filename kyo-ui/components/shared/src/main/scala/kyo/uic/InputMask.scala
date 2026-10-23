@@ -101,19 +101,16 @@ final case class InputMask private (
     private def fullLength: Int = maskV.length
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
+        // The validity slots go to the Input as they are, so it stamps them on the field and follows it
+        // with the message row exactly as a plain Input does.
         var in = Input()
             .extraClass("p-inputmask") // Prime tags the masked field with this alongside p-inputtext
             .inputMask(maskV)
             .size(sizeV)
             .variant(variantV)
-            .invalid(invalidV.constTrue)
+            .withInvalid(invalidV)
+            .withInvalidMessage(invalidMsgV)
+            .withInvalidMessageDyn(invalidMsgDynV)
             .fluid(fluidFlag)
         in = disabledFlag.foldFlag(in)(in.disabled(_))
         in = readonlyFlag.foldFlag(in)(in.readonly(_))
@@ -133,7 +130,6 @@ final case class InputMask private (
             case Present(Input.Value.Ref(r))   => in = in.value(r)
             case Absent                        => ()
         end match
-        invalidMsgV.foreach(m => in = in.invalidMessage(m))
         if onChangeF.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
                 val fireChange: UI.Action = onChangeF match
@@ -153,7 +149,7 @@ final case class InputMask private (
         // binding (passed through above), so the blur trigger delegates straight to it.
         onBlurF.foreach(f => in = in.onBlur(f))
         in.render
-    end renderStatic
+    end render
 end InputMask
 
 object InputMask:

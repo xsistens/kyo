@@ -114,17 +114,12 @@ final case class CheckBox private (
     def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
-        checkedBinding match
-            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref))))
-            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF)
-            case Absent                             => body(false, onChangeF)
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(checkedBinding match
+            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
+            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF, validity)
+            case Absent                             => body(false, onChangeF, validity))
+    end render
 
     /** Two-way handler: write the new value into `ref`, then run the user callback. */
     private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
@@ -137,7 +132,7 @@ final case class CheckBox private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly    = readonlyFlag.getOrElse(false)
         val isDisplayOnly = displayOnlyFlag.getOrElse(false)
         val isMixed       = indeterminateFlag.getOrElse(false)
@@ -156,7 +151,7 @@ final case class CheckBox private (
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
-        if invalidV.constTrue then box = box.aria("invalid", "true")
+        box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
         box = accNameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
@@ -192,15 +187,14 @@ final case class CheckBox private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then root = root.cssClass("p-variant-filled")
-        if invalidV.constTrue then root = root.cssClass("p-invalid")
+        root = validity.markClass(root)
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
         if isDisplayOnly then root = root.cssClass("p-uic-display-only")
 
-        val control: UI  = root(List[UI](box, boxDiv).map(toChild)*)
-        val labelled: UI = labelText match
+        val control: UI = root(List[UI](box, boxDiv).map(toChild)*)
+        labelText match
             case Present(t) => label.cssClass("p-uic-control-label")(List[UI](control, span(t)).map(toChild)*)
             case Absent     => control
-        FieldInvalid.withMessage(labelled, invalidV.constTrue, invalidMsgV)
     end body
 end CheckBox
 

@@ -181,26 +181,19 @@ final case class InputNumber private (
     end clamp
 
     private[uic] def render(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
 
-    private def renderResolved(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
+    private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref)))
-            case Present(InputNumber.Value.Dyn(sig)) => sig.render(v => body(Present(v), Absent))
-            case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent)
+            case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref), validity))
+            case Present(InputNumber.Value.Dyn(sig)) => sig.render(v => body(Present(v), Absent, validity))
+            case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent, validity)
             // No `render` here on purpose: a text binding is kyo's own two-way channel on
             // the field, so the value travels without a subscription. Re-rendering the
             // field on each keystroke would rewrite what is being typed into it.
-            case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, Present(ref))
-            case Absent                               => body(Absent, Absent)
+            case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, validity, Present(ref))
+            case Absent                               => body(Absent, Absent, validity)
 
     private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
         val write: UI.Action = ref match
@@ -219,6 +212,7 @@ final case class InputNumber private (
     private def body(
         value: Maybe[Double],
         ref: Maybe[SignalRef[Double]],
+        validity: FieldValidity,
         text: Maybe[SignalRef[String]] = Absent
     )(using Frame): UI =
         // === the native number field ============================================
@@ -234,7 +228,7 @@ final case class InputNumber private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then in = in.cssClass("p-variant-filled")
-        if invalidV.constTrue then in = in.cssClass("p-invalid").aria("invalid", "true")
+        in = validity.mark(in)
         minV.foreach(v => in = in.min(v))
         maxV.foreach(v => in = in.max(v))
         // Integer mode constrains the field through `step` rather than an input filter: kyo
@@ -325,10 +319,9 @@ final case class InputNumber private (
         if value.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if showButtonsFlag then el = el.cssClass(s"p-inputnumber-${buttonLayoutV.token}")
         if fluidFlag then el = el.cssClass("p-inputnumber-fluid")
-        if invalidV.constTrue then el = el.cssClass("p-invalid")
+        el = validity.markClass(el)
 
-        val root = el((pre ++ ((in: UI) :: buttons) ++ post).map(toChild)*)
-        FieldInvalid.withMessage(root, invalidV.constTrue, invalidMsgV)
+        el((pre ++ ((in: UI) :: buttons) ++ post).map(toChild)*)
     end body
 end InputNumber
 
