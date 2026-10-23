@@ -1,5 +1,7 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.<
+import kyo.Abort
 import kyo.Chunk
 import kyo.Frame
 import kyo.Maybe
@@ -175,7 +177,11 @@ end extension
   * a cache key, and its updates flow through the parent's reactivity — the
   * semantically correct behaviour for an object that only exists inside its
   * parent, and something Apollo does not support at all. See [[EntityFragment]]
-  * for the masking contract, which is identical.
+  * for the masking contract, which is identical except for how a ref opens:
+  * there is no store record behind an embedded ref, so its own `Ref.value`
+  * decodes the carried fields, where an entity ref opens only through the
+  * store's `readFragment` and `watchFragment` (or kyo-apollo-ui's
+  * `Apollo.fragment`).
   */
 final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     val fragmentName: String,
@@ -184,21 +190,41 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
 ):
     outer =>
 
-    /** The masked handle: carries the captured response slice, opened by
-      * kyo-apollo-ui's `Apollo.fragment(ref)`. No cache key: the object has no
-      * identity, so the store has no record to read it from. A plain
-      * `final class` for the same reason as [[EntityFragment.Ref]]: no `Product`
-      * view onto the masked fields.
+    /** The masked handle: carries the captured response slice and opens with
+      * [[value]] (kyo-apollo-ui's `Apollo.fragment(ref)` wraps that in a
+      * constant `Signal`). No cache key: the object has no identity, so the
+      * store has no record to read it from. A plain `final class` for the same
+      * reason as [[EntityFragment.Ref]]: no `Product` view onto the masked
+      * fields, and a `toString` that names only the fragment.
       */
     final class Ref private[apollo] (
         private[apollo] val raw: VectorMap[String, Json]
     ):
         private[apollo] def definition: EmbeddedFragment[Origin, D] = outer
 
-        /** The fragment's fields decoded from the captured response slice; a slice
-          * missing or mistyping one of them is a failure.
+        /** The fragment's fields, decoded from the response slice the ref carries.
+          *
+          * Unlike an entity ref, which stays closed outside the store's openers, an
+          * embedded ref opens directly: the value it carries is all there is, with no
+          * record behind it that masking could guard, so `value` is the opener. By
+          * convention only the component that declared the fragment calls it, which
+          * keeps the masking contract: the code that spread the fragment does not
+          * depend on its fields.
+          *
+          * The slice is decoded on each call. A slice missing or mistyping one of the
+          * fragment's fields (a ref built from a response that does not match the
+          * fragment's selection) aborts with an [[ApolloParseException]], the error
+          * `ApolloStore.readFragment` reports for an entity ref.
+          *
+          * {{{
+          * object LoadMore:
+          *     val fields = Fragment.embedded(PageInfo)(_.hasNextPage, _.endCursor)
+          *
+          *     def view(ref: fields.Ref)(using Frame) =
+          *         ref.value.map(page => if page.hasNextPage then render(page.endCursor) else ())
+          * }}}
           */
-        private[apollo] def value(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
+        def value(using Frame): D < Abort[ApolloParseException] = Abort.get(selection.decode(Json.JObj(raw)))
 
         override def equals(other: Any): Boolean = other match
             case that: EmbeddedFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw

@@ -879,7 +879,7 @@ them:
 | Selection value | `Country.name ~ Country.capital` | the fields, inline | any code holding the result | the same fields in several operations |
 | Cache fragment | `Fragment.of(Country)(...)` | not part of an operation | `ApolloStore`, at a `CacheKey` | reading or writing one record without an operation |
 | Entity fragment | `Fragment.entity(Country)(...)` | an opaque `Ref` | `ApolloStore.readFragment(ref)` and `watchFragment(ref)`, or kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on a type with a `CacheIdentity` |
-| Embedded fragment | `Fragment.embedded(PageInfo)(...)` | an opaque `Ref` | kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on an object without an identity |
+| Embedded fragment | `Fragment.embedded(PageInfo)(...)` | an opaque `Ref` | the ref's own `value`, or kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on an object without an identity |
 
 To pick one, ask what the fields are for:
 
@@ -1055,8 +1055,19 @@ val firstCountriesIsTyped: kyo.apollo.api.Query.Normalizable[
 -->
 
 An embedded ref has no record for the store to read, so `readFragment` and
-`watchFragment` do not take one; kyo-apollo-ui's `Apollo.fragment(ref)` opens it as a
-constant `Signal` of the delivered fields. A newer `PageInfo` arrives as a new ref in the parent's next result, so a watch
+`watchFragment` do not take one. It opens with its own `value`, which decodes the fields
+it carries and aborts with an `ApolloParseException` when they do not match the
+fragment. Masking an entity ref keeps the parent away from a record it could otherwise
+read; an embedded ref has no record, so `value` is public, and the convention that only
+the declaring component opens it is what keeps the parent from depending on its fields:
+
+```scala
+def loadMoreLabel(ref: LoadMore.fields.Ref)(using Frame): String < Abort[ApolloParseException] =
+    ref.value.map(page => if page.hasNextPage then "Load more" else "No more countries")
+```
+
+kyo-apollo-ui's `Apollo.fragment(ref)` opens it as a constant `Signal` of the same
+fields. A newer `PageInfo` arrives as a new ref in the parent's next result, so a watch
 on the page query brings it. `Fragment.entity(PageInfo)` would not compile here, because
 `PageInfo` has no identity. That is on purpose: an entity ref names its record, and a
 record named by position could hold a different object after the next refetch.
