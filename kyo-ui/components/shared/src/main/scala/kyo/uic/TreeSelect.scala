@@ -46,6 +46,9 @@ import scala.annotation.targetName
   * cannot drift. The trigger opens on ArrowDown, Enter or Space, and Escape closes.
   *
   * Honest deferrals: chip display mode, the header filter, and showClear.
+  *
+  * `id` lands on the field root, the combobox that holds the tab stop, and the tree derives `$id-list` and
+  * `$id-node-<n>` from it (a minted base stands in where none is given).
   */
 final case class TreeSelect[K] private (
     nodeList: List[TreeNode[K]] = Nil,
@@ -206,7 +209,8 @@ final case class TreeSelect[K] private (
         UI.mounted {
             for
                 cmds <- UI.commands
-                base <- cmds.freshId
+                // A caller's own id is the base the tree's parts derive from; a minted one stands in.
+                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
@@ -323,7 +327,6 @@ final case class TreeSelect[K] private (
         val labelUI: UI = lbl(if labelText.isEmpty then " " else labelText)
 
         var lblContainer = div.cssClass("p-treeselect-label-container")
-        idV.foreach(v => lblContainer = lblContainer.id(v))
         if !disabledFlag && st.isDefined then lblContainer = lblContainer.onClick(toggle)
         val labelContainerUI: UI = lblContainer(toChild(labelUI))
 
@@ -382,6 +385,9 @@ final case class TreeSelect[K] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-treeselect").cssClass("p-component").cssClass("p-inputwrapper")
+        // On the root, the combobox that holds the tab stop, not on the label container: see
+        // [[HasElementId]]. The tree's row and list ids derive from the same value.
+        idV.foreach(v => el = el.id(v))
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")

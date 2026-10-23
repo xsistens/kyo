@@ -48,6 +48,9 @@ import scala.annotation.targetName
   *
   * Honest deferrals: editable mode and virtual scrolling are not implemented yet. Arrow keys on the open panel no longer scroll the
   * page underneath: the panel declares `preventScrollKeys`.
+  *
+  * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
+  * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
 final case class Select[A] private (
     optionsV: List[OptionItem[A]],
@@ -424,7 +427,6 @@ final case class Select[A] private (
         val labelText       = if showPlaceholder then placeholder.getOrElse("") else selText
 
         var lbl = span.cssClass("p-select-label")
-        idV.foreach(v => lbl = lbl.id(v))
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if labelText.isEmpty then lbl = lbl.cssClass("p-select-label-empty")
         st.foreach(s => if interactive then lbl = lbl.onClick(toggle(s)))
@@ -469,6 +471,11 @@ final case class Select[A] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-select").cssClass("p-component")
+        // The id goes on the root because the root is the control: it holds the tab stop and is
+        // the combobox (or, with a filter header, the button that opens it), so this is what a
+        // `Label.forId`, `Commands.focusId` and the form's focus-first-invalid have to reach. The
+        // panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
+        idV.foreach(v => el = el.id(v))
         extraClassesV.foreach(c => el = el.cssClass(c))
         if inputwrapperFlag then
             el = el.cssClass("p-inputwrapper")

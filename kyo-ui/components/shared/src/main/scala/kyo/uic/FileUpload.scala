@@ -29,6 +29,10 @@ import kyo.UI.*
   * `uic.FileUpload().bind(field)` wires value, validity, message and the blur
   * trigger, and a validator can read the picked files' sizes and extensions
   * because the payload metadata IS the bound value.
+  *
+  * The native file input carries the id ([[inputId]]). It is visually hidden (`.p-hidden-accessible`) rather than
+  * `display:none`, so it keeps its tab stop: Space or Enter on it opens the file dialog, and the choose button
+  * shows its focus ring.
   */
 final case class FileUpload private (
     inputIdV: String = FileUpload.defaultInputId,
@@ -175,7 +179,8 @@ final case class FileUpload private (
             case (Absent, Present(ref)) => ref.render(labelSpan)
             case _                      => labelSpan(Absent)
 
-        var file = fileInput.id(inputIdV)
+        // Visually hidden rather than display:none (see the class doc), so the input keeps its tab stop.
+        var file = fileInput.id(inputIdV).cssClass("p-hidden-accessible")
         if acceptV.nonEmpty then file = file.accept(acceptV*)
         if multipleFlag then file = file.multiple(true)
         if disabledFlag then file = file.disabled(true)

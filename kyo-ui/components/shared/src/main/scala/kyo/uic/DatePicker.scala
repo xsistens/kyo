@@ -32,6 +32,9 @@ import scala.annotation.targetName
   * The render is pure: it never reads a clock, so the Today button renders only when the app supplies [[today]]. The month
   * shown comes from the `month` ref, else the held value, else [[referenceDate]], else January 2000; the mount mints the
   * month, view, open and cursor state a caller does not bind.
+  *
+  * `id` lands on the text field, and the live picker derives the day grid's `$id-grid` and its cells' `$id-c<n>`
+  * from it (a minted base stands in where none is given).
   */
 final case class DatePicker[A] private (
     kind: DateKind[A],
@@ -247,7 +250,8 @@ final case class DatePicker[A] private (
                 given CanEqual[A, A] = CanEqual.derived
                 for
                     cmds <- UI.commands
-                    base <- cmds.freshId
+                    // A caller's own id is the base the grid and its cells derive from; a minted one stands in.
+                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     => Signal.initRef(Maybe.empty[A]).map(r => DatePicker.Binding.Single(r): DatePicker.Binding[A])
@@ -288,7 +292,7 @@ final case class DatePicker[A] private (
         val cursor                                                   = refs.cursor
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
-            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus)
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
         // The cursor and the seed flag are read together rather than through a second nested render: two regions over the
         // same grid would leave the inner one drawing against the cursor it closed over.
         val body: UI =
@@ -381,6 +385,7 @@ final case class DatePicker[A] private (
         floating: Boolean
     )(using Frame): UI =
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
+        // The live render stamps `fieldId` below, which is this same id where the caller gave one.
         i = idV.map(v => i.id(v)).getOrElse(i)
         sizeV match
             case Size.Small  => i = i.cssClass("p-inputtext-sm")
@@ -1505,11 +1510,17 @@ object DatePicker:
         restore: SignalRef[Maybe[Restore]],
         draft: SignalRef[Maybe[String]],
         base: String,
-        focus: String => UI.Action
+        focus: String => UI.Action,
+        callerId: Maybe[String]
     ):
         def cellId(index: Int): String = s"$base-c$index"
         def gridId: String             = s"$base-grid"
-        def fieldId: String            = s"$base-field"
+
+        /** The text field's id: the caller's own where there is one, since the field is the control's focusable element and
+          * the id is what `Label.forId` and the form's focus-first-invalid address; a derived one otherwise, which Escape
+          * hands focus back to.
+          */
+        def fieldId: String = callerId.getOrElse(s"$base-field")
     end Nav
 
     private val monthNames: Array[String] =

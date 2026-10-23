@@ -60,8 +60,15 @@ end HasAccessibleName
   *
   * The one a caller would want to address, which is not the same element in every family:
   *
-  *   - a **field-shaped control** puts it on the focusable native input, because that is
-  *     what `Commands.focusById` and a `Label.forId` pairing have to reach;
+  *   - a **field-shaped control** puts it on the element that takes focus, because that is
+  *     what `Commands.focusById`, a `Label.forId` pairing and the form layer's
+  *     focus-first-invalid have to reach. That is the native input where there is one; the
+  *     root of a combobox that holds its own tab stop (`Select`, `MultiSelect`,
+  *     `CascadeSelect`, `TreeSelect`), never the label text inside it; the list of a
+  *     `Listbox`; and for a group that takes no focus itself (`SelectButton`, `Rating`) the
+  *     option a Tab reaches, which moves with the selection. A component with no focusable
+  *     element in some state (an inline `ColorPicker` with nothing bound) falls back to its
+  *     root. `ElementIdTest` holds every form control to this;
   *   - a **container or display component** puts it on its own root.
   *
   * ==Internal parts derive from it==
