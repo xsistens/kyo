@@ -12,8 +12,8 @@ import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.Uuid
 
-/** Pure tests for the effect form's response→outcome projection (Phase 09,
-  * Task 4), now on kyo-test. [[ApolloEffect.projectData]] is the pure heart of
+/** Pure tests for the effect form's response→outcome projection.
+  * [[ApolloEffect.projectData]] is the pure heart of
   * `call.data`, so these leaves need no effect execution — bare `assert`.
   */
 class ApolloEffectSpec extends kyo.test.Test[Any]:

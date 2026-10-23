@@ -13,7 +13,7 @@ import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 
-/** The **boilerplate-free surface** of the `kyo-ui` binding (Phase 09, Task 6).
+/** The **boilerplate-free surface** of the `kyo-ui` binding.
   *
   * Everything an app needs arrives through a single `import kyo.apollo.*`:
   *

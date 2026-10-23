@@ -5,9 +5,8 @@ package kyo.apollo.codegen
   * (`SelectionList` arities plus the value form) are overloads of `apply`, so the
   * args live on the single, non-overloaded selector method that returns the
   * `` `field$sel` `` object: `_.tracks(Present(50), Absent)(_.name)`. A scalar
-  * field with args is a plain method with defaults. Surfaced by the
-  * spotify-showcase schema, whose connection fields (`tracks(first, after)`) sit
-  * on non-root object types.
+  * field with args is a plain method with defaults. Connection fields such as
+  * `tracks(first, after)` sit on non-root object types.
   */
 class SelectorArgsSpec extends kyo.test.Test[Any]:
 
