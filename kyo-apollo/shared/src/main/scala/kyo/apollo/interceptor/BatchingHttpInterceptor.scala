@@ -53,8 +53,10 @@ import kyo.apollo.network.http.HttpRequestBody
   * first member, the *lead*, which sends under `Async.uninterruptible` and completes the
   * other members. Batches from consecutive windows therefore travel concurrently,
   * and an interrupt aimed at the lead cannot lose the batch: it is deferred past
-  * the send, and if it lands before the send starts, the remaining members are
-  * re-queued at the front and a new window opens.
+  * the send, and if it lands before the send starts, the remaining members still
+  * waiting are re-queued at the front and a new window opens. Joining the queue
+  * and requesting the window for it are one step, so a caller interrupted as it
+  * joins never leaves the callers queued behind it without a window.
   */
 final class BatchingHttpInterceptor private (
     batchInterval: Duration,
@@ -92,7 +94,7 @@ final class BatchingHttpInterceptor private (
             // The type argument is load-bearing: inferred from `()`, `fold` types as Unit and the withdraw is built and
             // discarded unrun.
             response <- Sync.ensure(outcome => outcome.fold[Unit < Sync](())(_ => withdraw(me))) {
-                pending.updateAndGet(_.map(_.append(me))).map {
+                join(1)(_.append(me)).map {
                     case Absent         => Abort.panic(closed)
                     case Present(batch) =>
                         kick(batch.length).andThen {
@@ -110,20 +112,33 @@ final class BatchingHttpInterceptor private (
     private[interceptor] def queued(using Frame): Int < Sync =
         pending.get.map(_.fold(0)(_.length))
 
+    /** Add `count` members to the queue with `add` and, when the queue was empty
+      * before, ask the window fiber for a window, as one step. Returns the queue
+      * after, or `Absent` once the `Scope` has ended.
+      *
+      * A non-empty queue always has a window coming: only a join that finds the
+      * queue empty asks for one, so a later joiner relies on the earlier one's
+      * request. `offer` on the capacity-1 channel is a no-op while a request is
+      * already parked, and `Closed` means the `Scope` is ending, when the
+      * teardown drain answers the callers.
+      */
+    private def join(count: Int)(add: Chunk[Pending] => Chunk[Pending])(using Frame): Maybe[Chunk[Pending]] < Sync =
+        // Unsafe: the update and the window request have to be one step no interrupt can split. A caller interrupted
+        // between them leaves the queue again, but whoever joined in the meantime found it non-empty and asked for no
+        // window, so nothing would ever cut their batch.
+        Sync.Unsafe.defer {
+            val queue = pending.unsafe.updateAndGet(_.map(add))
+            queue match
+                case Present(all) if all.length == count => discard(window.unsafe.offer(()))
+                case _                                   => ()
+            queue
+        }
+
     /** React to the queue having grown to `length`: the size cap dispatches at
-      * once, the first entry opens a window, anything in between just waits.
+      * once, anything below it waits for the window [[join]] asked for.
       */
     private def kick(length: Int)(using Frame): Unit < Sync =
-        if length >= maxBatchSize then dispatch
-        else if length == 1 then open
-        else ()
-
-    /** Ask the window fiber for a window. `offer` on the capacity-1 channel is a
-      * no-op while a request for a window is already parked, and `Closed` means
-      * the `Scope` is ending — the teardown drain answers the callers then.
-      */
-    private def open(using Frame): Unit < Sync =
-        Abort.run[Closed](window.offer(())).unit
+        if length >= maxBatchSize then dispatch else ()
 
     /** Cut whatever is queued as one batch (atomically) and hand it to its lead.
       * Nothing is sent from here.
@@ -176,17 +191,22 @@ final class BatchingHttpInterceptor private (
     private def claim(me: Pending)(using Frame): Boolean < Sync =
         me.claimed.compareAndSet(false, true)
 
-    /** Put `rest` back at the front of the queue (they are older than anything
-      * queued since) and react as if they had just arrived — unless the `Scope`
-      * has ended, in which case they are answered like every other stranded caller.
+    /** Put the members of `rest` still waiting back at the front of the queue
+      * (they are older than anything queued since) and react as if they had just
+      * arrived, a window included when the queue was empty: the one that covered
+      * them may have ended already. A member that has left meanwhile is dropped,
+      * so nothing is sent on its behalf. Once the `Scope` has ended they are
+      * answered like every other stranded caller.
       */
     private def requeue(rest: Chunk[Pending])(using Frame): Unit < Sync =
-        if rest.isEmpty then ()
-        else
-            pending.updateAndGet(_.map(rest.concat(_))).map {
-                case Present(all) => kick(all.length)
-                case Absent       => fail(rest, closed)
-            }
+        Kyo.filter(rest)(_.turn.done.map(!_)).map { waiting =>
+            if waiting.isEmpty then ()
+            else
+                join(waiting.length)(waiting.concat(_)).map {
+                    case Present(all) => kick(all.length)
+                    case Absent       => fail(waiting, closed)
+                }
+        }
 
     /** The lead's send: one unwrapped request for a batch of one, otherwise the
       * JSON array of every body on the lead's chain/URL/headers. Every other
