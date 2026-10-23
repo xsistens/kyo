@@ -112,7 +112,7 @@ class ElementIdTest extends UicTest:
     }
 
     "Tabs carries it on its root, alongside the headers derived from it" in {
-        val strip = uic.Tabs().tabs(
+        val strip = uic.Tabs[String]().tabs(
             uic.Tab("One", p("first"), "one"),
             uic.Tab("Two", p("second"), "two")
         )

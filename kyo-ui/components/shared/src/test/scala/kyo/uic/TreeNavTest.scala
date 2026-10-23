@@ -24,35 +24,35 @@ class TreeNavTest extends UicTest:
     private def key(focus: Int, k: Keyboard) = TreeNav.onKey(rows, focus, k)
 
     "ArrowDown from nothing lands on the first row" in assert(
-        key(-1, Keyboard.ArrowDown) == Present(Step(0))
+        key(-1, Keyboard.ArrowDown) == Present(Step[String](0))
     )
 
     "ArrowUp from nothing lands on the last visible row" in assert(
-        key(-1, Keyboard.ArrowUp) == Present(Step(4))
+        key(-1, Keyboard.ArrowUp) == Present(Step[String](4))
     )
 
     "ArrowDown walks into an open node's children" in assert(
-        key(0, Keyboard.ArrowDown) == Present(Step(1))
+        key(0, Keyboard.ArrowDown) == Present(Step[String](1))
     )
 
     "ArrowDown leaves the last child for the next root" in assert(
-        key(2, Keyboard.ArrowDown) == Present(Step(3))
+        key(2, Keyboard.ArrowDown) == Present(Step[String](3))
     )
 
     "ArrowDown holds at the last row" in assert(
-        key(4, Keyboard.ArrowDown) == Present(Step(4))
+        key(4, Keyboard.ArrowDown) == Present(Step[String](4))
     )
 
     "ArrowUp holds at the first row" in assert(
-        key(0, Keyboard.ArrowUp) == Present(Step(0))
+        key(0, Keyboard.ArrowUp) == Present(Step[String](0))
     )
 
     "ArrowRight on a closed node opens it and stays put" in assert(
-        key(3, Keyboard.ArrowRight) == Present(Step(3, Op.Expand("pictures")))
+        key(3, Keyboard.ArrowRight) == Present(Step[String](3, Op.Expand("pictures")))
     )
 
     "ArrowRight on an open node walks into its first child" in assert(
-        key(0, Keyboard.ArrowRight) == Present(Step(1))
+        key(0, Keyboard.ArrowRight) == Present(Step[String](1))
     )
 
     "ArrowRight on a leaf is not ours" in assert(
@@ -60,15 +60,15 @@ class TreeNavTest extends UicTest:
     )
 
     "ArrowLeft on an open node closes it and stays put" in assert(
-        key(0, Keyboard.ArrowLeft) == Present(Step(0, Op.Collapse("documents")))
+        key(0, Keyboard.ArrowLeft) == Present(Step[String](0, Op.Collapse("documents")))
     )
 
     "ArrowLeft on a child climbs to its parent" in assert(
-        key(1, Keyboard.ArrowLeft) == Present(Step(0))
+        key(1, Keyboard.ArrowLeft) == Present(Step[String](0))
     )
 
     "ArrowLeft on a closed node climbs rather than closing what is already closed" in assert(
-        key(2, Keyboard.ArrowLeft) == Present(Step(0))
+        key(2, Keyboard.ArrowLeft) == Present(Step[String](0))
     )
 
     "ArrowLeft on a root with nothing to close is not ours" in assert(
@@ -76,23 +76,23 @@ class TreeNavTest extends UicTest:
     )
 
     "Home and End reach the ends" in assert(
-        key(2, Keyboard.Home) == Present(Step(0)) && key(2, Keyboard.End) == Present(Step(4))
+        key(2, Keyboard.Home) == Present(Step[String](0)) && key(2, Keyboard.End) == Present(Step[String](4))
     )
 
     "Enter selects a leaf and opens nothing" in assert(
-        key(1, Keyboard.Enter) == Present(Step(1, activate = true))
+        key(1, Keyboard.Enter) == Present(Step[String](1, activate = true))
     )
 
     "Space selects a leaf too" in assert(
-        key(1, Keyboard.Space) == Present(Step(1, activate = true))
+        key(1, Keyboard.Space) == Present(Step[String](1, activate = true))
     )
 
     "Enter on a closed parent selects it and opens it" in assert(
-        key(2, Keyboard.Enter) == Present(Step(2, Op.Expand("home"), activate = true))
+        key(2, Keyboard.Enter) == Present(Step[String](2, Op.Expand("home"), activate = true))
     )
 
     "Space on an open parent selects it and closes it" in assert(
-        key(0, Keyboard.Space) == Present(Step(0, Op.Collapse("documents"), activate = true))
+        key(0, Keyboard.Space) == Present(Step[String](0, Op.Collapse("documents"), activate = true))
     )
 
     "Enter on nothing is not ours" in assert(
@@ -100,7 +100,7 @@ class TreeNavTest extends UicTest:
     )
 
     "Escape clears the highlight and asks the host to close" in assert(
-        key(2, Keyboard.Escape) == Present(Step(-1, dismiss = true))
+        key(2, Keyboard.Escape) == Present(Step[String](-1, dismiss = true))
     )
 
     "a key the tree does not use stays with the browser" in assert(
@@ -108,8 +108,8 @@ class TreeNavTest extends UicTest:
     )
 
     "an empty tree has nowhere to go" in assert(
-        TreeNav.onKey(Nil, -1, Keyboard.ArrowDown) == Absent &&
-            TreeNav.onKey(Nil, -1, Keyboard.End) == Absent
+        TreeNav.onKey(List.empty[Row[String]], -1, Keyboard.ArrowDown) == Absent &&
+            TreeNav.onKey(List.empty[Row[String]], -1, Keyboard.End) == Absent
     )
 
 end TreeNavTest

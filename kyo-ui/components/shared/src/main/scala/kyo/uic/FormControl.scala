@@ -5,7 +5,7 @@ import scala.annotation.targetName
 
 /** The validation vocabulary every control that holds a user-supplied value carries,
   * and the surface the form-validation layer binds against: [[TextFormControl]] /
-  * [[BooleanFormControl]] / [[NumberFormControl]] / [[MultiSelectFormControl]] /
+  * [[BooleanFormControl]] / [[NumberFormControl]] / [[ChoiceFormControl]] / [[MultiChoiceFormControl]] /
   * [[FileFormControl]] each add their value binding and blur trigger on top, and each
   * preserves the concrete `Self` type (Input, TextArea, Slider, ...) at the call site
   * — no opaque wrapper.
@@ -68,6 +68,34 @@ trait TextFormControl extends FormControl:
     def value(ref: SignalRef[String]): Self
     def onBlur(f: String => UI.Action)(using Frame): Self
 
+/** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself bound
+  * two-way, over `A` where the field always holds one or over `Maybe[A]` where it may stay empty, plus a focus-loss trigger
+  * that reports the held option (`Absent` for none).
+  *
+  * The field's value type is the option type, so `bind` takes a `FormField[A]` or a `FormField[Maybe[A]]` and a rule judges
+  * the option rather than a key standing in for it. The `@targetName` is there because both bindings erase to one signature;
+  * the call site reads `selection(...)` either way.
+  */
+trait ChoiceFormControl[A] extends FormControl:
+    def selection(ref: SignalRef[A]): Self
+    @targetName("selectionMaybe")
+    def selection(ref: SignalRef[Maybe[A]]): Self
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): Self
+end ChoiceFormControl
+
+/** A choice of several among typed options ([[MultiSelect]], [[MultiSelectButton]], [[Listbox]], [[TreeSelect]]): the set of chosen options
+  * bound two-way, plus a focus-loss trigger that reports it. `bind` takes a `FormField[Set[A]]`.
+  *
+  * The members carry a `@targetName` because `SignalRef[Set[A]]` and `Set[A] => ?` erase to the same signatures as
+  * [[ChoiceFormControl]]'s members, so a control may carry both traits without a clash.
+  */
+trait MultiChoiceFormControl[A] extends FormControl:
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[A]]): Self
+    @targetName("onBlurSet")
+    def onBlur(f: Set[A] => UI.Action)(using Frame): Self
+end MultiChoiceFormControl
+
 /** A `Boolean`-valued field (checkbox / switch / radio): checked binding plus
   * focus-loss. `onBlur` reports the field's current checked state.
   */
@@ -97,24 +125,6 @@ trait NumberFormControl extends FormControl:
     def onBlur(f: Double => UI.Action)(using Frame): Self
     def integer(v: Boolean): Self
 end NumberFormControl
-
-/** A multi-selection field bound to the set of selected option keys (MultiSelect /
-  * TreeSelect): two-way value binding plus a focus-loss trigger reporting the
-  * current selection. The value type is `Set[String]` — the option *keys*, not the
-  * option model `A`, which is exactly what the control persists.
-  *
-  * The two members carry a `@targetName`: `SignalRef[Set[String]]` and
-  * `Set[String] => ?` erase to the same JVM signatures as [[TextFormControl]]'s
-  * `SignalRef[String]` and `String => ?`, and a control that offers BOTH arities
-  * ([[SelectButton]], single or `multiple(true)`) has to implement both. The call site
-  * still reads `value(...)` / `onBlur(...)`; only the JVM name differs.
-  */
-trait MultiSelectFormControl extends FormControl:
-    @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): Self
-    @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => UI.Action)(using Frame): Self
-end MultiSelectFormControl
 
 /** A file-picking control ([[FileUpload]]) bound to the picked files' metadata. The
   * value type is `Seq[kyo.UI.FilePayload]` — name, size, MIME type and text content of

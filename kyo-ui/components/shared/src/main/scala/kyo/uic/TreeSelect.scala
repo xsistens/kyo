@@ -17,7 +17,7 @@ import scala.annotation.targetName
   * Select's tree-shaped sibling: the same [[Overlay]]-based floating panel
   * (outside click / Escape close it, and the panel takes no focus: the trigger
   * keeps it and wears the hosted tree's own keyboard), the value
-  * a `SignalRef[Set[String]]` of selected NODE ids. The panel hosts the real
+  * a `SignalRef[Set[K]]` of selected NODE ids, `K` being the app's own id type. The panel hosts the real
   * `uic.Tree` — its [[TreeNode]] model, expansion refs, and [[SelectionMode]]
   * semantics are reused wholesale: `Single` replaces the selection and CLOSES
   * the panel on pick (Prime), `Multiple`/`Checkbox` toggle ids and keep the
@@ -27,11 +27,13 @@ import scala.annotation.targetName
   * Expansion state is component-internal unless `expanded(ref)` binds it out.
   *
   * Options come in the same shape as the flat pickers': `options(roots)(label)
-  * (children)` projects any `A` to its text and its sub-options, with the option
-  * key defaulting to the label as in [[Select.optionKey]]. The extra `children`
+  * (children)` takes the values themselves as node ids, and `options(roots)(label,
+  * id)(children)` projects any `A` to a typed id. The extra `children`
   * projection is the whole difference between a tree-shaped picker and a flat
   * one. `nodes(TreeNode*)` remains for hand-authored trees whose nodes carry an
-  * icon, a tooltip or their own accessible name.
+  * icon, a tooltip or their own accessible name. `loading` says the tree is still
+  * arriving; without it a selected id no node carries is named in a
+  * `.p-uic-key-error` card.
   *
   * The trigger shows the selected nodes' labels (tree order, comma-joined) or
   * the placeholder while empty.
@@ -45,10 +47,10 @@ import scala.annotation.targetName
   *
   * Honest deferrals: chip display mode, the header filter, and showClear.
   */
-final case class TreeSelect private (
-    nodeList: List[TreeNode] = Nil,
-    valueRef: Maybe[SignalRef[Set[String]]] = Absent,
-    expandedRefV: Maybe[SignalRef[Set[String]]] = Absent,
+final case class TreeSelect[K] private (
+    nodeList: List[TreeNode[K]] = Nil,
+    valueRef: Maybe[SignalRef[Set[K]]] = Absent,
+    expandedRefV: Maybe[SignalRef[Set[K]]] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.Single,
     placeholderV: Maybe[TextValue] = Absent,
@@ -64,108 +66,115 @@ final case class TreeSelect private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Set[String] => UI.Action] = Absent,
+    onChangeF: Maybe[Set[K] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => UI.Action] = Absent
-) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
-    type Self = TreeSelect
+    onBlurF: Maybe[Set[K] => UI.Action] = Absent,
+    loadingV: Maybe[BoolValue] = Absent
+) extends Node, MultiChoiceFormControl[K], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+    type Self = TreeSelect[K]
+
+    // Ids compare the way the sets that hold them already compare them, by `equals`; the expansion ref this field
+    // allocates for itself needs that said.
+    private given CanEqual[K, K] = CanEqual.derived
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): TreeSelect = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): TreeSelect[K] = copy(idV = v)
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Appends typed root options in the picker family's shape: `label` projects an
-      * `A` to its visible text and `children` to its sub-options, so the tree
-      * structure arrives as a projection like every other key. The option key
-      * defaults to the label, exactly as in [[Select.optionKey]]; use the
-      * three-projection overload when the label is not a stable identity.
+    /** Appends typed root options in the picker family's shape, the values themselves serving as node ids: `label`
+      * projects one to its visible text and `children` to its sub-options, so the tree structure arrives as a projection
+      * like every other key, and the selection holds the values.
       *
       * The family shape does not fit every tree, because a `TreeNode` also carries
       * an icon, a tooltip and an accessible name that no `A => String` supplies —
       * reach for [[nodes]] with the hand-authored model when you need those.
       */
-    def options[A](roots: Seq[A])(label: A => String)(children: A => Seq[A]): TreeSelect =
-        options(roots)(label, label)(children)
+    def options(roots: Seq[K])(label: K => String)(children: K => Seq[K]): TreeSelect[K] =
+        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, (k: K) => k, children)))
 
-    /** [[options]] with an explicit stable key per option — the id written into the
-      * bound selection set.
-      */
-    def options[A](roots: Seq[A])(label: A => String, optionKey: A => String)(children: A => Seq[A]): TreeSelect =
-        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, optionKey, children)))
+    /** [[options]] over any `A`, with `id` projecting each to the node id the selection holds. */
+    def options[A](roots: Seq[A])(label: A => String, id: A => K)(children: A => Seq[A]): TreeSelect[K] =
+        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, id, children)))
 
     /** Appends root nodes of the hand-authored [[TreeNode]] model — the escape hatch
       * from [[options]] when a node needs an icon, a tooltip or its own accessible
       * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]]. Each node is built
       * directly or from `_` (see [[TreeNodeScope]]).
       */
-    def nodes(ns: TreeNodeEntry*): TreeSelect = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
+    def nodes(ns: TreeNodeEntry[K]*): TreeSelect[K] = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
 
-    /** Binds the selected node id set two-way to `ref`: picks write the updated
+    /** Binds the set of selected node ids two-way to `ref`: picks write the updated
       * set back, ref changes reselect the matching nodes.
       */
-    @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): TreeSelect = copy(valueRef = Present(ref))
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(valueRef = Present(ref))
 
     /** Binds the expansion set two-way to `ref` (optional — expansion is
       * component-internal otherwise).
       */
-    def expanded(ref: SignalRef[Set[String]]): TreeSelect = copy(expandedRefV = Present(ref))
+    def expanded(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(expandedRefV = Present(ref))
+
+    /** Says the tree is still arriving: the dropdown icon turns into Prime's spinner, and a selected id no node carries
+      * yet is left alone rather than reported in a `.p-uic-key-error` card.
+      */
+    def loading(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Binds the panel visibility two-way to `ref` (optional — self-managed
       * otherwise).
       */
-    def open(ref: SignalRef[Boolean]): TreeSelect = copy(openRefV = Present(ref))
+    def open(ref: SignalRef[Boolean]): TreeSelect[K] = copy(openRefV = Present(ref))
 
     /** Selection semantics (Tree's modes): `Single` (default — pick replaces the
       * selection and closes the panel), `Multiple` (toggle, panel stays open), or
       * `Checkbox` (toggle with Prime's per-node checkbox column, panel stays open).
       */
-    def selectionMode(v: SelectionMode): TreeSelect = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): TreeSelect[K] = copy(selectionModeV = v)
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): TreeSelect = copy(placeholderV = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): TreeSelect[K] = copy(placeholderV = v)
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeSelect = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeSelect[K] = copy(emptyContentV = v)
 
-    def disabled(v: Boolean): TreeSelect = copy(disabledFlag = v)
+    def disabled(v: Boolean): TreeSelect[K] = copy(disabledFlag = v)
 
     /** HTML form participation: emits a hidden `<input name=...>` carrying the
       * comma-joined selected node ids.
       */
-    def name(v: String): TreeSelect = copy(nameV = Present(v))
+    def name(v: String): TreeSelect[K] = copy(nameV = Present(v))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): TreeSelect = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): TreeSelect[K] = copy(tooltipV = v)
 
     /** Size: `.p-treeselect-sm` / default / `.p-treeselect-lg`. */
-    def size(v: Size): TreeSelect = copy(sizeV = v)
+    def size(v: Size): TreeSelect[K] = copy(sizeV = v)
 
     /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): TreeSelect = copy(variantV = v)
+    def variant(v: FieldVariant): TreeSelect[K] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
-    def fluid(v: Boolean): TreeSelect = copy(fluidFlag = v)
+    def fluid(v: Boolean): TreeSelect[K] = copy(fluidFlag = v)
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): TreeSelect                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): TreeSelect                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TreeSelect = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): TreeSelect[K]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): TreeSelect[K]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TreeSelect[K] = copy(invalidMsgDynV = v)
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeSelect = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeSelect[K] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect[K] = copy(accNameRefV = v)
 
     /** Fired with the FULL updated node id set after every selection change. */
-    def onChange(f: Set[String] => UI.Action)(using Frame): TreeSelect = copy(onChangeF = Present(Callback.of(f)))
+    @targetName("onChangeSet")
+    def onChange(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the current selection — unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
-    @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => UI.Action)(using Frame): TreeSelect = copy(onBlurF = Present(Callback.of(f)))
+    @targetName("onBlurSet")
+    def onBlur(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(onBlurF = Present(Callback.of(f)))
 
     /** (id, label) pairs of every node in tree order — the trigger-label lookup. */
-    private def flatNodes: List[(String, String)] =
-        def loop(ns: List[TreeNode]): List[(String, String)] =
+    private def flatNodes: List[(K, String)] =
+        def loop(ns: List[TreeNode[K]]): List[(K, String)] =
             ns.flatMap(n => (n.id, n.text) :: loop(n.children))
         loop(nodeList)
     end flatNodes
@@ -177,14 +186,15 @@ final case class TreeSelect private (
       * produces it.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = KeyDiagnostics.duplicates(flatNodes.map(_._1))
+        val ids  = flatNodes.map(_._1)
+        val dups = ids.groupBy(identity).collect { case (id, seen) if seen.sizeIs > 1 => id }.toSeq.sortBy(ids.indexOf)
         if dups.isEmpty then Nil
         else
             List(KeyDiagnostics.card(
                 "TreeSelect",
-                "node ids are not unique, so those nodes share one selection entry; give options an explicit key " +
+                "node ids are not unique, so those nodes share one selection entry; give options an id " +
                     "projection, or distinct TreeNode ids",
-                dups
+                dups.map(_.toString)
             ))
         end if
     end keyCollisionCard
@@ -202,7 +212,7 @@ final case class TreeSelect private (
                     case Absent     => Signal.initRef(false)
                 exp <- expandedRefV match
                     case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(Set.empty[String])
+                    case Absent     => Signal.initRef(Set.empty[K])
                 hi <- Signal.initRef(-1)
             yield wired(open, exp, hi, base)
         }.placeholder(stat)
@@ -211,7 +221,7 @@ final case class TreeSelect private (
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(
         open: SignalRef[Boolean],
-        exp: SignalRef[Set[String]],
+        exp: SignalRef[Set[K]],
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
@@ -223,36 +233,46 @@ final case class TreeSelect private (
             }
         }
 
-    private def withValue(f: Set[String] => UI)(using Frame): UI =
+    private def withValue(f: Set[K] => UI)(using Frame): UI =
         valueRef match
             case Present(ref) => ref.render(f)
             case Absent       => f(Set.empty)
 
     private def body(
-        current: Set[String],
-        exp: Set[String],
+        current: Set[K],
+        exp: Set[K],
         isOpen: Boolean,
-        st: Maybe[TreeSelect.State]
+        st: Maybe[TreeSelect.State[K]]
     )(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
         // helper; otherwise the untouched static form. The resolved placeholder text threads through.
-        TextValue.reactive(placeholderV): ph =>
-            (invalidV.dynSig, invalidMsgDynV) match
-                case (Absent, Absent) => bodyStatic(current, exp, isOpen, st, ph)
-                case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                        copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                            .bodyStatic(current, exp, isOpen, st, ph)
-                    )
+        BoolValue.reactive(loadingV): ld =>
+            val loading = ld.constTrue
+            TextValue.reactive(placeholderV): ph =>
+                (invalidV.dynSig, invalidMsgDynV) match
+                    case (Absent, Absent) => bodyStatic(current, exp, isOpen, st, ph, loading)
+                    case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                            copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
+                                .bodyStatic(current, exp, isOpen, st, ph, loading)
+                        )
 
     private def bodyStatic(
-        current: Set[String],
-        exp: Set[String],
+        current: Set[K],
+        exp: Set[K],
         isOpen: Boolean,
-        st: Maybe[TreeSelect.State],
-        placeholder: Maybe[String]
+        st: Maybe[TreeSelect.State[K]],
+        placeholder: Maybe[String],
+        loading: Boolean
     )(using Frame): UI =
         val selectedLabels = flatNodes.collect { case (id, text) if current.contains(id) => text }
+        // Selected ids no node carries, once the tree is said to be complete.
+        val known                 = flatNodes.map(_._1).toSet
+        val unknownCard: List[UI] =
+            val strays = current.filterNot(known.contains).toList
+            if strays.isEmpty || loading then Nil
+            else List(KeyDiagnostics.unknown("TreeSelect", strays.map(_.toString).sorted))
+        end unknownCard
 
         /** Where an opening key lands: the first selected row, or the first row there is.
           * Opening has to land ON a row, or the arrow that opened the panel has moved nothing and
@@ -309,26 +329,28 @@ final case class TreeSelect private (
 
         var dd = div.cssClass("p-treeselect-dropdown").role("button").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         if !disabledFlag && st.isDefined then dd = dd.onClick(toggle)
-        val dropdownUI: UI = dd(toChild(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon")))
+        val dropdownUI: UI =
+            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-treeselect-loading-icon", "p-icon", "p-icon-spin")))
+            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon")))
 
         val hiddenCarrier: List[UI] =
             nameV.toList.map { n =>
-                hiddenInput.jsProp("name", n).value(flatNodes.collect { case (id, _) if current.contains(id) => id }.mkString(","))
+                hiddenInput.jsProp("name", n).value(flatNodes.collect { case (id, _) if current.contains(id) => id.toString }.mkString(","))
             }
 
         // === floating panel ======================================================
         // The hosted tree, configured once: it renders the panel's rows AND supplies the keyboard
         // the TRIGGER wears, so the two cannot disagree about what a key does.
-        val hosted: Maybe[Tree] =
+        val hosted: Maybe[Tree[K]] =
             if nodeList.isEmpty then Absent
             else
                 st.map { state =>
-                    var t = Tree()
+                    var t = Tree[K]()
                         .nodes(nodeList*)
                         .expanded(state.expRef)
                         .selectionMode(selectionModeV)
                         .onItemClick(_ => afterPick)
-                    valueRef.foreach(r => t = t.selected(r))
+                    valueRef.foreach(r => t = t.selection(r))
                     t
                 }
 
@@ -361,6 +383,7 @@ final case class TreeSelect private (
         // === field root ==========================================================
         var el = div.cssClass("p-treeselect").cssClass("p-component").cssClass("p-inputwrapper")
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -419,11 +442,12 @@ final case class TreeSelect private (
             }
         end if
 
-        FieldInvalid.withMessage(
+        val field = FieldInvalid.withMessage(
             el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
             invalidV.constTrue,
             invalidMsgV
         )
+        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 end TreeSelect
 
@@ -437,21 +461,21 @@ object TreeSelect:
       * a `copy` of the field and a state typed against the original instance does not fit the
       * copy's own path-dependent one.
       */
-    final private[uic] case class State(
+    final private[uic] case class State[K](
         open: SignalRef[Boolean],
-        expRef: SignalRef[Set[String]],
+        expRef: SignalRef[Set[K]],
         hi: SignalRef[Int],
         hiV: Int,
         idBase: String
     )
 
-    def apply(): TreeSelect = new TreeSelect()
+    def apply[K](): TreeSelect[K] = new TreeSelect[K]()
 
     /** Projects one typed option (and, recursively, its sub-options) into the
       * [[TreeNode]] model the panel's [[Tree]] renders. Termination is the caller's
       * `children` projection: a cyclic one does not terminate, exactly as a cyclic
       * hand-authored `TreeNode` structure would not.
       */
-    private def project[A](a: A, label: A => String, key: A => String, children: A => Seq[A]): TreeNode =
-        TreeNode(label(a), key(a), children = children(a).toList.map(project(_, label, key, children)))
+    private def project[A, K](a: A, label: A => String, id: A => K, children: A => Seq[A]): TreeNode[K] =
+        TreeNode(label(a), id(a), children = children(a).toList.map(project(_, label, id, children)))
 end TreeSelect

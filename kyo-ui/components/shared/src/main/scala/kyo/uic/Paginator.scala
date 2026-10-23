@@ -174,10 +174,10 @@ final case class Paginator private (
                 var sel = Select[Int]()
                     .options(rppOptionsV)(_.toString)
                     .extraClass("p-paginator-rpp-dropdown")
-                    .current(rows.toString)
+                    .current(Present(rows))
                     .accessibleName("Rows per page")
                 rowsRef match
-                    case Present(_) => sel = sel.onChange(v => changeRows(v, cur, rows))
+                    case Present(_) => sel = sel.onChange(_.fold(())(n => changeRows(n, cur, rows)))
                     case Absent     => sel = sel.disabled(true)
                 List(sel.render)
 
@@ -188,9 +188,9 @@ final case class Paginator private (
                 Select[Int]()
                     .options((0 until pages).toList)(p => (p + 1).toString)
                     .extraClass("p-paginator-jtp-dropdown")
-                    .current((cur + 1).toString)
+                    .current(Present(cur))
                     .accessibleName("Jump to page")
-                    .onChange(v => activate(v.toIntOption.map(_ - 1).getOrElse(cur)))
+                    .onChange(p => activate(p.getOrElse(cur)))
                     .render
             )
 
@@ -307,23 +307,22 @@ final case class Paginator private (
     /** RPP pick: write the rows ref, then reposition to the page that keeps the
       * first visible record visible (clamped into the new range).
       */
-    private def changeRows(selected: String, cur: Int, oldRows: Int)(using Frame): UI.Action =
-        selected.trim.toIntOption match
-            case Some(newRows) if newRows >= 1 =>
-                val newPages             = totalPages(newRows)
-                val target               = math.min(cur * oldRows / newRows, newPages - 1)
-                val writeRows: UI.Action = rowsRef match
-                    case Present(ref) => ref.set(newRows)
-                    case Absent       => ()
-                val writePage: UI.Action = pageRef match
-                    case Present(ref) => ref.set(math.max(0, target))
-                    case Absent       => ()
-                for
-                    _ <- writeRows
-                    r <- writePage
-                yield r
-                end for
-            case _ => ()
+    private def changeRows(newRows: Int, cur: Int, oldRows: Int)(using Frame): UI.Action =
+        if newRows < 1 then ()
+        else
+            val newPages             = totalPages(newRows)
+            val target               = math.min(cur * oldRows / newRows, newPages - 1)
+            val writeRows: UI.Action = rowsRef match
+                case Present(ref) => ref.set(newRows)
+                case Absent       => ()
+            val writePage: UI.Action = pageRef match
+                case Present(ref) => ref.set(math.max(0, target))
+                case Absent       => ()
+            for
+                _ <- writeRows
+                r <- writePage
+            yield r
+            end for
 end Paginator
 
 object Paginator:

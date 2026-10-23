@@ -21,14 +21,14 @@ class SelectButtonTest extends UicTest:
     /** The group wired the way its mount wires it, with the focus moves recorded. */
     private def wired(selected: String, disabled: String => Boolean = _ => false)(using
         Frame
-    ): (SignalRef[String], SignalRef[List[String]], UI) < Async =
+    ): (SignalRef[Maybe[String]], SignalRef[List[String]], UI) < Async =
         for
-            value <- Signal.initRef(selected)
+            value <- Signal.initRef(if selected.isEmpty then Maybe.empty[String] else Maybe(selected))
             moved <- Signal.initRef(List.empty[String])
         yield (
             value,
             moved,
-            group.optionDisabled(disabled).value(value).wired(ids, id => moved.updateAndGet(_ :+ id).unit)
+            group.optionDisabled(disabled).selection(value).wired(ids, id => moved.updateAndGet(_ :+ id).unit)
         )
 
     private def options(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
@@ -43,7 +43,7 @@ class SelectButtonTest extends UicTest:
             os                 <- options(ui)
             _                  <- press(os(at), key)
             went               <- moved.get
-            got                <- value.get
+            got                <- value.get.map(_.getOrElse(""))
         yield (went, got)
 
     "the group says it is one, and its options say they are radios" in {
@@ -105,7 +105,7 @@ class SelectButtonTest extends UicTest:
             os                 <- options(ui)
             _                  <- press(os(0), UI.Keyboard.Home)
             went               <- moved.get
-            got                <- value.get
+            got                <- value.get.map(_.getOrElse(""))
         yield assert(went.isEmpty && got == "Small", "Home on the chosen option is not a second click on it")
     }
 
@@ -115,7 +115,7 @@ class SelectButtonTest extends UicTest:
             os                 <- options(ui)
             _                  <- press(os(0), UI.Keyboard.ArrowRight)
             went               <- moved.get
-            got                <- value.get
+            got                <- value.get.map(_.getOrElse(""))
         yield assert(went == List("sb-2") && got == "Large")
     }
 
@@ -131,18 +131,18 @@ class SelectButtonTest extends UicTest:
 
     "a click still clears the chosen option, which is what allowEmpty means" in {
         for
-            value <- Signal.initRef("Medium")
-            ui = group.value(value).wired(ids, _ => ())
+            value <- Signal.initRef(Maybe("Medium"))
+            ui = group.selection(value).wired(ids, _ => ())
             os  <- options(ui)
             _   <- click(os(1))
-            got <- value.get
+            got <- value.get.map(_.getOrElse(""))
         yield assert(got.isEmpty)
     }
 
     "several choices stay a group of toggle buttons, each its own tab stop" in {
         for
             value <- Signal.initRef(Set("Small"))
-            ui = uic.SelectButton[String]().options(sizes).multiple(true).value(value).render
+            ui = uic.SelectButton[String]().options(sizes).multiple.selection(value).render
             root <- elementWithClass(ui, "p-selectbutton")
             os   <- options(ui)
         yield
@@ -183,7 +183,7 @@ class SelectButtonTest extends UicTest:
     "a selection over a Set toggles options, and keeps a member no option carries" in {
         for
             ref <- Signal.initRef(Set(Size.S))
-            os  <- options(uic.SelectButton[Size]().options(Seq(Size.M, Size.L))(_.toString).multiple(true).selection(ref).render)
+            os  <- options(uic.SelectButton[Size]().options(Seq(Size.M, Size.L))(_.toString).multiple.selection(ref).render)
             _   <- click(os(1))
             got <- ref.get
         yield assert(got == Set(Size.S, Size.L))

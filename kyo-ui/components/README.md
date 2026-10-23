@@ -1,6 +1,6 @@
 # kyo-ui-components
 
-kyo-ui-components is a component library for kyo-ui: 83 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
+kyo-ui-components is a component library for kyo-ui: 84 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
 
 Everything reactive is kyo-ui's own vocabulary, unchanged. Every slot is one setter taking `A | Signal[A]`: a constant renders once, a `Signal[A]` patches in place, and on an editable slot a `SignalRef[A]` binds two way; a panel's visibility is a `SignalRef[Boolean]` you own. Rendering stays server-honest: state lives in signals, behaviour is computed from those signals at render time, and the only client-side machinery is the contract kyo-ui already ships (focus seeding, in-place attribute and class patching, pointer and scroll reporting). Two things you supply yourself: `uic.Theme.css` on the page (nothing is injected for you), and `import scala.language.implicitConversions` for the placement lift.
 
@@ -129,18 +129,18 @@ val stockBadge: UI < Async =
     )
 ```
 
-Interactive state binds through a `SignalRef`. `value`, `checked`, `selected`, `expanded`, `page`, `active`, and `open` all accept one, and the component writes into it as the user interacts. There is no `onChange`-only path where the component holds private state you cannot read.
+Interactive state binds through a `SignalRef`. `value`, `checked`, `selection`, `selected`, `expanded`, `page`, `active`, and `open` all accept one, and the component writes into it as the user interacts. There is no `onChange`-only path where the component holds private state you cannot read.
 
 ```scala
 val filters: UI < Async =
     for
         query    <- Signal.initRef("")
         onlyLeft <- Signal.initRef(false)
-        picked   <- Signal.initRef(Set.empty[String])
+        picked   <- Signal.initRef(Set.empty[Category])
     yield div(
         uic.Input().placeholder("Name contains").value(query),
         uic.CheckBox("Only in stock").checked(onlyLeft),
-        uic.MultiSelect[Category]().options(categories)(_.label).optionKey(_.id).value(picked)
+        uic.MultiSelect[Category]().options(categories)(_.label).optionKey(_.id).selection(picked)
     )
 ```
 
@@ -160,7 +160,7 @@ val saveRow: UI < Async =
 
 ## The shared vocabulary
 
-Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 83 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
+Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 84 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
 
 `Severity` has `Primary`, `Secondary`, `Success`, `Info`, `Warn`, `Danger`, `Help`, and `Contrast`. `Size` has `Small`, `Normal`, `Large`, and `XLarge`. Alongside those sit `SelectionMode`, `ButtonVariant`, `FieldVariant`, `Orientation`, `LabelPosition`, `OverlayPosition`, `OverlayAnchor`, `ColumnAlign`, `TitleLevel`, and `TextEmptyIndicatorMode`, plus per-component enums (`DatePickerView`, `MultiSelectDisplay`, `DrawerPosition`, `SkeletonShape`, and so on) that only one family needs.
 
@@ -383,21 +383,21 @@ Token names carry no leading `--`, the way `uic.Tokens` stores them and `Stylesh
 
 Two mechanics decide whether your values actually land, and both are about *where*:
 
-- **Re-pointing the ramps is enough, because everything else is a `var()` chain.** `--p-content-background` is `var(--p-surface-900)`, the primary button reads from the primary ramp, and so on down the graph — so you do not have to name the semantic tokens. But that only works because your block matches the same element the library's own blocks do, since CSS substitutes a `var()` at the element that *declares* the property. The ramps meant as a brand surface are `p-primary-*` (50…950) and `p-surface-*` (0…950).
+- **Re-pointing the ramps is enough, because everything else is a `var()` chain.** `--p-content-background` is `var(--p-surface-900)`, the primary button reads from the primary ramp, and so on down the graph, so you do not have to name the semantic tokens. But that only works because your block matches the same element the library's own blocks do, since CSS substitutes a `var()` at the element that *declares* the property. The ramps meant as a brand surface are `p-primary-*` (50…950) and `p-surface-*` (0…950).
 - **The `data-theme` and `data-scheme` attributes must sit on the element your tokens are declared against.** Stamping them on a shell `div` works. Declaring your own tokens on `:root` while theming a `div` does not: the base set is re-declared on that `div`, and a `:root` declaration never reaches it.
 
 `preset` always emits a second, paired block on `[data-theme="spotify"][data-scheme="dark"]` carrying your light tokens plus whatever you pass as `dark`. `dark` is a delta, so name only what actually differs in the dark scheme.
 
-Two things that block buys. It is the only place a preset can hold values that differ by scheme at all. And at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block (0,1,0), so your preset lands whatever order the sheets end up in — which matters because the library's dark set really does declare tokens a brand re-points (the whole `p-surface-*` ramp, `--p-content-background`, `--p-text-color`; the `p-primary-*` ramp it leaves alone). Emitted after `Theme.css` as above, your plain block already wins on source order at equal specificity; the paired block is what makes the order stop mattering.
+Two things that block buys. It is the only place a preset can hold values that differ by scheme at all. And at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block (0,1,0), so your preset lands whatever order the sheets end up in. That matters because the library's dark set really does declare tokens a brand re-points (the whole `p-surface-*` ramp, `--p-content-background`, `--p-text-color`; the `p-primary-*` ramp it leaves alone). Emitted after `Theme.css` as above, your plain block already wins on source order at equal specificity; the paired block is what makes the order stop mattering.
 
-To start from a shipped palette rather than from nothing, `Theme.tokens` hands you the set as it EFFECTIVELY resolves for a preset and scheme — the same blocks the sheet emits, folded in the same order:
+To start from a shipped palette rather than from nothing, `Theme.tokens` hands you the set as it EFFECTIVELY resolves for a preset and scheme: the same blocks the sheet emits, folded in the same order:
 
 ```scala
 val derived = uic.Theme.tokens(uic.Theme.Preset.Aura, uic.Theme.Scheme.Dark) ++
     Seq("p-primary-400" -> "#1ed760")
 ```
 
-**That convenience has a price, and it is the one the next section is about.** `Theme.tokens` folds the same blocks `Theme.css` emits, so it reaches all four presets and pulls every token set into your bundle — about 765 KB of it. That is fine when you use `Theme.css` anyway. If you are on the slim path, start from the set you actually want instead, which costs nothing extra:
+**That convenience has a price, and it is the one the next section is about.** `Theme.tokens` folds the same blocks `Theme.css` emits, so it reaches all four presets and pulls every token set into your bundle, about 765 KB of it. That is fine when you use `Theme.css` anyway. If you are on the slim path, start from the set you actually want instead, which costs nothing extra:
 
 ```scala
 val derived = uic.Tokens.auraDark ++ Seq("p-primary-400" -> "#1ed760")
@@ -407,11 +407,11 @@ The difference is only that `Tokens.auraDark` is the dark OVERRIDES rather than 
 
 ### Shipping only the CSS you use
 
-`Theme.css` is every preset in both schemes plus all 75 component sheets, whatever your page places. That is the right default — nothing can be missing — and it renders to about 684 KB of CSS out of roughly 1.15 MB of Scala string constants (`Tokens` 765 KB of that, `ComponentCss` 328 KB, the kyo remainder 62 KB). In a Scala.js bundle it costs more than the CSS it renders to, because the token sets live as arrays of pairs rather than as text.
+`Theme.css` is every preset in both schemes plus all 75 component sheets, whatever your page places. That is the right default, since nothing can be missing, and it renders to about 684 KB of CSS out of roughly 1.15 MB of Scala string constants (`Tokens` 765 KB of that, `ComponentCss` 328 KB, the kyo remainder 62 KB). In a Scala.js bundle it costs more than the CSS it renders to, because the token sets live as arrays of pairs rather than as text.
 
 `Theme.cssFor` is how you pay for less, and there are two rungs. **Take the first one; it is almost all of the win and it costs you nothing.**
 
-**Rung one — one preset instead of four.** Name every sheet, but only the token sets you actually select with `data-theme`/`data-scheme`:
+**Rung one: one preset instead of four.** Name every sheet, but only the token sets you actually select with `data-theme`/`data-scheme`:
 
 ```scala
 val css: String = uic.Theme.cssFor(uic.Tokens.auraLight, uic.Tokens.auraDark, uic.ComponentCss.all)
@@ -419,7 +419,7 @@ val css: String = uic.Theme.cssFor(uic.Tokens.auraLight, uic.Tokens.auraDark, ui
 
 Nothing can go missing here: `ComponentCss.all` is still every sheet. The only thing you give up is the ability to switch to Material, Lara or Nora at runtime, which most apps never do.
 
-**Rung two — only the sheets you place.** List them:
+**Rung two: only the sheets you place.** List them:
 
 ```scala
 val css: String = uic.Theme.cssFor(
@@ -437,19 +437,19 @@ Either way the token sets land on the same two selectors the full sheet uses, `C
 
 | sheet | bundle bytes | saved |
 |---|---|---|
-| `Theme.css` | 71 761 142 | — |
+| `Theme.css` | 71 761 142 | 0 |
 | rung one: one preset, all 74 sheets | 70 990 107 | 771 035 |
 | rung two: one preset, the 22 sheets that app places | 70 750 513 | 1 010 629 |
 
 **The tokens are 76 % of the saving and the sheets are 24 %.** Rung one is one line and carries no risk. Rung two buys the last quarter in exchange for a list you have to keep correct, which is the rest of this section.
 
-**There is a floor, and it is the remainder.** `Theme.primeExtraCss` is one flat 66.5 KB document of kyo's own glue, and it is keyed on component classes: **62 of the 74 component names appear in it or in `base`**, so a page that places no table still ships the table's slot rules, and one that places no gallery still ships Galleria's. Those rules are inert without the component's own sheet — this costs bytes, not correctness — but it means the floor is component-specific rather than neutral. Two named sheets plus one preset measure about 243 KB against the full sheet's 684 KB, a factor of 2.8, with the token pairs and those 66.5 KB making up most of what is left. Splitting the remainder per component would lower the floor, and the numbers above say how much that is worth: it sits inside the 24 % that rung two buys, so it is a few per cent of the whole. That is why it has not been done.
+**There is a floor, and it is the remainder.** `Theme.primeExtraCss` is one flat 66.5 KB document of kyo's own glue, and it is keyed on component classes: **62 of the 74 component names appear in it or in `base`**, so a page that places no table still ships the table's slot rules, and one that places no gallery still ships Galleria's. Those rules are inert without the component's own sheet, so this costs bytes rather than correctness, but it means the floor is component-specific rather than neutral. Two named sheets plus one preset measure about 243 KB against the full sheet's 684 KB, a factor of 2.8, with the token pairs and those 66.5 KB making up most of what is left. Splitting the remainder per component would lower the floor, and the numbers above say how much that is worth: it sits inside the 24 % that rung two buys, so it is a few per cent of the whole. That is why it has not been done.
 
-**Why it takes sheets rather than names.** Scala.js eliminates dead code per *method*. A `cssFor(parts: Part*)` — an enum, a `Map`, a `byName` lookup — references every branch the moment it is reachable, so it would ship all 1.15 MB while looking like an optimisation. Passing the sheets themselves means the bundle keeps exactly the `Tokens` and `ComponentCss` defs your call site mentions. This is the same rule `Icons` follows for its 309 glyphs, which is why that object has no `all` either, and it is why `Tokens`' accessors are `def`s rather than `val`s: a `val` in an object is built by the static initialiser and would retain all eight token sets the moment anything touched `Tokens` at all.
+**Why it takes sheets rather than names.** Scala.js eliminates dead code per *method*. A `cssFor(parts: Part*)` (an enum, a `Map`, a `byName` lookup) references every branch the moment it is reachable, so it would ship all 1.15 MB while looking like an optimisation. Passing the sheets themselves means the bundle keeps exactly the `Tokens` and `ComponentCss` defs your call site mentions. This is the same rule `Icons` follows for its 309 glyphs, which is why that object has no `all` either, and it is why `Tokens`' accessors are `def`s rather than `val`s: a `val` in an object is built by the static initialiser and would retain all eight token sets the moment anything touched `Tokens` at all.
 
-**The list is yours to keep correct**, and this is the real cost of the slim path. A component whose sheet you did not name renders its `.p-*` markup completely unstyled, and nothing warns you — not the compiler, not the renderer, not a console message. It looks like a layout bug. Adding a `uic.Chip` to a page means adding `uic.ComponentCss.chip` to this list in the same change. If you cannot hold that discipline, use `Theme.css`; it is correct by construction and the whole point of it being the default.
+**The list is yours to keep correct**, and this is the real cost of the slim path. A component whose sheet you did not name renders its `.p-*` markup completely unstyled, and nothing warns you: not the compiler, not the renderer, not a console message. It looks like a layout bug. Adding a `uic.Chip` to a page means adding `uic.ComponentCss.chip` to this list in the same change. If you cannot hold that discipline, use `Theme.css`; it is correct by construction and the whole point of it being the default.
 
-A practical way to derive the list rather than guess it: render the app, collect every `class` attribute in the result, and map the `p-<name>` prefixes onto sheet names. That also catches the components your components place internally — a `Select` brings an overlay, a `DataTable` brings a paginator — which reading your own source will not tell you.
+A practical way to derive the list rather than guess it: render the app, collect every `class` attribute in the result, and map the `p-<name>` prefixes onto sheet names. That also catches the components your components place internally (a `Select` brings an overlay, a `DataTable` brings a paginator), which reading your own source will not tell you.
 
 ### The one class you can still stamp yourself
 
@@ -603,7 +603,7 @@ val importField: UI < Async =
 
 ### Decorating a control
 
-Three different mechanisms sit near each other here, and it is worth keeping them apart. `FloatLabel`, `IftaLabel`, and `IconField` are single-host WRAPPERS: each takes one control builder as a value and keeps its concrete type, which is what lets them stamp classes onto it (`.p-filled`, the icon paddings). `InputGroup` is a CONTAINER of already-built children in visual order; Prime's CSS keys on child position, so the group needs no handle on any child. `Label` is neither — it stands beside a field and links to it by `forId`.
+Three different mechanisms sit near each other here, and it is worth keeping them apart. `FloatLabel`, `IftaLabel`, and `IconField` are single-host WRAPPERS: each takes one control builder as a value and keeps its concrete type, which is what lets them stamp classes onto it (`.p-filled`, the icon paddings). `InputGroup` is a CONTAINER of already-built children in visual order; Prime's CSS keys on child position, so the group needs no handle on any child. `Label` is neither: it stands beside a field and links to it by `forId`.
 
 ```scala
 val decorated: UI < Async =
@@ -619,7 +619,7 @@ val decorated: UI < Async =
     )
 ```
 
-`FloatLabel` and `IftaLabel` accept the same four hosts — `Input`, `TextArea`, `Select`, `AutoComplete` — because they are one idea with different label placement; `IconField` accepts `Input`, `TextArea`, and `Select`. A host they do not accept is a compile error, not a silently unwrapped control.
+`FloatLabel` and `IftaLabel` accept the same four hosts (`Input`, `TextArea`, `Select`, `AutoComplete`), because they are one idea with different label placement; `IconField` accepts `Input`, `TextArea`, and `Select`. A host they do not accept is a compile error, not a silently unwrapped control.
 
 ### Validity before the validation layer
 
@@ -636,24 +636,24 @@ val handRolled: UI < Async =
 
 ## Choosing from options
 
-Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. `value` binds the selection as the *keys*, which is what a form field and a hidden `<input name>` carry; `selection` binds the options themselves (see [Binding the option itself](#binding-the-option-itself)). `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
+Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the option itself, never as a key standing in for it: `selection(ref)` takes a `SignalRef[Maybe[A]]` for a choice that may stay empty under its placeholder, or a `SignalRef[A]` for one that always holds an option. Keys stay inside the component, where the panel, the keyboard and a hidden `<input name>` compare them. `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
 
 ```scala
 val categoryPicker: UI < Async =
-    for chosen <- Signal.initRef("acc")
+    for chosen <- Signal.initRef(Maybe(categories.head))
     yield uic.Select[Category]()
         .options(categories)(_.label)
         .optionKey(_.id)
-        .value(chosen)
+        .selection(chosen)
         .placeholder("Category")
         .showClear(true): UI
 ```
 
 > **Caution:** `optionKey` defaults to the label projection, so two options that render the same text collapse onto one selection key. Set it whenever the label is not unique, which is most of the time for a real domain. The same default applies to `MultiSelect`, `SelectButton`, and `CascadeSelect`. This one used to fail silently on exactly the data that triggers it; now the panel renders a loud `.p-uic-key-error` card naming the colliding keys, so a duplicate-label data set shows up the first time it is rendered rather than the first time someone picks the wrong row.
 
-### Binding the option itself
+### The option, none, or several
 
-`Select`, `CascadeSelect` and `SelectButton` also bind the chosen option itself: `selection(ref)` over a `SignalRef[A]` for a choice that always holds an option, or over a `SignalRef[Maybe[A]]` for one that may stay empty under its placeholder. `MultiSelect` and a `multiple(true)` `SelectButton` take a `SignalRef[Set[A]]`. The option is still matched by its key, so a copy of an option the app holds picks that option's row, and the instance the app wrote survives a pick of the row already chosen.
+`Select`, `CascadeSelect` and a single `SelectButton` bind a `SignalRef[A]` or a `SignalRef[Maybe[A]]`; `MultiSelect` and a `MultiSelectButton` (what `SelectButton.multiple` makes) bind a `SignalRef[Set[A]]`. The option is matched by its key, so a copy of an option the app holds picks that option's row, and the instance the app wrote survives a pick of the row already chosen. `onChange` reports what is now held (`Maybe[A]`, or the `Set[A]` of the multi-choice ones) and fires only when a gesture changed it. Single and multiple are two types rather than a flag on one, so each has exactly one binding and one `onChange` of its own value type, and a `Set` bound to a single-choice group does not compile.
 
 A filter's "all" is a real choice rather than an empty field, so `optionsWithNone` gives a select (or a button group) over `Maybe[B]` a labelled `Absent` row ahead of the values, and the app keeps a `Maybe[B]` with no string in between:
 
@@ -674,7 +674,9 @@ val viewControls: UI < Async =
     ): UI
 ```
 
-A ref over `A` has no none to clear to, so `showClear` draws nothing on it, and a `SelectButton` bound that way keeps its option when the chosen one is clicked again. `value` and `selection` fill the same slot: the one set last wins.
+A ref over `A` has no none to clear to, so `showClear` draws nothing on it, and a `SelectButton` bound that way keeps its option when the chosen one is clicked again.
+
+A typed value that matches no option means the data and the binding disagree, so the field names it in a `.p-uic-key-error` card, the way it names colliding keys, and keeps it in the ref until the app changes it. The trigger still shows it, from the value itself. While options are still arriving that would be a false alarm, so `loading(Boolean | Signal[Boolean])` says so: the dropdown icon turns into Prime's spinner, the field reports `aria-busy`, and the card waits until the load ends. Options loaded inside a `UI.mounted` with a placeholder never get there, since the picker renders only once the data is in.
 
 `itemTemplate(A => UI)` draws each option, and on a `Select` the chosen value in the trigger too, while the label projection stays the option's accessible name and the text the filter and the printable keys match. With `optionsWithNone` the template sees `Absent` like any other option.
 
@@ -684,14 +686,14 @@ A ref over `A` has no none to clear to, so `showClear` draws nothing on it, and 
 
 ```scala
 val groupedPicker: UI < Async =
-    for chosen <- Signal.initRef("acc")
+    for chosen <- Signal.initRef(Maybe.empty[Product])
     yield uic.Select[Product]()
         .optionGroups(Seq(
             uic.OptionItem.group("In stock")(catalog.filter(_.inStock)*),
             uic.OptionItem.group("Backordered")(catalog.filterNot(_.inStock)*)
         ))(_.name)
         .optionKey(_.id)
-        .value(chosen)
+        .selection(chosen)
         .filterable(true): UI
 ```
 
@@ -701,56 +703,56 @@ The group is a real `li[role=group]` carrying its label as its accessible name, 
 
 ### The family
 
-Which picker you reach for follows from three questions the shared shape leaves open: one selection or many, floating panel or always visible, flat options or a nested tree. `Select[A]` picks one option from a floating panel. `MultiSelect[A]` picks many, binding a `SignalRef[Set[String]]` (or a `SignalRef[Set[A]]`) and displaying the selection as chips or as a summary label. `SelectButton[A]` is the same choice rendered as a button group, single or multiple. `AutoComplete[A]` is a text field that matches its options against what you type. `CascadeSelect[A]` walks a nested option tree through side panels. `TreeSelect` puts a real `Tree` in the panel.
+Which picker you reach for follows from three questions the shared shape leaves open: one selection or many, floating panel or always visible, flat options or a nested tree. `Select[A]` picks one option from a floating panel. `MultiSelect[A]` picks many, binding a `SignalRef[Set[A]]` and displaying the selection as chips or as a summary label. `SelectButton[A]` is the same choice rendered as a button group, single or multiple. `AutoComplete[A]` is a text field that matches its options against what you type. `CascadeSelect[A]` walks a nested option tree through side panels. `TreeSelect` puts a real `Tree` in the panel.
 
 ```scala
 val pickers: UI < Async =
     for
-        one    <- Signal.initRef("acc")
-        many   <- Signal.initRef(Set("acc"))
+        one    <- Signal.initRef(categories.head)
+        many   <- Signal.initRef(Set(categories.head))
         typed  <- Signal.initRef("")
-        nested <- Signal.initRef("")
+        nested <- Signal.initRef(Maybe.empty[String])
     yield div(
         uic.MultiSelect[Category]()
             .options(categories)(_.label)
             .optionKey(_.id)
-            .value(many)
+            .selection(many)
             .display(uic.MultiSelectDisplay.Chip)
             .maxSelectedLabels(3)
             .filterable(true),
-        uic.SelectButton[Category]().options(categories)(_.label).optionKey(_.id).value(one).allowEmpty(false),
+        uic.SelectButton[Category]().options(categories)(_.label).optionKey(_.id).selection(one),
         uic.AutoComplete[Product]().options(catalog)(_.name).optionKey(_.id).value(typed).minQueryLength(2),
         uic.CascadeSelect[String]()
             .options(Seq(uic.CascadeItem.group("Accessories")(uic.CascadeItem.leaf("Watches"))))(identity)
-            .value(nested)
+            .selection(nested)
     )
 ```
 
-`TreeSelect` takes typed options like the rest, with `children` supplying the structure the flat pickers do not need.
+`TreeSelect[K]` takes typed options like the rest, with `children` supplying the structure the flat pickers do not need. `K` is the node id the selection holds: `options(roots)(label, id)(children)` projects each option to one, and `options(roots)(label)(children)` lets the options be their own ids.
 
 ```scala
-final case class Dept(id: String, name: String, subs: List[Dept])
+final case class Dept(id: String, name: String, subs: List[Dept]) derives CanEqual
 
 val treePicker: UI < Async =
     for chosen <- Signal.initRef(Set("acc"))
-    yield uic.TreeSelect()
+    yield uic.TreeSelect[String]()
         .options(Seq(Dept("acc", "Accessories", Nil), Dept("fit", "Fitness", List(Dept("yoga", "Yoga", Nil)))))(_.name, _.id)(_.subs)
-        .value(chosen)
+        .selection(chosen)
         .selectionMode(uic.SelectionMode.Multiple)
         .placeholder("Category"): UI
 ```
 
-A `TreeNode` also carries an icon, a tooltip, and its own accessible name, which no `A => String` projection supplies. When you need those, hand the nodes over directly instead — the same relation `Listbox.items` has to `Listbox.item`.
+A `TreeNode` also carries an icon, a tooltip, and its own accessible name, which no `A => String` projection supplies. When you need those, hand the nodes over directly instead, in the same relation `Listbox.items` has to `Listbox.item`.
 
 ```scala
 val handAuthoredTree: UI < Async =
     for chosen <- Signal.initRef(Set("acc"))
-    yield uic.TreeSelect()
+    yield uic.TreeSelect[String]()
         .nodes(
             uic.TreeNode("Accessories", "acc", icon = Present(uic.Icons.tag)),
             uic.TreeNode("Fitness", "fit", children = List(uic.TreeNode("Yoga", "yoga")))
         )
-        .value(chosen)
+        .selection(chosen)
         .placeholder("Category"): UI
 ```
 
@@ -761,21 +763,21 @@ val inlineList: UI < Async =
     for
         picked <- Signal.initRef(Set.empty[String])
         query  <- Signal.initRef("")
-    yield uic.Listbox()
+    yield uic.Listbox[String]()
         .selectionMode(uic.SelectionMode.Multiple)
         .checkmark(true)
         .filterQuery(query)
         .item("Accessories", "acc", icon = Present(uic.Icons.tag))
         .item("Fitness", "fit")
-        .value(picked)
+        .selection(picked)
         .emptyContent("No matches"): UI
 ```
 
-Its bound selection is spelled `value`, like every other picker's, because a Listbox is the always-visible member of the family rather than a different concept — and for the same reason it is a form control, so `uic.Listbox().bind(field)` works on a `Set[String]` field exactly as `MultiSelect` does.
+Its bound selection is spelled `selection`, like every other picker's, because a Listbox is the always-visible member of the family rather than a different concept. Its items carry ids of the app's own type `K`, and the selection is a `Set[K]` of them; for the same reason it is a form control, so `uic.Listbox[K]().bind(field)` works on a `FormField[Set[K]]` exactly as `MultiSelect` does on its options.
 
 Every component that can run out of rows takes the same `emptyContent`, in three forms: a `String`, a `Signal[String]` for a locale-driven line, or arbitrary `UI`. The UI form matters more than it sounds. An empty state is rarely a sentence; it is an icon over a line of explanation and a button that creates the first record, and a component that only accepted a `String` would push that layout outside itself, where it no longer sits in the list, table body or panel the emptiness belongs to.
 
-Filtering has one word per concept across the whole family, and each component offers the ones it can mean. `filterable(Boolean)` renders the header filter over a query the component allocates itself; `filterQuery(SignalRef[String])` renders the same header over a query *you* own, which is what you want when the option list is fetched per keystroke. `Listbox`, `Select`, and `MultiSelect` all have both. `AutoComplete` has neither, because it filters by construction; what it has instead is `filterMode(FilterMode)`, the matching strategy — `StartsWithPerTerm`, `StartsWith`, `Contains`, or `None` when you pre-filter server-side.
+Filtering has one word per concept across the whole family, and each component offers the ones it can mean. `filterable(Boolean)` renders the header filter over a query the component allocates itself; `filterQuery(SignalRef[String])` renders the same header over a query *you* own, which is what you want when the option list is fetched per keystroke. `Listbox`, `Select`, and `MultiSelect` all have both. `AutoComplete` has neither, because it filters by construction; what it has instead is `filterMode(FilterMode)`, the matching strategy: `StartsWithPerTerm`, `StartsWith`, `Contains`, or `None` when you pre-filter server-side.
 
 ## Floating panels
 
@@ -843,7 +845,7 @@ val editorDrawer: UI < Async =
 
 > **Note:** `Dialog.onClose` and `Drawer.onClose` fire only when the component dismisses *itself*: the close button, Escape, a backdrop click, or a mask click. Each of those writes `false` into your ref first and then runs the effect. Writing `false` into the ref yourself closes the panel silently, which is what you want when the close is already part of a larger action you are performing.
 
-The inline dismissible elements take the opposite convention, and the contrast is worked through under [Messages the page owns](#messages-the-page-owns): `Message.onDismissed` and `Chip.onRemove` change no visibility at all, because neither owns a ref to write into — which is why neither has an `onClose` at all.
+The inline dismissible elements take the opposite convention, and the contrast is worked through under [Messages the page owns](#messages-the-page-owns): `Message.onDismissed` and `Chip.onRemove` change no visibility at all, because neither owns a ref to write into, which is why neither has an `onClose` at all.
 
 ### Popover, tooltip, context menu
 
@@ -913,7 +915,7 @@ val toasted: UI < (Async & Env[uic.ToastService]) =
 val toastLayer: Layer[uic.ToastService, Sync] = uic.ToastService.layer
 ```
 
-`use` resolves the service once, here, and hands the instance to the block, so everything the block builds — handlers included — closes over that instance. That matters because *where* you resolve it decides whether it works: a handler runs on the event-drain fiber, which carries the root `Env` context in the browser transport but not under server-push dispatch. A handler's type is `UI.Action`, so an `Env` effect cannot ride along into it, on `uic.Button.onClick` and on a raw kyo element's `onClick` alike; `use` is how the service gets there.
+`use` resolves the service once, here, and hands the instance to the block, so everything the block builds, handlers included, closes over that instance. That matters because *where* you resolve it decides whether it works: a handler runs on the event-drain fiber, which carries the root `Env` context in the browser transport but not under server-push dispatch. A handler's type is `UI.Action`, so an `Env` effect cannot ride along into it, on `uic.Button.onClick` and on a raw kyo element's `onClick` alike; `use` is how the service gets there.
 
 ## Menus and navigation
 
@@ -933,7 +935,7 @@ val bar: UI = uic.Menubar().start(span("CATALOG")).items(uic.MenuItem("File").it
 
 `Menu` renders inline by default and becomes a popup when you give it a visibility ref via `popup`. `TieredMenu` is the vertical form with side-nested submenus, `MegaMenu` opens one panel of grouped columns per root item, and `SplitButton` is a primary action with an attached menu.
 
-A menu of `url` rows is a nav, and a nav's whole job is to mark the page you are on. `current` is that mark: `aria-current="page"` on the row's link plus `.p-uic-menu-item-current` on the row. Give it the route signal rather than a boolean you recompute, and the strip is built once — the class and the attribute are both channels, patched in place with no re-render, so navigating does not rebuild the list and the reader's keyboard position survives it. Do not reach for `.p-focus`: that is the roving highlight the component moves as the reader arrows through, and it is gone when the list loses focus.
+A menu of `url` rows is a nav, and a nav's whole job is to mark the page you are on. `current` is that mark: `aria-current="page"` on the row's link plus `.p-uic-menu-item-current` on the row. Give it the route signal rather than a boolean you recompute, and the strip is built once: the class and the attribute are both channels, patched in place with no re-render, so navigating does not rebuild the list and the reader's keyboard position survives it. Do not reach for `.p-focus`: that is the roving highlight the component moves as the reader arrows through, and it is gone when the list loses focus.
 
 A site's navigation also wants to be one to a screen reader, which the menu role is not: `role="menu"` announces an application menu, with one tab stop and arrows inside, and stops the rows reading as links. `accessibleRole(MenuAccessibleRole.Navigation)` keeps the same rows and the same skin and renders them as a `<nav>` landmark around a plain list, every link its own tab stop that the browser follows. Name it, since a page with a breadcrumb and a table of contents has several navs.
 
@@ -973,18 +975,21 @@ val quickActions: UI =
 
 ### Navigation that is not a menu
 
-`Breadcrumb` is a trail, `Tabs` is a panel switcher bound to a `SignalRef[String]`, `Stepper` is a linear wizard, and `Paginator` is a page control you can also use standalone from any table.
+`Breadcrumb` is a trail, `Tabs[K]` is a panel switcher bound to a `SignalRef[K]` of the app's own tab ids, `Stepper` is a linear wizard, and `Paginator` is a page control you can also use standalone from any table.
 
 ```scala
+enum Section derives CanEqual:
+    case Overview, Pricing
+
 val navChrome: UI < Async =
     for
-        active <- Signal.initRef("overview")
+        active <- Signal.initRef(Section.Overview)
         page   <- Signal.initRef(0)
     yield div(
         uic.Breadcrumb().home(uic.Icons.home, "/").item("Catalog", "/catalog").item("Bamboo Watch"),
-        uic.Tabs()
-            .tab("Overview", "overview")(p("Overview content"))
-            .tab("Pricing", "pricing")(p("Pricing content"))
+        uic.Tabs[Section]()
+            .tab("Overview", Section.Overview)(p("Overview content"))
+            .tab("Pricing", Section.Pricing)(p("Pricing content"))
             .selected(active),
         uic.Paginator().totalRecords(120).rows(10).page(page).pageLinkSize(5).jumpToPageInput(true)
     )
@@ -1012,17 +1017,20 @@ val compact: UI < Async =
 
 A `DataTable` reaches the same setters through `paginator(f)`, a function over the paginator it renders below its rows. Prime mirrors a handful of the paginator's props onto the table and a caller reaching for one it did not mirror has nowhere to go; here the paginator is a value, so one name covers all of them. The four the table owns are applied after `f` and cannot be overridden from there: the record count, the page size, the current page and the ref it writes to, since a paginator disagreeing with the rows above it would page a list nobody is looking at.
 
-`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[String])` keys each step by an explicit id and survives steps being inserted or reordered.
+`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[K])` keys each step by a value of the app's own type and survives steps being inserted or reordered. A step without a value is reachable through `active` only.
 
 ```scala
+enum Phase derives CanEqual:
+    case Details, Pricing, Review
+
 val wizard: UI < Async =
-    for step <- Signal.initRef("details")
-    yield uic.Stepper()
+    for step <- Signal.initRef(Phase.Details)
+    yield uic.Stepper[Phase]()
         .value(step)
         .linear(true)
-        .step("Details", value = Present("details"))(p("Step 1"))
-        .step("Pricing", value = Present("pricing"))(p("Step 2"))
-        .step("Review", value = Present("review"))(p("Step 3")): UI
+        .step("Details", value = Present(Phase.Details))(p("Step 1"))
+        .step("Pricing", value = Present(Phase.Pricing))(p("Step 2"))
+        .step("Review", value = Present(Phase.Review))(p("Step 3")): UI
 ```
 
 > **Note:** both refs may be bound at once, and `value` wins. Prefer `value` for anything but a migration.
@@ -1040,7 +1048,7 @@ val productTable: UI < Async =
     for
         query    <- Signal.initRef("")
         page     <- Signal.initRef(0)
-        selected <- Signal.initRef(Set.empty[String])
+        selected <- Signal.initRef(Set.empty[Product])
     yield div(
         uic.Input().placeholder("Filter").value(query),
         uic.DataTable[Product]()
@@ -1058,14 +1066,14 @@ val productTable: UI < Async =
             .globalFilter(query)
             .paginate(10)(page)
             .selectionMode(uic.SelectionMode.Checkbox)
-            .selected(selected)
+            .selection(selected)
             .stripedRows(true)
     )
 ```
 
 > **Caution:** a column built without a text projection is invisible to `globalFilter`, which matches only against text projections. The Stock column above is filterable by nothing; if you want "sold out" to be a searchable term, give the column a text projection *and* a `body`.
 
-> **Caution:** `rowKey` is what selection, expansion, and the `onRowClick` payload key on. Its fallback is the row's position in the original list, which survives sorting and filtering but not a change to the data: reorder the rows and every selection re-associates with a different record. Because the table cannot tell a static list from a live one, binding any of those three without a `rowKey` renders a loud `.p-uic-key-error` card above the table instead of shipping that failure to production data.
+> **Caution:** `rowKey` is how the rows a selection or an expansion holds are matched to the rows on the screen. The bound sets hold the rows themselves (`Set[Product]`), and the payloads of `onRowClick` and the change events are rows too. Its fallback is the row's position in the original list, which survives sorting and filtering but not a change to the data: reorder the rows and every selection re-associates with a different record. Because the table cannot tell a static list from a live one, binding any of those three without a `rowKey` renders a loud `.p-uic-key-error` card above the table instead of shipping that failure to production data.
 
 Sorting is opt-in per column through `sortBy`, and needs a `sort` ref on the table to persist. The ref holds an ordered `List[SortKey]`, each entry naming its column by path (its header, preceded by the labels of any `headerGroup`s around it), and the first entry that is actually sorting is the primary key. The plain click and the modifier click do different jobs, and the plain one changes with the size of the spec. While a single column sorts it owns the whole cycle, ascending, descending, off, because there is no priority order to damage and no reason to make clearing one sort reach for a modifier. Once several columns sort it only reverses the clicked one, in place: a spec built up over several clicks must not lose a key because a header was clicked once too often, so switching a column off moves to Ctrl or Cmd. A plain click on a column that is not sorting makes it the single key the reader controls either way. Ctrl or Cmd click is the multi-key control: it adds a column, or advances one already in the spec.
 
@@ -1092,11 +1100,11 @@ The advance happens *in place*, which is the part that matters. `SortDirection` 
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
-`selectedCells(ref)` picks CELLS instead of rows, Prime's `cellSelection`, bound as a set of `CellPath`, which is a row key paired with a column path. Binding it is the switch, and `selectionMode` says what a click means: `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no identity until a row key and a column path are put together, which is why this is a second binding rather than a mode over the row one. One click can mean one thing, so binding more than one of cell editing, row selection and cell selection is a card: editing keeps the click, then row selection, and cell selection is off while either is bound. `selectableWhen` covers cells too, which is what Prime's Cell Selection disabled section does with `isDataSelectable`.
+`selectedCells(ref)` picks CELLS instead of rows, Prime's `cellSelection`, bound as a set of `CellPath[A]`, which is a row paired with a column path. Binding it is the switch, and `selectionMode` says what a click means: `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no identity until a row and a column path are put together, which is why this is a second binding rather than a mode over the row one. One click can mean one thing, so binding more than one of cell editing, row selection and cell selection is a card: editing keeps the click, then row selection, and cell selection is off while either is bound. `selectableWhen` covers cells too, which is what Prime's Cell Selection disabled section does with `isDataSelectable`.
 
 ```scala
 val picking: UI < Async =
-    for cells <- Signal.initRef(Set.empty[uic.CellPath])
+    for cells <- Signal.initRef(Set.empty[uic.CellPath[Product]])
     yield uic.DataTable[Product]()
         .rows(catalog)
         .rowKey(_.id)
@@ -1109,7 +1117,7 @@ val picking: UI < Async =
 
 ```scala
 val onlyInStock: UI < Async =
-    for picked <- Signal.initRef(Set.empty[String])
+    for picked <- Signal.initRef(Set.empty[Product])
     yield uic.DataTable[Product]()
         .rows(catalog)
         .rowKey(_.id)
@@ -1118,7 +1126,7 @@ val onlyInStock: UI < Async =
             uic.column("Stock")(p => if p.inStock then "yes" else "no")
         )
         .selectionMode(uic.SelectionMode.Checkbox)
-        .selected(picked)
+        .selection(picked)
         .selectableWhen(_.inStock): UI
 ```
 
@@ -1231,7 +1239,7 @@ val expanding: UI < Async =
         .columnResizeMode(uic.ColumnResizeMode.Expand): UI
 ```
 
-`state` and `restore` bring a reader back where they were. Prime persists the same set itself, under a `stateKey` in local or session storage, because in Prime that state lives inside the component and a caller has no other way to reach it. Here every field is already a ref the caller bound, so `state` bundles them and `restore` writes them back, and where the value is kept between visits stays the application's: a cookie, a URL, a profile row, or nowhere. A field whose ref is not bound reads as its default and is not restored, since there is nowhere for it to go, and nothing is validated on the way in because a restored spec naming a column the table no longer has, a width for one it never had, or a page past the end are each already something the table reports or clamps at render.
+`state` and `restore` bring a reader back where they were. Prime persists the same set itself, under a `stateKey` in local or session storage, because in Prime that state lives inside the component and a caller has no other way to reach it. Here every field is already a ref the caller bound, so `state` bundles them and `restore` writes them back, and where the value is kept between visits stays the application's: a cookie, a URL, a profile row, or nowhere. A field whose ref is not bound reads as its default and is not restored, since there is nowhere for it to go. The selection and the expansion travel as `rowKey`s, which is what keeps a `TableState` small enough for a URL; `restore` turns them back into rows, the ones the table holds first and then whatever `restore(state, byKey)` supplies for rows it has not loaded, and drops a key neither can answer. Nothing else is validated on the way in because a restored spec naming a column the table no longer has, a width for one it never had, or a page past the end are each already something the table reports or clamps at render.
 
 ```scala
 val resumable: UI < Async =
@@ -1281,7 +1289,7 @@ Getting the string to the reader is the app's, not the table's. `a.download(name
 ```scala
 val withMenu: UI < Async =
     for
-        onRow <- Signal.initRef(Absent: Maybe[String])
+        onRow <- Signal.initRef(Absent: Maybe[Product])
         table = uic.DataTable[Product]()
             .rows(catalog)
             .rowKey(_.id)
@@ -1452,7 +1460,7 @@ Editing puts the whole round trip on the column. `editable(read)(write)` says wh
 
 That is the difference from a table that owns only the editing STATE. Nothing downstream has to ask which column an edit belongs to, or dispatch on a path to find the field it maps to, or keep a draft ref per column: the table seeds the draft from `read`, the editor writes into it, and the commit goes back through `write`. Where a value comes from and where it goes is written once, and checked against the row type.
 
-`editingCell(ref)` binds one `CellPath`, a row crossed with a column path (the same path the sort spec names a column by), and clicking a cell of an editable column moves the editor there. `editingRows(ref)` binds a `Set` of `rowKey` ids and adds Prime's editor-button column at the trailing edge, opening every editable cell of a row at once. Enter commits and Escape discards in both.
+`editingCell(ref)` binds one `CellPath[A]`, a row crossed with a column path (the same path the sort spec names a column by), and clicking a cell of an editable column moves the editor there. `editingRows(ref)` binds the `Set[A]` of rows being edited and adds Prime's editor-button column at the trailing edge, opening every editable cell of a row at once. Enter commits and Escape discards in both.
 
 Where a commit LANDS is the second binding. `rows(ref)` over a `SignalRef[Seq[A]]` lets the table store the new row itself; with the plain `rows(Seq)` it computes the row and hands it to `onCellValueChanged` instead, which is the mode for rows the table cannot reach. A column that is editable while the table can do neither is reported in a card, because the commit would be computed and dropped.
 
@@ -1460,7 +1468,7 @@ Where a commit LANDS is the second binding. `rows(ref)` over a `SignalRef[Seq[A]
 val editableTable: UI < Async =
     for
         rows <- Signal.initRef(catalog)
-        cell <- Signal.initRef(Absent: Maybe[uic.CellPath])
+        cell <- Signal.initRef(Absent: Maybe[uic.CellPath[Product]])
     yield uic.DataTable[Product]()
         .rows(rows)
         .rowKey(_.id)
@@ -1544,15 +1552,16 @@ A `headerGroup` is a `DataTable` shape only: a `TreeTable` renders one header ro
 
 ### Recursive shapes
 
-`TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree` is the plain hierarchy, and `OrganizationChart` is the top-down box diagram. All three bind selection as a `SignalRef[Set[String]]` of node keys, and all three bind their open state through `expanded(ref)` in the same currency and the same polarity, so one ref moves between them without inverting.
+`TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree[K]` is the plain hierarchy, and `OrganizationChart[K]` is the top-down box diagram. `Tree` and `OrganizationChart` hold node ids of the app's own type `K`; `TreeTable` holds its rows, matched by `rowKey`, as `DataTable` does. All three bind their open state through `expanded(ref)` with the same polarity, the set of what is open, so nothing has to be inverted between them.
 
 ```scala
 val hierarchy: UI < Async =
     for
         expanded <- Signal.initRef(Set("acc"))
         picked   <- Signal.initRef(Set.empty[String])
+        openRows <- Signal.initRef(Set(catalog(0)))
     yield div(
-        uic.Tree()
+        uic.Tree[String]()
             .selectionMode(uic.SelectionMode.Multiple)
             .nodes(
                 uic.TreeNode(
@@ -1563,12 +1572,12 @@ val hierarchy: UI < Async =
                 )
             )
             .expanded(expanded)
-            .selected(picked),
+            .selection(picked),
         uic.TreeTable[Product]()
             .nodes(uic.TreeTableNode(catalog(0), List(uic.TreeTableNode(catalog(1)))))
             .columns(uic.column("Name")(_.name), uic.column("Category")(_.category))
             .rowKey(_.id)
-            .expanded(expanded)
+            .expanded(openRows)
     )
 ```
 
@@ -1579,7 +1588,7 @@ val orgChart: UI < Async =
     for
         open   <- Signal.initRef(Set("root", "fit"))
         picked <- Signal.initRef(Set.empty[String])
-    yield uic.OrganizationChart()
+    yield uic.OrganizationChart[String]()
         .node(
             uic.OrgChartNode(
                 "Catalog",
@@ -1592,7 +1601,7 @@ val orgChart: UI < Async =
         )
         .expanded(open)
         .selectionMode(uic.SelectionMode.Single)
-        .selected(picked): UI
+        .selection(picked): UI
 ```
 
 ### The other views over a list
@@ -1606,32 +1615,32 @@ val views: UI < Async =
     for
         page     <- Signal.initRef(0)
         ordering <- Signal.initRef(catalog)
-        picked   <- Signal.initRef(Set.empty[String])
+        picked   <- Signal.initRef(Set.empty[Product])
     yield div(
         uic.DataView[Product]()
             .items(catalog)
             .itemTemplate(p => div(span(p.name), span(f"${p.price}%.2f")))
             .header(span("Products"))
             .paginate(2)(page),
-        uic.OrderList[Product]().items(ordering)(_.name).itemKey(_.id).selected(picked),
+        uic.OrderList[Product]().items(ordering)(_.name).itemKey(_.id).selection(picked),
         uic.Carousel[Product]().items(catalog)(p => div(span(p.name))).page(page).numVisible(2).circular(true),
         uic.Timeline[Product]().events(catalog).content(p => span(p.name)).opposite(p => span(p.category))
     )
 ```
 
-`PickList[A]` is two of that: `sourceItems(ref)(label)` and `targetItems(ref)` each bind their own `SignalRef[Seq[A]]`, and a transfer appends the moved rows to the other column's ref. The names are deliberately `OrderList.items` twice over, so a PickList reads as two of the same thing rather than as a different model. `sourceSelected` and `targetSelected` are the optional selection refs, one per column, and the label projection is declared once on `sourceItems` because it renders both columns.
+`PickList[A]` is two of that: `sourceItems(ref)(label)` and `targetItems(ref)` each bind their own `SignalRef[Seq[A]]`, and a transfer appends the moved rows to the other column's ref. The names are deliberately `OrderList.items` twice over, so a PickList reads as two of the same thing rather than as a different model. `sourceSelection` and `targetSelection` are the optional selection refs, one `Set[A]` per column, and the label projection is declared once on `sourceItems` because it renders both columns.
 
 ```scala
 val transfer: UI < Async =
     for
         available <- Signal.initRef(catalog)
         chosen    <- Signal.initRef(Seq.empty[Product])
-        srcPicked <- Signal.initRef(Set.empty[String])
+        srcPicked <- Signal.initRef(Set.empty[Product])
     yield uic.PickList[Product]()
         .sourceItems(available)(_.name)
         .targetItems(chosen)
         .itemKey(_.id)
-        .sourceSelected(srcPicked)
+        .sourceSelection(srcPicked)
         .showTargetControls(false): UI
 ```
 
@@ -1710,19 +1719,19 @@ val sections: UI < Async =
     )
 ```
 
-`Accordion` has no `multiple` flag. The *type* of the bound ref picks the mode: `value(SignalRef[String])` keeps one panel open at a time, `value(SignalRef[Set[String]])` allows many. The illegal state ("multiple = false but two panels open") is therefore unrepresentable rather than defended against at runtime.
+`Accordion[K]` has no `multiple` flag. The *type* of the bound ref picks the mode: `value(SignalRef[Maybe[K]])` keeps at most one panel open, `value(SignalRef[Set[K]])` allows many, `K` being the app's own panel id type. The illegal state ("multiple = false but two panels open") is therefore unrepresentable rather than defended against at runtime.
 
 ```scala
 val singleOpen: UI < Async =
-    for open <- Signal.initRef("shipping")
-    yield uic.Accordion()
+    for open <- Signal.initRef(Maybe("shipping"))
+    yield uic.Accordion[String]()
         .panel("Shipping", "shipping")(p("Ships in 2 days"))
         .panel("Returns", "returns")(p("30 day window"))
         .value(open): UI
 
 val manyOpen: UI < Async =
     for open <- Signal.initRef(Set("shipping", "returns"))
-    yield uic.Accordion()
+    yield uic.Accordion[String]()
         .panel("Shipping", "shipping")(p("Ships in 2 days"))
         .panel("Returns", "returns")(p("30 day window"))
         .value(open): UI
@@ -1751,7 +1760,7 @@ Validation is a separate, opt-in layer in `kyo.uic.form`. Nothing above this sec
 
 A form is a mount region: `Form.mountedWith` allocates the state, runs your builder with the live `Form` scope, and returns the `UI.mounted` node that holds it. The form's state lives as long as that node's instance, so a mount's settings apply to the form itself: `.keyed(issueId)` gives every issue a form of its own, and `.placeholder` and `.onError` cover its loading and its failure.
 
-`scope.field(initial)` returns a `FieldSpec`, and `.declare` turns it into the live handle. Everything decided at declaration lives on that spec — `rules`, `on`, `domId`, `debounce`, `revealWhen`, `focusable` — each with the default most fields want, so `scope.field(true).declare` is a complete declaration. What stays on the handle is what can only be done afterwards: `addRule` and `matches`, which need a second field that does not exist yet when the first is declared.
+`scope.field(initial)` returns a `FieldSpec`, and `.declare` turns it into the live handle. Everything decided at declaration lives on that spec (`rules`, `on`, `domId`, `debounce`, `revealWhen`, `focusable`), each with the default most fields want, so `scope.field(true).declare` is a complete declaration. What stays on the handle is what can only be done afterwards: `addRule` and `matches`, which need a second field that does not exist yet when the first is declared.
 
 ```scala
 import kyo.uic.form.*
@@ -1820,7 +1829,7 @@ def skuAvailable(check: String => Boolean < Async): Validator[String] =
 
 `Activation.Field` values combine, and a field validates on the union of the ones it declares. `Change` re-checks on every value change, `Blur` on focus loss. `Reveal` picks the display gate: `WhenTouched` (the default, so an untouched field is quiet), `OnSubmit`, `Immediate`, or `Manual` (never auto-shown, but still feeding `isValid` and still blocking submit).
 
-The defaults are `Blur + Change` with `WhenTouched`, which is why the examples above declare neither: nothing is said while the reader first types, the verdict appears when they leave the field, and it stays live from then on. `Activation.Submit` is the opt-*out* rather than a third trigger — every field is validated at submit whatever it declares, so declaring `Submit` alone means "never re-check while the reader is in the field", which is what an expensive async rule wants.
+The defaults are `Blur + Change` with `WhenTouched`, which is why the examples above declare neither: nothing is said while the reader first types, the verdict appears when they leave the field, and it stays live from then on. `Activation.Submit` is the opt-*out* rather than a third trigger: every field is validated at submit whatever it declares, so declaring `Submit` alone means "never re-check while the reader is in the field", which is what an expensive async rule wants.
 
 ```scala
 val quietUntilSubmit: UI =
@@ -1840,7 +1849,7 @@ That form re-validates as the user types (so a submit gate can open the instant 
 
 `.bind(field)` wires the field's value ref, its DOM id, its gated message, and its blur trigger onto a control, and returns the same concrete control type. `uic.Input().bind(f)` is an `Input`, so setters keep chaining on either side of the call.
 
-The id is the form's slot, not the control's: `focusFirstInvalid` and the error summary both reach a field through it, so `bind` stamps the field's own and a `.id(...)` already on the control is replaced. Choose it at declaration instead — `scope.field.domId("login-username")` — which is also what makes a field addressable from outside the form at all: a hand-written `<label for>`, an `aria-describedby` on a sibling hint, a deep link like `/settings#email`, an end-to-end selector. Left alone, the id is minted (`kyo-uic-7`), unique and stable within a render and referenceable only from inside via `field.domId`. A form reports what it can be certain of here — an id `bind` displaced, two fields claiming one id, a `<label for>` pointing at nothing — as an inline card at mount, because every one of those used to fail by moving focus nowhere and saying nothing.
+The id is the form's slot, not the control's: `focusFirstInvalid` and the error summary both reach a field through it, so `bind` stamps the field's own and a `.id(...)` already on the control is replaced. Choose it at declaration instead with `scope.field.domId("login-username")`, which is also what makes a field addressable from outside the form at all: a hand-written `<label for>`, an `aria-describedby` on a sibling hint, a deep link like `/settings#email`, an end-to-end selector. Left alone, the id is minted (`kyo-uic-7`), unique and stable within a render and referenceable only from inside via `field.domId`. A form reports what it can be certain of here (an id `bind` displaced, two fields claiming one id, a `<label for>` pointing at nothing) as an inline card at mount, because every one of those used to fail by moving focus nowhere and saying nothing.
 
 ```scala
 val bound: UI =
@@ -1855,9 +1864,9 @@ val bound: UI =
     }
 ```
 
-`bind` compiles only against a control implementing the matching `FormControl` trait, and the field's value type picks which one. Text fields bind to `Input`, `TextArea`, `Password`, `InputMask`, `InputOtp`, `Select`, `AutoComplete`, `CascadeSelect`, `DatePicker`, `ColorPicker`, and a single-select `SelectButton`. Boolean fields bind to `CheckBox`, `RadioButton`, `ToggleSwitch`, and `ToggleButton`. Number fields bind to `InputNumber`, `Slider`, `Knob`, and `Rating`. Multi-selection fields (`Set[String]`) bind to `MultiSelect`, `TreeSelect`, `Listbox`, and a `multiple(true)` `SelectButton`. A file field (`Seq[UI.FilePayload]`) binds to `FileUpload`, which is what lets a rule check a size cap or an extension against the metadata the picker handed over.
+`bind` compiles only against a control implementing the matching `FormControl` trait, and the field's value type picks which one. Text fields bind to `Input`, `TextArea`, `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `DatePicker`, and `ColorPicker`. A choice field's value type is the option type: a `FormField[A]` or a `FormField[Maybe[A]]` binds to a `Select[A]`, a `CascadeSelect[A]` or a single-select `SelectButton[A]`, with `Validator.chosen()` as the `required` of the `Maybe` form, and a `FormField[Set[A]]` binds to a `MultiSelect[A]` or a `MultiSelectButton[A]` (`Validator.chosenAny()`). Boolean fields bind to `CheckBox`, `RadioButton`, `ToggleSwitch`, and `ToggleButton`. Number fields bind to `InputNumber`, `Slider`, `Knob`, and `Rating`. A `FormField[Set[K]]` of item ids binds to a `TreeSelect[K]` or a `Listbox[K]`. A file field (`Seq[UI.FilePayload]`) binds to `FileUpload`, which is what lets a rule check a size cap or an extension against the metadata the picker handed over.
 
-The rule behind that list is that every control holding a user-supplied value is a `FormControl`, and `FormControl` declares the whole validation vocabulary — `invalid` and `invalidMessage` in both their constant and reactive forms, plus `id`. A control cannot carry half of it. `size` and `variant` are deliberately not part of the contract: the PrimeOne sheet defines `.p-*-sm`/`-lg` and `.p-variant-filled` only for the field-shaped controls, so requiring them would mean inventing CSS Prime does not ship for a `Slider` or a `Rating`.
+The rule behind that list is that every control holding a user-supplied value is a `FormControl`, and `FormControl` declares the whole validation vocabulary: `invalid` and `invalidMessage` in both their constant and reactive forms, plus `id`. A control cannot carry half of it. `size` and `variant` are deliberately not part of the contract: the PrimeOne sheet defines `.p-*-sm`/`-lg` and `.p-variant-filled` only for the field-shaped controls, so requiring them would mean inventing CSS Prime does not ship for a `Slider` or a `Rating`.
 
 `bindControlOnly` is the same wiring minus the message row: it sets `invalid` but leaves the message for you to place, which is what you want when the message belongs in a summary or beside the label rather than under the field.
 
@@ -1990,7 +1999,7 @@ val lineItems: UI =
 
 `rows.render` is a keyed list, so adding, removing, and moving rows preserve the DOM (and therefore the focus and caret) of the rows that stayed. Cross-row `satisfy` reads the live rows, so a deleted row never counts toward a check.
 
-A row builder runs with `Async` only and no `Scope`, because rows are added later, from a handler, long after the mount body ran. `Activation.Change` works there anyway: the array wires each row's observer on an unscoped fiber and owns it, cancelling it when the row is removed and when the form unmounts. `dependsOn` is the one thing a row cannot do, and its type says so rather than leaving you to find out — it returns `Unit < (Async & Scope)`, so it does not compile inside a row at all. Cross-field re-validation within a row falls back to `addRule`.
+A row builder runs with `Async` only and no `Scope`, because rows are added later, from a handler, long after the mount body ran. `Activation.Change` works there anyway: the array wires each row's observer on an unscoped fiber and owns it, cancelling it when the row is removed and when the form unmounts. `dependsOn` is the one thing a row cannot do, and its type says so rather than leaving you to find out: it returns `Unit < (Async & Scope)`, so it does not compile inside a row at all. Cross-field re-validation within a row falls back to `addRule`.
 
 ### Summaries
 
@@ -2009,7 +2018,6 @@ val productEditor: UI < Async =
     for
         confirmDelete <- Signal.initRef(false)
         saved         <- Signal.initRef(false)
-        category      <- Signal.initRef("acc")
     yield div(
         uic.Toolbar()
             .start(uic.Title().level(uic.TitleLevel.H2)("Edit product"))
@@ -2019,6 +2027,7 @@ val productEditor: UI < Async =
                 name    <- scope.field.rules(Validator.required() and Validator.minLength(2)).declare
                 price   <- scope.numberField(0.0).rules(Validator.min(0.0)).declare
                 inStock <- scope.field(true).declare
+                kind    <- scope.field(Maybe.empty[Category]).rules(Validator.chosen()).declare
                 gate    <- scope.submitDisabled
                 summary <- Form.errorSummary(scope)
             yield uic.Card().title("Details")(
@@ -2026,7 +2035,7 @@ val productEditor: UI < Async =
                     uic.Label("Name").forId(name.domId).required(true),
                     uic.Input().bind(name).fluid(true),
                     uic.InputNumber().bind(price).suffix(" EUR"),
-                    uic.Select[Category]().options(categories)(_.label).optionKey(_.id).value(category),
+                    uic.Select[Category]().options(categories)(_.label).optionKey(_.id).placeholder("Category").bind(kind),
                     uic.CheckBox("In stock").bind(inStock),
                     summary,
                     uic.Button("Save")
@@ -2058,6 +2067,6 @@ The library targets kyo-ui's server-push transport as a first-class deployment, 
 
 **Render is pure.** No clock, no randomness, nothing scheduled while a component is being projected into a `UI`. `DatePicker.today(iso)` is an explicit parameter because a pure render cannot read a clock.
 
-Fibers follow one rule from there. A component may own one spawned inside its own `UI.mounted`, because the mount's `Scope` is that component's lifetime and unmount cancels it — `Carousel`'s autoplay is the one that does. A timer that has to outlive any single render belongs to a service instead, which forks it unscoped and owns the cancellation: that is why a single `Toast` emits its `duration` as a data attribute and runs no timer of its own, while `ToastService` owns its dismissal fibers.
+Fibers follow one rule from there. A component may own one spawned inside its own `UI.mounted`, because the mount's `Scope` is that component's lifetime and unmount cancels it; `Carousel`'s autoplay is the one that does. A timer that has to outlive any single render belongs to a service instead, which forks it unscoped and owns the cancellation: that is why a single `Toast` emits its `duration` as a data attribute and runs no timer of its own, while `ToastService` owns its dismissal fibers.
 
 **The honest deferrals**, per family, are option groups in the picker family, virtual scrolling inside picker panels, typeahead in the menu family, range mode on `Slider`, advanced mode on `FileUpload`, pagination on `TreeTable`, and fullscreen on `Galleria`. Each is absent rather than half-present, so nothing silently degrades. The full record, component by component with the reason for each, is [PARITY.md](PARITY.md), which also names the one PrimeReact component this library does not have.

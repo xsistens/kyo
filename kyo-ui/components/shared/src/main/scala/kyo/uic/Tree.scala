@@ -4,42 +4,45 @@ import kyo.*
 import kyo.UI.*
 
 /** One node of a [[Tree]] — a recursive hand-authored carrier: a `text` label, a
-  * stable `id` (the expansion / selection key and the `onNodeToggle` payload), an
+  * stable `id` of the app's own type `K` (what the expansion and selection sets
+  * hold and `onNodeToggle` reports), an
   * optional leading `icon` glyph, its `children` (empty for a leaf), a native
   * `tooltip` (title attribute), and an `accessibleName` override for the
   * treeitem.
   */
-final case class TreeNode(
+final case class TreeNode[K](
     text: String,
-    id: String,
+    id: K,
     icon: Maybe[IconGlyph] = Absent,
-    children: List[TreeNode] = Nil,
+    children: List[TreeNode[K]] = Nil,
     tooltip: Maybe[String] = Absent,
     accessibleName: Maybe[String] = Absent
 )
 
 /** A tree node, built directly or as `_.node(...)` (see [[TreeNodeScope]]). */
-type TreeNodeEntry = Entry[TreeNode, TreeNodeScope]
+type TreeNodeEntry[K] = Entry[TreeNode[K], TreeNodeScope[K]]
 
 /** What `_` stands for in [[Tree.nodes]] and [[TreeSelect.nodes]]: `_.node("Documents", "docs", children = Seq(_.node(...)))`. The
   * children take the same two spellings, so a whole tree reads one way.
   */
-final class TreeNodeScope private ():
+final class TreeNodeScope[K] private ():
     /** A node keyed by `id`, as [[TreeNode.apply]]. */
     def node(
         text: String,
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
-        children: Seq[TreeNodeEntry] = Nil,
+        children: Seq[TreeNodeEntry[K]] = Nil,
         tooltip: Maybe[String] = Absent,
         accessibleName: Maybe[String] = Absent
-    ): TreeNode = TreeNode(text, id, icon, TreeNodeScope.resolve(children), tooltip, accessibleName)
+    ): TreeNode[K] = TreeNode(text, id, icon, TreeNodeScope.resolve(children), tooltip, accessibleName)
 end TreeNodeScope
 
 object TreeNodeScope:
-    private val scope = new TreeNodeScope
+    // The scope holds nothing of its own type, so one instance serves every `K`.
+    private val scope = new TreeNodeScope[Any]
 
-    private[uic] def resolve(entries: Seq[TreeNodeEntry]): List[TreeNode] = Entry.resolve(scope, entries)
+    private[uic] def resolve[K](entries: Seq[TreeNodeEntry[K]]): List[TreeNode[K]] =
+        Entry.resolve(scope.asInstanceOf[TreeNodeScope[K]], entries)
 end TreeNodeScope
 
 /** Tree — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tree
@@ -54,10 +57,10 @@ end TreeNodeScope
   * `@primeuix` tree CSS applies verbatim. Indentation comes from the real
   * nesting (`--p-tree-indent` on the child lists), exactly like Prime.
   *
-  * Expansion and selection each bind two-way to a `SignalRef[Set[String]]`: the
+  * Expansion and selection each bind two-way to a `SignalRef[Set[K]]` of node ids: the
   * tree re-renders reactively, a node's toggle button flips its id in the
   * `expanded` set before firing `onNodeToggle`, and clicking a node's content
-  * updates the `selected` set per the [[SelectionMode]] before firing
+  * updates the `selection` set per the [[SelectionMode]] before firing
   * `onItemClick`. Recursion is pure and bounded by the provided node structure.
   *
   * Keyboard (WAI-ARIA tree, the shared [[TreeNav]] machine): the tree is ONE tab stop and
@@ -83,32 +86,35 @@ end TreeNodeScope
   * "all children fully checked". The cascade math is pure over the node tree and
   * the current set.
   */
-final case class Tree private (
-    nodeList: List[TreeNode] = Nil,
-    expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    onNodeToggleF: Maybe[String => UI.Action] = Absent,
-    onItemClickF: Maybe[String => UI.Action] = Absent,
+final case class Tree[K] private (
+    nodeList: List[TreeNode[K]] = Nil,
+    expandedRef: Maybe[SignalRef[Set[K]]] = Absent,
+    selectedRef: Maybe[SignalRef[Set[K]]] = Absent,
+    onNodeToggleF: Maybe[K => UI.Action] = Absent,
+    onItemClickF: Maybe[K => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node, HasEmptyContent, HasAccessibleName:
-    type Self = Tree
+    type Self = Tree[K]
 
     /** Appends the given root nodes, each built directly or from `_` (see [[TreeNodeScope]]). */
-    def nodes(ns: TreeNodeEntry*): Tree = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
+    def nodes(ns: TreeNodeEntry[K]*): Tree[K] = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
 
     /** Binds expansion two-way to `ref`: toggles update the set, ref changes re-render `aria-expanded`. */
-    def expanded(ref: SignalRef[Set[String]]): Tree = copy(expandedRef = Present(ref))
+    def expanded(ref: SignalRef[Set[K]]): Tree[K] = copy(expandedRef = Present(ref))
 
-    /** Binds selection two-way to `ref`: clicking a node updates the set, ref changes re-render selection. */
-    def selected(ref: SignalRef[Set[String]]): Tree = copy(selectedRef = Present(ref))
+    /** Binds the selection two-way to the set of chosen node ids: clicking a node updates the set, ref changes re-render
+      * selection.
+      */
+    def selection(ref: SignalRef[Set[K]]): Tree[K] = copy(selectedRef = Present(ref))
 
-    def onNodeToggle(f: String => UI.Action)(using Frame): Tree = copy(onNodeToggleF = Present(Callback.of(f)))
+    /** Fired with the node id after a toggle (after the expansion write). */
+    def onNodeToggle(f: K => UI.Action)(using Frame): Tree[K] = copy(onNodeToggleF = Present(Callback.of(f)))
 
     /** Fired with the node id after a content click (after the selection write). */
-    def onItemClick(f: String => UI.Action)(using Frame): Tree = copy(onItemClickF = Present(Callback.of(f)))
+    def onItemClick(f: K => UI.Action)(using Frame): Tree[K] = copy(onItemClickF = Present(Callback.of(f)))
 
     /** Selection semantics: `None` (default — nodes inert unless `onItemClick` is
       * set), `Single` (clicking replaces the selection; re-clicking clears it),
@@ -118,7 +124,7 @@ final case class Tree private (
       * checks its whole subtree and re-checks any ancestor that becomes complete,
       * and parents render indeterminate while partially checked).
       */
-    def selectionMode(v: SelectionMode): Tree = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): Tree[K] = copy(selectionModeV = v)
 
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -128,11 +134,11 @@ final case class Tree private (
       * point of that mode. See [[SelectionPick]] for the rule every component offering this
       * shares; there is no shift-range, matching Prime.
       */
-    def metaKeySelection(v: Boolean): Tree = copy(metaKeyFlag = v)
+    def metaKeySelection(v: Boolean): Tree[K] = copy(metaKeyFlag = v)
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree[K] = copy(emptyContentV = v)
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree = copy(accessibleNameV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree[K] = copy(accessibleNameV = v)
 
     /** Whether nodes respond to content clicks (selecting or an explicit handler). */
     private def selectable: Boolean =
@@ -150,7 +156,7 @@ final case class Tree private (
       * the outer replace (the Overlay renderOpen lesson). The toggle/selection
       * handlers still write through the BOUND refs.
       */
-    private[uic] def resolved(exp: Set[String], sel: Set[String], roving: Maybe[Roving] = Absent)(using Frame): UI =
+    private[uic] def resolved(exp: Set[K], sel: Set[K], roving: Maybe[Roving] = Absent)(using Frame): UI =
         body(exp, sel, roving)
 
     private[uic] def render(using Frame): UI =
@@ -175,7 +181,7 @@ final case class Tree private (
             case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel, roving))
             case _                        => body(Set.empty, Set.empty, roving)
 
-    private def body(exp: Set[String], sel: Set[String], roving: Maybe[Roving])(using Frame): UI =
+    private def body(exp: Set[K], sel: Set[K], roving: Maybe[Roving])(using Frame): UI =
         val rows     = Tree.visibleRows(nodeList, exp)
         val rowIndex = rows.map(_.key).zipWithIndex.toMap
         val focus    = roving.map(r => if r.focus >= 0 && r.focus < rows.size then r.focus else -1).getOrElse(-1)
@@ -245,7 +251,7 @@ final case class Tree private (
       * reaches a handler further down, so the panel wears the same handler through
       * `Overlay.onPanelKeyDown`. One handler either way, so the two keyboards cannot drift.
       */
-    private[uic] def keyHandler(exp: Set[String], roving: Roving)(using Frame): KeyboardEvent => UI.Action =
+    private[uic] def keyHandler(exp: Set[K], roving: Roving)(using Frame): KeyboardEvent => UI.Action =
         val rows  = Tree.visibleRows(nodeList, exp)
         val focus = if roving.focus >= 0 && roving.focus < rows.size then roving.focus else -1
         e =>
@@ -266,10 +272,10 @@ final case class Tree private (
     end keyHandler
 
     private def renderNode(
-        node: TreeNode,
-        exp: Set[String],
-        sel: Set[String],
-        rowIndex: Map[String, Int],
+        node: TreeNode[K],
+        exp: Set[K],
+        sel: Set[K],
+        rowIndex: Map[K, Int],
         focus: Int,
         roving: Maybe[Roving]
     )(using Frame): UI =
@@ -354,7 +360,7 @@ final case class Tree private (
     end renderNode
 
     /** Toggling a node flips its id in the bound `expanded` set, then fires `onNodeToggle`. */
-    private def toggleNode(id: String)(using Frame): UI.Action =
+    private def toggleNode(id: K)(using Frame): UI.Action =
         val setExpanded: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
@@ -371,7 +377,7 @@ final case class Tree private (
     /** Clicking a node's content updates the bound `selected` set per the selection
       * mode, then fires `onItemClick`.
       */
-    private def selectNode(id: String, meta: Boolean = false)(using Frame): UI.Action =
+    private def selectNode(id: K, meta: Boolean = false)(using Frame): UI.Action =
         val setSelection: UI.Action = (selectedRef, selectionModeV) match
             // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
             // this mode does not go through the shared one.
@@ -391,28 +397,29 @@ final case class Tree private (
     end selectNode
 
     /** The node's own id plus every descendant id (its whole subtree). */
-    private[uic] def subtreeIds(node: TreeNode): Set[String] =
+    private[uic] def subtreeIds(node: TreeNode[K]): Set[K] =
         node.children.foldLeft(Set(node.id))((acc, c) => acc ++ subtreeIds(c))
 
     /** Whether `node` is fully checked: a leaf iff its id is in `set`, a parent iff
       * ALL its children are fully checked (recursively).
       */
-    private[uic] def isFullyChecked(node: TreeNode, set: Set[String]): Boolean =
+    private[uic] def isFullyChecked(node: TreeNode[K], set: Set[K]): Boolean =
         if node.children.isEmpty then set.contains(node.id)
         else node.children.forall(isFullyChecked(_, set))
 
     /** Whether `node` is indeterminate: not fully checked, yet some descendant is
       * checked. Always false for a leaf.
       */
-    private[uic] def isPartiallyChecked(node: TreeNode, set: Set[String]): Boolean =
+    private[uic] def isPartiallyChecked(node: TreeNode[K], set: Set[K]): Boolean =
         !isFullyChecked(node, set) && subtreeIds(node).exists(set.contains)
 
     /** Finds the node carrying `id` anywhere in `nodes` (depth-first). */
-    private def findNode(nodes: List[TreeNode], id: String): Maybe[TreeNode] =
+    private def findNode(nodes: List[TreeNode[K]], id: K): Maybe[TreeNode[K]] =
         nodes match
             case Nil       => Absent
             case n :: rest =>
-                if n.id == id then Present(n)
+                // `equals`, the identity the expansion and selection sets already use for `K`.
+                if n.id.equals(id) then Present(n)
                 else
                     findNode(n.children, id) match
                         case p @ Present(_) => p
@@ -422,7 +429,7 @@ final case class Tree private (
       * to match "all children fully checked", so ancestors of a change stay
       * consistent after a naive subtree add/remove. Leaves are left untouched.
       */
-    private[uic] def normalize(nodes: List[TreeNode], set: Set[String]): Set[String] =
+    private[uic] def normalize(nodes: List[TreeNode[K]], set: Set[K]): Set[K] =
         nodes.foldLeft(set) { (acc, node) =>
             if node.children.isEmpty then acc
             else
@@ -435,7 +442,7 @@ final case class Tree private (
       * removed, otherwise the subtree is added; then a single `normalize` pass
       * reconciles every ancestor's membership.
       */
-    private[uic] def cascadeToggle(id: String, cur: Set[String]): Set[String] =
+    private[uic] def cascadeToggle(id: K, cur: Set[K]): Set[K] =
         findNode(nodeList, id) match
             case Present(node) =>
                 val sub   = subtreeIds(node)
@@ -452,7 +459,7 @@ object Tree:
       * because a host that owns the highlight ([[TreeSelect]]) has to count rows before it has a
       * tree to ask.
       */
-    private[uic] def visibleRows(nodes: List[TreeNode], exp: Set[String], depth: Int = 0): List[TreeNav.Row] =
+    private[uic] def visibleRows[K](nodes: List[TreeNode[K]], exp: Set[K], depth: Int = 0): List[TreeNav.Row[K]] =
         nodes.flatMap { n =>
             val open = exp.contains(n.id)
             TreeNav.Row(depth, n.id, n.children.nonEmpty, open) ::
@@ -469,7 +476,7 @@ object Tree:
       */
     private[uic] def rowId(base: String, index: Int): String = s"$base-node-$index"
 
-    def apply(): Tree = new Tree()
+    def apply[K](): Tree[K] = new Tree[K]()
 end Tree
 
 /** The keyboard highlight of a [[Tree]], and the id it addresses rows by.

@@ -23,6 +23,10 @@ private given CanEqual[ZoneId, ZoneId]       = CanEqual.derived
   */
 class FormValidationTest extends UicTest:
 
+    /** The options of the multi-choice field below: a field holds the options themselves, not keys standing in for them. */
+    private enum Lang derives CanEqual:
+        case De, En
+
     /** A form built the way `Form.mounted` builds one, minus the `UI.mounted` wrapper —
       * so a test can hold the instance and read its signals.
       */
@@ -829,17 +833,17 @@ class FormValidationTest extends UicTest:
             assert(!serverHidden, "server error hides once the number changes")
     }
 
-    "a typed Set[String] field (MultiSelect) validates on selection and value-scopes on change" in {
+    "a typed Set[A] field (MultiSelect over its options) validates on selection and value-scopes on change" in {
         for
             (emptyFails, nonEmptyOk, serverShown, serverHidden) <-
                 for
-                    (f, valueRef) <- mkField(Set.empty[String], Validator.satisfy[Set[String]]("pick-one")(_.nonEmpty), Set.empty[String])
+                    (f, valueRef) <- mkField(Set.empty[Lang], Validator.satisfy[Set[Lang]]("pick-one")(_.nonEmpty), Set.empty[Lang])
                     r1            <- f.validateForSubmit                         // {} → nothing selected
-                    _             <- valueRef.set(Set("de"))
-                    r2            <- f.validateForSubmit                         // {de} → passes
-                    _             <- f.setError(Present(FieldError("server-x"))) // scoped to {de}
+                    _             <- valueRef.set(Set(Lang.De))
+                    r2            <- f.validateForSubmit                         // {De} → passes
+                    _             <- f.setError(Present(FieldError("server-x"))) // scoped to {De}
                     s1            <- f.visibleError.current
-                    _             <- valueRef.set(Set("de", "en"))               // selection change diverges from the scope
+                    _             <- valueRef.set(Set(Lang.De, Lang.En))         // selection change diverges from the scope
                     s2            <- f.visibleError.current
                 yield (r1.isDefined, r2.isDefined, s1.isDefined, s2.isDefined)
         yield

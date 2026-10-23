@@ -15,7 +15,7 @@ class StepperTest extends UicTest:
     private val ids = List("s0", "s1", "s2")
 
     private def steps(using Frame) =
-        uic.Stepper()
+        uic.Stepper[String]()
             .step("One")(p("first"))
             .step("Two")(p("second"))
             .step("Three")(p("third"))

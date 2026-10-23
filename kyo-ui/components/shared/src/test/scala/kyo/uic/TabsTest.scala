@@ -15,7 +15,7 @@ class TabsTest extends UicTest:
     private val ids = List("t0", "t1", "t2")
 
     private def strip(using Frame) =
-        uic.Tabs().tabs(
+        uic.Tabs[String]().tabs(
             uic.Tab("One", p("first"), "one"),
             uic.Tab("Two", p("second"), "two", disabled = true),
             uic.Tab("Three", p("third"), "three")
@@ -128,7 +128,7 @@ class TabsTest extends UicTest:
     // ── url headers: a navigational strip, not a panel switcher ──────────────────
 
     private def navStrip(using Frame) =
-        uic.Tabs().tabs(
+        uic.Tabs[String]().tabs(
             uic.Tab("One", p("first"), "one").url("/one"),
             uic.Tab("Two", p("second"), "two", disabled = true).url("/two"),
             uic.Tab("Three", p("third"), "three").url("/three")

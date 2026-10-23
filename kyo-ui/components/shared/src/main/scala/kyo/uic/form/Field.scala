@@ -2,11 +2,13 @@ package kyo.uic.form
 
 import kyo.*
 import kyo.uic.BooleanFormControl
+import kyo.uic.ChoiceFormControl
 import kyo.uic.FileFormControl
 import kyo.uic.FormControl
-import kyo.uic.MultiSelectFormControl
+import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.TextFormControl
+import scala.annotation.targetName
 
 /** A single validated field of value type `A`. Owns its value/touched/validating/error
   * signals and a mutable rule chain; the owning [[Form]] holds a reference and validates
@@ -416,18 +418,56 @@ extension [C <: FileFormControl { type Self <: C }](control: C)
     end bindControlOnly
 end extension
 
-extension [C <: MultiSelectFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[Set[String]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
+/** The choice-control binding: the field's value type is the option type, so a field that always holds an option binds as
+  * `FormField[A]` and one that may stay empty as `FormField[Maybe[A]]`. The blur trigger validates what the field holds, which
+  * is what the control was just showing, since the two share the field's ref.
+  */
+extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
+    def bind(field: FormField[A])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
         b
     end bind
 
-    def bindControlOnly(field: FormField[Set[String]])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
+    def bindControlOnly(field: FormField[A])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b
+    end bindControlOnly
+
+    @targetName("bindMaybe")
+    def bind(field: FormField[Maybe[A]])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
+        b = b.invalidMessage(field.message)
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b
+    end bind
+
+    @targetName("bindControlOnlyMaybe")
+    def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
+        b = b.invalid(field.visibleError.map(_.isDefined))
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b
+    end bindControlOnly
+end extension
+
+extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
+    @targetName("bindSet")
+    def bind(field: FormField[Set[A]])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
+        b = b.invalidMessage(field.message)
+        if field.wantsBlur then b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent))
+        b
+    end bind
+
+    @targetName("bindControlOnlySet")
+    def bindControlOnly(field: FormField[Set[A]])(using Frame): C =
+        var b: C = stampId(control.selection(field.valueRef), field)
+        b = b.invalid(field.visibleError.map(_.isDefined))
+        if field.wantsBlur then b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent))
         b
     end bindControlOnly
 end extension

@@ -4,14 +4,15 @@ import kyo.*
 import kyo.UI.*
 
 /** One node of an [[OrganizationChart]] — a recursive hand-authored carrier: a
-  * `label`, a stable `id` (the collapse/selection key and the event payload),
+  * `label`, a stable `id` of the app's own type `K` (what the expansion and
+  * selection sets hold, and the event payload),
   * its `children`, an optional `template` slot that wins over the plain label,
   * and an optional extra `className` on the node box (Prime's `styleClass`).
   */
-final case class OrgChartNode(
+final case class OrgChartNode[K](
     label: String,
-    id: String,
-    children: List[OrgChartNode] = Nil,
+    id: K,
+    children: List[OrgChartNode[K]] = Nil,
     template: Maybe[UI] = Absent,
     className: Maybe[String] = Absent
 )
@@ -34,7 +35,7 @@ final case class OrgChartNode(
   * via `visibility` (Prime's inline `childStyle`, expressed as the
   * `.p-uic-oc-hidden` remainder class).
   *
-  * `expanded` binds two-way to a `SignalRef[Set[String]]` of EXPANDED ids, the
+  * `expanded` binds two-way to a `SignalRef[Set[K]]` of EXPANDED ids, the
   * same polarity and the same name as [[Tree.expanded]] and
   * [[TreeTable.expanded]], so a ref moves between the three tree-shaped
   * components without inverting. Prime models this one collapse-keyed
@@ -43,22 +44,22 @@ final case class OrgChartNode(
   * node that has children renders its toggle button (Tree's contract); without
   * one the chart is static, which is Prime's `collapsible=false`.
   *
-  * Selection (`Single`/`Multiple` + `selected` ref) follows the Tree contract.
+  * Selection (`Single`/`Multiple` + `selection` ref) follows the Tree contract.
   * Every nested table puts its rows in a real `tbody`, which is what the sheet's
   * `.p-organizationchart-table > tbody > tr > td` cell rule is scoped to.
   */
-final case class OrganizationChart private (
-    rootNode: Maybe[OrgChartNode] = Absent,
-    expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+final case class OrganizationChart[K] private (
+    rootNode: Maybe[OrgChartNode[K]] = Absent,
+    expandedRef: Maybe[SignalRef[Set[K]]] = Absent,
+    selectedRef: Maybe[SignalRef[Set[K]]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
-    onNodeToggleF: Maybe[String => UI.Action] = Absent,
-    onNodeClickF: Maybe[String => UI.Action] = Absent
+    onNodeToggleF: Maybe[K => UI.Action] = Absent,
+    onNodeClickF: Maybe[K => UI.Action] = Absent
 ) extends Node:
-    type Self = OrganizationChart
+    type Self = OrganizationChart[K]
 
     /** The root node of the chart. */
-    def node(n: OrgChartNode): OrganizationChart = copy(rootNode = Present(n))
+    def node(n: OrgChartNode[K]): OrganizationChart[K] = copy(rootNode = Present(n))
 
     /** Binds the EXPANDED subtrees two-way, exactly like [[Tree.expanded]] and
       * [[TreeTable.expanded]]: the set holds the ids whose children are shown, an
@@ -66,21 +67,21 @@ final case class OrganizationChart private (
       * also renders the toggle buttons on nodes with children; a chart with no ref
       * is static and fully open, since there would be no toggle to open it with.
       */
-    def expanded(ref: SignalRef[Set[String]]): OrganizationChart = copy(expandedRef = Present(ref))
+    def expanded(ref: SignalRef[Set[K]]): OrganizationChart[K] = copy(expandedRef = Present(ref))
 
-    /** Binds selection two-way to `ref` (a set of node ids). */
-    def selected(ref: SignalRef[Set[String]]): OrganizationChart = copy(selectedRef = Present(ref))
+    /** Binds the selection two-way to the set of chosen node ids. */
+    def selection(ref: SignalRef[Set[K]]): OrganizationChart[K] = copy(selectedRef = Present(ref))
 
     /** Selection semantics: `Single`/`Multiple` on node click; `None` (default)
       * leaves nodes inert.
       */
-    def selectionMode(v: SelectionMode): OrganizationChart = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): OrganizationChart[K] = copy(selectionModeV = v)
 
     /** Fired with the node id after a toggle press (after the collapse write). */
-    def onNodeToggle(f: String => UI.Action)(using Frame): OrganizationChart = copy(onNodeToggleF = Present(Callback.of(f)))
+    def onNodeToggle(f: K => UI.Action)(using Frame): OrganizationChart[K] = copy(onNodeToggleF = Present(Callback.of(f)))
 
     /** Fired with the node id after a node-box click (after the selection write). */
-    def onNodeClick(f: String => UI.Action)(using Frame): OrganizationChart = copy(onNodeClickF = Present(Callback.of(f)))
+    def onNodeClick(f: K => UI.Action)(using Frame): OrganizationChart[K] = copy(onNodeClickF = Present(Callback.of(f)))
 
     private def selectable: Boolean =
         selectionModeV != SelectionMode.None || onNodeClickF.isDefined
@@ -89,17 +90,19 @@ final case class OrganizationChart private (
         (expandedRef, selectedRef) match
             case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp.contains, sel)))
             case (Present(e), Absent)     => e.render(exp => body(exp.contains, Set.empty))
-            case (Absent, Present(s))     => s.render(sel => body(OrganizationChart.allExpanded, sel))
-            case _                        => body(OrganizationChart.allExpanded, Set.empty)
+            // A chart with no `expanded` ref renders no toggles, so an empty set would leave every subtree hidden with
+            // nothing to open it: a static chart shows its whole hierarchy.
+            case (Absent, Present(s)) => s.render(sel => body(_ => true, sel))
+            case _                    => body(_ => true, Set.empty)
 
-    private def body(isExpanded: String => Boolean, sel: Set[String])(using Frame): UI =
+    private def body(isExpanded: K => Boolean, sel: Set[K])(using Frame): UI =
         val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel))
         div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
 
     /** One node's nested table: node row, connector rows (visibility-hidden while
       * collapsed, exactly Prime), and the children row of recursive subtrees.
       */
-    private def renderNode(node: OrgChartNode, expandedAt: String => Boolean, sel: Set[String])(using Frame): UI =
+    private def renderNode(node: OrgChartNode[K], expandedAt: K => Boolean, sel: Set[K])(using Frame): UI =
         val hasChildren = node.children.nonEmpty
         val isExpanded  = expandedAt(node.id)
         val isSelected  = sel.contains(node.id)
@@ -187,7 +190,7 @@ final case class OrganizationChart private (
     /** A toggle press flips the node in the bound `expanded` set, then fires
       * `onNodeToggle`.
       */
-    private def toggleNode(id: String)(using Frame): UI.Action =
+    private def toggleNode(id: K)(using Frame): UI.Action =
         val write: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
@@ -204,10 +207,10 @@ final case class OrganizationChart private (
     /** A node-box click updates the bound selection per the mode, then fires
       * `onNodeClick`.
       */
-    private def clickNode(id: String)(using Frame): UI.Action =
+    private def clickNode(id: K)(using Frame): UI.Action =
         val write: UI.Action = (selectedRef, selectionModeV) match
             case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
-                ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
+                ref.getAndUpdate(cur => if cur.sizeIs == 1 && cur.contains(id) then Set.empty else Set(id))
             case (Present(ref), SelectionMode.Multiple | SelectionMode.Checkbox) =>
                 ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case _ => ()
@@ -223,11 +226,5 @@ final case class OrganizationChart private (
 end OrganizationChart
 
 object OrganizationChart:
-    def apply(): OrganizationChart = new OrganizationChart()
-
-    /** The expansion predicate of a chart with no `expanded` ref. Such a chart renders no
-      * toggles, so an empty expanded set would leave every subtree hidden with nothing to
-      * open it: a static chart shows its whole hierarchy.
-      */
-    private val allExpanded: String => Boolean = _ => true
+    def apply[K](): OrganizationChart[K] = new OrganizationChart[K]()
 end OrganizationChart
