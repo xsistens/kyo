@@ -33,13 +33,13 @@ final class Form private[form] (
       * }}}
       * Bind the handle onto a matching control with `uic.CheckBox().bind(field)`.
       */
-    def field[A](initial: A)(using CanEqual[A, A]): FieldSpec[A] =
+    def field[A](initial: A)(using CanEqual[A, A]): FieldSpec[A] { type Valid = A } =
         FieldSpec.init(this, initial)
 
     /** Zero-config `String` field, value starting empty: the common case, so text forms
       * declare `form.field.declare` and say nothing else.
       */
-    def field: FieldSpec[String] = FieldSpec.init(this, "")
+    def field: FieldSpec[String] { type Valid = String } = FieldSpec.init(this, "")
 
     /** Declare a typed numeric field (`Int` / `Long` / `Double`) bound to a `uic.InputNumber`.
       * The bound `Double` is the source of truth; rules stated on the spec validate the typed
@@ -47,8 +47,8 @@ final class Form private[form] (
       * automatically at bind time. `.declare` yields a [[NumberField]] whose `value` is a
       * `Signal[A]`; bind it with `uic.InputNumber().bind(field)`.
       */
-    def numberField[A](initial: A)(using codec: NumberCodec[A]): NumberFieldSpec[A] =
-        NumberFieldSpec(FieldSpec.init(this, codec.toDouble(initial)), codec, Validator.none[A])
+    def numberField[A](initial: A)(using codec: NumberCodec[A]): NumberFieldSpec[A] { type Valid = A } =
+        NumberFieldSpec.of(FieldSpec.init(this, codec.toDouble(initial)), codec, Validator.none[A])
 
     /** Every field declared in this scope and its child scopes, in declaration order.
       *
@@ -161,6 +161,12 @@ final class Form private[form] (
       */
     def raise(e: FieldError)(using Frame): Unit < Sync =
         formErrorsRef.updateAndGet(_ :+ Form.ErrorEntry(e, anchorId)).unit
+
+    /** Raise a form-level error that is its text, with no code to invent: `raise(FieldError.message(message))`. A
+      * server's own sentence goes here as it is.
+      */
+    def raise(message: String)(using Frame): Unit < Sync =
+        raise(FieldError.message(message))
 
     def clearErrors(using Frame): Unit < Sync = formErrorsRef.set(Chunk.empty[Form.ErrorEntry])
 
@@ -352,23 +358,110 @@ final class Form private[form] (
       * display gate for ALL fields first (submit-reveal), then validates every field
       * including untouched ones, in parallel. A failing `onValid` goes to the
       * `onFailure` rules around the handler, and `submitting` still ends.
+      *
+      * The overloads below hand `onValid` the validated values of the fields they name.
       */
     def submit(onValid: => UI.Action)(using Frame): UI.Action =
+        submitWith(Chunk.empty)((Chunk.empty, Present(() => onValid)))
+
+    /** [[submit]], handing `onValid` what `field`'s rules yielded: its [[Validated.Valid]], so a field declared with
+      * `Validator.chosen()` over a `Maybe[LocalDate]` hands over the `LocalDate`, and a field whose rules only check hands
+      * over its value. The value is the one the submit validated, from the same single run of the rules that decided
+      * the form was valid, so an edit that lands while an async rule is in flight cannot reach the handler.
+      *
+      * Every other behaviour is [[submit]]'s: the whole subtree is validated, focus goes to the first invalid field, and
+      * `onValid` runs only when everything holds. `field` may belong to this form or to any other; a
+      * field of another form gets its own display gate opened by the submit, so the error that blocked it shows, while the
+      * unnamed fields of its form stay as they were.
+      */
+    def submit(field: Validated)(onValid: field.Valid => UI.Action)(using Frame): UI.Action =
+        submitWith(Chunk(field.submitField)) {
+            field.verdict.map(r => (Chunk(r.failure), r.value.map(v => () => onValid(v))))
+        }
+
+    /** [[submit]] handing over the validated values of two fields, in the order named. */
+    def submit(a: Validated, b: Validated)(onValid: (a.Valid, b.Valid) => UI.Action)(using Frame): UI.Action =
+        submitWith(Chunk(a.submitField, b.submitField)) {
+            Async.zip(a.verdict, b.verdict).map { (ra, rb) =>
+                val run =
+                    for
+                        x <- ra.value
+                        y <- rb.value
+                    yield () => onValid(x, y)
+                (Chunk(ra.failure, rb.failure), run)
+            }
+        }
+
+    /** [[submit]] handing over the validated values of three fields, in the order named. */
+    def submit(a: Validated, b: Validated, c: Validated)(onValid: (a.Valid, b.Valid, c.Valid) => UI.Action)(using
+        Frame
+    ): UI.Action =
+        submitWith(Chunk(a.submitField, b.submitField, c.submitField)) {
+            Async.zip(a.verdict, b.verdict, c.verdict).map { (ra, rb, rc) =>
+                val run =
+                    for
+                        x <- ra.value
+                        y <- rb.value
+                        z <- rc.value
+                    yield () => onValid(x, y, z)
+                (Chunk(ra.failure, rb.failure, rc.failure), run)
+            }
+        }
+
+    /** [[submit]] handing over the validated values of four fields, in the order named. */
+    def submit(a: Validated, b: Validated, c: Validated, d: Validated)(
+        onValid: (a.Valid, b.Valid, c.Valid, d.Valid) => UI.Action
+    )(using Frame): UI.Action =
+        submitWith(Chunk(a.submitField, b.submitField, c.submitField, d.submitField)) {
+            Async.zip(a.verdict, b.verdict, c.verdict, d.verdict).map { (ra, rb, rc, rd) =>
+                val run =
+                    for
+                        w <- ra.value
+                        x <- rb.value
+                        y <- rc.value
+                        z <- rd.value
+                    yield () => onValid(w, x, y, z)
+                (Chunk(ra.failure, rb.failure, rc.failure, rd.failure), run)
+            }
+        }
+
+    /** The one submit every overload runs. `named` are the fields whose verdicts `runNamed` produces, in its order, with
+      * the handler to run if all of them passed; the subtree walk skips exactly those fields, so each field's rules run
+      * once per submit, and their verdicts are put back in declaration order for focus-first-invalid. The named run
+      * and the walk go in parallel, as the subtree's own fields always have.
+      */
+    private def submitWith(named: Chunk[FormField[?]])(
+        runNamed: => (Chunk[Maybe[FieldError]], Maybe[() => UI.Action]) < Async
+    )(using Frame): UI.Action =
+        def validate: ((Chunk[Maybe[FieldError]], Maybe[() => UI.Action]), Chunk[(FormField[?], Maybe[FieldError])]) < Async =
+            if named.isEmpty then runNamed.map(n => validateSubtree(named).map(rest => (n, rest)))
+            else Async.zip(runNamed, validateSubtree(named))
         for
-            _             <- submitCountRef.updateAndGet(_ + 1)
-            _             <- submittingRef.set(true)
-            _             <- clearErrorsSubtree
-            results       <- validateSubtree
+            _                           <- submitCountRef.updateAndGet(_ + 1)
+            _                           <- submittingRef.set(true)
+            _                           <- Kyo.foreach(named)(_.openGate) // a named field of another form shows why too
+            _                           <- clearErrorsSubtree
+            ((namedErrs, handler), own) <- validate
+            namedResults = named.zip(namedErrs)
+            // The named verdicts in the walk's declaration order; a named field from another form follows the walk.
+            results = own.map((f, e) => namedResults.find(_._1 eq f).getOrElse((f, e))) ++
+                namedResults.filterNot((f, _) => own.exists(_._1 eq f))
             checkFailures <- runChecks
             invHoldSig    <- invariantsHold
             invHold       <- invHoldSig.current // a failing invariant blocks onValid
             ok = results.forall(_._2.isEmpty) && checkFailures.isEmpty && invHold
+            // Every named field passed when `ok` holds, which is exactly when `handler` is present.
+            run = if ok then handler else Absent
             // `submitting` stays true THROUGH onValid so it also covers the server
             // round-trip (where the handler may write back per-field / form errors).
             // On failure, move focus to the first invalid field (focus-first-invalid).
-            r <- if ok then kyo.uic.Callback(onValid) else focusFirstInvalid(results).andThen(Kyo.unit)
+            r <- run match
+                case Present(k) => kyo.uic.Callback(k())
+                case Absent     => focusFirstInvalid(results).andThen(Kyo.unit)
             _ <- submittingRef.set(false)
         yield r
+        end for
+    end submitWith
 
     /** Revert values to their live baselines (last [[markPristine]], else each field's
       * initial), and clear errors + touched state across the subtree. Reset on the form
@@ -488,14 +581,18 @@ final class Form private[form] (
       * children, then array rows), pairing each field with its result, in the order
       * [[focusFirstInvalid]] walks to pick the field to focus.
       */
-    private[form] def validateSubtree(using Frame): Chunk[(FormField[?], Maybe[FieldError])] < Async =
+    private[form] def validateSubtree(skip: Chunk[FormField[?]])(using Frame): Chunk[(FormField[?], Maybe[FieldError])] < Async =
         for
-            fields       <- fieldsRef.get
-            kids         <- childrenRef.get
-            arrays       <- arraysRef.get
-            own          <- Async.foreach(fields)(_.validateForSubmit)
-            kidResults   <- Kyo.foreach(kids)(_.validateSubtree)
-            arrayResults <- Kyo.foreach(arrays)(_.validateRows)
+            fields <- fieldsRef.get
+            kids   <- childrenRef.get
+            arrays <- arraysRef.get
+            own    <- Async.foreach(fields) { f =>
+                // A skipped field is validated by the submit that named it; its placeholder verdict is replaced there.
+                val res: Maybe[FieldError] < Async = if skip.exists(_ eq f) then Absent else f.validateForSubmit
+                res
+            }
+            kidResults   <- Kyo.foreach(kids)(_.validateSubtree(skip))
+            arrayResults <- Kyo.foreach(arrays)(_.validateRows(skip))
         yield
             val empty = Chunk.empty[(FormField[?], Maybe[FieldError])]
             fields.zip(own) ++ kidResults.foldLeft(empty)(_ ++ _) ++ arrayResults.foldLeft(empty)(_ ++ _)

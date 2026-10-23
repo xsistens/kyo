@@ -156,7 +156,7 @@ There is no public setter that takes the key a component compares by. Rules:
   (`KeyDiagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.
 - **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
-  `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]`.
+  `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]` (whatever its rules refine to).
 - **An internal host** that renders inside its own subscription (`Paginator`, `CellEditor`, the DataTable
   filter menu) passes the held option with `current(Maybe[A])` and reads `onChange`; it never reaches for keys.
 - **A model carrying its own id takes the id's type**: `Listbox[K]` / `ListItem[K]`, `Tree[K]` / `TreeNode[K]`,
@@ -199,6 +199,37 @@ what the type already says. Rules:
 - **Only `DatePicker[A]` binds a form field** (`OptionalFormControl[A]`). The wrappers carry `FormControl`'s
   validation vocabulary but no form binding: `MultiChoiceFormControl` binds through `selection`, which would
   be a second name for the set `values` already bound, and no field holds a range's two refs.
+
+## Form rules refine, and submit hands over what they yield
+
+`Rule[-A, +B]` (opaque, `A => Result.Partial[FieldError, B] < Async`) checks an `A` and yields a `B`;
+`Validator[A]` is the alias `Rule[A, A]` for a rule that only checks. `and` composes left to right with
+the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.chosen` refines
+`Maybe[A]` to `A`, `Validator.ifPresent(r)` lifts a rule into `Maybe`, `Validator.refine` is the pure
+"parse or fail with a code". Rules:
+
+- **The field knows its type through a type member, not a type parameter.** `FormField[A]`,
+  `NumberField[A]`, `FieldSpec[A]` and `NumberFieldSpec[A]` carry `type Valid`; `rules[B]` returns a
+  spec refined to `Valid = B` and `declare` a `FormField[A] { type Valid = B }`. Every signature over
+  `FormField[A]` (all the `bind` extensions) keeps working because a refinement is a subtype. The
+  classes are sealed abstract with one anonymous implementation each (`FormField.declared`,
+  `FieldSpec.of`), so the refinement is stated once. A setter that keeps the rules returns
+  `X[A] { type Valid = X.this.Valid }`, and `addRule`/`satisfy` return `this.type`, or the refinement
+  is lost after the first chained call.
+- **`submit(field)(v => ...)` takes `Validated`** (the common supertrait of `FormField` and
+  `NumberField`) with dependent method types, up to four fields. The named fields are validated by the
+  submit itself (`verdict`, one run that both decides validity and yields the value) and skipped by the
+  subtree walk, whose results get the named verdicts put back in declaration order for
+  focus-first-invalid. Never re-read `value` in a handler for something a rule refined.
+- **`addRule` appends a CHECK on the raw value and keeps the declared chain's output** (`andCheck`), so
+  a post-hoc rule cannot change `Valid`. It takes `Rule[A, Any]`, which also restores the contravariant
+  use the old `Validator[-A]` allowed (a check over a supertype).
+- **Text belongs to the rule**: `rule.message(text)` sets `fallback`, and `FieldError.message(text)` (code
+  `FieldError.messageCode`) backs `raise(text)` and `setError(text)`. Every translator answers in the
+  order table entry, then `fallback`, then code: the translator speaks first so an i18n translator can
+  replace every string. A field that needs its own words under an app-wide table gets its own code.
+- **`FieldArray` has no typed submit**: a row model is the app's own type, so an array has no single
+  `Valid` the form could name; read row fields in the handler.
 
 ## Typed builders: where inference dies
 
