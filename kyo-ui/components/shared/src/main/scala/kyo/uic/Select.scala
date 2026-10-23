@@ -117,11 +117,11 @@ final case class Select[A] private (
     private[uic] def current(v: Maybe[A]): Select[A] = copy(currentV = Present(v))
 
     /** Appends typed options with their text projection. */
-    def options(is: Seq[A])(label: A => String): Select[A] =
+    def options(is: Iterable[A])(label: A => String): Select[A] =
         copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)
 
     /** Convenience for plain string options (label = identity). */
-    def options(is: Seq[String])(using ev: String =:= A): Select[A] =
+    def options(is: Iterable[String])(using ev: String =:= A): Select[A] =
         copy(optionsV = optionsV ++ is.map(a => OptionItem.Item(ev(a))), labelF = a => ev.flip(a))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their options
@@ -132,7 +132,7 @@ final case class Select[A] private (
       * model, the key projection and the keyboard all address the same flat
       * option sequence they do without it.
       */
-    def optionGroups(is: Seq[OptionItem[A]])(label: A => String): Select[A] =
+    def optionGroups(is: Iterable[OptionItem[A]])(label: A => String): Select[A] =
         copy(optionsV = optionsV ++ is.toList, labelF = label)
 
     /** Stable per-option key: the value written into the bound ref.
@@ -157,8 +157,8 @@ final case class Select[A] private (
       * The none option is a row like any other, so a filter's "all" is one the reader picks; a field that may be left empty
       * binds `selection` over a `Maybe` with a placeholder instead. Only a select whose options are `Maybe[B]` takes it.
       */
-    def optionsWithNone[B](none: String, is: Seq[B])(label: B => String)(using ev: Maybe[B] =:= A): Select[A] =
-        val all: Seq[Maybe[B]] = (Absent: Maybe[B]) +: is.map(b => Present(b): Maybe[B])
+    def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): Select[A] =
+        val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
         copy(optionsV = optionsV ++ all.map(m => OptionItem.Item(ev(m))), labelF = a => ev.flip(a).fold(none)(label))
     end optionsWithNone
 

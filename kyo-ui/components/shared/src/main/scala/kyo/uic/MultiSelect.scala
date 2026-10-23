@@ -94,11 +94,11 @@ final case class MultiSelect[A] private (
     private[uic] def elementId: Maybe[String] = idV
 
     /** Appends typed options with their text projection. */
-    def options(is: Seq[A])(label: A => String): MultiSelect[A] =
+    def options(is: Iterable[A])(label: A => String): MultiSelect[A] =
         copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)
 
     /** Convenience for plain string options (label = identity). */
-    def options(is: Seq[String])(using ev: String =:= A): MultiSelect[A] =
+    def options(is: Iterable[String])(using ev: String =:= A): MultiSelect[A] =
         copy(optionsV = optionsV ++ is.map(a => OptionItem.Item(ev(a))), labelF = a => ev.flip(a))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their options
@@ -110,7 +110,7 @@ final case class MultiSelect[A] private (
       * Prime has no per-group select-all and the header checkbox speaks for the
       * whole panel.
       */
-    def optionGroups(is: Seq[OptionItem[A]])(label: A => String): MultiSelect[A] =
+    def optionGroups(is: Iterable[OptionItem[A]])(label: A => String): MultiSelect[A] =
         copy(optionsV = optionsV ++ is.toList, labelF = label)
 
     /** Stable per-option key: the value written into the bound set (defaults to

@@ -92,10 +92,10 @@ sealed abstract class FormField[A] private[form] (
     val value: Signal[A] = valueRef
 
     /** True once the field has been entered and left (first blur/commit). */
-    val touched: Signal[Boolean] = touchedRef
+    def touched: Signal[Boolean] = touchedRef
 
     /** True while an async validator is in flight; drive a spinner off this. */
-    val validating: Signal[Boolean] = validatingRef
+    def validating: Signal[Boolean] = validatingRef
 
     /** The server error, but only while the value still matches the one it was set
       * against. As soon as the user edits the field the value diverges and this reads
