@@ -4,16 +4,16 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** Rating — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Rating: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Rating anatomy: `div.p-rating.p-component[.p-readonly][.p-disabled]` > N
   * `div.p-rating-option[.p-rating-option-active]`, each holding a hidden native
   * radio (`span.p-hidden-accessible` > `input[type=radio]`) plus the star glyph
-  * `.p-rating-icon` — filled `.p-rating-on-icon` up to the current value,
+  * `.p-rating-icon`: filled `.p-rating-on-icon` up to the current value,
   * outline `.p-rating-off-icon` beyond it), so the extracted `@primeuix`
   * rating CSS applies verbatim.
   *
   * Clicking option i sets the value to i+1; clicking the CURRENT value clears
-  * to 0 — Prime's cancel-on-same-value semantics. Prime v10's separate cancel
+  * to 0 (Prime's cancel-on-same-value semantics). Prime v10's separate cancel
   * icon was retired in the PrimeOne sheet (no `.p-rating-cancel` classes ship),
   * so it is intentionally not ported. `value(SignalRef)` binds two-way: clicks
   * write back into the ref before firing the user `onChange`.
@@ -21,7 +21,7 @@ import scala.annotation.targetName
   * The hidden radios are PrimeVue's anatomy: they carry the checked state,
   * the per-star `aria-label`, and native keyboard semantics; `name(...)` groups
   * them and submits the value with HTML forms. Prime derives a default name
-  * from a per-instance attr selector — a pure server render has no such
+  * from a per-instance attr selector; a pure server render has no such
   * uniqueness source, so the `name` attribute is only emitted when set.
   * `onIcon`/`offIcon` swap the star glyphs for any [[IconGlyph]].
   *
@@ -79,7 +79,7 @@ final case class Rating private (
     /** Number of stars (Prime default 5). */
     def stars(n: Int): Rating = copy(starsV = math.max(1, n))
 
-    /** `readonly` — the stars keep their look, keep their place in the tab order, and stop
+    /** `readonly`: the stars keep their look, keep their place in the tab order, and stop
       * reacting (`.p-readonly`, `aria-readonly` on the group). Only `disabled` takes them out of
       * reach.
       */
@@ -121,7 +121,7 @@ final case class Rating private (
     /** Fired with the NEW value (0 on cancel) after the ref write-back. */
     def onChange(f: Int => UI.Action)(using Frame): Rating = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the current star count — the validation layer's Blur
+    /** Fires on focus loss with the current star count: the validation layer's Blur
       * trigger, in the `Double` shape the number family speaks.
       */
     def onBlur(f: Double => UI.Action)(using Frame): Rating = copy(onBlurDoubleF = Present(Callback.of(f)))
@@ -140,7 +140,7 @@ final case class Rating private (
                 UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
             }.placeholder(renderNamed)
 
-    /** The tree the mount publishes once it has a name to group the radios by — the seam golden
+    /** The tree the mount publishes once it has a name to group the radios by, the seam golden
       * tests render directly, since a mount shows only its placeholder there.
       */
     private[uic] def wired(name: String)(using Frame): UI = copy(nameV = Present(name)).renderNamed
@@ -184,14 +184,14 @@ final case class Rating private (
             if interactive then opt = opt.onClick(activate(i, value, ref))
 
             // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
-            // keyboard semantics — the arrows move within the name group and select as they go,
+            // keyboard semantics: the arrows move within the name group and select as they go,
             // which is the whole reason the group has a name.
             //
             // It carries NO handler of its own. Selecting a radio from the keyboard is an
             // activation: the browser checks it, fires `change`, and dispatches a `click` that
             // bubbles out of the input. A handler on each meant the change wrote the new star, the
             // region re-rendered around it, and the click then reached an option rebuilt with that
-            // value in hand, read it as a second pick of the same star and cleared it — every
+            // value in hand, read it as a second pick of the same star and cleared it, so every
             // arrow press ended at zero. The click is the one activation both inputs produce (a
             // press on the visible star reaches only the option, since the radio is clipped away),
             // so it is the one that acts.

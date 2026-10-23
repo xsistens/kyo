@@ -2,22 +2,22 @@ package kyo.uic
 
 import kyo.*
 
-/** InputMask — native kyo-ui, PrimeOne design. A thin, typed wrapper over
+/** InputMask: native kyo-ui, PrimeOne design. A thin, typed wrapper over
   * [[Input]] that applies the fork's client-local `inputMask`, so the component
   * IS the same bare `<input class="p-inputtext">` and the extracted `@primeuix`
-  * inputtext CSS applies verbatim (Prime's InputMask has no sheet of its own —
+  * inputtext CSS applies verbatim (Prime's InputMask has no sheet of its own;
   * it reuses InputText styling).
   *
   * The mask vocabulary is the fork's: `9` = digit, `a` = letter, `*` =
   * alphanumeric; every other character is a literal that the client inserts as
   * you type. Masking is CLIENT-LOCAL (on `beforeinput`), so the already-masked
-  * value is what reaches `onChange`/the bound ref — the round-trip carries the
+  * value is what reaches `onChange`/the bound ref, so the round-trip carries the
   * formatted string, not the raw keystrokes.
   *
   * Honest deferrals vs PrimeReact's InputMask: the fork formats INCREMENTALLY
   * (it inserts literals ahead of the caret as slots fill) but shows no
   * `slotChar` placeholder for the not-yet-typed tail, and there is no
-  * `autoClear` (clear-on-blur-if-incomplete) — both are client-runtime
+  * `autoClear` (clear-on-blur-if-incomplete). Both are client-runtime
   * behaviors the fork's mask engine does not model, so they are documented
   * rather than faked. `onComplete` IS honest: it fires when the masked value
   * fills every mask slot (its length reaches the full template length).
@@ -45,7 +45,7 @@ final case class InputMask private (
     /** The mask template (`9` digit, `a` letter, `*` alphanumeric, else literal). */
     def mask(v: String): InputMask = copy(maskV = v)
 
-    /** Sets a constant value (already formatted, or raw — the client re-masks on edit). */
+    /** Sets a constant value (already formatted, or raw; the client re-masks on edit). */
     def value(v: String): InputMask = copy(valueBinding = Present(Input.Value.Const(v)))
 
     /** Binds two-way to `ref`: edits write the MASKED value back, ref writes update the field. */
@@ -72,7 +72,7 @@ final case class InputMask private (
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
     def size(v: Size): InputMask = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`. */
     def variant(v: FieldVariant): InputMask = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
@@ -87,7 +87,7 @@ final case class InputMask private (
     /** Fired with the MASKED value on every change (native change commit). */
     def onChange(f: String => UI.Action)(using Frame): InputMask = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the field's current value — unlike onChange it
+    /** Fires on focus loss with the field's current value. Unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
     def onBlur(f: String => UI.Action)(using Frame): InputMask = copy(onBlurF = Present(Callback.of(f)))
@@ -95,7 +95,7 @@ final case class InputMask private (
     /** Fired with the MASKED value when it fills every mask slot (complete). */
     def onComplete(f: String => UI.Action)(using Frame): InputMask = copy(onCompleteF = Present(Callback.of(f)))
 
-    /** The number of literal-template characters when every slot is filled — a
+    /** The number of literal-template characters when every slot is filled: a
       * masked value of this length is complete.
       */
     private def fullLength: Int = maskV.length
@@ -160,6 +160,6 @@ object InputMask:
     /** An input mask with the given template (`9`/`a`/`*` slots, else literal). */
     def apply(mask: String): InputMask = new InputMask(maskV = mask)
 
-    /** An unbound input mask — set the template via [[InputMask.mask]]. */
+    /** An unbound input mask; set the template via [[InputMask.mask]]. */
     def apply(): InputMask = new InputMask(maskV = "")
 end InputMask

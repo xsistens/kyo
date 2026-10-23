@@ -3,11 +3,11 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** ConfirmDialog — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** ConfirmDialog: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ConfirmDialog anatomy: a [[Dialog]] whose box carries `.p-confirmdialog`, its
   * content pairing `span.p-confirmdialog-icon` with the
   * `span.p-confirmdialog-message` text, its footer holding the
-  * `.p-confirmdialog-reject-button` (text/secondary — Prime's default) and the
+  * `.p-confirmdialog-reject-button` (text/secondary, Prime's default) and the
   * `.p-confirmdialog-accept-button`), so the extracted `@primeuix` confirmdialog
   * CSS applies verbatim on top of the dialog sheet.
   *
@@ -17,12 +17,12 @@ import kyo.UI.*
   * two-way to the `open` ref like Dialog.
   *
   * Choice semantics: the accept button runs `onAccept`; the reject button runs
-  * `onReject` — and so does EVERY dismissal (Escape, the header close button,
+  * `onReject`, and so does EVERY dismissal (Escape, the header close button,
   * a backdrop click): dismissing a confirmation means declining it (Prime's
   * reject semantics). All paths write `false` into the ref first.
   *
   * This is the declarative form. Prime's imperative service form
-  * (`ConfirmationService.require(...)` — an Env service resolving the choice as
+  * (`ConfirmationService.require(...)`, an Env service resolving the choice as
   * an effect) is a documented follow-up; the declarative ref + callbacks cover
   * the anatomy and the interaction story.
   */
@@ -39,7 +39,7 @@ final case class ConfirmDialog private (
 ) extends Node:
     type Self = ConfirmDialog
 
-    /** Binds visibility two-way to `ref` — the only way to open/close the dialog. */
+    /** Binds visibility two-way to `ref`, the only way to open/close the dialog. */
     def open(ref: SignalRef[Boolean]): ConfirmDialog = copy(openRef = Present(ref))
 
     /** The confirmation question (`span.p-confirmdialog-message`). A `Signal[String]` re-renders it in
@@ -65,7 +65,7 @@ final case class ConfirmDialog private (
       */
     def rejectLabel(v: String | Signal[String]): ConfirmDialog = copy(rejectLabelV = ReactiveValue(v))
 
-    /** Accept button severity (default primary — Prime's default; a destructive
+    /** Accept button severity (default primary, Prime's default; a destructive
       * confirmation typically passes [[Severity.Danger]]).
       */
     def acceptSeverity(v: Severity): ConfirmDialog = copy(acceptSeverityV = Present(v))
@@ -74,7 +74,7 @@ final case class ConfirmDialog private (
     def onAccept(action: => UI.Action)(using Frame): ConfirmDialog =
         copy(onAcceptEff = Present(Callback(action)))
 
-    /** Runs `action` on the reject button AND on every dismissal — Escape, the
+    /** Runs `action` on the reject button AND on every dismissal: Escape, the
       * header close button, a backdrop click (after the ref write).
       */
     def onReject(action: => UI.Action)(using Frame): ConfirmDialog =
@@ -121,7 +121,7 @@ final case class ConfirmDialog private (
                     case TextValue.Dyn(s)   => dialog = dialog.header(s)
                 }
                 // Dismissal = declining: Dialog fires onClose on Escape, the header
-                // close button, and backdrop clicks — route all of them to onReject.
+                // close button, and backdrop clicks; route all of them to onReject.
                 onRejectEff.foreach(e => dialog = dialog.onClose(e))
                 dialog((iconUI ++ messageUI)*)
 end ConfirmDialog
@@ -130,6 +130,6 @@ object ConfirmDialog:
     /** A confirm dialog whose visibility binds two-way to `open`. */
     def apply(open: SignalRef[Boolean]): ConfirmDialog = new ConfirmDialog(openRef = Present(open))
 
-    /** An unbound confirm dialog — bind visibility via [[ConfirmDialog.open]]. */
+    /** An unbound confirm dialog; bind visibility via [[ConfirmDialog.open]]. */
     def apply(): ConfirmDialog = new ConfirmDialog()
 end ConfirmDialog

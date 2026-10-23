@@ -2,7 +2,7 @@ package kyo.uic
 
 import kyo.*
 
-/** The token layer's SELECTOR contract — the part of theming that decides whether an
+/** The token layer's SELECTOR contract: the part of theming that decides whether an
   * override lands, and that used to live only in a source comment.
   *
   * Everything here is pure string and pair algebra: `Theme` emits blocks, `preset` emits
@@ -102,7 +102,7 @@ class ThemeTest extends UicTest:
     }
 
     /** The case that decides how `tokens` may be implemented. A dark element carrying a
-      * preset resolves FOUR blocks, and `<preset>Dark` is only the last of them — so
+      * preset resolves FOUR blocks, and `<preset>Dark` is only the last of them, so
       * `<preset>Light ++ <preset>Dark` would silently drop whatever the Aura dark set
       * contributes and nothing else re-covers.
       */
@@ -179,7 +179,7 @@ class ThemeTest extends UicTest:
       * everything would pass every other case here and save nothing.
       */
     /** The probes have to come from the twelve components the always-included parts never
-      * name — see the floor case below. `organizationchart` and `stepper` are two of them.
+      * name (see the floor case below). `organizationchart` and `stepper` are two of them.
       */
     "cssFor OMITS a sheet it was not given" in {
         assert(Theme.css.contains(".p-organizationchart"), "the full sheet has it")
@@ -194,7 +194,7 @@ class ThemeTest extends UicTest:
       * keyed on component classes: measured 2026-09-02, **62 of the 74 component names
       * appear in it or in `base`**, so a page that places no table still ships the table's
       * slot rules. The rules are inert without the component's own sheet, so this costs
-      * bytes rather than correctness — but it means the slim path has a floor, and the
+      * bytes rather than correctness, but it means the slim path has a floor, and the
       * floor is component-specific rather than neutral. Splitting the remainder the way
       * `ComponentCss` is split is a separate piece of work.
       */
@@ -207,7 +207,7 @@ class ThemeTest extends UicTest:
 
     /** The rung worth taking first: every sheet, one preset. Nothing can go missing, and
       * measured on a consuming app it is 771 035 of the 1 010 629 bundle bytes the slim
-      * path saves — 76 % of the win for a change that needs no maintained list.
+      * path saves: 76 % of the win for a change that needs no maintained list.
       */
     "cssFor with ComponentCss.all keeps every sheet and drops the other presets" in {
         val rungOne = Theme.cssFor(Tokens.auraLight, Tokens.auraDark, ComponentCss.all)

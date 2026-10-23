@@ -5,13 +5,13 @@ import kyo.UI.*
 import kyo.uic
 import kyo.uic.UicTest
 
-/** The three things a form says out loud about its own ids — and the one it deliberately
+/** The three things a form says out loud about its own ids, and the one it deliberately
   * stays quiet about.
   *
   * Each of these used to be silent, and silent in the worst way: the form still rendered, the
   * markup still looked right, and the only symptom was that a failed submit moved focus
   * nowhere. So what these assert is not that the form works but that it COMPLAINS, and the
-  * last case is the other half of that — a card that fired when nothing was wrong would train
+  * last case is the other half of that: a card that fired when nothing was wrong would train
   * the reader to ignore all of them.
   *
   * Driven at `FormDiagnostics.cards` rather than through `Form.mountedWith`, for the same
@@ -74,7 +74,7 @@ class FormDiagnosticsTest extends UicTest:
         yield assert(said.isEmpty, s"the ordinary case is quiet; got: $said")
     }
 
-    "a field that chose its own id says nothing either — that is the sanctioned way" in {
+    "a field that chose its own id says nothing either: that is the sanctioned way" in {
         for
             said <- complaints { form =>
                 for f <- form.field("").domId("login-username").declare
@@ -83,7 +83,7 @@ class FormDiagnosticsTest extends UicTest:
         yield assert(said.isEmpty, s"nothing is reported; got: $said")
     }
 
-    "two fields claiming one id is reported — getElementById would answer for one of them" in {
+    "two fields claiming one id is reported: getElementById would answer for one of them" in {
         for
             said <- complaints { form =>
                 for

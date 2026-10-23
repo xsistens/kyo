@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Const-or-reactive carrier for a component's boolean slot — either a constant `Boolean`
+/** Const-or-reactive carrier for a component's boolean slot: either a constant `Boolean`
   * or a `Signal[Boolean]` (a mutation-in-flight `disabled`, a reactive `invalid`). The
   * `Boolean` specialization of the generic [[ReactiveValue]]; sibling of [[TextValue]] and
   * [[Input.Value]].
@@ -38,7 +38,7 @@ private[uic] object BoolValue:
             case other             => rebuild(other)
 end BoolValue
 
-/** A reactive "blocked" state that must NOT reach a native `disabled` attribute — the submit
+/** A reactive "blocked" state that must NOT reach a native `disabled` attribute; the submit
   * gate ([[kyo.uic.form.Form.submitDisabled]]) is the one this exists for.
   *
   * A natively `disabled` submit button leaves the tab order, and the reactive re-enable lands
@@ -46,7 +46,7 @@ end BoolValue
   * [[Button.ariaDisabled]] is the fix, and this type is how the fix stops being an informed
   * choice: a `SubmitGate` is a distinct type from `Signal[Boolean]`, so it only fits the
   * accessible setter. Take [[SubmitGate.signal]] when you genuinely want the raw boolean (a
-  * hint, a spinner) — that is a deliberate step, not the default one.
+  * hint, a spinner): that is a deliberate step, not the default one.
   *
   * A plain wrapper class rather than an opaque type or a value class: both of those erase to
   * `Signal[Boolean]`, which would collide with the existing `ariaDisabled(Signal[Boolean])`
@@ -63,12 +63,12 @@ final class SubmitGate private[uic] (
   */
 extension (bv: Maybe[BoolValue])
 
-    /** Statically-known truth — `Const(true)` ⇒ true; `Const(false)`/`Dyn`/`Absent` ⇒ false. The
+    /** Statically-known truth: `Const(true)` ⇒ true; `Const(false)`/`Dyn`/`Absent` ⇒ false. The
       * plain-boolean read every non-reactive builder site needs (invalid class, aria-invalid, ...).
       */
     private[uic] def constTrue: Boolean = bv.flatMap(_.const).getOrElse(false)
 
-    /** The signal iff the slot is `Dyn`, else `Absent` — for feeding a `Signal[Boolean]` seam
+    /** The signal iff the slot is `Dyn`, else `Absent`, for feeding a `Signal[Boolean]` seam
       * (e.g. `FieldInvalid.reactive`) or deciding whether a slot needs the reactive render path.
       */
     private[uic] def dynSig: Maybe[Signal[Boolean]] = bv.flatMap(_.dyn)
@@ -78,7 +78,7 @@ extension (bv: Maybe[BoolValue])
       * reactively (`set(sig)`), `Absent` leaves `self` untouched. `set` is one of the
       * `Boolean | Signal[Boolean]` in-place setters (disabled, readOnly, cssClass(name, _)), so both
       * branches share the same call. Routed through `.const`/`.dyn` so it is total over the whole
-      * `ReactiveValue` hierarchy. `inline` splices the setter in — no lambda allocation.
+      * `ReactiveValue` hierarchy. `inline` splices the setter in, so no lambda allocation.
       */
     private[uic] inline def foldFlag[S](self: S)(set: (Boolean | Signal[Boolean]) => S): S =
         // Wildcard rather than `case Absent`: `Maybe` is opaque, so the exhaustivity checker cannot

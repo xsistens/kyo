@@ -14,7 +14,7 @@ enum PanelAccessibleRole derives CanEqual:
         case Complementary => "complementary"
 end PanelAccessibleRole
 
-/** Panel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Panel
+/** Panel: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Panel
   * anatomy: `div.p-panel[.p-panel-toggleable]` > `div.p-panel-header`
   * (`span.p-panel-title` + `div.p-panel-header-actions` with the
   * `button.p-panel-toggle-button`) + `div.p-panel-content-container` >
@@ -23,13 +23,13 @@ end PanelAccessibleRole
   * verbatim.
   *
   * A panel is fixed by default; `toggleable(true)` adds the toggle button
-  * (plus icon collapsed, minus expanded — Prime's glyphs) whose state binds
+  * (plus icon collapsed, minus expanded, Prime's glyphs) whose state binds
   * two-way to the `collapsed` `SignalRef[Boolean]`: pressing the button toggles
   * the ref, and external ref writes collapse/expand the content.
   *
   * `id(...)` lands on the panel root, and the toggle takes `s"$id-toggle"`. That
   * derivation is the only way to address the button: it belongs to the panel, so
-  * wrapping the panel in a `div` with an id does not reach it — the wrapper is
+  * wrapping the panel in a `div` with an id does not reach it: the wrapper is
   * not that button.
   *
   * Collapse ANIMATION: the content container is a `.p-uic-collapse` grid,
@@ -61,7 +61,7 @@ final case class Panel private (
     def header(u: UI): Panel = copy(headerUIV = Present(u))
 
     /** Renders the toggle button (`.p-panel-toggleable`); pair with [[collapsed]]
-      * to bind the collapse state. Default false — a plain fixed panel.
+      * to bind the collapse state. Default false: a plain fixed panel.
       */
     def toggleable(v: Boolean): Panel = copy(toggleableFlag = v)
 
@@ -138,7 +138,7 @@ final case class Panel private (
                                 .aria("label", "Toggle")
                                 .onClick(ref.getAndUpdate(!_))
                             // The toggle is Panel's own button, so it is not reachable by
-                            // wrapping the panel — the wrapper is not that button. It takes
+                            // wrapping the panel: the wrapper is not that button. It takes
                             // its id from the panel's, per the derivation HasElementId
                             // describes.
                             idV.foreach(base => b = b.id(s"$base-toggle"))
@@ -170,7 +170,7 @@ final case class Panel private (
 
     /** The animated content container: `containerBase`'s twin carrying
       * `.p-uic-collapse` (the grid-rows transition) with the current collapse state
-      * in its class. Reactive on the collapse ref — morph patches `.p-uic-collapsed`
+      * in its class. Reactive on the collapse ref: morph patches `.p-uic-collapsed`
       * onto the same element in place, so the transition fires.
       */
     private def collapseContainer(collapsed: Boolean, inner: List[UI])(using Frame): UI =

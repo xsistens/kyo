@@ -88,7 +88,7 @@ class TabsTest extends UicTest:
     }
 
     "a derived signal binds ONE way: the strip follows it and never writes back" in {
-        // `map` is what a route-shaped selection looks like — a Signal that is not a
+        // `map` is what a route-shaped selection looks like: a Signal that is not a
         // SignalRef, so there is nothing to write into even in principle. Before this
         // slot took a union it could not be handed over at all.
         for
@@ -106,7 +106,7 @@ class TabsTest extends UicTest:
             src   <- Signal.initRef("three")
             fired <- Signal.initRef(Absent: Maybe[String])
             // `.readOnly` is the documented opt-out from two-way binding, and the
-            // runtime class is what the dispatch reads — so this stays one-way.
+            // runtime class is what the dispatch reads, so this stays one-way.
             ui = strip.selected(src.readOnly).onTabSelect(id => fired.set(Present(id))).render
             headers <- elementsWithClass(ui, "p-tab")
             _       <- click(headers(0))
@@ -160,7 +160,7 @@ class TabsTest extends UicTest:
             assert(off.attrs.tabIndex.isEmpty, "out of the Tab order, like the button form")
     }
 
-    "clicking a url header does NOT write back — the navigation is the selection" in {
+    "clicking a url header does NOT write back: the navigation is the selection" in {
         // Writing would race the navigation: the ref would hold the new id while the
         // location, and anything derived from it, still held the old one.
         for
@@ -177,7 +177,7 @@ class TabsTest extends UicTest:
     "a url header declares no click handler unless there is something for it to do" in {
         // Not a micro-optimisation. kyo-ui prevent-defaults a click on ANY anchor that
         // carries a kyo click handler, with no exemption for Ctrl/Cmd/Shift/Alt or the
-        // middle button — so an empty handler would silently cost the very thing an
+        // middle button, so an empty handler would silently cost the very thing an
         // anchor was chosen for. Verified in a browser both ways.
         for
             plain      <- elementsWithClass(navStrip.selected("one").render, "p-tab")
@@ -214,7 +214,7 @@ class TabsTest extends UicTest:
     }
 
     "without a base the ids are minted, so a pure render has none at all" in {
-        // The minting needs a mount, and a pure render shows only the placeholder — which is
+        // The minting needs a mount, and a pure render shows only the placeholder, which is
         // why a golden render and an SSG page had no header ids before a base could be given.
         for
             headers <- elementsWithClass(strip.render, "p-tab")

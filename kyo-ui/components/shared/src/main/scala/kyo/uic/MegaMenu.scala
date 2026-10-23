@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 
 /** One root item of a [[MegaMenu]]: a label with optional icon whose panel
-  * holds columns of labelled [[MenuGroup]]s — `column(groups*)` appends one
+  * holds columns of labelled [[MenuGroup]]s: `column(groups*)` appends one
   * panel column (the grid divides Prime's 12-column raster evenly, so two
   * columns render `.p-megamenu-col-6`, three `.p-megamenu-col-4`, ...). An item
   * without columns is a plain row (activate via `onSelect`/`url`).
@@ -69,7 +69,7 @@ object MegaMenuItemScope:
     private[uic] def resolve(entries: Seq[MegaMenuItemEntry]): List[MegaMenuItem] = Entry.resolve(scope, entries)
 end MegaMenuItemScope
 
-/** MegaMenu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** MegaMenu: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * MegaMenu anatomy: `div.p-megamenu.p-component.p-megamenu-horizontal|-vertical`
   * > `ul.p-megamenu-root-list[role=menubar]` of `li.p-megamenu-item` rows; the
   * active root item opens ONE `p-megamenu-overlay` panel holding a
@@ -79,7 +79,7 @@ end MegaMenuItemScope
   *
   * The panel is a real [[Overlay]] anchored on the megamenu ROOT (the sheet
   * makes `.p-megamenu` the positioning context, so the panel spans the whole
-  * bar — Prime's `left: 0; min-width: 100%`): a root-row click toggles it
+  * bar, Prime's `left: 0; min-width: 100%`): a root-row click toggles it
   * (deliberate deviation from Prime's hover-open), an outside click or Escape
   * closes, the panel seeds focus. `orientation(Vertical)` renders the sheet's
   * vertical variant (root list stacked, panel to the side).
@@ -179,7 +179,7 @@ final case class MegaMenu private (
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: UI.Action =
@@ -359,5 +359,5 @@ final case class MegaMenu private (
 end MegaMenu
 
 object MegaMenu:
-    /** An empty mega menu — add root items via [[MegaMenu.items]]. */
+    /** An empty mega menu; add root items via [[MegaMenu.items]]. */
     def apply(): MegaMenu = new MegaMenu()

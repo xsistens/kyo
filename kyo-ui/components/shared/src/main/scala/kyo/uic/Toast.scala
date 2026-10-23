@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Toast — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Toast
+/** Toast: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Toast
   * anatomy: the fixed `div.p-toast.p-component.p-toast-<position>` region (Prime
   * positions it via inline styles; here a `.p-uic-*` remainder pins each
   * position token) > `div.p-toast-message.p-toast-message-<severity>` >
@@ -16,12 +16,12 @@ import kyo.UI.*
   * `when(ref)` reactive boundary). One `Toast` owns no fiber at all (see [[Node]]
   * on fiber ownership): the auto-dismiss `duration` is emitted as
   * `data-uic-duration` (ms) for the client runtime, and the dismissal timer, which
-  * has to outlive the render, is the caller's — `ref.set(true)` then
+  * has to outlive the render, is the caller's: `ref.set(true)` then
   * `Fiber.initUnscoped(Async.sleep(..).andThen(ref.set(false)))`. [[ToastService]]
   * exists so that timer has an owner.
   *
   * One toast renders ONE message; for the multi-message stacking store (Prime's
-  * ToastService with `add(...)` queueing) use [[ToastService]] — a kyo
+  * ToastService with `add(...)` queueing) use [[ToastService]], a kyo
   * Env/Layer service whose `render` region stacks queued messages.
   */
 final case class Toast private (
@@ -37,7 +37,7 @@ final case class Toast private (
 ) extends Node:
     type Self = Toast
 
-    /** Binds visibility to `ref` — the only way to show/hide the toast. */
+    /** Binds visibility to `ref`, the only way to show/hide the toast. */
     def open(ref: SignalRef[Boolean]): Toast = copy(openRef = Present(ref))
 
     /** Auto-dismiss duration in milliseconds (emitted as `data-uic-duration`;
@@ -49,7 +49,7 @@ final case class Toast private (
     def position(v: OverlayPosition): Toast = copy(positionV = v)
 
     /** Semantic tint of the message (`.p-toast-message-<token>`; Prime's toast
-      * vocabulary is info/success/warn/error/secondary/contrast — `Danger` maps to
+      * vocabulary is info/success/warn/error/secondary/contrast; `Danger` maps to
       * `error`, `Primary`/`Help` fall back to the `info` skin).
       */
     def severity(v: Severity): Toast = copy(severityV = v)
@@ -144,7 +144,7 @@ object Toast:
     def apply(): Toast = new Toast()
 
     /** The `.p-toast-message-<token>` suffix (Prime's toast vocabulary; `Danger`
-      * maps to `error`, `Primary`/`Help` fall back to the `info` skin) — shared
+      * maps to `error`, `Primary`/`Help` fall back to the `info` skin), shared
       * with [[ToastService]]'s stacked region.
       */
     private[uic] def severityToken(s: Severity): String = s match
@@ -157,7 +157,7 @@ object Toast:
 
     /** The message ENTER transition per screen position (a kyo enhancement over
       * Prime's uniform scale-in): side positions slide in horizontally,
-      * top/bottom-center vertically, `Center` fades — each space-joined with the
+      * top/bottom-center vertically, `Center` fades, each space-joined with the
       * fade from-state so the message slides AND fades. The region carries the
       * centering transform, not the message, so the slide never fights it. Shared
       * with [[ToastService]]'s stacked region.
@@ -169,7 +169,7 @@ object Toast:
         case OverlayPosition.BottomCenter                           => "p-uic-slide-enter-bottom p-uic-enter-fade"
         case OverlayPosition.Center                                 => "p-uic-enter-fade"
 
-    /** Design-derived leading icon per severity (Prime's Toast defaults) — shared
+    /** Design-derived leading icon per severity (Prime's Toast defaults), shared
       * with [[ToastService]]'s stacked region.
       */
     private[uic] def severityIcon(s: Severity): IconGlyph = s match

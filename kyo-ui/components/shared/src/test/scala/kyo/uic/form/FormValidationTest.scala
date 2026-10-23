@@ -22,7 +22,7 @@ class FormValidationTest extends UicTest:
     private enum Lang derives CanEqual:
         case De, En
 
-    /** A form built the way `Form.mounted` builds one, minus the `UI.mounted` wrapper —
+    /** A form built the way `Form.mounted` builds one, minus the `UI.mounted` wrapper,
       * so a test can hold the instance and read its signals.
       */
     private def mkForm(using Frame): Form < Sync =
@@ -86,7 +86,7 @@ class FormValidationTest extends UicTest:
         )
 
     /** A form whose id minting is a real counter (so fields get distinct ids) and whose
-      * focus command appends the targeted id to `focused` — lets a test assert exactly
+      * focus command appends the targeted id to `focused`, which lets a test assert exactly
       * which field submit would focus.
       */
     private def mkFocusForm(focused: SignalRef[Chunk[String]], focus: Boolean = true)(using Frame): Form < Sync =
@@ -223,7 +223,7 @@ class FormValidationTest extends UicTest:
                     sig   <- form.isDirty // read after fields + child are declared
                     c0    <- sig.current  // false
                     _     <- cf.valueRef.set("z")
-                    c1    <- sig.current  // true — a dirty child field bubbles up
+                    c1    <- sig.current  // true: a dirty child field bubbles up
                     _     <- form.markPristine
                     c2    <- sig.current  // false
                 yield (c0, c1, c2)
@@ -319,7 +319,7 @@ class FormValidationTest extends UicTest:
             assert(after.exists(_.code == "required"), "once touched, the same verdict is shown")
     }
 
-    "on(Activation.Submit) is how a field opts OUT — it adds no trigger of its own" in {
+    "on(Activation.Submit) is how a field opts OUT: it adds no trigger of its own" in {
         for
             form <- mkForm
             f    <- form.field("").rules(Validator.required()).on(Activation.Submit).declare
@@ -368,7 +368,7 @@ class FormValidationTest extends UicTest:
                     field <- form.field(3.0).rules(Validator.satisfy[Double]("min-volume")(_ >= 5.0)).on(Activation.Submit).declare
                     bound = uic.Slider().min(0).max(10).bind(field)
                     pre <- UI.runRender(bound).take(1).run
-                    // Marks the field touched AND validates — the same path a real Blur takes,
+                    // Marks the field touched AND validates, the same path a real Blur takes,
                     // so the error is both recorded and revealed.
                     _    <- field.onEvent(3.0)
                     post <- UI.runRender(bound).take(1).run
@@ -437,7 +437,7 @@ class FormValidationTest extends UicTest:
             assert(afterRemoval, "removing the row cancelled its observer: a later edit is not revalidated")
     }
 
-    "move / moveDown reorder rows — row.index reflects the new positions" in {
+    "move / moveDown reorder rows, and row.index reflects the new positions" in {
         for
             (i0, i1, i0b, i1b) <-
                 for

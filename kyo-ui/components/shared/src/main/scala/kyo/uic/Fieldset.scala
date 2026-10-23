@@ -3,9 +3,9 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Fieldset — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Fieldset: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Fieldset anatomy: `.p-fieldset.p-component[.p-fieldset-toggleable]` >
-  * `.p-fieldset-legend` (plain `span.p-fieldset-legend-label`, or — toggleable —
+  * `.p-fieldset-legend` (plain `span.p-fieldset-legend-label`, or, when toggleable,
   * `button.p-fieldset-toggle-button` with the `.p-fieldset-toggle-icon` glyph +
   * label span) + `.p-fieldset-content-container` > `.p-fieldset-content-wrapper`
   * > `.p-fieldset-content`), so the extracted `@primeuix` fieldset CSS applies
@@ -15,7 +15,7 @@ import kyo.UI.*
   * group's accessible name comes from the legend by STRUCTURE. That matters
   * beyond tidiness: the `role="group"` + `aria-label` pair this used to render
   * could only carry a constant, so a fieldset whose legend was a `Signal[String]`
-  * — a locale-driven `I18n.t` leaf, say — announced as an unnamed group. No
+  * (a locale-driven `I18n.t` leaf, say) announced as an unnamed group. No
   * `role` is set: `<fieldset>` already has `group` implicitly.
   *
   * A fieldset is fixed by default; `toggleable(true)` renders the legend as
@@ -64,7 +64,7 @@ final case class Fieldset private (
 
     private[uic] def render(using Frame): UI =
         // The toggle button's own aria-label is an attribute channel, and a channel can only
-        // carry a static string — there is no attribute-level reactive patch. So it reads the
+        // carry a static string: there is no attribute-level reactive patch. So it reads the
         // constant legend, falling back to "Toggle". The GROUP's name does not depend on this:
         // that comes from the <legend> element, which a reactive legend drives as a text node.
         val legendConst: Maybe[String] = legendV match
@@ -125,7 +125,7 @@ final case class Fieldset private (
 
     /** The animated content container: `containerBase`'s twin carrying
       * `.p-uic-collapse` (the grid-rows transition) with the current collapse state
-      * in its class. Reactive on the collapse ref — morph patches `.p-uic-collapsed`
+      * in its class. Reactive on the collapse ref: morph patches `.p-uic-collapsed`
       * onto the same element in place, so the transition fires.
       */
     private def collapseContainer(collapsed: Boolean)(using Frame): UI =

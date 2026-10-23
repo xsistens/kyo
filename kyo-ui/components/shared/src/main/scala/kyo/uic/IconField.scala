@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** IconField — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** IconField: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * IconField/InputIcon pair: `div.p-iconfield` wrapping `span.p-inputicon`
   * icons around the field), so the extracted `@primeuix` iconfield CSS applies
   * verbatim. The CSS is position-keyed: an icon rendered BEFORE the field
@@ -16,7 +16,7 @@ import kyo.UI.*
   * beside a field and links to it by id.
   *
   * Hosts: [[Input]] (Prime's canonical pairing), [[TextArea]], and [[Select]].
-  * Prime's sheet only pads `.p-inputtext` — the TextArea and Select paddings
+  * Prime's sheet only pads `.p-inputtext`; the TextArea and Select paddings
   * are `.p-uic-*` remainder rules with the same padding calc (a kyo extension
   * beyond Prime's CSS). On a Select host, prefer `iconStart`: the end edge
   * already hosts the dropdown chevron.
@@ -43,7 +43,7 @@ final case class IconField private (
         val endSlot: List[UI]   = endIconV.toList.map(g => GlyphSvg(g, "p-inputicon"))
         // Prime pads the field via sibling-position selectors (.p-inputtext:not(:first-child));
         // a two-way bound kyo field renders inside a classless reactive <span>, which
-        // resets those positions — stamp deterministic padding classes instead (the
+        // resets those positions, so stamp deterministic padding classes instead (the
         // remainder CSS keys on them with Prime's own padding calc).
         val classes =
             startIconV.toList.map(_ => "p-uic-iconfield-start") ++
@@ -72,7 +72,7 @@ object IconField:
     /** Wraps `textArea` (kyo extension beyond Prime's input-only CSS). */
     def apply(textArea: TextArea): IconField = new IconField(Host.Ta(textArea))
 
-    /** Wraps `select` (kyo extension; prefer `iconStart` — the end edge hosts the
+    /** Wraps `select` (kyo extension; prefer `iconStart`, since the end edge hosts the
       * dropdown chevron).
       */
     def apply(select: Select[?]): IconField = new IconField(Host.Sel(select))

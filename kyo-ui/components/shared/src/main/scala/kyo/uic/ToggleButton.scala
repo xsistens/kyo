@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** ToggleButton — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** ToggleButton: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ToggleButton anatomy: `button.p-togglebutton.p-component
   * [.p-togglebutton-checked][.p-invalid][.p-togglebutton-sm|-lg]` >
   * `span.p-togglebutton-content` > [icon `.p-togglebutton-icon`] +
@@ -78,7 +78,7 @@ final case class ToggleButton private (
       */
     def offLabel(v: String | Signal[String]): ToggleButton = copy(offLabelV = Present(ReactiveValue(v)))
 
-    /** Drops both labels — the label span renders a non-breaking space (icon-only look). */
+    /** Drops both labels: the label span renders a non-breaking space (icon-only look). */
     def noLabels: ToggleButton = copy(onLabelV = Absent, offLabelV = Absent)
 
     /** Icon while checked (`.p-togglebutton-icon`). */
@@ -95,7 +95,7 @@ final case class ToggleButton private (
 
     def disabled(v: Boolean): ToggleButton = copy(disabledFlag = v)
 
-    /** `readonly` — the button never toggles and reports `aria-disabled`, which is what
+    /** `readonly`: the button never toggles and reports `aria-disabled`, which is what
       * `role="button"` has to say it with (there is no readonly state for that role), but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
@@ -113,7 +113,7 @@ final case class ToggleButton private (
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
     def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the button's current checked state — unlike onChange it
+    /** Fires on focus loss with the button's current checked state; unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onBlurF = Present(Callback.of(f)))
@@ -176,7 +176,7 @@ final case class ToggleButton private (
         else if readonlyFlag then el = el.aria("disabled", "true")
         else onChg.foreach(f => el = el.onClick(f(!isChecked)))
         end if
-        // Blur fires even without a toggle — the validation layer's Blur trigger. Reads the
+        // Blur fires even without a toggle: the validation layer's Blur trigger. Reads the
         // ref LIVE (the CheckBox shape), so it reports the state at blur time.
         onBlurF.foreach { f =>
             el = el.onBlur(checkedBinding match

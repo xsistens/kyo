@@ -9,7 +9,7 @@ import scala.language.implicitConversions
   * A component is a plain immutable builder, NOT a `kyo.UI`. The kyo HTML AST
   * (`UI` / `Element` / `HtmlContent`) is `sealed` and cannot be extended from
   * outside `kyo/UI.scala`, so a component instead renders itself into a `UI` on
-  * demand and is auto-lifted at placement — mirroring how kyo lifts a bare
+  * demand and is auto-lifted at placement, mirroring how kyo lifts a bare
   * `String` into a `Text` node (`kyo.UI.stringToUI`).
   *
   * The chained setters each return the concrete `Self`, so IDE autocomplete after
@@ -28,14 +28,14 @@ import scala.language.implicitConversions
   *     autoplay is the one component that does this today.
   *   - A timer that must outlive any single render does NOT belong to a component.
   *     It belongs to a service, which forks it with `Fiber.initUnscoped` and owns
-  *     the cancellation itself — `ToastService`'s per-message auto-dismiss is the
+  *     the cancellation itself; `ToastService`'s per-message auto-dismiss is the
   *     reference case.
   */
 trait Node:
     type Self <: Node
 
     /** Render this component into the kyo `UI` AST. Internal: downstream code never
-      * calls this — the placement conversions in [[Node]]'s companion do.
+      * calls this; the placement conversions in [[Node]]'s companion do.
       */
     private[uic] def render(using Frame): UI
 
@@ -53,7 +53,7 @@ trait Node:
       * fragment(rows*)                              // does not compile
       * }}}
       * has nothing constraining the element type at the definition, so the list
-      * fixes to `List[Button]` and the placement one line later fails — with an
+      * fixes to `List[Button]` and the placement one line later fails, with an
       * error that points at the collection rather than at the missing conversion.
       * No additional `Conversion` can rescue that: there is no expected type to
       * trigger one. Project explicitly instead, `yield uic.Button(a).toUI`.

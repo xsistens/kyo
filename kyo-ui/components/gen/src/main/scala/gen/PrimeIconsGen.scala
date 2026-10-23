@@ -5,11 +5,11 @@ import java.nio.file.Path
 import scala.jdk.CollectionConverters.*
 
 /** Parses the raw SVGs shipped by `primeicons` (gen/npm/node_modules/primeicons/raw-svg)
-  * and emits `kyo/uic/generated/Icons.scala` — the PRIMARY icon set: one `def` per
+  * and emits `kyo/uic/generated/Icons.scala`, the PRIMARY icon set: one `def` per
   * icon so Scala.js method-level DCE strips unused icons' path strings from
   * downstream bundles.
   *
-  * Icons with several `<path>` elements are merged into one path-data string —
+  * Icons with several `<path>` elements are merged into one path-data string:
   * every primeicons subpath starts with an absolute `M`, so concatenation is
   * valid SVG path grammar.
   */
@@ -20,7 +20,7 @@ object PrimeIconsGen:
     final case class ParsedIcon(name: String, ident: String, pathData: String, w: Int, h: Int)
 
     /** `java.lang.Object` members can't be (re)declared with a different signature
-      * inside an object — icons named like them get an `Icon` suffix.
+      * inside an object, so icons named like them get an `Icon` suffix.
       */
     private val objectMembers =
         Set("clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait")
@@ -40,7 +40,7 @@ object PrimeIconsGen:
 
     def run(): Unit =
         val svgDir = Common.repoRoot.resolve("gen/npm/node_modules/primeicons/raw-svg")
-        require(Files.isDirectory(svgDir), s"primeicons not installed — run gen/fetch.sh first ($svgDir)")
+        require(Files.isDirectory(svgDir), s"primeicons not installed: run gen/fetch.sh first ($svgDir)")
         val icons = Files
             .list(svgDir)
             .iterator()

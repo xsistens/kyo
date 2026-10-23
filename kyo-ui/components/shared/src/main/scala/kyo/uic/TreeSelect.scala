@@ -4,21 +4,21 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** TreeSelect — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** TreeSelect: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * TreeSelect anatomy: `div.p-treeselect.p-component.p-inputwrapper
   * [.p-invalid][.p-disabled][.p-treeselect-sm|-lg][.p-variant-filled]
   * [.p-treeselect-fluid][.p-treeselect-open]` > `div.p-treeselect-label-container`
   * > `div.p-treeselect-label` + `div.p-treeselect-dropdown` with the chevron,
   * floating `div.p-treeselect-overlay` panel > `div.p-treeselect-tree-container`
   * hosting the EXISTING [[Tree]] component's `.p-tree` anatomy), so the
-  * extracted `@primeuix` treeselect CSS applies verbatim — its
+  * extracted `@primeuix` treeselect CSS applies verbatim: its
   * `.p-treeselect-overlay .p-tree` rule reaches through the composition.
   *
   * Select's tree-shaped sibling: the same [[Overlay]]-based floating panel
   * (outside click / Escape close it, and the panel takes no focus: the trigger
   * keeps it and wears the hosted tree's own keyboard), the value
   * a `SignalRef[Set[K]]` of selected NODE ids, `K` being the app's own id type. The panel hosts the real
-  * `uic.Tree` — its [[TreeNode]] model, expansion refs, and [[SelectionMode]]
+  * `uic.Tree`: its [[TreeNode]] model, expansion refs, and [[SelectionMode]]
   * semantics are reused wholesale: `Single` replaces the selection and CLOSES
   * the panel on pick (Prime), `Multiple`/`Checkbox` toggle ids and keep the
   * panel open (Checkbox renders Prime's per-node checkbox column and inherits
@@ -88,7 +88,7 @@ final case class TreeSelect[K] private (
       * like every other key, and the selection holds the values.
       *
       * The family shape does not fit every tree, because a `TreeNode` also carries
-      * an icon, a tooltip and an accessible name that no `A => String` supplies —
+      * an icon, a tooltip and an accessible name that no `A => String` supplies;
       * reach for [[nodes]] with the hand-authored model when you need those.
       */
     def options(roots: Seq[K])(label: K => String)(children: K => Seq[K]): TreeSelect[K] =
@@ -98,7 +98,7 @@ final case class TreeSelect[K] private (
     def options[A](roots: Seq[A])(label: A => String, id: A => K)(children: A => Seq[A]): TreeSelect[K] =
         copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, id, children)))
 
-    /** Appends root nodes of the hand-authored [[TreeNode]] model — the escape hatch
+    /** Appends root nodes of the hand-authored [[TreeNode]] model, the escape hatch
       * from [[options]] when a node needs an icon, a tooltip or its own accessible
       * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]]. Each node is built
       * directly or from `_` (see [[TreeNodeScope]]).
@@ -111,7 +111,7 @@ final case class TreeSelect[K] private (
     @targetName("selectionSet")
     def selection(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(valueRef = Present(ref))
 
-    /** Binds the expansion set two-way to `ref` (optional — expansion is
+    /** Binds the expansion set two-way to `ref` (optional; expansion is
       * component-internal otherwise).
       */
     def expanded(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(expandedRefV = Present(ref))
@@ -121,12 +121,12 @@ final case class TreeSelect[K] private (
       */
     def loading(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(loadingV = Present(ReactiveValue(v)))
 
-    /** Binds the panel visibility two-way to `ref` (optional — self-managed
+    /** Binds the panel visibility two-way to `ref` (optional; self-managed
       * otherwise).
       */
     def open(ref: SignalRef[Boolean]): TreeSelect[K] = copy(openRefV = Present(ref))
 
-    /** Selection semantics (Tree's modes): `Single` (default — pick replaces the
+    /** Selection semantics (Tree's modes): `Single` (default: pick replaces the
       * selection and closes the panel), `Multiple` (toggle, panel stays open), or
       * `Checkbox` (toggle with Prime's per-node checkbox column, panel stays open).
       */
@@ -148,7 +148,7 @@ final case class TreeSelect[K] private (
     /** Size: `.p-treeselect-sm` / default / `.p-treeselect-lg`. */
     def size(v: Size): TreeSelect[K] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): TreeSelect[K] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
@@ -165,14 +165,14 @@ final case class TreeSelect[K] private (
     @targetName("onChangeSet")
     def onChange(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the current selection — unlike
+    /** Fires on focus loss (native `blur`) with the current selection. Unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
     @targetName("onBlurSet")
     def onBlur(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(onBlurF = Present(Callback.of(f)))
 
-    /** (id, label) pairs of every node in tree order — the trigger-label lookup. */
+    /** (id, label) pairs of every node in tree order: the trigger-label lookup. */
     private def flatNodes: List[(K, String)] =
         def loop(ns: List[TreeNode[K]]): List[(K, String)] =
             ns.flatMap(n => (n.id, n.text) :: loop(n.children))
@@ -181,7 +181,7 @@ final case class TreeSelect[K] private (
 
     /** The loud card shown at the top of the panel when two nodes share an id (see
       * [[KeyDiagnostics]]). The ids are the selection keys, so a collision merges two
-      * nodes into one selection entry — and [[options]] defaults the key to the label,
+      * nodes into one selection entry, and [[options]] defaults the key to the label,
       * exactly the way [[Select.optionKey]] does, so the same duplicate-label data set
       * produces it.
       */
@@ -244,7 +244,7 @@ final case class TreeSelect[K] private (
         isOpen: Boolean,
         st: Maybe[TreeSelect.State[K]]
     )(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
+        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
         // helper; otherwise the untouched static form. The resolved placeholder text threads through.
         BoolValue.reactive(loadingV): ld =>
@@ -362,7 +362,7 @@ final case class TreeSelect[K] private (
                         div.cssClass("p-treeselect-empty-message")(c)
                     )
                 // The enclosing wired render already subscribes to the expansion, value and
-                // highlight refs — the resolved seam renders the tree WITHOUT its own nested
+                // highlight refs, so the resolved seam renders the tree WITHOUT its own nested
                 // subscriptions (handlers still write through the bound refs), and the highlight
                 // is handed across so the panel's keyboard is the tree's own.
                 case Present(t) => t.resolved(exp, current, Present(roving))
@@ -434,7 +434,7 @@ final case class TreeSelect[K] private (
                 }
             }
             // Focus-loss on the trigger reports the currently bound selection (or the
-            // resolved current set when unbound) — the validation layer's Blur trigger.
+            // resolved current set when unbound): the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(valueRef match
                     case Present(r) => r.use(f)

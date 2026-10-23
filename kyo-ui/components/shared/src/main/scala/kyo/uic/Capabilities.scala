@@ -46,13 +46,13 @@ end HasAccessibleName
   *
   * The slot every page needs and only a third of the components had. It began on
   * [[FormControl]], because the form layer stamps each field's minted id there so
-  * focus-first-invalid can reach the control — which is why the 31 components that had it
+  * focus-first-invalid can reach the control, which is why the 31 components that had it
   * were exactly the form controls plus the menus, and why `Card`, `Panel`, `Tag`, `Message`,
   * `DataTable` and the rest of the display family had none. `Node` carries no `id` either,
   * so there was no escape hatch at the base type.
   *
   * Storage was already uniform across every implementor (`copy(idV = Present(v))`), which is
-  * the test `Capabilities.scala` applies before lifting anything — and the test `disabled`
+  * the test `Capabilities.scala` applies before lifting anything, and the test `disabled`
   * and `severity` fail. `FileUpload` is the single exception and answers with its
   * `inputId`.
   *
@@ -67,11 +67,11 @@ end HasAccessibleName
   * ==Internal parts derive from it==
   *
   * A component with addressable internals treats this id as their BASE and derives
-  * `s"$id-<part>"` — `Menu`'s highlighted row is `s"$id-active"`, `Panel`'s collapse button
+  * `s"$id-<part>"`: `Menu`'s highlighted row is `s"$id-active"`, `Panel`'s collapse button
   * is `s"$id-toggle"`, a `Tabs` header is `s"$id-<tab id>"`. A component that mints a base
   * for itself when none was given (so its ARIA still works unasked) must prefer the
   * caller's: `if idV.isDefined then this else copy(idV = Present(minted))`. Every derived
-  * name is documented on the component that derives it — an undocumented derived id is as
+  * name is documented on the component that derives it; an undocumented derived id is as
   * unreachable as no id at all.
   */
 private[uic] trait HasElementId extends Node:
@@ -82,7 +82,7 @@ private[uic] trait HasElementId extends Node:
       *
       * The writer's twin, and it exists because "prefer the caller's id" is a rule this trait
       * already states and only a component could follow: everything else that stamps an id
-      * — `form.bind` is the one — could not see whether the caller had already set one, so it
+      * (`form.bind` is the one) could not see whether the caller had already set one, so it
       * overwrote and the caller's id vanished with nothing said. A reader is what lets that be
       * a named error instead.
       */

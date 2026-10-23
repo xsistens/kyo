@@ -6,7 +6,7 @@ import kyo.*
   * live [[FormField]] by [[declare]].
   *
   * Every slot here is a decision made once, before the field exists, and the defaults are the
-  * answer most fields want — so the common declaration is
+  * answer most fields want, so the common declaration is
   * `form.field("").declare` and nothing else. What the older constructor form made mandatory,
   * this makes optional: an empty rule chain was spelled `Validator.all[String]()` and a field
   * that re-checks only at submit was spelled `Activation.Submit`, both of which read as
@@ -14,7 +14,7 @@ import kyo.*
   *
   * Nothing here runs an effect. The spec is a value you can build, pass around and hand to
   * `declare` at the point where the form scope wants it, which is what lets the id, the reveal
-  * mode and the trigger set be settled BEFORE anything reads them — the ordering hazard that a
+  * mode and the trigger set be settled BEFORE anything reads them: the ordering hazard that a
   * post-hoc setter on the live field would keep open.
   *
   * The chain reads in declaration order and ends in a terminal:
@@ -36,7 +36,7 @@ final case class FieldSpec[A] private[form] (
     private[form] val focusableV: Boolean
 )(using CanEqual[A, A]):
 
-    /** The rule chain this field STARTS with (default: [[Validator.none]] — every value passes).
+    /** The rule chain this field STARTS with (default: [[Validator.none]], every value passes).
       *
       * Compose several with `a and b`, which short-circuits on the first failure, or
       * [[Validator.all]]. This SETS the chain; [[FormField.addRule]] appends to it later, which
@@ -47,7 +47,7 @@ final case class FieldSpec[A] private[form] (
 
     /** When the rule chain is RE-COMPUTED (default: `Blur` + `Change`).
       *
-      * Combinable, and independent of when a failure is SHOWN — that is [[revealWhen]]. The
+      * Combinable, and independent of when a failure is SHOWN; that is [[revealWhen]]. The
       * default pairs with `Reveal.WhenTouched` to give the shape most forms want: silent while
       * the reader first types, live once they have left the field. `on(Activation.Submit)` is
       * how you opt out of both triggers; see [[Activation.Field]] for why that reads as a
@@ -63,20 +63,20 @@ final case class FieldSpec[A] private[form] (
       * Give one here and `bind` stamps it, `Label.forId(field.domId)` follows it, and the focus
       * jumps that address the field (`focusFirstInvalid`, the error summary) keep working.
       *
-      * Yours to keep unique — the mint could not collide, a chosen id can. Two fields of one
+      * Yours to keep unique: the mint could not collide, a chosen id can. Two fields of one
       * form claiming the same id is reported at [[declare]].
       */
     def domId(id: String): FieldSpec[A] = copy(domIdV = Present(id))
 
     /** Wait this long after a change before running the rules (default: none).
       *
-      * For an expensive rule — a round-trip that asks a server whether a name is taken. Only
+      * For an expensive rule, such as a round-trip that asks a server whether a name is taken. Only
       * the RUN is delayed; the value itself is not. A superseded run is dropped rather than
       * published, so the last edit is what the reader is told about.
       */
     def debounce(d: Duration): FieldSpec[A] = copy(debounceV = d)
 
-    /** When a failure is DISPLAYED (default: [[Reveal.WhenTouched]] — after this field's first
+    /** When a failure is DISPLAYED (default: [[Reveal.WhenTouched]], after this field's first
       * blur/change, or after a submit).
       *
       * Independent of [[on]]: `Reveal.OnSubmit` stays quiet while editing and flags only at
@@ -97,7 +97,7 @@ final case class FieldSpec[A] private[form] (
     /** Allocate the field's state, register it with the form, and hand back the live handle.
       *
       * Registration order is declaration order, which is the order `focusFirstInvalid` and the
-      * error summary walk — so a field declared here is reachable even if it is never bound.
+      * error summary walk, so a field declared here is reachable even if it is never bound.
       */
     def declare(using Frame): FormField[A] < Sync =
         // Explicitly typed rather than folded: a match with one effectful and one plain branch
@@ -162,7 +162,7 @@ final case class NumberFieldSpec[A] private[form] (
     private[form] val codec: NumberCodec[A],
     private[form] val rulesV: Validator[A]
 ):
-    /** @see [[FieldSpec.rules]] — stated over `A`, run on the parsed value. */
+    /** @see [[FieldSpec.rules]], stated over `A`, run on the parsed value. */
     def rules(v: Validator[A]): NumberFieldSpec[A] = copy(rulesV = v)
 
     /** @see [[FieldSpec.on]] */

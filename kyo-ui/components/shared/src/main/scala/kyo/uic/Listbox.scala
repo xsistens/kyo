@@ -19,7 +19,7 @@ final case class ListItem[K](
 )
 
 object ListItem:
-    /** Ergonomic public constructor with a constant label — the primary `text: TextValue` field is
+    /** Ergonomic public constructor with a constant label: the primary `text: TextValue` field is
       * package-private, so this is how callers outside `kyo.uic` build an item that also carries an
       * `additionalText` badge or a `tooltip` (the [[Listbox.item]] builders cover only text+icon).
       * A distinct name (not an `apply` overload) because Scala 3 forbids two `apply` variants that both
@@ -88,7 +88,7 @@ object ListOptionScope:
         Entry.resolve(scope.asInstanceOf[ListOptionScope[K]], entries)
 end ListOptionScope
 
-/** Listbox — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Listbox: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Listbox anatomy: `div.p-listbox.p-component` > `div.p-listbox-list-container`
   * > `ul.p-listbox-list[role=listbox]` of `li.p-listbox-option[role=option]`
   * rows, with `.p-listbox-option-selected` on picked rows and an optional
@@ -171,7 +171,7 @@ final case class Listbox[K] private (
     /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]). */
     def items(is: ListItemEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListItemScope.resolve(is).map(OptionItem.Item(_)))
 
-    /** Appends a single option (ergonomic builder — no need to construct [[ListItem]]). A
+    /** Appends a single option (ergonomic builder; no need to construct [[ListItem]]). A
       * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
       * selection key either way, and `icon` keeps its default for both label shapes.
       */
@@ -187,7 +187,7 @@ final case class Listbox[K] private (
       */
     def optionGroups(is: ListOptionEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListOptionScope.resolve(is))
 
-    /** Selection semantics: `None` (default — rows inert unless `onItemClick` is
+    /** Selection semantics: `None` (default: rows inert unless `onItemClick` is
       * set), `Single` (picking replaces the selection; re-picking clears it), or
       * `Multiple` (picking toggles the row in the set).
       */
@@ -196,8 +196,8 @@ final case class Listbox[K] private (
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
       * Off (the default, and Prime's) every click toggles its row. On, a plain click replaces
-      * the selection with the row it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
-      * never one of the two. `Checkbox` mode ignores it: a checkbox already says the set is
+      * the selection with the row it landed on and Ctrl or Cmd toggles (`metaKey || ctrlKey`,
+      * never one of the two). `Checkbox` mode ignores it: a checkbox already says the set is
       * additive. See [[SelectionPick]] for the exact rule, which every component offering it
       * shares.
       *
@@ -217,7 +217,7 @@ final case class Listbox[K] private (
 
     /** Renders Prime's header filter input (`div.p-listbox-header` >
       * `input.p-listbox-filter.p-inputtext`) over a query the listbox allocates
-      * itself — the same word, and the same on/off meaning, as
+      * itself: the same word, and the same on/off meaning, as
       * [[Select.filterable]] and [[MultiSelect.filterable]]. Use [[filterQuery]]
       * when the app needs to read or write the query.
       */
@@ -251,7 +251,7 @@ final case class Listbox[K] private (
     private[uic] def withInvalidMessage(v: Maybe[String]): Listbox[K]                   = copy(invalidMsgV = v)
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox[K] = copy(invalidMsgDynV = v)
 
-    /** Fires on focus loss with the current selection — the validation layer's Blur
+    /** Fires on focus loss with the current selection: the validation layer's Blur
       * trigger.
       */
     @targetName("onBlurSet")
@@ -267,7 +267,7 @@ final case class Listbox[K] private (
         !disabledFlag && (selectionModeV != SelectionMode.None || onItemClickF.isDefined)
 
     /** Package-internal: hosts (OrderList/PickList) that already subscribe to the
-      * same selection ref in an enclosing render supply the resolved set directly —
+      * same selection ref in an enclosing render supply the resolved set directly;
       * a second nested subscription to the same ref would race the inner update
       * against the outer replace (the Overlay renderOpen lesson). The click
       * handlers still write through the BOUND refs.
@@ -384,7 +384,7 @@ final case class Listbox[K] private (
                 ref.set(if selectedRow >= 0 then selectedRow else navigable.head)
             case _ => ()
 
-        // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
+        // Blur fires even without a pick: the validation layer's Blur trigger. Reads the
         // bound ref LIVE, so it reports the selection at blur time.
         val fireBlur: UI.Action = onBlurF match
             case Present(f) => selectedRef match

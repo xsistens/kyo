@@ -101,7 +101,7 @@ class DataTableLiveHandlerTest extends UicTest:
             up   = grip.attrs.onPointerUp.getOrElse(throw new AssertionError("no release"))
             _ <- down(UI.PointerEvent(0, 10, 0, 0, 200, 40, 1, Absent))
             _ <- move(UI.PointerEvent(0, 95, 0, 0, 200, 40, 1, Absent))
-            // A row is appended while the drag is in flight — the shape a paginated or streaming
+            // A row is appended while the drag is in flight, the shape a paginated or streaming
             // table produces on its own.
             _     <- rows.set(trio :+ Item("4", "D"))
             _     <- up(UI.PointerEvent(0, 95, 0, 0, 200, 40, 1, Absent))
@@ -131,7 +131,7 @@ class DataTableLiveHandlerTest extends UicTest:
             // Open the first row's cell and type into it.
             _ <- cells.head.attrs.onClick.getOrElse(throw new AssertionError("no cell click"))
             _ <- name.set("A-typed")
-            // The rows are replaced by an equal-keyed list — the shape a re-fetch produces. The
+            // The rows are replaced by an equal-keyed list, the shape a re-fetch produces. The
             // cell handlers below still belong to the render above.
             _ <- rows.set(List(Item("1", "A"), Item("2", "B"), Item("3", "C"), Item("4", "D")))
             // Clicking another cell is a way of leaving the open one, so it has to commit it.

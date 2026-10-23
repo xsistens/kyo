@@ -7,7 +7,7 @@ import kyo.UI.*
 enum SkeletonShape derives CanEqual:
     case Rectangle, Circle
 
-/** Skeleton — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Skeleton: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Skeleton anatomy: `div.p-skeleton.p-component[.p-skeleton-circle]
   * [.p-skeleton-animation-none]`, an empty box whose `::after` runs the wave
   * shimmer), so the extracted `@primeuix` skeleton CSS applies verbatim.
@@ -16,9 +16,9 @@ enum SkeletonShape derives CanEqual:
   * and `height` (default `1rem`), or the `size` square convenience that wins
   * over both (Prime semantics). `borderRadius` overrides the token radius;
   * `animation(false)` maps Prime's `animation="none"`. The `::after` shimmer
-  * needs `position: relative` on the root — PrimeVue sets it as an inline
+  * needs `position: relative` on the root; PrimeVue sets it as an inline
   * style, here it lives in [[Theme.primeExtraCss]]. The box is `aria-hidden`
-  * (Prime semantics — a skeleton is a purely visual placeholder).
+  * (Prime semantics: a skeleton is a purely visual placeholder).
   */
 final case class Skeleton private (
     shapeV: SkeletonShape = SkeletonShape.Rectangle,
@@ -39,7 +39,7 @@ final case class Skeleton private (
     /** CSS height (inline style; default `1rem`). */
     def height(v: String): Skeleton = copy(heightV = v)
 
-    /** Square convenience: one CSS length for both dimensions — wins over
+    /** Square convenience: one CSS length for both dimensions; wins over
       * `width`/`height` (Prime semantics).
       */
     def size(v: String): Skeleton = copy(sizeV = Present(v))

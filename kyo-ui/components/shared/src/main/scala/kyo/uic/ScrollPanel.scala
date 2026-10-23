@@ -3,13 +3,13 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** ScrollPanel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** ScrollPanel: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ScrollPanel anatomy: `div.p-scrollpanel.p-component` >
   * `div.p-scrollpanel-content-container` > `div.p-scrollpanel-content`), so the
   * extracted `@primeuix` scrollpanel CSS applies verbatim.
   *
   * DEFERRAL (server-honest): Prime's ScrollPanel drives CUSTOM scrollbar
-  * elements (`.p-scrollpanel-bar-x/-y`) from JS scroll measuring — that
+  * elements (`.p-scrollpanel-bar-x/-y`) from JS scroll measuring. That
   * lifecycle has no server-side equivalent, so this version scrolls NATIVELY:
   * the kyo remainder re-enables the native scrollbars Prime's content CSS
   * hides and styles them thin with the `--p-scrollpanel-bar-*` tokens
@@ -50,6 +50,6 @@ end ScrollPanel
 object ScrollPanel:
     def apply(): ScrollPanel = new ScrollPanel()
 
-    /** A scroll panel with the given content — size it via `width`/`height`. */
+    /** A scroll panel with the given content; size it via `width`/`height`. */
     def apply(cs: UI*): ScrollPanel = new ScrollPanel(kids = cs.toList)
 end ScrollPanel

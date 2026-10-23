@@ -6,10 +6,10 @@ package kyo.uic.form
   *
   * `integer` reports whether the field is whole-valued (`Int`/`Long`); when it is, the
   * binding turns on `InputNumber.integer(true)`, whose client keystroke mask rejects the
-  * decimal separator — so the bound `Double` is always integral and `fromDouble` is exact
+  * decimal separator, so the bound `Double` is always integral and `fromDouble` is exact
   * and total. Out-of-range values are clamped to `A`'s bounds.
   *
-  * Precision note: `Long` rides a `Double`, so it is exact only up to ±2^53 — fine for
+  * Precision note: `Long` rides a `Double`, so it is exact only up to ±2^53: fine for
   * counts/quantities, unsuitable for large ids.
   */
 trait NumberCodec[A]:

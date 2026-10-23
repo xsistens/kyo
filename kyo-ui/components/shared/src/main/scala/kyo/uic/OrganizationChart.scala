@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** One node of an [[OrganizationChart]] — a recursive hand-authored carrier: a
+/** One node of an [[OrganizationChart]]: a recursive hand-authored carrier: a
   * `label`, a stable `id` of the app's own type `K` (what the expansion and
   * selection sets hold, and the event payload),
   * its `children`, an optional `template` slot that wins over the plain label,
@@ -17,12 +17,12 @@ final case class OrgChartNode[K](
     className: Maybe[String] = Absent
 )
 
-/** OrganizationChart — native kyo-ui, PrimeOne design (mirrors
+/** OrganizationChart: native kyo-ui, PrimeOne design (mirrors
   * PrimeVue/PrimeReact's OrganizationChart anatomy: per node one nested
   * `table.p-organizationchart-table` whose first row holds the
   * `div.p-organizationchart-node[.p-organizationchart-node-selectable]
   * [.p-organizationchart-node-selected]` box (label/template + the round
-  * `a.p-organizationchart-node-toggle-button` with the chevron — down while
+  * `a.p-organizationchart-node-toggle-button` with the chevron: down while
   * expanded, up while collapsed, Prime's glyphs), a connector row with the
   * vertical `div.p-organizationchart-connector-down` line, a
   * `tr.p-organizationchart-connectors` row of paired
@@ -109,7 +109,7 @@ final case class OrganizationChart[K] private (
         val colspan     = if hasChildren then node.children.length * 2 else 1
 
         // The node box: label/template + the round toggle anchor (chevron-down
-        // while expanded, chevron-up while collapsed — Prime's glyphs).
+        // while expanded, chevron-up while collapsed, Prime's glyphs).
         var box = div.cssClass("p-organizationchart-node")
         if selectable then box = box.cssClass("p-organizationchart-node-selectable").onClick(clickNode(node.id))
         if isSelected then box = box.cssClass("p-organizationchart-node-selected")

@@ -13,12 +13,12 @@ enum DividerLineStyle derives CanEqual:
 
 /** Divider content alignment: `Left`/`Center`/`Right` apply to horizontal
   * dividers, `Top`/`Center`/`Bottom` to vertical ones (Prime's `align`
-  * vocabulary — a value from the other axis is ignored, like Prime).
+  * vocabulary; a value from the other axis is ignored, like Prime).
   */
 enum DividerAlign derives CanEqual:
     case Left, Center, Right, Top, Bottom
 
-/** Divider — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Divider: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Divider anatomy: `div.p-divider.p-component.p-divider-horizontal|-vertical
   * .p-divider-solid|-dashed|-dotted[.p-divider-left|-center|-right|-top|-bottom]`
   * > optional `div.p-divider-content`), so the extracted `@primeuix` divider

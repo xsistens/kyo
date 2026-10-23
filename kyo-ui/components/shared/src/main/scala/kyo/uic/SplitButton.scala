@@ -3,16 +3,16 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** SplitButton — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** SplitButton: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * SplitButton anatomy: `div.p-splitbutton.p-component
   * [.p-splitbutton-raised|-rounded|-fluid]` > primary
   * `button.p-splitbutton-button.p-button` + attached dropdown trigger
   * `button.p-splitbutton-dropdown.p-button.p-button-icon-only`), so the
-  * extracted `@primeuix` splitbutton CSS applies verbatim — the sheet fuses the
+  * extracted `@primeuix` splitbutton CSS applies verbatim: the sheet fuses the
   * two buttons' radii and drops the inner border.
   *
   * The primary segment runs `onClick`; the chevron segment toggles a popup
-  * [[Menu]] of the given [[MenuItem]]s — the real [[Overlay]] panel anchored on
+  * [[Menu]] of the given [[MenuItem]]s, the real [[Overlay]] panel anchored on
   * the splitbutton root (the sheet's `position: relative`), with Prime's
   * `.p-splitbutton .p-menu { min-width: 100% }` sizing, outside-click/Escape
   * dismissal, focus seeding, and the Menu's ArrowDown/ArrowUp + Enter keyboard
@@ -42,10 +42,10 @@ final case class SplitButton private (
       */
     def severity(v: Severity | Signal[Severity]): SplitButton = copy(severityV = ReactiveValue(v))
 
-    /** Rendering variant (Filled/Outlined/Text/Link) — passed to both segments. */
+    /** Rendering variant (Filled/Outlined/Text/Link), passed to both segments. */
     def variant(v: ButtonVariant): SplitButton = copy(variantV = v)
 
-    /** Size — passed to both segments. */
+    /** Size, passed to both segments. */
     def size(v: Size): SplitButton = copy(sizeV = v)
 
     /** Fully rounded outer corners (`.p-splitbutton-rounded`). */
@@ -69,7 +69,7 @@ final case class SplitButton private (
     /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]). */
     def items(is: MenuItemEntry*): SplitButton = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
-    /** Binds the panel visibility two-way to `ref` (optional — self-managed
+    /** Binds the panel visibility two-way to `ref` (optional; self-managed
       * otherwise).
       */
     def open(ref: SignalRef[Boolean]): SplitButton = copy(openRefV = Present(ref))
@@ -156,6 +156,6 @@ object SplitButton:
       */
     def apply(label: String | Signal[String]): SplitButton = new SplitButton(labelV = Present(ReactiveValue(label)))
 
-    /** An empty split button — add an icon and items via the setters. */
+    /** An empty split button; add an icon and items via the setters. */
     def apply(): SplitButton = new SplitButton()
 end SplitButton

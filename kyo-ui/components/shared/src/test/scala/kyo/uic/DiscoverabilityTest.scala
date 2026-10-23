@@ -4,7 +4,7 @@ import kyo.uic.UicTest
 
 /** Machine-checked IDE-discoverability contract: each component's setter surface
   * is gated by its concrete return type, so options that don't apply to a
-  * component must not exist on it — invalid code fails to COMPILE, which is the
+  * component must not exist on it: invalid code fails to COMPILE, which is the
   * same information autocomplete uses to show only valid options after `.`.
   */
 class DiscoverabilityTest extends UicTest:
@@ -33,7 +33,7 @@ class DiscoverabilityTest extends UicTest:
         )
         // Bound to a val first, it does not: nothing constrains the element type at the
         // definition, the comprehension infers List[Button], and the placement one line
-        // later fails — pointing at the collection rather than at the missing
+        // later fails, pointing at the collection rather than at the missing
         // conversion. This is the position that costs readers an unexplained ascription.
         typeCheckFailure(
             preamble + "def x(using Frame): UI =\n  val rows = for i <- List(1, 2) yield uic.Button(i.toString)\n  fragment(rows*)"
@@ -71,8 +71,8 @@ class DiscoverabilityTest extends UicTest:
 
     "the tab selection is ONE setter over the whole union, not a SignalRef demand" in {
         // A SignalRef in a slot is a CAPABILITY demand: it asks every caller for write
-        // access so the callers that want write-back can have it. Reading needs none —
-        // `Signal.render` serves all three — so the union is the strictly weaker ask.
+        // access so the callers that want write-back can have it. Reading needs none
+        // (`Signal.render` serves all three), so the union is the strictly weaker ask.
         typeCheck(preamble + """def x(r: SignalRef[String]): uic.Tabs[String] = uic.Tabs[String]().selected(r)""")
         typeCheck(preamble + """def x(s: Signal[String]): uic.Tabs[String] = uic.Tabs[String]().selected(s)""")
         typeCheck(preamble + """def x: uic.Tabs[String] = uic.Tabs[String]().selected("overview")""")
@@ -123,7 +123,7 @@ class DiscoverabilityTest extends UicTest:
     "a menu item's disabled takes a Signal, like its label already did" in {
         // The item type was uneven with ITSELF: a label that may follow a signal beside an
         // availability that may not. That is the argument for this one, not the count of
-        // `disabled` slots elsewhere — nineteen of those are plain Booleans and rightly so.
+        // `disabled` slots elsewhere: nineteen of those are plain Booleans and rightly so.
         typeCheck(preamble + """def x: uic.MenuItem = uic.MenuItem("Play").disabled(true)""")
         typeCheck(preamble + """def x(s: Signal[Boolean]): uic.MenuItem = uic.MenuItem("Play").disabled(s)""")
         // Chains on, and composes with the rest of the item's slots.
@@ -136,7 +136,7 @@ class DiscoverabilityTest extends UicTest:
     "the element id is one slot, and it still hands back the concrete component" in {
         // Lifting `id` off FormControl and the seven standalones onto HasElementId is a
         // pure reshaping: the setter has to stay on every component that had it, and it
-        // has to keep returning `Self` — a trait that returned `Node` would silently end
+        // has to keep returning `Self`: a trait that returned `Node` would silently end
         // every builder chain it appeared in.
         typeCheck(preamble + """def x: uic.Input = uic.Input().id("a").placeholder("b")""")
         typeCheck(preamble + """def x: uic.Button = uic.Button("Save").id("a").rounded(true)""")
@@ -171,7 +171,7 @@ class DiscoverabilityTest extends UicTest:
     }
 
     "every control that holds a user-supplied value carries the whole validation vocabulary" in {
-        // The four setters used to be spread unevenly — the pair on some controls, the
+        // The four setters used to be spread unevenly: the pair on some controls, the
         // constant alone on others, nothing on a third group. FormControl declares all
         // four, so a control that claims the trait cannot be missing one; asserting the
         // trait per control is therefore asserting the whole vocabulary per control.
@@ -244,7 +244,7 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + form + """def x(using Frame): NumberField[Int] < Sync = f.numberField[Int](1).on(Activation.Blur).declare""")
         // The old constructor form: rules and triggers were positional and mandatory.
         typeCheckFailure(preamble + form + """def x(using Frame) = f.field("a", Validator.required(), Activation.Blur)""")
-        // A spec is not a field — the terminal is what registers it, so forgetting it cannot
+        // A spec is not a field: the terminal is what registers it, so forgetting it cannot
         // silently produce a field the form does not know about.
         typeCheckFailure(preamble + form + """def x(using Frame): FormField[String] < Sync = f.field("a")""")
     }
@@ -1451,7 +1451,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x(r: SignalRef[String]): uic.FloatLabel = uic.FloatLabel(uic.AutoComplete[String]().options(Seq("A")).id("c").value(r), "City").variant(uic.FloatLabelVariant.In).forId("c")"""
         )
         // IftaLabel is the same idea with a fixed placement, so it accepts the same
-        // four hosts — not Input alone.
+        // four hosts, not Input alone.
         typeCheck(
             preamble + """def x(r: SignalRef[String]): uic.IftaLabel = uic.IftaLabel(uic.TextArea().id("m").value(r), "Message").forId("m")"""
         )
@@ -1526,14 +1526,14 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     "a MenuItem can say it is the current page, constantly or from the route signal" in {
         // The slot a menu needs to be a NAV, which is what a menu of `url` rows is. Both forms,
         // because the constant one is a static page's whole need and the signal one is what a
-        // router-driven strip binds — and the signal form is why this is not a class passthrough:
+        // router-driven strip binds. And the signal form is why this is not a class passthrough:
         // the component knows to write `aria-current` as well, and a page painting a class from
         // outside cannot.
         typeCheck(preamble + """def x: uic.MenuItem = uic.MenuItem("Queue").url("/queue").current(true)""")
         typeCheck(
             preamble + """def x(s: Signal[Boolean]): uic.MenuItem = uic.MenuItem("Queue").url("/queue").current(s)"""
         )
-        // There is still no class/style escape hatch on the model — the typed slot is the answer.
+        // There is still no class/style escape hatch on the model; the typed slot is the answer.
         typeCheckFailure(preamble + """def x = uic.MenuItem("a").cssClass("mine")""")
     }
 
@@ -1631,7 +1631,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     }
 
     "TreeSelect carries the picker family's options shape, plus a children projection" in {
-        // options(roots)(label)(children) — the flat pickers' shape with one extra
+        // options(roots)(label)(children): the flat pickers' shape with one extra
         // projection for the structure; the values serve as their own ids and the selection holds them.
         typeCheck(
             preamble + "final case class Dir(name: String, subs: List[Dir])\n" +
@@ -1683,8 +1683,8 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
 
     // The targetless form is a placement choice, not a second open-state API: the caller holds the
     // state because the panel has no mount to hold it, and the only two things that value offers
-    // are a right-click handler and a close. Anything looser — a raw Boolean, the caller's own
-    // refs — would put the open ordering (point BEFORE open) back where it can be got wrong.
+    // are a right-click handler and a close. Anything looser (a raw Boolean, the caller's own
+    // refs) would put the open ordering (point BEFORE open) back where it can be got wrong.
     "ContextMenu.targetless takes the state the component allocated, not a bare open ref" in {
         typeCheck(
             preamble + """def x(using Frame): UI = UI.mounted { val m = uic.ContextMenu(Seq(uic.MenuItem("Play"))); m.state.map(st => fragment(tr.onContextMenu(st.openAt)(td("row")), m.targetless(st))) }"""
@@ -1912,7 +1912,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Overlay = uic.Overlay(r).autoFlip(false)""")
         // Dialog draggable + resizable
         typeCheck(preamble + """def x: uic.Dialog = uic.Dialog().draggable(true).resizable(true)""")
-        // Knob keeps keyboard; pointer-drag is behavioral (no new prop) — the value binding stands
+        // Knob keeps keyboard; pointer-drag is behavioral (no new prop); the value binding stands
         typeCheck(preamble + """def x(r: SignalRef[Double])(using Frame): uic.Knob = uic.Knob().value(r).min(0).max(100)""")
         // Carousel swipe is behavioral on the bound page; no responsiveOptions prop (deferred)
         typeCheckFailure(preamble + """def x = uic.Carousel[Int]().responsiveOptions(Nil)""")

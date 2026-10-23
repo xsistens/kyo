@@ -18,34 +18,34 @@ enum MenuAccessibleRole derives CanEqual:
     case Navigation
 end MenuAccessibleRole
 
-/** Menu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Menu
+/** Menu: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Menu
   * anatomy: `div.p-menu.p-component` > `ul.p-menu-list[role=menu]` of
-  * `li.p-menu-item` rows — each `div.p-menu-item-content` >
-  * `a.p-menu-item-link` with icon + label — plus `li.p-menu-separator` dividers
+  * `li.p-menu-item` rows, each `div.p-menu-item-content` >
+  * `a.p-menu-item-link` with icon + label, plus `li.p-menu-separator` dividers
   * and `li.p-menu-submenu-label` section headings for grouped items), so the
   * extracted `@primeuix` menu CSS applies verbatim.
   *
-  * Two modes like Prime: inline (the default render) and `popup(openRef)` — the
+  * Two modes like Prime: inline (the default render) and `popup(openRef)`: the
   * popup wraps the same list in the [[Overlay]] primitive (Prime's
   * `.p-menu-overlay` skin): writes to the ref open and close it, an outside
   * click or Escape closes, and the LIST seeds focus on open so the keyboard
   * works without a prior click (the list, not the panel around it, because the
   * list is the `role="menu"` carrying `aria-activedescendant` and that attribute
   * is read off whatever holds focus). Place the popup inside a `position: relative`
-  * anchor (stamp `p-uic-overlay-anchor` on your trigger's container — the
+  * anchor (stamp `p-uic-overlay-anchor` on your trigger's container; the
   * Select/Popover geometry story).
   *
   * Items are the shared typed [[MenuItem]] model: `onSelect(effect)` runs on
   * click or Enter and the popup closes; `url` rows render real anchors;
   * top-level items carrying `items(...)` render as flat labelled sections
-  * (Prime's grouped Menu — for nested floating submenus use TieredMenu).
+  * (Prime's grouped Menu; for nested floating submenus use TieredMenu).
   * Keyboard (WAI-ARIA menu, the shared [[ListNav]] machine): the list is the
   * single tab stop; ArrowDown/ArrowUp move Prime's `.p-focus` row over the
   * enabled items (disabled and separators skipped) and cycle at the ends, so
   * ArrowUp with nothing highlighted lands on the last row; Home/End jump to the
   * first/last, Enter or Space activates it. An inline menu highlights its first
   * enabled row when it takes focus and drops the highlight when it loses it. The
-  * item links carry `tabindex="-1"` (out of the Tab order — the list roves the
+  * item links carry `tabindex="-1"` (out of the Tab order: the list roves the
   * highlight), and `id(...)` wires `aria-activedescendant` to the focused row,
   * which is exposed as `s"$id-active"`. Give distinct ids to multiple menus on a
   * page. The mount mints a base when none was given, so the announcement works
@@ -83,7 +83,7 @@ final case class Menu private (
     private[uic] def elementId: Maybe[String] = idV
 
     /** Popup mode: the menu renders as a floating [[Overlay]] panel bound two-way
-      * to `ref` — writes open and close it, outside click/Escape write back.
+      * to `ref`: writes open and close it, outside click/Escape write back.
       */
     def popup(ref: SignalRef[Boolean]): Menu = copy(popupRefV = Present(ref))
 
@@ -182,7 +182,7 @@ final case class Menu private (
         }
     end navigation
 
-    /** The subscription tree the mount publishes — the seam golden tests render
+    /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as
       * placeholders).
       *
@@ -203,7 +203,7 @@ final case class Menu private (
             case MenuAccessibleRole.Navigation => navigation
             case MenuAccessibleRole.Menu       =>
                 // Resolved HERE and not in `render`: the resolution is a reactive region, and one
-                // placed outside the mount would rebuild the mount on every emission — taking the
+                // placed outside the mount would rebuild the mount on every emission, taking the
                 // open state with it. Inside the mount's content it re-renders the rows and nothing
                 // else.
                 MenuRender.resolveDisabled(itemsV) { items =>
@@ -212,7 +212,7 @@ final case class Menu private (
                 }
     end wired
 
-    /** @param partBase what internal parts derive from (`s"$partBase-active"`) — the caller's id
+    /** @param partBase what internal parts derive from (`s"$partBase-active"`): the caller's id
       *                 when there is one, else the id the mount minted. Distinct from `idV`,
       *                 which is only ever the caller's and is what lands on the element.
       */
@@ -285,7 +285,7 @@ final case class Menu private (
         var list = named(ul.cssClass("p-menu-list").role("menu"))
         if hiRow >= 0 then partBase.foreach(base => list = list.aria("activedescendant", s"$base-active"))
         // The caller's id goes on the ELEMENT, the way `HasElementId` says a container puts it on
-        // its own root — inline that root is the `div.p-menu` below; in a popup the component's
+        // its own root: inline that root is the `div.p-menu` below; in a popup the component's
         // root is the overlay's panel, which the menu does not own, so it lands on the
         // `ul[role=menu]`, the element that IS the menu to a reader. Either way `#<id>` exists
         // and contains the rows, which is what a page addressing a menu by name is reaching for.
@@ -344,7 +344,7 @@ final case class Menu private (
 end Menu
 
 /** Package-internal flat row model of the plain Menu (grouped items flatten to
-  * a heading followed by their children — Prime's Menu is a flat list).
+  * a heading followed by their children; Prime's Menu is a flat list).
   */
 private[uic] enum MenuRow derives CanEqual:
     case Item(it: MenuItem)
@@ -353,5 +353,5 @@ private[uic] enum MenuRow derives CanEqual:
 end MenuRow
 
 object Menu:
-    /** An empty menu — add rows via [[Menu.items]]. */
+    /** An empty menu; add rows via [[Menu.items]]. */
     def apply(): Menu = new Menu()

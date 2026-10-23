@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Radio button — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Radio button: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * RadioButton anatomy: `div.p-radiobutton` > hidden native
   * `input.p-radiobutton-input` + visual `div.p-radiobutton-box` with the always
   * present `div.p-radiobutton-icon` dot that scales in when checked). The kyo
@@ -40,7 +40,7 @@ final case class RadioButton private (
 
     def text(v: String): RadioButton = copy(labelText = Present(v))
 
-    /** Radio group name — all buttons sharing a `name` are mutually exclusive. */
+    /** Radio group name: all buttons sharing a `name` are mutually exclusive. */
     def name(v: String): RadioButton = copy(groupName = Present(v))
 
     /** Sets a constant checked state. */
@@ -54,7 +54,7 @@ final case class RadioButton private (
       */
     def disabled(v: Boolean | Signal[Boolean]): RadioButton = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly` — interaction is blocked (`aria-readonly`), but unlike
+    /** `readonly`: interaction is blocked (`aria-readonly`), but unlike
       * `disabled` the button keeps its normal look.
       */
     def readonly(v: Boolean): RadioButton = copy(readonlyFlag = Present(v))
@@ -68,7 +68,7 @@ final case class RadioButton private (
     /** Size: `.p-radiobutton-sm` / default / `.p-radiobutton-lg`. */
     def size(v: Size): RadioButton = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): RadioButton = copy(variantV = v)
 
     private[uic] def withInvalid(v: Maybe[BoolValue]): RadioButton                       = copy(invalidV = v)
@@ -80,7 +80,7 @@ final case class RadioButton private (
 
     def onChange(f: Boolean => UI.Action)(using Frame): RadioButton = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the button's current checked state — unlike onChange it
+    /** Fires on focus loss with the button's current checked state; unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
     def onBlur(f: Boolean => UI.Action)(using Frame): RadioButton = copy(onBlurF = Present(Callback.of(f)))
@@ -138,7 +138,7 @@ final case class RadioButton private (
                 case Absent => box
         end if
 
-        // The dot icon is always present — Prime's CSS scales it 0.1 → 1 on checked.
+        // The dot icon is always present; Prime's CSS scales it 0.1 → 1 on checked.
         val boxDiv = div.cssClass("p-radiobutton-box")(toChild(div.cssClass("p-radiobutton-icon"): UI))
 
         var root = div.cssClass("p-radiobutton").cssClass("p-component")

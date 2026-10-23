@@ -11,7 +11,7 @@ import scala.annotation.targetName
 enum MultiSelectDisplay derives CanEqual:
     case Comma, Chip
 
-/** MultiSelect — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** MultiSelect: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * MultiSelect anatomy: `div.p-multiselect.p-component.p-inputwrapper
   * [.p-multiselect-display-chip][.p-invalid][.p-disabled][.p-multiselect-sm|-lg]
   * [.p-variant-filled][.p-multiselect-fluid][.p-multiselect-open]` >
@@ -27,13 +27,13 @@ enum MultiSelectDisplay derives CanEqual:
   * (outside click / Escape close it, and the panel takes no focus: the trigger
   * keeps it, or a filter header's input does), but `selection` binds a
   * `SignalRef[Set[A]]` of the chosen options and PICKING DOES NOT
-  * CLOSE — clicking a row (or Enter on the `.p-focus` highlight) toggles the key
+  * CLOSE: clicking a row (or Enter on the `.p-focus` highlight) toggles the key
   * and the panel stays open, exactly Prime's multiselect semantics.
   *
   * The header select-all checkbox follows PrimeVue: checked while every visible
   * non-disabled option is selected (with `filterable(true)` "visible" means the
-  * FILTERED options), unchecked otherwise — Prime renders no indeterminate
-  * state here; checking selects exactly the visible enabled options (replacing
+  * FILTERED options), unchecked otherwise (Prime renders no indeterminate
+  * state here); checking selects exactly the visible enabled options (replacing
   * the whole value, like Prime), unchecking clears the selection entirely.
   *
   * Trigger label: comma-joined labels of the selected options in OPTIONS order
@@ -110,12 +110,12 @@ final case class MultiSelect[A] private (
     def optionGroups(is: Seq[OptionItem[A]])(label: A => String): MultiSelect[A] =
         copy(optionsV = optionsV ++ is.toList, labelF = label)
 
-    /** Stable per-option key — the value written into the bound set (defaults to
+    /** Stable per-option key: the value written into the bound set (defaults to
       * the label projection).
       */
     def optionKey(f: A => String): MultiSelect[A] = copy(keyF = Present(f))
 
-    /** Renders matching options disabled (`.p-disabled` rows — shown in the panel
+    /** Renders matching options disabled (`.p-disabled` rows, shown in the panel
       * but not pickable; the keyboard highlight and select-all skip them).
       */
     def optionDisabled(f: A => Boolean): MultiSelect[A] = copy(optionDisabledF = Present(f))
@@ -132,7 +132,7 @@ final case class MultiSelect[A] private (
       */
     def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 
-    /** Binds the panel visibility two-way to `ref` (optional — the panel is
+    /** Binds the panel visibility two-way to `ref` (optional; the panel is
       * self-managed otherwise).
       */
     def open(ref: SignalRef[Boolean]): MultiSelect[A] = copy(openRefV = Present(ref))
@@ -169,19 +169,19 @@ final case class MultiSelect[A] private (
       */
     def filterQuery(ref: SignalRef[String]): MultiSelect[A] = copy(filterQueryRefV = Present(ref))
 
-    /** Whether the header renders the select-all checkbox (default true —
+    /** Whether the header renders the select-all checkbox (default true,
       * Prime's `showToggleAll`).
       */
     def showToggleAll(v: Boolean): MultiSelect[A] = copy(showToggleAllFlag = v)
 
     /** Whether selected rows ALSO get Prime's highlighted row skin
-      * (`.p-multiselect-option-selected`). Default false — PrimeVue's default:
+      * (`.p-multiselect-option-selected`). Default false, PrimeVue's default:
       * the checked box alone marks a selected row.
       */
     def highlightOnSelect(v: Boolean): MultiSelect[A] = copy(highlightOnSelectFlag = v)
 
     /** Renders the clear affordance on the trigger while the selection is
-      * non-empty — clears the bound set and fires `onChange(Set.empty)`.
+      * non-empty; it clears the bound set and fires `onChange(Set.empty)`.
       */
     def showClear(v: Boolean): MultiSelect[A] = copy(showClearFlag = v)
 
@@ -199,7 +199,7 @@ final case class MultiSelect[A] private (
     /** Size: `.p-multiselect-sm` / default / `.p-multiselect-lg`. */
     def size(v: Size): MultiSelect[A] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): MultiSelect[A] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
@@ -218,7 +218,7 @@ final case class MultiSelect[A] private (
     @targetName("onChangeSet")
     def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the current selection — unlike
+    /** Fires on focus loss (native `blur`) with the current selection; unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
@@ -312,7 +312,7 @@ final case class MultiSelect[A] private (
     end write
 
     private def body(held: Set[A], st: Maybe[State])(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
+        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
         // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
         // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
         // than through `copy(...)` (a copied instance's `State` would not match).
@@ -342,7 +342,7 @@ final case class MultiSelect[A] private (
         val unknownCard: List[UI] =
             if strays.isEmpty || loading then Nil else List(KeyDiagnostics.unknown("MultiSelect", strays.map(labelF)))
 
-        // Toggles one option key — the panel STAYS OPEN (Prime's multiselect pick).
+        // Toggles one option key; the panel STAYS OPEN (Prime's multiselect pick).
         def toggleOption(a: A): UI.Action =
             val k = key(a)
             write(if current.contains(k) then current - k else current + k)
@@ -410,7 +410,7 @@ final case class MultiSelect[A] private (
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if selected.isEmpty && placeholder.isEmpty then lbl = lbl.cssClass("p-multiselect-label-empty")
         // onClickSelf, not onClick: in chip mode the chips (and their remove
-        // buttons) live INSIDE the label — a bubbling handler would also toggle
+        // buttons) live INSIDE the label, and a bubbling handler would also toggle
         // the panel on every chip remove.
         st.foreach(s => if !disabledFlag then lbl = lbl.onClickSelf(toggle(s)))
         val labelUI: UI = lbl(labelChildren.map(toChild)*)
@@ -509,7 +509,7 @@ final case class MultiSelect[A] private (
                     else panelKey(shown, navigable, hiEff, s, toggleOption, toggleAllOf(current, shown))(e)
                 }
             }
-            // Focus-loss on the trigger reports the current selection — the validation layer's Blur trigger.
+            // Focus-loss on the trigger reports the current selection: the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
                     case Present(c) => c.read(f)
@@ -526,7 +526,7 @@ final case class MultiSelect[A] private (
     end bodyStatic
 
     /** The floating option panel: Prime's `.p-multiselect-overlay` skin on the
-      * [[Overlay]] primitive — header (select-all + filter), then the checkbox
+      * [[Overlay]] primitive: header (select-all + filter), then the checkbox
       * option rows.
       */
     /** The options the panel is showing, the positions the highlight may land on, and where it is
@@ -571,7 +571,7 @@ final case class MultiSelect[A] private (
         val toggleAll   = toggleAllOf(current, shown)
 
         // The inert Prime checkbox anatomy on a row (the Tree precedent: no native
-        // input — the row's own click handler toggles, so an input would double-fire).
+        // input: the row's own click handler toggles, so an input would double-fire).
         def rowCheckbox(isSel: Boolean): UI =
             var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
             if isSel then cb = cb.cssClass("p-checkbox-checked")
@@ -612,7 +612,7 @@ final case class MultiSelect[A] private (
                 )
             )
 
-        // Header: the REAL uic.CheckBox (interactive select-all — const-checked, so
+        // Header: the REAL uic.CheckBox (interactive select-all, const-checked so
         // no nested subscription) plus Prime's IconField filter container.
         val headerKids: List[UI] =
             (if showToggleAllFlag then

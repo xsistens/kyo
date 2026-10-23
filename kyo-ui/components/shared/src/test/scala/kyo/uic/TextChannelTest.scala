@@ -17,7 +17,7 @@ import scala.language.implicitConversions
   * backend's text write and skips the region apparatus entirely.
   *
   * Because the two forms are indistinguishable in the rendered HTML, the golden suite cannot hold this
-  * line — a refactor that reaches for `.render` again would be invisible there. So it is held here, on
+  * line: a refactor that reaches for `.render` again would be invisible there. So it is held here, on
   * the AST. The discriminator is where the reactive node sits: under the labelled element it is the
   * channel, and the labelled element itself is static; above it, the element is the region's output and
   * carries a plain `Text` child instead.
@@ -63,7 +63,7 @@ class TextChannelTest extends UicTest:
         yield
             assert(regions == 0, s"the label span is built once, not per emission (found $regions regions above it)")
             assert(label.children.size == 1, "the label span holds exactly the one reactive text node")
-            // The region carries the caller's own signal, unmapped — that identity is what lets the
+            // The region carries the caller's own signal, unmapped; that identity is what lets the
             // binder dedupe on the emitted string instead of on a fresh UI value per emission.
             val carriesCallerSignal = lifted(nodes.head) match
                 case Present(s) => s eq ref
@@ -75,7 +75,7 @@ class TextChannelTest extends UicTest:
             assert(html.contains("● LIVE"), "renders the signal's current value")
     }
 
-    "a constant Tag label stays a plain text node — no reactive node at all" in {
+    "a constant Tag label stays a plain text node: no reactive node at all" in {
         for
             tree  <- Kyo.lift(uic.Tag("Done").toUI)
             nodes <- reactiveNodes(tree)
