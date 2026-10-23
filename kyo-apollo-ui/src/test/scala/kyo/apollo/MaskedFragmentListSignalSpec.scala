@@ -180,6 +180,30 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 assert(after.map(_.name) == Seq("Deutschland", "France", "Italy"))
         }
 
+        "sees a write that lands between the first reads and its subscription to the store" in {
+            // The write runs on the reading fiber right after the first projection read
+            // `Country:DE`, before the signal exists. A list that subscribes only after
+            // projecting would show Germany until some later write touched a row.
+            val cache = TrapCache(MemoryCache())
+            for
+                c <- ApolloClient.init(
+                    ApolloClient.Config(serverUrl)
+                        .httpEngine(StaticEngine(body))
+                        .normalizedCache(cache, CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
+                )
+                data <- c.query(countriesQuery).data
+                germany = data.countries.head.countryCard
+                key  <- c.apolloStore.keyOf(germany.typeName, germany.raw)
+                _    <- cache.arm(key)(Abort.run[CacheReadFailure](rename(c, germany, "Deutschland")).unit)
+                refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
+                sig  <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                now <- sig.current
+            yield assert(now == Seq("Deutschland", "France", "Italy"), s"the write during the first reads was lost: $now")
+            end for
+        }
+
         "stays total on a cache-less client: each ref's own slice is its value" in {
             for
                 c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(body)))
