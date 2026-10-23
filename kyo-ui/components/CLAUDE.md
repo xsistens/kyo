@@ -58,8 +58,9 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   first converted, `DataTable.selected` the second, and the second is the warning about how this
   list was drawn up: it was not on it. The family was enumerated from the pickers, and a table's
   row selection is the same slot wearing different clothes. Assume the list is short, not complete.
-  Still outstanding: `Select`/`MultiSelect`/`Listbox`/`TreeSelect`/
-  `CascadeSelect`/`SelectButton` take `SignalRef` and nothing else, and
+  `Select`/`CascadeSelect`/`SelectButton` were the third: `selection(A | Signal[A])` and
+  `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`).
+  Still outstanding: `MultiSelect`/`Listbox`/`TreeSelect` take `SignalRef` and nothing else, and
   `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
   constant/`SignalRef` overload pair through two private ADTs (`CheckBox.Checked`,
   `Input.Value`) that duplicate `ReactiveValue` without its one-way case.
@@ -143,8 +144,8 @@ Rules a new one follows:
 
 ## A choice binds the option, never a key
 
-What a reader chooses binds as the app's own type: `selection(SignalRef[A])` where the field always holds an
-option, `selection(SignalRef[Maybe[A]])` where it may stay empty, `selection(SignalRef[Set[A]])` for several.
+What a reader chooses binds as the app's own type: `selection(A | Signal[A])` where the field always holds an
+option, `selection(Maybe[A] | Signal[Maybe[A]])` where it may stay empty, `selection(SignalRef[Set[A]])` for several.
 There is no public setter that takes the key a component compares by. Rules:
 
 - **Keys stay inside.** `optionKey` is how options are matched (panel, keyboard, hidden `<input name>`), and
@@ -152,6 +153,12 @@ There is no public setter that takes the key a component compares by. Rules:
   option it names. Matching never uses `A`'s own equality.
 - **Events carry the value**, not the key: `onChange(Maybe[A] => ...)` / `onChange(Set[A] => ...)`, fired only
   when the write changed what is held (a pick of the row already chosen fires nothing). `onBlur` the same.
+- **A single choice also reports `onPick(A => ...)`**: the same moments as `onChange` minus a clear, fired after it.
+  Both go through `SingleChoice.report`, so the order is one fact, not three. A field never empty reads its picks
+  there instead of writing `_.fold(Kyo.unit)(...)`.
+- **A single choice binds one way too.** `SingleChoice` holds a `ReactiveValue`: a `ReactiveVariable` is written, a
+  `Dyn` or `Const` is only shown, and a pick against it is judged against the value shown and reported, never written,
+  so the app writes its own state (a route). Forms are unaffected: `bind` passes the field's ref, which is two-way.
 - **A value no option carries is a data error**, named in a `.p-uic-key-error` card
   (`KeyDiagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.

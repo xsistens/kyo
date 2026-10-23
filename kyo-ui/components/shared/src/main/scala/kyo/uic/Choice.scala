@@ -4,60 +4,102 @@ import kyo.*
 import kyo.UI.*
 
 /** What a single-choice field ([[Select]], [[CascadeSelect]], [[SelectButton]]) holds its choice in: the option itself
-  * (`selection` over a `SignalRef[A]`), or the option or none (`selection` over a `SignalRef[Maybe[A]]`).
+  * (`selection` over `A`), or the option or none (`selection` over `Maybe[A]`), each as the module's const-or-reactive
+  * [[ReactiveValue]].
+  *
+  * A writable `SignalRef` binds TWO-WAY: a pick writes the option. Any other `Signal`, or a constant, binds ONE-WAY: the
+  * field shows the value and a pick writes nothing, it only reports the change, so the app writes its own state (a route,
+  * say) and the field follows it. The case is decided on the runtime class ([[ReactiveVariable]] before `Dyn`), so
+  * `ref.readOnly` is how a ref opts out.
   *
   * The fields compare options by their key, because the key is what the panel, the keyboard and the hidden form input work
   * with, and never by the option type's own equality: an app value that is a copy of an option still picks that option's row.
-  * A write that names the key the ref already holds leaves the ref as it is, so the instance the app wrote survives a pick of
-  * the row already chosen, and a ref over `A` cannot hold none, so a write of none leaves it too. Both cases report no change,
-  * which is what keeps `onChange` from announcing a write that did not happen.
+  * A write that names the key already held changes nothing, so the instance the app wrote survives a pick of the row already
+  * chosen, and a binding over `A` cannot hold none, so a step to none changes nothing either. Both cases report no change,
+  * which is what keeps `onChange` and `onPick` from announcing a change that did not happen. A one-way binding answers the
+  * same question against the value it shows.
   */
 private[uic] enum SingleChoice[A]:
-    case Value(ref: SignalRef[A])
-    case Optional(ref: SignalRef[Maybe[A]])
+    case Value(v: ReactiveValue[A])
+    case Optional(v: ReactiveValue[Maybe[A]])
 
     /** Renders `f` with the held option, `Absent` for none. */
     def render(f: Maybe[A] => UI)(using Frame): UI =
         this match
-            case Value(r)    => r.render(a => f(Present(a)))
-            case Optional(r) => r.render(f)
+            case Value(ReactiveValue.Dyn(sig))    => sig.render(a => f(Present(a)))
+            case Value(ReactiveValue.Const(a))    => f(Present(a))
+            case Optional(ReactiveValue.Dyn(sig)) => sig.render(f)
+            case Optional(ReactiveValue.Const(m)) => f(m)
+
+    /** The held option as it is at this moment. */
+    def current(using Frame): Maybe[A] < Sync =
+        this match
+            case Value(ReactiveValue.Dyn(sig))    => sig.current.map(a => Present(a))
+            case Value(ReactiveValue.Const(a))    => Present(a)
+            case Optional(ReactiveValue.Dyn(sig)) => sig.current
+            case Optional(ReactiveValue.Const(m)) => m
 
     /** Runs `f` with the held option as it is at this moment. */
     def read(f: Maybe[A] => UI.Action)(using Frame): UI.Action =
-        this match
-            case Value(r)    => r.use(a => f(Present(a)))
-            case Optional(r) => r.use(f)
+        current.map(f)
 
-    /** Writes `next` unless it names the key already held (or is none over a ref that cannot hold it), and answers the value
-      * now held where the write changed it.
+    /** Writes `next` unless it names the key already held (or is none over a binding that cannot hold it), and answers the
+      * value now held where that changed it. A one-way binding writes nothing and answers the same.
       */
     def write(next: Maybe[A], key: A => String)(using Frame): Maybe[Maybe[A]] < Sync =
         update(key)(_ => next)
 
-    /** [[write]] of `f` applied to the held option, as one atomic step. */
+    /** [[write]] of `f` applied to the held option, as one atomic step where the binding is writable. */
     def update(key: A => String)(f: Maybe[A] => Maybe[A])(using Frame): Maybe[Maybe[A]] < Sync =
         def same(a: Maybe[A], b: Maybe[A]): Boolean = a.map(key) == b.map(key)
+        // Over `A` the binding takes only an option, so a step to none leaves it.
+        def stepValue(prev: A): Maybe[A] =
+            f(Present(prev)) match
+                case n @ Present(a) if key(a) != key(prev) => n
+                case _                                     => Absent
+        def stepOptional(prev: Maybe[A]): Maybe[Maybe[A]] =
+            val now = f(prev)
+            if same(prev, now) then Absent else Present(now)
         this match
-            case Value(r) =>
-                // A ref over `A` takes only an option, so a step to none leaves it.
-                def step(prev: A): Maybe[A] =
-                    f(Present(prev)) match
-                        case n @ Present(a) if key(a) != key(prev) => n
-                        case _                                     => Absent
-                r.getAndUpdate(prev => step(prev).getOrElse(prev)).map(prev => step(prev).map(a => Present(a)))
-            case Optional(r) =>
-                r.getAndUpdate(prev => if same(prev, f(prev)) then prev else f(prev)).map { prev =>
-                    val now = f(prev)
-                    if same(prev, now) then Absent else Present(now)
-                }
+            case Value(ReactiveVariable(r)) =>
+                r.getAndUpdate(prev => stepValue(prev).getOrElse(prev)).map(prev => stepValue(prev).map(a => Present(a)))
+            case Optional(ReactiveVariable(r)) =>
+                r.getAndUpdate(prev => stepOptional(prev).getOrElse(prev)).map(stepOptional)
+            case Value(_) =>
+                current.map(_.flatMap(stepValue).map(a => Present(a)))
+            case Optional(_) =>
+                current.map(stepOptional)
         end match
     end update
 
-    /** Whether the ref can hold none, which is what a clear writes. */
+    /** Whether the binding can hold none, which is what a clear writes (or, one-way, reports). */
     def clearable: Boolean =
         this match
             case Value(_) => false
             case _        => true
+end SingleChoice
+
+private[uic] object SingleChoice:
+
+    /** Fires what a single-choice field reports after a write that changed what it holds (`changed` is `Present` exactly
+      * then): `onChange` with what it now holds, then `onPick` with the option where it holds one. Nothing fires for no
+      * change, and `onPick` never fires for a clear. One place, so the order is the same in every field.
+      */
+    def report[A](
+        changed: Maybe[Maybe[A]],
+        onChange: Maybe[Maybe[A] => UI.Action],
+        onPick: Maybe[A => UI.Action]
+    )(using Frame): UI.Action =
+        changed match
+            case Present(now) =>
+                val change: UI.Action = onChange match
+                    case Present(g) => g(now)
+                    case Absent     => ()
+                val pick: UI.Action = (now, onPick) match
+                    case (Present(a), Present(g)) => g(a)
+                    case _                        => ()
+                change.andThen(pick)
+            case Absent => ()
 end SingleChoice
 
 /** What a multi-choice field ([[MultiSelect]], [[MultiSelectButton]]) holds its choice in: the set of chosen
