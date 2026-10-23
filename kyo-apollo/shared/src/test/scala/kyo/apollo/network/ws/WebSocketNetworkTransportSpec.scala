@@ -709,6 +709,50 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 }
         }
 
+        "a delivery that waited for a full subscription does not drop the frame after it" in Clock.withTimeControl { _ =>
+            // A delivery into a full channel races its put against the transport's closing signal. With a buffer
+            // of one, frame 1 is in the consumer's hand, frame 2 in the buffer, frame 3 waits in that race and the
+            // drain holds frame 4: the fifth socket read (the ack first) is the barrier. One consumer step lets
+            // the put of frame 3 win. The sixth read, the `complete`, happens once the owner has handed that credit
+            // back and taken frame 4, which then meets a full channel again (frame 2 in hand, frame 3 buffered).
+            // Had the race's losing waiter completed the closing signal, that delivery would return at once and
+            // drop frame 4, and the `complete` would end the stream after frame 3.
+            //
+            // The sixth read proves frame 4 was handed to the owner, not that the owner is delivering it yet, and a
+            // waiting owner is not observable from outside. Releasing the consumer before that delivery leaves room
+            // for frame 4, so one round can miss a dropping transport, never fail a correct one; the rounds make a
+            // miss unlikely.
+            val rounds = 20
+
+            def round: Chunk[Int] < (Async & Scope & Abort[Closed]) =
+                fixture(bufferSize = 1).map { f =>
+                    val subscription = f.transport.subscribe(request())
+                    for
+                        step     <- Channel.init[Unit](4)
+                        received <- AtomicRef.init(Chunk.empty[Int])
+                        consumer <- Fiber.init(Scope.run(subscription.foreach { r =>
+                            step.take.andThen(received.getAndUpdate(_.append(r.data.getOrElse(-1))))
+                        }))
+                        _ <- established(f.conn, "0")
+                        _ <- Sync.defer {
+                            (1 to 4).foreach(i => f.conn.server(next("0", i)))
+                            f.conn.server(complete("0"))
+                        }
+                        _    <- f.conn.awaitFramesRead(1 + 4)
+                        _    <- step.put(())
+                        _    <- f.conn.awaitFramesRead(1)
+                        _    <- Kyo.foreachDiscard(Chunk.from(2 to 4))(_ => step.put(()))
+                        _    <- consumer.get
+                        seen <- received.get
+                    yield seen
+                    end for
+                }
+            Kyo.foreach(Chunk.from(1 to rounds))(_ => Scope.run(round)).map { seen =>
+                val dropped = seen.filter(_ != Chunk.from(1 to 4))
+                assert(dropped.isEmpty, s"${dropped.size} of $rounds rounds dropped a frame after a waiting delivery: $dropped")
+            }
+        }
+
         "one close caller's interrupt does not end another close caller's wait for the owner" in Clock.withTimeControl { control =>
             // Every close caller waits for the owner's exit, and one caller going away is not the owner exiting:
             // the other caller still returns only once the connection is released and the owner is gone.
