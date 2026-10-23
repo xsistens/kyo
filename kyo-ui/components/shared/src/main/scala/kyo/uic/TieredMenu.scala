@@ -152,7 +152,9 @@ final case class TieredMenu private (
                     .apply(listUI)
                     .render
             case Absent =>
-                if focusRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
+                // One tab stop from the first render; the keys are wired once the mount has a focus to move.
+                list = list.tabIndex(0)
+                if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
                 var root = div.cssClass("p-tieredmenu").cssClass("p-component")
                 idV.foreach(v => root = root.id(v))
                 root(toChild(list(rowsUI.map(toChild)*)))

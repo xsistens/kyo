@@ -1324,6 +1324,51 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "every roving widget is one tab stop in the page as first rendered, where the attached render puts it" in {
+        // Before the client attaches no mount has run, so there is no cursor and no key handler yet. The
+        // menus and the tree used to render no tab stop at all then (the list only took one once the mount
+        // handed it a focus ref), the tree table made every selectable row one, and a horizontal stepper
+        // every header. Tab must reach each widget once, on the element the attached render gives it to.
+        final case class Pet(id: String, name: String) derives CanEqual
+        def stops(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+            elements(ui).map(_.filter(e =>
+                e.attrs.tabIndex match
+                    case Present(i) => i >= 0
+                    case Absent     => e.isInstanceOf[UI.Ast.Focusable]
+            ))
+        val items = List(uic.MenuItem("New").onSelect(()), uic.MenuItem("Open").onSelect(()))
+        for
+            menu   <- stops(uic.Menu().items(items*).render)
+            bar    <- stops(uic.Menubar().items(uic.MenuItem("File").items(items*), uic.MenuItem("Edit")).render)
+            tiered <- stops(uic.TieredMenu().items(uic.MenuItem("File").items(items*), uic.MenuItem("Edit")).render)
+            mega   <- stops(uic.MegaMenu().items(_.item("Products"), _.item("Contact")).render)
+            tree   <- stops(uic.Tree[String]().nodes(_.node("Documents", "docs"), _.node("CV", "cv")).render)
+            chosen <- Signal.initRef(Set(Pet("b", "Bo")))
+            table  <- stops(
+                uic.TreeTable[Pet]().nodes(uic.TreeTableNode(Pet("a", "Al")), uic.TreeTableNode(Pet("b", "Bo"))).rowKey(_.id)
+                    .columns(uic.column("Name")(_.name)).selectionMode(uic.SelectionMode.Single).selection(chosen).render
+            )
+            stepper <- stops(uic.Stepper().step("One")(p("a")).step("Two")(p("b")).render)
+            upright <- stops(uic.Stepper().vertical(true).step("One")(p("a")).step("Two")(p("b")).render)
+        yield
+            assert(menu.map(_.attrs.cssClasses) == Chunk(Chunk("p-menu-list")), s"Menu: ${menu.map(_.attrs.cssClasses)}")
+            assert(bar.map(_.attrs.cssClasses) == Chunk(Chunk("p-menubar-root-list")), s"Menubar: ${bar.map(_.attrs.cssClasses)}")
+            assert(
+                tiered.map(_.attrs.cssClasses) == Chunk(Chunk("p-tieredmenu-root-list")),
+                s"TieredMenu: ${tiered.map(_.attrs.cssClasses)}"
+            )
+            assert(mega.map(_.attrs.cssClasses) == Chunk(Chunk("p-megamenu-root-list")), s"MegaMenu: ${mega.map(_.attrs.cssClasses)}")
+            assert(tree.map(_.attrs.role) == Chunk(Present("tree")), s"Tree: ${tree.map(_.attrs.cssClasses)}")
+            assert(table.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")), s"TreeTable: the chosen row, ${table.size} stops")
+            assert(
+                stepper.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")),
+                s"Stepper: the active header, ${stepper.size} stops"
+            )
+            // A vertical stepper is an accordion's shape, not a tablist's: every header stays its own stop.
+            assert(upright.size == 2, s"vertical Stepper: ${upright.size}")
+        end for
+    }
+
     "Listbox roving: the list is the only tab stop and the only focus target" in {
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         def listbox(using Frame)                           = uic.Listbox[String]()

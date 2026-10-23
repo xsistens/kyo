@@ -567,14 +567,16 @@ final case class TreeTable[A] private (
         if hasChildren then row = row.aria("expanded", isExp.toString)
         if rowInteractive then row = row.cssClass("p-treetable-selectable-row")
         if base.isEmpty then
-            // The placeholder: no mount has run, so there is nothing to move focus with. Every
-            // selectable row stays its own tab stop and answers the two activation keys, which is
-            // what the table did before it grew a cursor.
+            // The placeholder: no mount has run, so there is nothing to move focus with yet, but the
+            // treegrid is already the one tab stop it will be, on the chosen row else the first.
+            // A selectable row still answers a click and the two activation keys.
+            row = row.tabIndex(if index == tabStop then 0 else -1)
             if rowInteractive then
-                row = row.tabIndex(0)
+                row = row
                     .onClick((e: MouseEvent) => activate(id, e.modifiers.meta || e.modifiers.ctrl))
                     // A key activation carries no pointer, so it is always the plain kind.
                     .onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
+            end if
         else
             // A treegrid is ONE tab stop, and it sits where the reader is: the cursor, else the
             // chosen row, else the first. The rest are reachable by the arrows, which is what the

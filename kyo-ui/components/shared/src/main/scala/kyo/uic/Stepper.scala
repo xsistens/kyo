@@ -86,8 +86,8 @@ final case class Stepper[K] private (
         }.placeholder(shown(Nil, _ => ()))
 
     /** The rendered stepper. Empty `ids` is the placeholder a golden render and an SSG page show:
-      * no mount has run, so there is nothing to move focus with and every enabled header stays its
-      * own tab stop, which is what the component did before the arrows.
+      * no mount has run, so there is nothing to move focus with yet, but a horizontal stepper is
+      * already the one tab stop its tablist will be, on the active header.
       */
     private def shown(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         valueRef match
@@ -149,12 +149,14 @@ final case class Stepper[K] private (
             .cssClass("p-step-header")
             .jsProp("type", "button")
         if tablist then header = header.role("tab").aria("selected", isActive.toString)
+        // A tablist is one tab stop, on the active header, from the first render: the arrows that
+        // move between the headers come with the mount's ids, the single stop does not wait for them.
+        if tablist && !blocked then header = header.tabIndex(if isActive then 0 else -1)
         if blocked then header = header.disabled(true).tabIndex(-1)
         else
             if !isActive then header = header.onClick(activate(i))
             if ids.isDefinedAt(i) then
                 val axis = if tablist then ListNav.Orientation.Horizontal else ListNav.Orientation.Vertical
-                if tablist then header = header.tabIndex(if isActive then 0 else -1)
                 header = header.id(ids(i)).onKeyDown(headerMove(ids, navigableSteps(cur), i, axis, focus))
             end if
         end if

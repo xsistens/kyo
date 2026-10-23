@@ -307,10 +307,10 @@ final case class SelectButton[A] private (
                 (nav, optionIds) match
                     case (Present((_, focus)), Present(ids)) if ids.isDefinedAt(i) =>
                         tb = tb.id(ids(i)).asRadioOption(i == tabStop, optionKey(ids, navigable, i, focus))
-                    // No mount, no ids: the static projection reports the role and the state, and
-                    // every option keeps its own tab stop, which is what it had before the arrows.
+                    // No mount, no ids: the page as first rendered has no arrows yet, but it is already
+                    // the one tab stop the attached group is, on the option that carries the id.
                     case _ =>
-                        tb = tb.asRadioOption(tabbable = true, _ => ())
+                        tb = tb.asRadioOption(i == tabStop, _ => ())
                         if i == idAt then idV.foreach(v => tb = tb.id(v))
             else if i == idAt then idV.foreach(v => tb = tb.id(v))
             end if
