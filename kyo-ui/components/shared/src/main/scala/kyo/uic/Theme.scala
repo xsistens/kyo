@@ -8,16 +8,17 @@ import kyo.*
   * Prime's own `.p-*` stylesheets with `dt()` resolved to `var(--p-*)`) plus a
   * small kyo-specific remainder ([[primeExtraCss]]).
   *
-  * Presets: Aura (default, on `:root`) / Material / Lara / Nora via a
-  * `data-theme` attribute on any ancestor; dark scheme via `data-scheme="dark"`,
-  * composable with every preset. Fonts: nothing is embedded. Components
-  * inherit the page font; the root rule prefers Inter with a system-ui
-  * fallback, so self-hosting Inter is optional.
+  * Presets: Aura (default, on `:root`) / Material / Lara / Nora, selected for a
+  * subtree with `.themed(palette, scheme)` on any ancestor element (`import
+  * kyo.uic.Theme.themed`), which stamps the `data-theme` and `data-scheme` attributes
+  * the sheet keys on. The dark scheme composes with every preset. Fonts: nothing is
+  * embedded. Components inherit the page font; the root rule prefers Inter with a
+  * system-ui fallback, so self-hosting Inter is optional.
   *
   * Usage: SSG/SSR: `PageHead(css = uic.Theme.css)`; client mount: put
   * `uic.Theme.css` in the host page's `<style>`.
   *
-  * Branding: [[preset]] emits your own palette in the same shape the four shipped
+  * Branding: [[brand]] makes your own palette in the same shape the four shipped
   * presets take, and [[tokens]] hands you a shipped preset's effective token set to
   * derive from. Both speak the `(name, value)` pairs (no leading `--`) that
   * [[kyo.uic.Tokens]] stores and [[kyo.Stylesheet.scopedVars]] renders.
@@ -29,25 +30,81 @@ import kyo.*
   */
 object Theme:
 
-    /** One of the four shipped PrimeOne presets, selected on the page with a
-      * `data-theme` attribute whose value is [[Preset.attr]]. Aura is the base: its
-      * tokens are declared on every theme and scheme scope, and the other three are
+    /** The token set a subtree resolves against: one of the four shipped [[Preset]]s, or a
+      * [[Brand]] of your own. [[themed]] takes either, so an element is themed by a value
+      * that names its palette rather than by the string the sheet happens to key on.
+      */
+    sealed trait Palette:
+        /** The `data-theme` attribute value the sheet keys this palette on. */
+        def attr: String
+
+    /** One of the four shipped PrimeOne presets, selected on the page with
+      * [[themed]] (the `data-theme` attribute, whose value is [[Preset.attr]]). Aura is the
+      * base: its tokens are declared on every theme and scheme scope, and the other three are
       * emitted as override diffs against it.
       */
-    enum Preset derives CanEqual:
+    enum Preset extends Palette derives CanEqual:
         case Aura, Material, Lara, Nora
 
         /** The `data-theme` attribute value for this preset. */
         def attr: String = toString.toLowerCase
     end Preset
 
+    /** Your own palette: its `name` (the `data-theme` value) and the [[sheet]] that declares
+      * its tokens under that name, made by [[brand]]. The two travel together, so the name an
+      * element is themed with is always one a sheet was made for. Emit `sheet` AFTER [[css]].
+      */
+    final case class Brand private[uic] (name: String, sheet: Stylesheet) extends Palette derives CanEqual:
+        def attr: String = name
+
     /** The color scheme a preset's tokens resolve in, selected on the page with
-      * `data-scheme="dark"`. The two compose: dark is a set of overrides layered onto
+      * [[themed]] (`data-scheme`). The two compose: dark is a set of overrides layered onto
       * whichever preset is in scope, never a preset of its own.
       */
     enum Scheme derives CanEqual:
         case Light, Dark
+
+        /** The `data-scheme` attribute value for this scheme. */
+        def attr: String = toString.toLowerCase
     end Scheme
+
+    extension [E <: UI.Ast.Element](el: E)
+        /** Themes this element's subtree: stamps `data-theme` with the palette's name and
+          * `data-scheme` with the scheme, the two attributes [[css]] and [[cssFor]] select the
+          * token sets by. Put it on the element the tokens should land on (a shell `div`, the
+          * app's root), since CSS resolves a `var()` chain where it is declared.
+          *
+          * Each argument takes a value or a `Signal`. A signal patches its attribute in place on
+          * emission, so a theme or dark-mode switch re-renders nothing below it, and a static
+          * render (SSR, SSG) writes the signal's current value. `Scheme.Light` is written
+          * rather than left out, so a light subtree inside a dark one resets to the light tokens.
+          *
+          * {{{
+          * import kyo.uic.Theme.themed
+          * div(content).themed(uic.Theme.Preset.Aura, uic.Theme.Scheme.Dark)
+          * main(content).themed(paletteRef, darkRef.map(if _ then Scheme.Dark else Scheme.Light))
+          * }}}
+          */
+        def themed(palette: Palette | Signal[? <: Palette], scheme: Scheme | Signal[Scheme] = Scheme.Light)(using Frame): el.Self =
+            val paletteAttr: String | Signal[String] = palette match
+                case s: Signal[? <: Palette] @unchecked => s.map(_.attr)
+                case p: Palette                         => p.attr
+            val schemeAttr: String | Signal[String] = scheme match
+                case s: Signal[Scheme] @unchecked => s.map(_.attr)
+                case s: Scheme                    => s.attr
+            el.withAttrs(dataAttr(dataAttr(el.attrs, "theme", paletteAttr), "scheme", schemeAttr))
+        end themed
+    end extension
+
+    /** Sets `data-<name>` as a constant or as a signal, dropping the other form, so a second
+      * [[themed]] replaces the first rather than leaving a constant and a signal to disagree.
+      */
+    private def dataAttr(a: UI.Ast.Attrs, name: String, v: String | Signal[String]): UI.Ast.Attrs =
+        v match
+            case s: Signal[String] @unchecked =>
+                a.copy(dataAttrs = a.dataAttrs - name, reactiveAttrs = a.reactiveAttrs.updated(s"data-$name", s))
+            case s: String =>
+                a.copy(dataAttrs = a.dataAttrs.updated(name, s), reactiveAttrs = a.reactiveAttrs - s"data-$name")
 
     // === PrimeOne foundation (the target design system) ======================
     // Emitted as raw var-blocks (the values are machine-generated by gen/extract.mjs
@@ -135,7 +192,7 @@ object Theme:
     /** The token set as it EFFECTIVELY resolves on an element carrying this preset and
       * scheme: the same blocks [[primeTokensCss]] emits, folded in the same order, a later
       * declaration winning. Names carry no leading `--`, so the result feeds straight into
-      * [[preset]] or [[kyo.Stylesheet.scopedVars]].
+      * [[brand]] or [[kyo.Stylesheet.scopedVars]].
       *
       * Use it to DERIVE a brand preset from a shipped one: `tokens(Preset.Aura,
       * Scheme.Dark) ++ myRamps` is Aura's dark palette with your colours over it. For most
@@ -153,7 +210,7 @@ object Theme:
         applied.map(_._1).distinct.map(n => (n, last(n)))
     end tokens
 
-    /** Your own preset, in the shape the four shipped ones take: a block keyed by
+    /** Your own palette, in the shape the four shipped presets take: a block keyed by
       * `data-theme="name"`, plus a PAIRED `[data-theme="name"][data-scheme="dark"]` block
       * that out-specifies the library's own `[data-scheme="dark"]` (0,1,0) at (0,2,0).
       * Token names carry no leading `--`, matching [[kyo.uic.Tokens]].
@@ -176,25 +233,30 @@ object Theme:
       *     are declared against. Stamping them on a shell `div` works; declaring your own
       *     tokens on `:root` while theming a `div` does not.
       *
-      * Emit it AFTER [[css]]: at equal specificity the later declaration wins.
+      * Emit its [[Brand.sheet]] AFTER [[css]]: at equal specificity the later declaration
+      * wins. The [[Brand]] is also what [[themed]] takes, so the element is themed with the
+      * name this sheet was made for. A brand named like a shipped preset (`"aura"`) overrides
+      * that preset wherever it is selected.
       *
       * {{{
-      * val brand = uic.Theme.preset("spotify", Seq("p-primary-400" -> "#1ed760", "p-surface-900" -> "#121212"))
-      * val sheet = uic.Theme.css + "\n" + brand.render
-      * div.data("theme", "spotify").data("scheme", "dark")(rawHtml(s"<style>$sheet</style>"), content)
+      * val spotify = uic.Theme.brand("spotify", Seq("p-primary-400" -> "#1ed760", "p-surface-900" -> "#121212"))
+      * val sheet   = uic.Theme.css + "\n" + spotify.sheet.render
+      * div(rawHtml(s"<style>$sheet</style>"), content).themed(spotify, uic.Theme.Scheme.Dark)
       * }}}
       */
-    def preset(
+    def brand(
         name: String,
         light: Seq[(String, String)],
         dark: Seq[(String, String)] = Nil
-    ): Stylesheet =
-        val themed    = Selector.data("theme", name)
+    ): Brand =
+        val scope     = Selector.data("theme", name)
         val darkPairs = light ++ dark
-        val base      = if light.isEmpty then Stylesheet.empty else Stylesheet.scopedVars(themed, light*)
-        if darkPairs.isEmpty then base
-        else base.scopedVars(themed.and(Selector.data("scheme", "dark")), darkPairs*)
-    end preset
+        val base      = if light.isEmpty then Stylesheet.empty else Stylesheet.scopedVars(scope, light*)
+        val sheet     =
+            if darkPairs.isEmpty then base
+            else base.scopedVars(scope.and(Selector.data("scheme", Scheme.Dark.attr)), darkPairs*)
+        Brand(name, sheet)
+    end brand
 
     /** Prime sets no font-family of its own; the showcase look is Inter, with a system
       * fallback, so self-hosting Inter stays optional.
@@ -241,7 +303,7 @@ object Theme:
       *
       * `light` lands on `:root, [data-theme], [data-scheme]` and `dark` on
       * `[data-scheme="dark"]`, the two selectors [[primeTokensCss]] uses for the base set, so
-      * a brand preset from [[preset]] composes on top exactly as it does with [[css]].
+      * a [[Brand]] from [[brand]] composes on top exactly as it does with [[css]].
       * `ComponentCss.base` and [[primeExtraCss]] are always included: the first is the shared
       * anatomy every component builds on, the second is kyo's glue and is one flat document.
       * That second one is the FLOOR here, and it is not neutral: 62 of the 74 component
