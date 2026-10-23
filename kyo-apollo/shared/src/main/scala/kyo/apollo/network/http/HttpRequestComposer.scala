@@ -221,11 +221,12 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.POST)
         Defer.has(request.operation.rootField)
 
     /** The `Accept` header value, widened to advertise incremental delivery when the
-      * operation defers (per the `deferSpec=20220824` incremental-delivery spec).
+      * operation defers: the `deferSpec=20220824` format first, then GraphQL 17's
+      * `incrementalSpec=v0.2`. [[kyo.apollo.runtime.IncrementalAssembler]] reads both.
       */
     private def accept(deferring: Boolean): String =
         val base = "application/graphql-response+json, application/json"
-        if deferring then s"multipart/mixed; deferSpec=20220824, $base" else base
+        if deferring then s"multipart/mixed; deferSpec=20220824, multipart/mixed; incrementalSpec=v0.2, $base" else base
 
     private def postHeaders(deferring: Boolean): HttpHeaders =
         HttpHeaders.empty.add("Content-Type", "application/json").add("Accept", accept(deferring))
