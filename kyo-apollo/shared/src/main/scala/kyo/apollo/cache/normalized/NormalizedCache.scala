@@ -93,6 +93,15 @@ trait NormalizedCache:
       */
     def sizeLimit: Maybe[Int] = Absent
 
+    /** How often this backend has dropped data on its own since it was created: a
+      * record or field that outlived its time-to-live, a record evicted to stay within
+      * its size. Never decreases. A `CacheFirst` watch reads it to tell a miss that
+      * recurs because data was dropped from one that recurs because another operation
+      * keeps overwriting the object (a cache feud). A backend that drops nothing on
+      * its own keeps the default `0`.
+      */
+    def dropped(using Frame): Long < Sync = 0L
+
     /** The record stored under `key`, or `Absent` — one [[read]] of one key. */
     final def loadRecord(key: CacheKey)(using Frame): Maybe[Record] < Sync =
         read(loader => Maybe.fromOption(loader.load(Chunk(key)).get(key)))

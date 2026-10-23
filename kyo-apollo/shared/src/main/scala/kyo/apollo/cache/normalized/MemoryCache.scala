@@ -43,9 +43,10 @@ import scala.collection.immutable.TreeMap
   * write ([[transact]], [[removeExpiredRecords]]) computes the next
   * state from the current one and commits it with a compare-and-set, running again
   * on the newer state if another write committed first. Recency and the physical
-  * removal of records a read found expired are recorded after the read in one
-  * update against the then-current state, so they never roll back a write that
-  * landed during the read.
+  * removal of the records and fields a read found expired are recorded after the
+  * read in one update against the then-current state, so they never roll back a
+  * write that landed during the read. Every record or field dropped by expiry or
+  * eviction counts towards [[dropped]].
   *
   * The clock is injectable via `nowMillis` so expiration is deterministic under
   * test. Mirrors apollo-kotlin's `MemoryCache`.
@@ -78,19 +79,20 @@ final class MemoryCache(
         state.get.map { snapshot =>
             val now                  = nowMillis()
             val used                 = Chunk.newBuilder[CacheKey]
-            val expired              = Chunk.newBuilder[(CacheKey, Entry)]
+            val expired              = Chunk.newBuilder[(CacheKey, Entry, Maybe[Record])]
             val loader: RecordLoader = keys =>
                 keys.foldLeft(Map.empty[CacheKey, Record]) { (loaded, key) =>
                     snapshot.entries.get(key) match
                         case None        => loaded
                         case Some(entry) =>
-                            live(entry.record, now) match
+                            val seen = live(entry.record, now)
+                            if !seen.exists(_ eq entry.record) then expired += ((key, entry, seen))
+                            seen match
                                 case Present(record) =>
                                     used += key
                                     loaded.updated(key, record)
-                                case Absent =>
-                                    expired += (key -> entry)
-                                    loaded
+                                case Absent => loaded
+                            end match
                 }
             val result      = f(loader)
             val usedKeys    = used.result()
@@ -98,6 +100,8 @@ final class MemoryCache(
             if usedKeys.isEmpty && expiredSeen.isEmpty then result
             else state.updateAndGet(_.afterRead(usedKeys, expiredSeen)).andThen(result)
         }
+
+    override def dropped(using Frame): Long < Sync = state.get.map(_.dropped)
 
     def transact[A](
         f: RecordState => (RecordChanges, A),
@@ -124,7 +128,7 @@ final class MemoryCache(
         }
     end transact
 
-    def clearAll(using Frame): Unit < Sync = state.set(State.empty)
+    def clearAll(using Frame): Unit < Sync = state.updateAndGet(s => State.empty.copy(dropped = s.dropped)).unit
 
     def allRecords(using Frame): Map[CacheKey, Record] < Sync =
         state.get.map(_.records)
@@ -148,9 +152,9 @@ final class MemoryCache(
                 val now = nowMillis()
                 before.entries.foldLeft((before, Set.empty[CacheKey])) { case ((s, removed), (key, entry)) =>
                     live(entry.record, now) match
-                        case Absent                                      => (s.removeAll(Set(key)), removed + key)
+                        case Absent                                      => (s.removeAll(Set(key)).countDropped, removed + key)
                         case Present(trimmed) if trimmed eq entry.record => (s, removed)
-                        case Present(trimmed)                            => (s.replace(key, trimmed), removed)
+                        case Present(trimmed)                            => (s.replace(key, trimmed).countDropped, removed)
                 }
             }
 
@@ -266,10 +270,10 @@ object MemoryCache:
     final private case class Entry(record: Record, lastUsed: Long)
 
     /** The whole cache as one immutable value: the records by key, the same keys
-      * ordered by last use (the head is the LRU eviction candidate), and the next
-      * recency tick.
+      * ordered by last use (the head is the LRU eviction candidate), the next
+      * recency tick, and how many records or fields expiry and eviction dropped.
       */
-    final private case class State(entries: Map[CacheKey, Entry], recency: TreeMap[Long, CacheKey], tick: Long):
+    final private case class State(entries: Map[CacheKey, Entry], recency: TreeMap[Long, CacheKey], tick: Long, dropped: Long):
 
         /** The live records among `keys`, as `live` sees each stored one. */
         def load(keys: Chunk[CacheKey], live: Record => Maybe[Record]): Map[CacheKey, Record] =
@@ -294,7 +298,7 @@ object MemoryCache:
         def put(record: Record): State =
             val key     = record.key
             val trimmed = entries.get(key).fold(recency)(old => recency - old.lastUsed)
-            State(entries.updated(key, Entry(record, tick)), trimmed.updated(tick, key), tick + 1)
+            copy(entries = entries.updated(key, Entry(record, tick)), recency = trimmed.updated(tick, key), tick = tick + 1)
         end put
 
         /** Replace the record under `key` without touching its recency. */
@@ -303,25 +307,30 @@ object MemoryCache:
 
         def removeAll(keys: Set[CacheKey]): State =
             keys.foldLeft(this) { (s, key) =>
-                s.entries.get(key).fold(s)(entry => State(s.entries - key, s.recency - entry.lastUsed, s.tick))
+                s.entries.get(key).fold(s)(entry => s.copy(entries = s.entries - key, recency = s.recency - entry.lastUsed))
             }
+
+        /** One more record or field dropped by expiry or eviction. */
+        def countDropped: State = copy(dropped = dropped + 1)
 
         /** Evict least-recently-used entries until at most `maxSize` remain. */
         def evictTo(maxSize: Int): State =
             if entries.size <= maxSize then this
             else
                 val evicted = recency.valuesIterator.take(entries.size - maxSize).toSet
-                removeAll(evicted)
+                removeAll(evicted).copy(dropped = dropped + evicted.size)
 
         /** Record what a read did, against the state as it is NOW: every key it used
-          * becomes most recently used, and every entry it found expired is dropped —
-          * unless a write replaced that entry since, in which case the write wins.
+          * becomes most recently used, and every entry it found expired is dropped,
+          * or trimmed to its live fields, unless a write replaced that entry since,
+          * in which case the write wins.
           */
-        def afterRead(used: Chunk[CacheKey], expired: Chunk[(CacheKey, Entry)]): State =
-            val pruned = expired.foldLeft(this) { case (s, (key, seen)) =>
+        def afterRead(used: Chunk[CacheKey], expired: Chunk[(CacheKey, Entry, Maybe[Record])]): State =
+            val pruned = expired.foldLeft(this) { case (s, (key, seen, live)) =>
                 s.entries.get(key) match
-                    case Some(current) if current eq seen => s.removeAll(Set(key))
-                    case _                                => s
+                    case Some(current) if current eq seen =>
+                        live.fold(s.removeAll(Set(key)))(s.replace(key, _)).countDropped
+                    case _ => s
             }
             used.foldLeft(pruned) { (s, key) =>
                 s.entries.get(key).fold(s)(entry => s.put(entry.record))
@@ -330,5 +339,5 @@ object MemoryCache:
     end State
 
     private object State:
-        val empty: State = State(Map.empty, TreeMap.empty, 0L)
+        val empty: State = State(Map.empty, TreeMap.empty, 0L, 0L)
 end MemoryCache
