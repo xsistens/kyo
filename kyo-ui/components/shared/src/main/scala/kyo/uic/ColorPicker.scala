@@ -55,6 +55,9 @@ import kyo.UI.*
   * (saturation 0, e.g. black/white) hue is not represented in hex, so it reads
   * back as 0: dragging the hue bar on pure black has no visible effect until
   * brightness/saturation lift it off the achromatic axis.
+  *
+  * `id` lands on the element a Tab reaches first: the preview swatch of the overlay picker, the plane's slider
+  * of an inline one (its root where an inline picker has no slider, unbound or disabled).
   */
 final case class ColorPicker private (
     valueBinding: Maybe[Input.Value] = Absent,
@@ -186,7 +189,8 @@ final case class ColorPicker private (
         onKey: (Keyboard, (Double, Double, Double)) => Maybe[String],
         ref: Maybe[SignalRef[String]],
         panel: Maybe[ColorPicker.Panel],
-        seed: Boolean
+        seed: Boolean,
+        elementId: Maybe[String] = Absent
     )(using Frame): UI =
         var el = span
             .cssClass("p-hidden-accessible")
@@ -198,6 +202,7 @@ final case class ColorPicker private (
             .aria("valuetext", r.map(hex => text(ColorPicker.hsvOf(hex))))
             .tabIndex(0)
             .preventScrollKeys
+        elementId.foreach(v => el = el.id(v))
         if seed then el = el.focusAuto(true).focusRestore(true)
         el = el.onKeyDown { e =>
             val eff: UI.Action = e.key match
@@ -320,7 +325,10 @@ final case class ColorPicker private (
                 planeKeys,
                 ref,
                 panel,
-                seed = panel.isDefined
+                seed = panel.isDefined,
+                // Inline, the plane is the picker's first tab stop and so where the caller's id goes;
+                // in the overlay the swatch carries it, since the panel is not on the page until opened.
+                elementId = if panel.isEmpty then idV else Absent
             )
         }
         val hueAxis: List[UI] = ref.toList.filter(_ => interactive).map { r =>
@@ -346,7 +354,9 @@ final case class ColorPicker private (
         if inlineFlag then
             withValidity { (red, msg) =>
                 FieldInvalid.withMessage(
-                    shellRoot(red)(
+                    // Without a bound value or while disabled, an inline picker renders no slider, so
+                    // nothing in it takes focus and the root is the one place the id can name.
+                    shellRoot(red, ownsId = ref.isEmpty || !interactive)(
                         toChild(
                             div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
                                 toChild(content(ref, fallbackHex))
@@ -363,10 +373,10 @@ final case class ColorPicker private (
     /** The root box shared by the inline and overlay paths, with the resolved red state
       * stamped on it.
       */
-    private def shellRoot(red: Boolean, extraClasses: String*)(using Frame): Ast.Div =
+    private def shellRoot(red: Boolean, ownsId: Boolean, extraClasses: String*)(using Frame): Ast.Div =
         var root = div.cssClass("p-colorpicker").cssClass("p-component")
         extraClasses.foreach(c => root = root.cssClass(c))
-        idV.foreach(v => root = root.id(v))
+        if ownsId then idV.foreach(v => root = root.id(v))
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
         if red then root = root.cssClass("p-invalid").aria("invalid", "true")
         accNameV match
@@ -398,6 +408,8 @@ final case class ColorPicker private (
             .jsProp("type", "button")
             .style(_.bg(Style.Color.hex(hex).getOrElse(Style.Color.rgb(0, 0, 0))))
             .onClick(onClickEff)
+        // The swatch is the overlay picker's one tab stop, so it carries the caller's id.
+        idV.foreach(v => preview = preview.id(v))
         if disabledFlag.constTrue then preview = preview.disabled(true).cssClass("p-disabled")
         accNameV match
             case Present(TextValue.Const(n)) => preview = preview.aria("label", n)
@@ -415,7 +427,7 @@ final case class ColorPicker private (
         val staticRoot: UI =
             withValidity { (red, msg) =>
                 FieldInvalid.withMessage(
-                    shellRoot(red, "p-uic-overlay-anchor")(
+                    shellRoot(red, false, "p-uic-overlay-anchor")(
                         toChild(previewSwatchOf(hex => previewSwatch(hex, ()), ref, fallbackHex))
                     ),
                     red,
@@ -469,7 +481,7 @@ final case class ColorPicker private (
         // drop `open`, closing the panel mid-interaction.
         withValidity { (red, msg) =>
             FieldInvalid.withMessage(
-                shellRoot(red, "p-uic-overlay-anchor")(
+                shellRoot(red, false, "p-uic-overlay-anchor")(
                     toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
                     toChild(floating)
                 ),

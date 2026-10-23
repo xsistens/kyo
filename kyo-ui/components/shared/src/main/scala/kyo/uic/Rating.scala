@@ -30,6 +30,9 @@ import scala.annotation.targetName
   * rounds on the way in and writes whole stars on the way out, which is exactly what
   * `NumberFormControl.integer` asks for and why that setter has nothing left to do
   * here.
+  *
+  * `id` lands on the hidden radio a Tab reaches, since the group itself takes no focus: the checked star's,
+  * or the first star's while none is checked.
   */
 final case class Rating private (
     valueBinding: Maybe[ReactiveValue[Int]] = Absent,
@@ -177,6 +180,10 @@ final case class Rating private (
                     case Absent                          => body(0, Absent)
 
     private def body(value: Int, ref: Maybe[SignalRef[Int]])(using Frame): UI =
+        // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
+        // focus, and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
+        // that does. A radio group's tab stop is its checked radio, else its first.
+        val tabStop           = if value >= 1 && value <= starsV then value else 1
         val options: List[UI] = (1 to starsV).toList.map { i =>
             val active = i <= value
             var opt    = div.cssClass("p-rating-option")
@@ -200,6 +207,7 @@ final case class Rating private (
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
             nameV.foreach(n => hidden = hidden.name(n))
+            if i == tabStop then idV.foreach(v => hidden = hidden.id(v))
             // readonly keeps the stars FOCUSABLE and refuses to change: only `disabled` takes them
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
             // state of its own; the group below carries it.
@@ -225,7 +233,6 @@ final case class Rating private (
         // The radios inside form one group, so the box around them says so: an `aria-label` on a
         // roleless div labels nothing in particular.
         var el = div.cssClass("p-rating").cssClass("p-component").role("radiogroup")
-        idV.foreach(v => el = el.id(v))
         if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")

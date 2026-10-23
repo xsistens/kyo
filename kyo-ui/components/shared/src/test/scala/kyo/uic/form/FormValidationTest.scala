@@ -368,6 +368,23 @@ class FormValidationTest extends UicTest:
         end for
     }
 
+    "an invalid Select is focused through its id: the id bind stamps is on the combobox, not on its label" in {
+        import kyo.uic
+        for
+            sink <- Signal.initRef(Chunk.empty[String])
+            form <- mkFocusForm(sink)
+            f    <- form.field(Maybe.empty[Lang]).rules(Validator.chosen()).on(Activation.Submit).declare
+            sel = uic.Select[Lang]().options(Lang.values.toSeq)(_.toString).bind(f)
+            _    <- form.submit(Kyo.unit)
+            went <- sink.get
+            el   <- elementWithId(sel.render, f.domId)
+        yield
+            assert(went == Chunk(f.domId), "submit asks for the Select by its field id")
+            assert(el.attrs.cssClasses.contains("p-select"), s"and that id is on the field root, got ${el.attrs.cssClasses}")
+            assert(el.attrs.tabIndex.contains(0) && el.attrs.role.contains("combobox"), "the element focus can land on")
+        end for
+    }
+
     "the controls that could not join a form now bind end to end" in {
         import kyo.uic
         // Slider over a numeric field: bind wires the value ref, the field's id and the

@@ -1125,6 +1125,17 @@ object Theme:
       |/* Knob: kyo's div column default centers the dial; the sheet only styles
       |   the svg. inline-flex hugs the svg like Prime's inline root. */
       |.p-knob { display: inline-flex; }
+      |/* FileUpload: the sheet hides the native file input with display:none, which also
+      |   takes it out of the tab order, so the control had no element a keyboard could reach
+      |   and its id named nothing focusable. kyo keeps the input visually hidden instead
+      |   (.p-hidden-accessible, which this rule lets apply), so Space or Enter on it opens the
+      |   dialog, and draws the choose button's own focus ring while the input holds focus. */
+      |.p-fileupload input[type='file'].p-hidden-accessible { display: inline-block; }
+      |.p-fileupload-basic-content:has(> input[type='file']:focus-visible) > .p-fileupload-choose-button {
+      |  box-shadow: var(--p-button-primary-focus-ring-shadow);
+      |  outline: var(--p-button-focus-ring-width) var(--p-button-focus-ring-style) var(--p-button-primary-focus-ring-color);
+      |  outline-offset: var(--p-button-focus-ring-offset);
+      |}
       |/* ==== container/data block ==== */
       |/* Row restorers (kyo base CSS: every div/ul is a COLUMN flexbox; Prime never
       |   declares flex-direction and relies on the browser's row default). */

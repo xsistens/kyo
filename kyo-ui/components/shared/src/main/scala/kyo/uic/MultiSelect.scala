@@ -48,6 +48,9 @@ enum MultiSelectDisplay derives CanEqual:
   * Honest deferrals: virtual scrolling, per-option templates, and
   * `selectionLimit` are not implemented. Arrow keys on the open panel no longer
   * scroll the page underneath: the panel declares `preventScrollKeys`.
+  *
+  * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
+  * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
 final case class MultiSelect[A] private (
     optionsV: List[OptionItem[A]],
@@ -416,7 +419,6 @@ final case class MultiSelect[A] private (
         val labelUI: UI = lbl(labelChildren.map(toChild)*)
 
         var lblContainer = div.cssClass("p-multiselect-label-container")
-        idV.foreach(v => lblContainer = lblContainer.id(v))
         st.foreach(s => if !disabledFlag then lblContainer = lblContainer.onClickSelf(toggle(s)))
         val labelContainerUI: UI = lblContainer(toChild(labelUI))
 
@@ -454,6 +456,9 @@ final case class MultiSelect[A] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
+        // On the root, the combobox that holds the tab stop, not on the label container: see
+        // [[HasElementId]]. The panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
+        idV.foreach(v => el = el.id(v))
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
