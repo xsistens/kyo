@@ -445,13 +445,11 @@ sealed abstract class Chunk[+A]
                             discard(f(c.value))
             loop(self, 0, 0)
 
-            @tailrec def flush(): Unit =
-                val v = buffer.pollLast()
-                if !isNull(v) then
-                    discard(f(v))
-                    flush()
-            end flush
-            flush()
+            @tailrec def flush(index: Int): Unit =
+                if index >= 0 then
+                    discard(f(buffer(index)))
+                    flush(index - 1)
+            flush(buffer.size - 1)
 
             ChunkBuilder.releaseBuffer(buffer)
     end foreach
