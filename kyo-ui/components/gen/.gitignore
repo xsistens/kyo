@@ -1,0 +1,3 @@
+# fetch.sh downloads and derives these; they are inputs, never committed.
+input/
+work/

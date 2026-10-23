@@ -3,8 +3,8 @@
 //   @primeuix/styles: per-component CSS with dt('token.path') references
 //   @primeuix/styled: the resolution engine (Theme, dt, evaluateDtExpressions)
 //
-// Run from gen/: `bun extract.mjs` (deps live in gen/npm, installed by fetch.sh).
-// Emits into gen/work/ (gitignored):
+// Run by fetch.sh as `bun extract.mjs` (deps live in npm/, installed by fetch.sh).
+// Emits into work/ next to this file (gitignored):
 //   tokens/<preset>.json: { light: [[name, value]...], dark: [[...]] }
 //   css/base.css:         shared/base component style (var(--p-*) consumers)
 //   css/<component>.css:  per-component style, dt() resolved to var(--p-*)
