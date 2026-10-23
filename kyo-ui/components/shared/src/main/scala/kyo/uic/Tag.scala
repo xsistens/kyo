@@ -3,13 +3,13 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Tag — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tag
+/** Tag: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tag
   * anatomy: `span.p-tag[.p-tag-<severity>][.p-tag-rounded]` > optional
   * `.p-tag-icon` + `span.p-tag-label`), so the extracted `@primeuix` tag CSS
   * applies verbatim.
   *
   * Without a `severity`, the base `.p-tag` skin renders the primary chip.
-  * Prime's tag vocabulary is success/info/warn/danger/secondary/contrast —
+  * Prime's tag vocabulary is success/info/warn/danger/secondary/contrast;
   * `Primary` (and `Help`) keep the unsuffixed base skin. `onClick` is a kyo
   * extension (Prime's Tag is inert): it adds the pointer cursor and makes the
   * chip a control, `role="button"` and one tab stop answering Enter and Space,
@@ -99,10 +99,10 @@ end Tag
 
 object Tag:
     /** A tag labelled `label`. A `Signal[String]` patches the label text IN PLACE on emission (kyo-ui's text
-      * channel — no region, no re-render of the label span), e.g. a locale-driven `I18n.t` leaf or a counter.
+      * channel: no region, no re-render of the label span), e.g. a locale-driven `I18n.t` leaf or a counter.
       */
     def apply(label: String | Signal[String]): Tag = new Tag(labelV = Present(ReactiveValue(label)))
 
-    /** An empty tag — fill the default slot via `apply(cs*)`. */
+    /** An empty tag; fill the default slot via `apply(cs*)`. */
     def apply(): Tag = new Tag()
 end Tag

@@ -10,11 +10,11 @@ import kyo.UI.*
 enum FlexDirection derives CanEqual:
     case Row, RowReverse, Column, ColumnReverse
 
-/** Flex layout container — native kyo-ui (`div.p-uic-flex`; Prime ships no flex
+/** Flex layout container: native kyo-ui (`div.p-uic-flex`; Prime ships no flex
   * primitive, the class lives in the kyo remainder CSS).
   * Direction/alignment/wrap map straight onto the kyo `Style` flex ADT (kyo-ui
   * elements lay out as flex by default, so no display toggle is needed).
-  * Alignment options reuse kyo's own `Alignment`/`Justification` enums — they ARE
+  * Alignment options reuse kyo's own `Alignment`/`Justification` enums; they ARE
   * the ecosystem vocabulary, so autocomplete via `_.spaceBetween` works as usual.
   *
   * `wrap` is three-way: `wrap(true)` maps onto the typed `flexWrap(_.wrap)`;
@@ -38,7 +38,7 @@ final case class FlexBox private (
     /** Typed flow direction (default row). */
     def direction(v: FlexDirection): FlexBox = copy(directionV = Present(v))
 
-    /** Column direction (default is row) — alias for `direction(Column/Row)`. */
+    /** Column direction (default is row); alias for `direction(Column/Row)`. */
     def vertical(v: Boolean): FlexBox =
         copy(directionV = Present(if v then FlexDirection.Column else FlexDirection.Row))
 

@@ -5,13 +5,13 @@ import kyo.*
 /** A typed numeric field (`Int` / `Long` / `Double`). A thin typed façade over a
   * `Double`-valued [[FormField]] (which owns the two-way ref `uic.InputNumber` binds):
   * the `Double` stays the single source of truth and the typed value is derived through a
-  * [[NumberCodec]] — sidestepping a second `SignalRef[A]` (which `SignalRef`, having no
+  * [[NumberCodec]], sidestepping a second `SignalRef[A]` (which `SignalRef`, having no
   * bidirectional map, cannot provide).
   *
   * The value is a total `Signal[A]` (not `Maybe`): `InputNumber` always holds a `Double`,
   * and integer masking (see [[NumberCodec.integer]]) keeps whole-valued fields exact.
   *
-  * Constructed by [[Form.numberField]] — never directly.
+  * Constructed by [[Form.numberField]], never directly.
   */
 final class NumberField[A] private[form] (
     private[form] val underlying: FormField[Double],
@@ -41,20 +41,20 @@ final class NumberField[A] private[form] (
     /** The gated, translated inline message, delegated to the underlying field. */
     def message(using Frame): Signal[Maybe[String]] = underlying.message
 
-    /** Append another rule over the typed value `A` — adapted onto the underlying `Double`
+    /** Append another rule over the typed value `A`, adapted onto the underlying `Double`
       * field through the [[NumberCodec]]. Chainable.
       */
     def addRule(v: Validator[A])(using Frame): NumberField[A] =
         discard(underlying.addRule(Validator.async(d => v.run(codec.fromDouble(d)))))
         this
 
-    /** Predicate rule over the typed value `A`, mirroring [[Form.satisfy]] — sugar for
+    /** Predicate rule over the typed value `A`, mirroring [[Form.satisfy]]: sugar for
       * `addRule(Validator.satisfy(code, args)(p))`. Chainable.
       */
     def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): NumberField[A] =
         addRule(Validator.satisfy(code, args)(p))
 
-    /** This field must equal the live value of `other` — one call for `addRule` +
+    /** This field must equal the live value of `other`: one call for `addRule` +
       * [[dependsOn]] (see [[FormField.matches]]).
       */
     def matches(other: Signal[A], code: String = "must-match")(using CanEqual[A, A], Frame): Unit < (Async & Scope) =

@@ -9,13 +9,13 @@ import scala.language.implicitConversions
 /** Which of DataView's two item sources a build lands on, and what the rows become.
   *
   * `items(Seq)` is build-time data: the rows are plain children, and new data means a new component, so
-  * every row is re-rendered. `items(Signal[Chunk])` makes the rows a kyo-ui list region — a
-  * `UI.Ast.Foreach` — which reconciles per emission and leaves untouched rows alone; `itemKey` moves that
+  * every row is re-rendered. `items(Signal[Chunk])` makes the rows a kyo-ui list region (a
+  * `UI.Ast.Foreach`), which reconciles per emission and leaves untouched rows alone; `itemKey` moves that
   * reconciliation from position to identity by filling the node's `key`.
   *
   * Both sources render the same markup for the same data, so the golden suite cannot tell them apart.
   * What is asserted here is therefore the FORM of the built tree: whether a `Foreach` is there, and
-  * whether it carries a key. The third case is the honest limit — a paginated DataView slices at build
+  * whether it carries a key. The third case is the honest limit: a paginated DataView slices at build
   * time, so a reactive source falls back to the rebuild path and no list region exists at all.
   */
 class DataViewItemsTest extends UicTest:
@@ -51,7 +51,7 @@ class DataViewItemsTest extends UicTest:
             assert(lists.head.key.isDefined, "itemKey fills the region's key function")
     }
 
-    "a build-time item source stays plain children — no list region" in {
+    "a build-time item source stays plain children, no list region" in {
         for
             tree  <- Kyo.lift(view.items(Seq("a", "b")).toUI)
             lists <- foreachNodes(tree)

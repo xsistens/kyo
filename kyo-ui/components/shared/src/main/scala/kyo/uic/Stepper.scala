@@ -3,15 +3,15 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Stepper — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Stepper: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Stepper anatomy). Horizontal: `div.p-stepper.p-component[.p-stepper-readonly]`
-  * > `div.p-steplist` of `div.p-step[.p-step-active][.p-disabled]` items — each
+  * > `div.p-steplist` of `div.p-step[.p-step-active][.p-disabled]` items (each
   * a `button.p-step-header[role=tab]` > `span.p-step-number` +
-  * `span.p-step-title`, followed by the `span.p-stepper-separator` (except the
-  * last step) — plus `div.p-steppanels` > `div.p-steppanel` holding only the
+  * `span.p-step-title`, followed by the `span.p-stepper-separator` except on the
+  * last step), plus `div.p-steppanels` > `div.p-steppanel` holding only the
   * ACTIVE step's content. Vertical (`vertical(true)`, Prime's StepItem
   * composition): the root stacks `div.p-stepitem[.p-stepitem-active]` wrappers,
-  * each holding its `div.p-step` header and — for the active item — the
+  * each holding its `div.p-step` header and (for the active item) the
   * `div.p-steppanel.p-steppanel-active` > `div.p-steppanel-content-wrapper` >
   * vertical `span.p-stepper-separator` (except the last item) +
   * `div.p-steppanel-content` inline under the header. Both layouts use the
@@ -204,8 +204,8 @@ final case class Stepper[K] private (
     /** Wraps the active panel in a step-keyed mount so a step change animates it:
       * the outgoing panel's leave ghost fades out (`p-uic-leave-fade`) while the
       * incoming panel fades in (`p-uic-enter-fade`). A bare `enterTransition` would
-      * never replay — `ref.render` keeps the (horizontal) panel's structural path
-      * stable — so the mount's key (the active index) is what forces the teardown +
+      * never replay (`ref.render` keeps the horizontal panel's structural path
+      * stable), so the mount's key (the active index) is what forces the teardown +
       * remount. The placeholder is the un-animated panel, so SSR/golden output stays
       * byte-identical (the animation is a pure runtime enhancement).
       */

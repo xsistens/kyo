@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Checkbox — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Checkbox: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Checkbox anatomy: `div.p-checkbox` > hidden native `input.p-checkbox-input`
   * + visual `div.p-checkbox-box` with the check/minus SVG icon). The kyo
   * `<input type="checkbox">` provides the real boolean input, so the change
@@ -67,7 +67,7 @@ final case class CheckBox private (
       */
     def disabled(v: Boolean | Signal[Boolean]): CheckBox = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly` — the box reports `aria-readonly` and refuses to change, but
+    /** `readonly`: the box reports `aria-readonly` and refuses to change, but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
@@ -77,8 +77,8 @@ final case class CheckBox private (
     /** Marks the box required (`aria-required` + native constraint). */
     def required(v: Boolean): CheckBox = copy(requiredFlag = Present(v))
 
-    /** Purely informational: non-interactive (`.p-uic-display-only` — kyo
-      * extension, Prime has no displayOnly), without the disabled dimming.
+    /** Purely informational: non-interactive (`.p-uic-display-only`, a kyo
+      * extension; Prime has no displayOnly), without the disabled dimming.
       */
     def displayOnly(v: Boolean): CheckBox = copy(displayOnlyFlag = Present(v))
 
@@ -96,7 +96,7 @@ final case class CheckBox private (
     /** Size: `.p-checkbox-sm` / default / `.p-checkbox-lg`. */
     def size(v: Size): CheckBox = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CheckBox = copy(variantV = v)
 
     private[uic] def withInvalid(v: Maybe[BoolValue]): CheckBox                       = copy(invalidV = v)
@@ -108,7 +108,7 @@ final case class CheckBox private (
 
     def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the box's current checked state — unlike onChange it
+    /** Fires on focus loss with the box's current checked state. Unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
     def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onBlurF = Present(Callback.of(f)))
@@ -208,7 +208,7 @@ object CheckBox:
     def apply(): CheckBox             = new CheckBox()
     def apply(text: String): CheckBox = new CheckBox(labelText = Present(text))
 
-    /** Const-or-ref carrier for the pending `checked` state — the boolean analogue of
+    /** Const-or-ref carrier for the pending `checked` state: the boolean analogue of
       * `Input.Value`. `Ref` establishes two-way binding at render time.
       */
     private[uic] enum Checked:

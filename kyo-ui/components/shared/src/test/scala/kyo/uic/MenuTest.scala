@@ -138,7 +138,7 @@ class MenuTest extends UicTest:
         yield assert(constant == 1 && reactive == 2, s"constant=$constant reactive=$reactive")
     }
 
-    "a nav row says which page the reader is on — on the row AND on its link" in {
+    "a nav row says which page the reader is on, on the row AND on its link" in {
         // The class is for the sheet; `aria-current` is the whole of what is said to a reader
         // who cannot see it, which is the same split as the highlight two tests above.
         for
@@ -162,8 +162,8 @@ class MenuTest extends UicTest:
         // The contrast with `disabled` directly above is the point. Resolving a reactive
         // `disabled` must cost a region, because the navigable index set, `MenuNav.skip` and
         // whether an activate effect is attached all read it as a plain Boolean. Being current
-        // changes none of those, so it goes through `cssClass(name, sig)` and `aria(name, sig)`
-        // — patched in place. That is what lets a nav be built ONCE: were this a region, every
+        // changes none of those, so it goes through `cssClass(name, sig)` and `aria(name, sig)`,
+        // patched in place. That is what lets a nav be built ONCE: were this a region, every
         // navigation would rebuild the strip and throw away the reader's keyboard position.
         for
             here <- Signal.initRef(false)

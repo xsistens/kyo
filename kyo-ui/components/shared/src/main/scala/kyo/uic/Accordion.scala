@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** One panel of an [[Accordion]] — a hand-authored carrier: a `header` label, the
+/** One panel of an [[Accordion]], a hand-authored carrier: a `header` label, the
   * panel `content`, a stable `id` of the app's own type `K` (what the bound ref holds
   * and `onToggle` reports), a `disabled` flag, and an optional `headerUI` slot that
   * wins over the plain header text.
@@ -55,11 +55,11 @@ object AccordionPanelScope:
         Entry.resolve(scope.asInstanceOf[AccordionPanelScope[K]], entries)
 end AccordionPanelScope
 
-/** Accordion — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Accordion: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Accordion anatomy: `div.p-accordion.p-component` >
   * `div.p-accordionpanel[.p-accordionpanel-active][.p-disabled]` entries, each a
   * `button.p-accordionheader` (header slot + the chevron
-  * `.p-accordionheader-toggle-icon` — up while active, down while collapsed,
+  * `.p-accordionheader-toggle-icon`: up while active, down while collapsed,
   * Prime's glyphs) over, while active, `div.p-accordioncontent` >
   * `div.p-accordioncontent-wrapper` > `div.p-accordioncontent-content`), so the
   * extracted `@primeuix` accordion CSS applies verbatim.
@@ -80,7 +80,7 @@ end AccordionPanelScope
   *
   * Collapse ANIMATION: with a bound ref the whole body is built ONCE
   * inside a `UI.mounted`, so each panel's content container stays STABLE across
-  * toggles — a whole-body `ref.render` would replace it and reset the grid-rows
+  * toggles; a whole-body `ref.render` would replace it and reset the grid-rows
   * transition. Per panel: the `.p-accordioncontent.p-uic-collapse` container is
   * id-stamped and ALWAYS present (the grid 0fr row hides a collapsed panel), and
   * the shell's `.p-accordionpanel-active` class plus the content's
@@ -94,7 +94,7 @@ end AccordionPanelScope
   * INSIDE the button (the toggle-icon rule is descendant, so that inner wrapper is
   * harmless). The mount's
   * `.placeholder` is today's un-animated whole-body `ref.render` (content
-  * only-when-active) — the byte-identical SSR/golden fallback.
+  * only-when-active), the byte-identical SSR/golden fallback.
   */
 final case class Accordion[K] private (
     panelList: List[AccordionPanel[K]] = Nil,
@@ -111,20 +111,20 @@ final case class Accordion[K] private (
     def panels(ps: AccordionPanelEntry[K]*): Accordion[K] =
         copy(panelList = panelList ++ AccordionPanelScope.resolve(ps))
 
-    /** Appends a single panel (ergonomic builder — no need to construct
+    /** Appends a single panel (ergonomic builder: no need to construct
       * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
     def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
         copy(panelList = panelList :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
 
-    /** Binds the open panel two-way — SINGLE mode (Prime's default): at most one
+    /** Binds the open panel two-way, SINGLE mode (Prime's default): at most one
       * panel open, the ref holds its id (`Absent` = all closed); clicking the open
       * header closes it.
       */
     def value(ref: SignalRef[Maybe[K]]): Accordion[K] = copy(singleRef = Present(ref))
 
-    /** Binds the open panels two-way — MULTIPLE mode (Prime's `multiple`): the ref
+    /** Binds the open panels two-way, MULTIPLE mode (Prime's `multiple`): the ref
       * holds the set of open ids; header clicks toggle membership.
       */
     @targetName("valueMultiple")
@@ -193,7 +193,7 @@ final case class Accordion[K] private (
             case _                    => Set.empty[K]
 
     /** Nested mount (runs after the body is published) that installs, per panel, the
-      * in-place binds — all WITHOUT replacing the shell or header, so Prime's
+      * in-place binds, all WITHOUT replacing the shell or header, so Prime's
       * `.p-accordionpanel[...] > .p-accordionheader` child-combinator rules keep
       * matching: `.p-accordionpanel-active` on the shell tracks the open signal,
       * `.p-uic-collapsed` on the content tracks its negation, and `aria-expanded` on
@@ -254,7 +254,7 @@ final case class Accordion[K] private (
 
         // The button stays a DIRECT child of the shell so Prime's `.p-accordionpanel[...]
         // > .p-accordionheader` rules (active background, chevron color, first/last radii)
-        // match — a Reactive wrapper span between panel and header would break the `>`
+        // match; a Reactive wrapper span between panel and header would break the `>`
         // combinator. So the two reactive header bits patch without wrapping the button:
         // `aria-expanded` via the id-addressed `bindAttrById` channel (see activeBinder),
         // baked here to the initial state; the chevron glyph via a tiny nested reactive
@@ -275,7 +275,7 @@ final case class Accordion[K] private (
             toChild(active.render(a => GlyphSvg(if a then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon")))
         )
 
-        // Content is ALWAYS present — the grid 0fr row hides a collapsed panel.
+        // Content is ALWAYS present: the grid 0fr row hides a collapsed panel.
         val contentEl: UI =
             var c = div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId)
             if !active0 then c = c.cssClass("p-uic-collapsed")

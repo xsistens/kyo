@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** InputOtp — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** InputOtp: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * InputOtp anatomy: `div.p-inputotp.p-component` > N single-character
   * `input.p-inputotp-input.p-inputtext` cells), so the extracted `@primeuix`
   * inputotp CSS applies verbatim.
@@ -19,7 +19,7 @@ import kyo.UI.*
   * (in the `UI.mounted` region that also grabs the session `Commands`) and
   * stamps it on itself; after a digit lands in cell N, the input handler drives
   * `focusId(cellIds(N+1))`, moving focus to the next cell exactly as Prime's
-  * client JS does — over server-push the focus command rides the same transport
+  * client JS does; over server-push the focus command rides the same transport
   * as the render op. In the static projection (SSG / the placeholder before the
   * transport attaches) the cells carry no ids and focus stays put; Tab /
   * Shift-Tab and the pointer always work.
@@ -60,10 +60,10 @@ final case class InputOtp private (
     /** Number of cells (Prime default 4). */
     def length(n: Int): InputOtp = copy(lengthV = math.max(1, n))
 
-    /** Accepts only digits (Prime's `integerOnly`) — other characters never reach
+    /** Accepts only digits (Prime's `integerOnly`): other characters never reach
       * the BOUND value. Each cell carries the fork's client-local `inputFilter("int")`,
-      * so a non-digit keystroke is rejected on `beforeinput` BEFORE it ever paints
-      * — matching Prime's client-side block. (A server-side `filter` still guards
+      * so a non-digit keystroke is rejected on `beforeinput` BEFORE it ever paints,
+      * matching Prime's client-side block. (A server-side `filter` still guards
       * the stored code as defense in depth.)
       */
     def integerOnly(v: Boolean): InputOtp = copy(integerOnlyFlag = v)
@@ -82,7 +82,7 @@ final case class InputOtp private (
       */
     def size(v: Size): InputOtp = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled` cells. */
+    /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
     def variant(v: FieldVariant): InputOtp = copy(variantV = v)
 
     private[uic] def withInvalid(v: Maybe[BoolValue]): InputOtp                       = copy(invalidV = v)
@@ -94,7 +94,7 @@ final case class InputOtp private (
     /** Fired with the FULL code after a cell write-back. */
     def onChange(f: String => UI.Action)(using Frame): InputOtp = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current value — unlike
+    /** Fires on focus loss (native `blur`) with the field's current value; unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -123,7 +123,7 @@ final case class InputOtp private (
             case Present(Input.Value.Const(v)) => body(v, Absent, Absent, _ => ())
             case Absent                        => body("", Absent, Absent, _ => ())
 
-    /** The advancing subscription the mount publishes — the golden seam. `focus`
+    /** The advancing subscription the mount publishes: the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
     private[uic] def wired(ref: SignalRef[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
@@ -156,7 +156,7 @@ final case class InputOtp private (
         cellIds: Maybe[List[String]],
         focus: String => UI.Action
     )(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription — never around the
+        // Reactive-invalid gate (INSIDE the mount subscription, never around the
         // UI.mounted node): with a reactive slot set, re-render the cells + message
         // through the shared helper; otherwise the untouched static form.
         (invalidV.dynSig, invalidMsgDynV) match

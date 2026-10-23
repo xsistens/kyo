@@ -12,7 +12,7 @@ import scala.jdk.CollectionConverters.*
   * enforced below:
   *
   *   - a COMPONENT is a public, concrete, top-level class in package `kyo.uic` that
-  *     implements [[Node]] — exactly the set a caller can construct and place;
+  *     implements [[Node]]: exactly the set a caller can construct and place;
   *   - nested types (`Select.State`, `CheckBox.Checked`), companion objects, traits
   *     ([[Node]], [[FormControl]] and its family) and the model carriers that are not
   *     components (`TreeNode`, `ListItem`, `Column`, `MenuItem`, ...) are not counted.
@@ -71,6 +71,6 @@ class NodeTest extends UicTest:
 end NodeTest
 
 object NodeTest:
-    /** The count asserted above — the one number prose may quote. */
+    /** The count asserted above, the one number prose may quote. */
     val ComponentCount = 86
 end NodeTest

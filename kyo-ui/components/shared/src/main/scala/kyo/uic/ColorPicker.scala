@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** ColorPicker — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** ColorPicker: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ColorPicker anatomy: `div.p-colorpicker.p-component` > (overlay) the
   * `input.p-colorpicker-preview` swatch trigger + the floating
   * `div.p-colorpicker-panel` OR (inline) `div.p-colorpicker-panel.p-colorpicker-panel-inline`
@@ -18,7 +18,7 @@ import kyo.UI.*
   *
   * Server-honest: the value is a single hex string bound to a
   * `SignalRef[String]`. HSB is DERIVED from the hex on every render (pure math
-  * in [[ColorPicker.hsvOf]]) — the plane's tint, both handle positions, and the
+  * in [[ColorPicker.hsvOf]]): the plane's tint, both handle positions, and the
   * preview swatch all follow from the bound hex, so a ref write from anywhere
   * moves the picker.
   *
@@ -46,14 +46,14 @@ import kyo.UI.*
   *
   * HONEST cost: this is a WAN round-trip PER FRAME while dragging. The client
   * throttles pointer-move to one message per animation frame, but each of those
-  * still crosses the wire, recomputes hex server-side, and re-renders — so a
+  * still crosses the wire, recomputes hex server-side, and re-renders, so a
   * drag is only as smooth as the round-trip latency (crisp locally / on the
   * SPA, visibly stepped over a slow link). This is the deliberate trade for a
   * zero-client-logic, server-authoritative color value.
   *
   * HONEST limit: only the hex is stored, not full HSB. For a grayscale value
   * (saturation 0, e.g. black/white) hue is not represented in hex, so it reads
-  * back as 0 — dragging the hue bar on pure black has no visible effect until
+  * back as 0: dragging the hue bar on pure black has no visible effect until
   * brightness/saturation lift it off the achromatic axis.
   */
 final case class ColorPicker private (
@@ -105,7 +105,7 @@ final case class ColorPicker private (
     /** Fired with the NEW hex after the ref write-back. */
     def onChange(f: String => UI.Action)(using Frame): ColorPicker = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the current hex — unlike onChange it fires even when the
+    /** Fires on focus loss with the current hex; unlike onChange it fires even when the
       * color was not changed. The validation layer's Blur trigger.
       */
     def onBlur(f: String => UI.Action)(using Frame): ColorPicker = copy(onBlurF = Present(Callback.of(f)))
@@ -150,7 +150,7 @@ final case class ColorPicker private (
       *
       * CRITICAL for the drag: the pointer HANDLERS sit on the STABLE surface
       * elements (`.p-colorpicker-color-selector` / `.p-colorpicker-hue`), which
-      * are OUTSIDE the reactive region — a per-frame re-render would otherwise
+      * are OUTSIDE the reactive region: a per-frame re-render would otherwise
       * detach the pointer-captured element and break the drag stream. Only the
       * tint + handle positions live in the inner `ref.render`. The handlers read
       * the LIVE value via `ref.get` (not a closed-over render-time hex), so a
@@ -383,7 +383,7 @@ final case class ColorPicker private (
         root
     end shellRoot
 
-    /** The preview swatch trigger (`input.p-colorpicker-preview` per Prime — here a
+    /** The preview swatch trigger (`input.p-colorpicker-preview` per Prime; here a
       * `button` so it needs no value plumbing); its background IS the current hex.
       * Bound to `ref` it re-renders reactively as the color changes.
       */
@@ -430,7 +430,7 @@ final case class ColorPicker private (
         }.placeholder(staticRoot)
     end overlayBody
 
-    /** The subscription tree the overlay mount publishes — the seam the tests drive, since a
+    /** The subscription tree the overlay mount publishes, the seam the tests drive, since a
       * golden render shows a mount only as its placeholder.
       */
     private[uic] def wired(panel: ColorPicker.Panel, ref: Maybe[SignalRef[String]], fallbackHex: String)(using
@@ -491,7 +491,7 @@ object ColorPicker:
     /** A color picker whose hex value binds two-way to `ref`. */
     def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(Input.Value.Ref(ref)))
 
-    /** An unbound color picker — set the value via [[ColorPicker.value]]. */
+    /** An unbound color picker; set the value via [[ColorPicker.value]]. */
     def apply(): ColorPicker = new ColorPicker()
 
     private[uic] val DefaultHex = "#ff0000"
@@ -506,7 +506,7 @@ object ColorPicker:
         val (r, g, b) = hexToRgb(raw)
         f"#$r%02x$g%02x$b%02x"
 
-    /** Parses `#rgb` / `#rrggbb` (with or without `#`) to 0–255 channels; falls
+    /** Parses `#rgb` / `#rrggbb` (with or without `#`) to 0 to 255 channels; falls
       * back to red on anything unparseable.
       */
     private[uic] def hexToRgb(raw: String): (Int, Int, Int) =

@@ -7,8 +7,8 @@ import kyo.UI.*
   * only: the id a caller gave never reached the document, and the sole id that existed was the
   * derived `s"$id-active"` on whichever row the keyboard had highlighted (GAPS.md F-34).
   *
-  * `HasElementId`'s own contract says what these owe — *"a container or display component puts it
-  * on its own root"* — and `Panel` next door already does both halves. These pin the two halves
+  * `HasElementId`'s own contract says what these owe (*"a container or display component puts it
+  * on its own root"*), and `Panel` next door already does both halves. These pin the two halves
   * together, because they pull against each other: the components MINT a base when no id was
   * given, so stamping "the base" on the root would put a machine-made name in the document for
   * every menu that was never named. The caller's id and the part base are two values now, and
@@ -122,7 +122,7 @@ class ElementIdTest extends UicTest:
             headers <- elementsWithClass(ui, "p-tab")
         yield
             assert(root == Present("mine"))
-            // The derived name is a different string, which is why the two uses never collided —
+            // The derived name is a different string, which is why the two uses never collided:
             // only one of them was ever rendered.
             assert(headers.map(_.attrs.identifier).toSeq == Seq(Present("mine-one"), Present("mine-two")))
         end for

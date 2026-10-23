@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Accessible role of a popup. Hand-authored — lives with [[Dialog]], the only
+/** Accessible role of a popup. Hand-authored; lives with [[Dialog]], the only
   * popup that exposes it. [[PopupAccessibleRole.None]] suppresses the `role`
   * attribute entirely.
   */
@@ -17,15 +17,15 @@ enum PopupAccessibleRole derives CanEqual:
         case PopupAccessibleRole.AlertDialog => Present("alertdialog")
 end PopupAccessibleRole
 
-/** Dialog — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Dialog
+/** Dialog: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Dialog
   * anatomy: the modal `div.p-dialog-mask.p-overlay-mask.p-overlay-mask-enter-active`
   * backdrop (base.css styles `.p-overlay-mask`; a `.p-uic-*` remainder centers
-  * it — Prime centers via inline styles) over `div[role=dialog].p-dialog.p-component
+  * it, since Prime centers via inline styles) over `div[role=dialog].p-dialog.p-component
   * [.p-dialog-maximized]` > `div.p-dialog-header` (title +
   * `div.p-dialog-header-actions` with the icon-only close button) +
   * `div.p-dialog-content` + optional `div.p-dialog-footer`), so the extracted
   * `@primeuix` dialog CSS applies verbatim. The dialog keeps its proven fixed
-  * backdrop approach — no floating-overlay primitive is involved.
+  * backdrop approach: no floating-overlay primitive is involved.
   *
   * Visibility binds two-way to a `SignalRef[Boolean]`: writes to the ref open and
   * close the dialog, Escape and (optionally) a backdrop click write `false` back.
@@ -35,21 +35,21 @@ end PopupAccessibleRole
   * reactive boundary, and keyboard containment uses the element-level `focusTrap`
   * the kyo renderer already implements.
   *
-  * `severity` accents the header (kyo extension — a subtle colored bottom border
+  * `severity` accents the header (kyo extension: a subtle colored bottom border
   * plus a tinted leading icon under `.p-uic-dialog-<token>`); it is only visible
   * when a header is present. `maximized` renders Prime's `.p-dialog-maximized`
   * full-viewport state.
   *
   * Focus story (kyo's declarative `data-kyo-focus-*` client contract): the
-  * dialog box carries `focusAuto` — opening seeds focus onto the freshly
-  * inserted box, so Escape dismisses immediately without any prior click — and
-  * `focusRestore` — closing returns focus to the element focused before the
-  * open (typically the opener button). `preventInitialFocus(true)` /
+  * dialog box carries `focusAuto` (opening seeds focus onto the freshly
+  * inserted box, so Escape dismisses immediately without any prior click) and
+  * `focusRestore` (closing returns focus to the element focused before the
+  * open, typically the opener button). `preventInitialFocus(true)` /
   * `preventFocusRestore(true)` omit the respective attribute. To seed a
   * SPECIFIC child instead of the box, combine `preventInitialFocus(true)` with
   * `.focusAuto(true).focusRestore(true)` stamped directly on that child (the
   * client seeds the first `data-kyo-focus-auto` element of the inserted
-  * region, root first — the box must therefore stand down).
+  * region, root first; the box must therefore stand down).
   */
 final case class Dialog private (
     openRef: Maybe[SignalRef[Boolean]] = Absent,
@@ -75,7 +75,7 @@ final case class Dialog private (
 ) extends Node, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Dialog
 
-    /** Binds visibility two-way to `ref` — the only way to open/close the dialog. */
+    /** Binds visibility two-way to `ref`: the only way to open/close the dialog. */
     def open(ref: SignalRef[Boolean]): Dialog = copy(openRef = Present(ref))
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
@@ -88,7 +88,7 @@ final case class Dialog private (
       */
     def header(content: UI): Dialog = copy(headerContent = Present(content))
 
-    /** Footer slot (typically right-aligned action buttons) — Prime's
+    /** Footer slot (typically right-aligned action buttons), Prime's
       * `div.p-dialog-footer`.
       */
     def footer(v: UI): Dialog = copy(footerV = Present(v))
@@ -96,7 +96,7 @@ final case class Dialog private (
     /** Whether clicking the backdrop closes the dialog (default true). */
     def closeOnBackdrop(v: Boolean): Dialog = copy(closeOnBackdrop = v)
 
-    /** Grows the dialog to the full viewport — Prime's `.p-dialog-maximized`. */
+    /** Grows the dialog to the full viewport: Prime's `.p-dialog-maximized`. */
     def maximized(v: Boolean): Dialog = copy(maximizedFlag = v)
 
     /** Makes the dialog draggable by its header (Prime's `draggable`, driven by
@@ -112,7 +112,7 @@ final case class Dialog private (
       */
     def resizable(v: Boolean): Dialog = copy(resizableFlag = v)
 
-    /** Semantic header accent (kyo extension — colored border + tinted icon under
+    /** Semantic header accent (kyo extension: colored border + tinted icon under
       * `.p-uic-dialog-<token>`); only visible when a header is present.
       */
     def severity(v: Severity): Dialog = copy(severityV = Present(v))
@@ -146,7 +146,7 @@ final case class Dialog private (
     def accessibleRole(v: PopupAccessibleRole): Dialog = copy(accessibleRoleV = v)
 
     /** Runs `action` whenever the dialog closes itself (close button, Escape,
-      * backdrop click) — after the `open` ref is written to `false`. External ref
+      * backdrop click), after the `open` ref is written to `false`. External ref
       * writes do NOT fire it.
       */
     def onClose(action: => UI.Action)(using Frame): Dialog =
@@ -199,7 +199,7 @@ final case class Dialog private (
                         }
 
                 // The header, optionally wired as a draggable pointer surface. When drag
-                // handlers are present the header carries them directly — it is a STABLE
+                // handlers are present the header carries them directly: it is a STABLE
                 // child of the box (built once), so pointer capture survives the per-frame
                 // translate re-render; the handlers read the position ref
                 // LIVE, never a closed-over render value.
@@ -233,7 +233,7 @@ final case class Dialog private (
                 val footerUI: List[UI]  = footerV.toList.map(f => div.cssClass("p-dialog-footer")(toChild(f)))
 
                 // Builds the whole box element. `animate` adds the open scale (dropped on
-                // the draggable/resizable path, where the box re-renders per drag frame —
+                // the draggable/resizable path, where the box re-renders per drag frame, so
                 // re-triggering the from-state each frame would flicker); `pos`/`size`
                 // apply the live translate/geometry; `inner` are the stable children.
                 def buildBox(
@@ -282,7 +282,7 @@ final case class Dialog private (
                 end buildBox
 
                 // Enter/leave: the mask fades in via a transient from-state
-                // class (NOT Prime's `p-overlay-mask-enter-active` — applied permanently
+                // class (NOT Prime's `p-overlay-mask-enter-active`: applied permanently,
                 // its fill-forwards keyframe paints the mask transparent, the documented
                 // Chromium trap); on close the body-level leave ghost plays Prime's own
                 // `p-overlay-mask-leave-active` keyframe, carrying the box out with it.
@@ -302,7 +302,7 @@ final case class Dialog private (
                     // Draggable/resizable (pointer-drag plus a self-measure on grab).
                     // The box position/size live in refs owned by this per-open mount; the
                     // reactive region re-styles the box element each frame while the header
-                    // and resize handle — the pointer-capture surfaces — are STABLE children
+                    // and resize handle (the pointer-capture surfaces) are STABLE children
                     // reused by the positional diff, so capture never detaches.
                     val staticPlaceholder =
                         maskAround(buildBox(Absent, animate = true, Absent, Absent, headerBlock(Absent) ++ contentUI ++ footerUI))

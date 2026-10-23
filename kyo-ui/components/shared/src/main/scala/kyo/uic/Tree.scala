@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** One node of a [[Tree]] — a recursive hand-authored carrier: a `text` label, a
+/** One node of a [[Tree]]: a recursive hand-authored carrier: a `text` label, a
   * stable `id` of the app's own type `K` (what the expansion and selection sets
   * hold and `onNodeToggle` reports), an
   * optional leading `icon` glyph, its `children` (empty for a leaf), a native
@@ -45,13 +45,13 @@ object TreeNodeScope:
         Entry.resolve(scope.asInstanceOf[TreeNodeScope[K]], entries)
 end TreeNodeScope
 
-/** Tree — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tree
+/** Tree: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tree
   * anatomy: `div.p-tree.p-component` > `div.p-tree-root` >
   * `ul.p-tree-root-children[role=tree]` of `li.p-tree-node[role=treeitem]`
-  * entries, each a `div.p-tree-node-content` — toggle
+  * entries, each a `div.p-tree-node-content` (toggle
   * `button.p-tree-node-toggle-button` with the chevron
   * `.p-tree-node-toggle-icon`, an optional Prime checkbox for multi-select, an
-  * optional `.p-tree-node-icon` glyph, and the `span.p-tree-node-label` — over a
+  * optional `.p-tree-node-icon` glyph, and the `span.p-tree-node-label`) over a
   * nested `ul.p-tree-node-children[role=group]` while expanded; leaves carry
   * `.p-tree-node-leaf`, which hides their toggle button), so the extracted
   * `@primeuix` tree CSS applies verbatim. Indentation comes from the real
@@ -78,7 +78,7 @@ end TreeNodeScope
   * `SelectionMode.Multiple` is FLAT: clicking a node toggles only its own id in
   * the `selected` set, and each box is a plain check/unchecked. `SelectionMode.Checkbox`
   * is Prime's CASCADING tri-state: the `selected` set holds every FULLY-checked id
-  * (leaves and fully-checked parents), and each node's box state is DERIVED — a
+  * (leaves and fully-checked parents), and each node's box state is DERIVED: a
   * leaf is checked iff its id is in the set, a parent is fully checked iff all its
   * children are (recursively), and indeterminate iff some but not all descendants
   * are checked. Toggling a node adds or removes its whole subtree, then a single
@@ -116,11 +116,11 @@ final case class Tree[K] private (
     /** Fired with the node id after a content click (after the selection write). */
     def onItemClick(f: K => UI.Action)(using Frame): Tree[K] = copy(onItemClickF = Present(Callback.of(f)))
 
-    /** Selection semantics: `None` (default — nodes inert unless `onItemClick` is
+    /** Selection semantics: `None` (default; nodes inert unless `onItemClick` is
       * set), `Single` (clicking replaces the selection; re-clicking clears it),
-      * `Multiple` (flat multi-select — clicking toggles only the node's own id and
+      * `Multiple` (flat multi-select: clicking toggles only the node's own id and
       * renders a plain per-node checkbox), or `Checkbox` (Prime's cascading
-      * tri-state — the `selected` set stores every fully-checked id, checking a node
+      * tri-state: the `selected` set stores every fully-checked id, checking a node
       * checks its whole subtree and re-checks any ancestor that becomes complete,
       * and parents render indeterminate while partially checked).
       */
@@ -129,8 +129,8 @@ final case class Tree[K] private (
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
       * Off (the default, and Prime's) every click toggles its node. On, a plain click replaces
-      * the selection with the node it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
-      * never one of the two. `Checkbox` mode ignores it and keeps cascading, which is the whole
+      * the selection with the node it landed on and Ctrl or Cmd toggles (`metaKey || ctrlKey`,
+      * never one of the two). `Checkbox` mode ignores it and keeps cascading, which is the whole
       * point of that mode. See [[SelectionPick]] for the rule every component offering this
       * shares; there is no shift-range, matching Prime.
       */
@@ -151,7 +151,7 @@ final case class Tree[K] private (
         selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox
 
     /** Package-internal: hosts (TreeSelect) that already subscribe to the same
-      * refs in an enclosing render supply the resolved sets directly — a second
+      * refs in an enclosing render supply the resolved sets directly: a second
       * nested subscription to the same refs would race the inner update against
       * the outer replace (the Overlay renderOpen lesson). The toggle/selection
       * handlers still write through the BOUND refs.
@@ -304,7 +304,7 @@ final case class Tree[K] private (
 
         // Multi-select renders Prime's checkbox anatomy per node (the same box the
         // CheckBox component emits); clicking it toggles the selection. In Checkbox
-        // mode the box is tri-state — a fully-checked node shows the check glyph, a
+        // mode the box is tri-state: a fully-checked node shows the check glyph, a
         // partially-checked parent the minus glyph on the neutral box (no checked
         // class), mirroring CheckBox's indeterminate skin.
         val checkboxSlot: List[UI] =

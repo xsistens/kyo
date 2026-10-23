@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** One image of a [[Galleria]] — a hand-authored carrier: the main `src`, its
+/** One image of a [[Galleria]], a hand-authored carrier: the main `src`, its
   * `alt` text, an optional `thumbnailSrc` (falls back to `src`), and the
   * optional caption `title`/`subtitle` pair.
   *
@@ -46,7 +46,7 @@ object GalleriaItemScope:
     private[uic] def resolve(entries: Seq[GalleriaItemEntry]): List[GalleriaItem] = Entry.resolve(scope, entries)
 end GalleriaItemScope
 
-/** Galleria — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Galleria: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Galleria anatomy: `div.p-galleria.p-component` > `div.p-galleria-content` >
   * `div.p-galleria-items-container` > `div.p-galleria-items` with the plain
   * `button.p-galleria-prev-button.p-galleria-nav-button` /
@@ -62,7 +62,7 @@ end GalleriaItemScope
   * `activeIndex` binds two-way to a `SignalRef[Int]` (clamped at render):
   * thumbnail/indicator clicks and the navigators write it; external writes
   * re-render the preview. Server-honest DEVIATION (documented): Prime windows
-  * the thumbnail strip (`numVisible`) and slides it via a JS translate — here
+  * the thumbnail strip (`numVisible`) and slides it via a JS translate; here
   * ALL thumbnails render in the strip and the thumbnail navigators step the
   * active index by one. `circular(true)` wraps the navigators; otherwise they
   * disable at the ends. The fullscreen mode is deferred (portal + JS
@@ -101,7 +101,7 @@ final case class Galleria private (
     /** Custom thumbnail content, replacing the default thumbnail `img`. */
     def thumbnailTemplate(f: GalleriaItem => UI): Galleria = copy(thumbnailTemplateF = Present(f))
 
-    /** Wraps the navigators past the ends (default false — they disable). */
+    /** Wraps the navigators past the ends (default false: they disable). */
     def circular(v: Boolean): Galleria = copy(circularFlag = v)
 
     /** Renders the thumbnail strip (default true, like Prime). */

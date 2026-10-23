@@ -64,7 +64,7 @@ class MegaNavTest extends UicTest:
     )
 
     "panel: Right/Left move between columns, clamping the row index" in assert(
-        // col0 has 3 items, col1 has 1 — moving right from row 2 clamps to row 0
+        // col0 has 3 items, col1 has 1; moving right from row 2 clamps to row 0
         (k(List(0, 0, 2), Keyboard.ArrowRight) == Present(Step(List(0, 1, 0)))) &&
             (k(List(0, 1, 0), Keyboard.ArrowLeft) == Present(Step(List(0, 0, 0)))) &&
             // at the right edge, Right stays put

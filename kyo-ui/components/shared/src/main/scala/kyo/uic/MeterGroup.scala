@@ -3,11 +3,11 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** MeterGroup — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** MeterGroup: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * MeterGroup anatomy: `div.p-metergroup.p-component
   * .p-metergroup-horizontal|-vertical[role=meter]` > optional label list /
   * start slot / `div.p-metergroup-meters` > `span.p-metergroup-meter` (inline
-  * size % + background color) / end slot / optional label list —
+  * size % + background color) / end slot / optional label list:
   * `ol.p-metergroup-label-list.p-metergroup-label-list-horizontal|-vertical` >
   * `li.p-metergroup-label` > `span.p-metergroup-label-marker` (or the meter's
   * icon as `.p-metergroup-label-icon`) + `span.p-metergroup-label-text`), so
@@ -16,7 +16,7 @@ import kyo.UI.*
   * Values scale against `max` (default 100); like Prime, a meter that rounds
   * to 0% renders no bar segment (its label still lists), and the label text is
   * `Label (NN%)`. Colors: pass a CSS color per meter (`#hex` or
-  * `var(--token)` — kyo's typed styles carry no other color forms), or leave
+  * `var(--token)`; kyo's typed styles carry no other color forms), or leave
   * it unset to draw from the rotating default palette
   * (`--p-primary-color`, then `--p-orange-500`, `--p-cyan-500`,
   * `--p-purple-500`, `--p-teal-500`, `--p-pink-500`, `--p-indigo-500`,
@@ -30,7 +30,7 @@ import kyo.UI.*
   * Template slots mirror Prime's: `startTemplate`/`endTemplate` render around
   * the meter track, `meterTemplate` replaces each segment, `labelTemplate`
   * replaces each label row's content (Prime's label slot swaps the whole list;
-  * per-item functions fit the library's typed template idiom — see
+  * per-item functions fit the library's typed template idiom; see
   * `Timeline.content`).
   */
 final case class MeterGroup private (
@@ -67,10 +67,10 @@ final case class MeterGroup private (
     /** Appends the given meters. */
     def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = copy(metersV = metersV ++ ms.toList)
 
-    /** The scale ceiling (default 100) — each meter's size is `value / max`. */
+    /** The scale ceiling (default 100): each meter's size is `value / max`. */
     def max(v: Double): MeterGroup = copy(maxV = v)
 
-    /** Meter-track orientation: `Vertical` renders `.p-metergroup-vertical` — the
+    /** Meter-track orientation: `Vertical` renders `.p-metergroup-vertical`: the
       * track becomes a column and segments size by HEIGHT percent (the group needs
       * a height from the surrounding layout). Default `Horizontal`.
       */
@@ -82,7 +82,7 @@ final case class MeterGroup private (
     def labelOrientation(v: Orientation): MeterGroup = copy(labelOrientationV = v)
 
     /** Places the label list before (`Start`) or after (`End`, default) the meter
-      * track — Prime's `labelPosition`.
+      * track (Prime's `labelPosition`).
       */
     def labelPosition(v: LabelPosition): MeterGroup = copy(labelPositionV = v)
 
@@ -93,7 +93,7 @@ final case class MeterGroup private (
     def endTemplate(content: UI): MeterGroup = copy(endTemplateV = Present(content))
 
     /** Replaces each meter segment with `(meter, percent) => UI` (Prime's `meter`
-      * slot); the template renders for 0% meters too — skipping is its call.
+      * slot); the template renders for 0% meters too; skipping is its call.
       */
     def meterTemplate(f: (MeterGroup.Meter, Double) => UI): MeterGroup =
         copy(meterTemplateV = Present(f))
@@ -151,7 +151,7 @@ final case class MeterGroup private (
                                 case TextValue.Dyn(sig) =>
                                     // The percentage is build-time (the meter value is not reactive), so the
                                     // whole label is a projection of the one string signal and goes in as a
-                                    // text child — patched in place instead of rebuilding the span.
+                                    // text child, patched in place instead of rebuilding the span.
                                     span.cssClass("p-metergroup-label-text")(
                                         sig.map(t => s"$t (${math.round(pct(m.value))}%)")
                                     )
@@ -180,7 +180,7 @@ object MeterGroup:
     /** One meter: `label` + `value` (scaled against the group's `max`), an
       * optional CSS color (`#hex` or `var(--token)`; unset draws from the
       * rotating default palette), and an optional label icon (replaces the color
-      * marker, tinted with the meter color — Prime semantics). A reactive label
+      * marker, tinted with the meter color, Prime semantics). A reactive label
       * re-renders only its own text region; the `(NN%)` suffix follows the value.
       */
     final case class Meter private[uic] (

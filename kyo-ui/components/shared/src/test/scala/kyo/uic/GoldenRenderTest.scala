@@ -234,7 +234,7 @@ class GoldenRenderTest extends UicTest:
         // moves the highlight without drawing a keyboard indicator.
         assert(
             uic.Theme.primeExtraCss.contains(".p-listbox:not(.p-disabled):has(.p-listbox-list:focus-visible)"),
-            "listbox focus ring (remainder — Prime clears the list outline and stamps no ring)"
+            "listbox focus ring (remainder: Prime clears the list outline and stamps no ring)"
         )
         assert(
             uic.Theme.primeExtraCss.contains(".p-tree-root-children:focus-visible .p-tree-node-content.p-focus"),
@@ -252,7 +252,7 @@ class GoldenRenderTest extends UicTest:
         )
         assert(
             uic.Theme.primeExtraCss.contains(".p-tree-root-children:focus { outline: none; }"),
-            "tree list draws no ring of its own (remainder — the node ring is the indicator)"
+            "tree list draws no ring of its own (remainder: the node ring is the indicator)"
         )
         assert(uic.Theme.primeExtraCss.contains("p-icon-spin"), "loading spinner keyframes (remainder)")
         assert(uic.Theme.primeExtraCss.contains(".p-uic-invalid-message"), "invalidMessage row CSS (remainder)")
@@ -745,7 +745,7 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
-    "Tooltip renders Prime anatomy inside the hover wrapper — zero state, zero round-trips" in {
+    "Tooltip renders Prime anatomy inside the hover wrapper with zero state and zero round-trips" in {
         for
             html   <- renderHtml(uic.Tooltip("Save your work")(uic.Button("Save")))
             bottom <- renderHtml(uic.Tooltip("Below").position(uic.TooltipPosition.Bottom)(span("target")))
@@ -859,7 +859,7 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("p-uic-overlay-backdrop"), "open: outside-click backdrop (Overlay primitive)")
             assert(open.contains("p-uic-overlay-panel"), "open: overlay panel geometry class")
             assert(open.contains("p-autocomplete-overlay"), "open: Prime's panel skin class")
-            assert(!open.contains("data-kyo-focus-auto"), "open: NO focus seed — focus stays in the input")
+            assert(!open.contains("data-kyo-focus-auto"), "open: NO focus seed, focus stays in the input")
             assert(open.contains("p-autocomplete-list-container"), "open: scrollable list container")
             assert(open.contains("p-autocomplete-list"), "open: suggestion list class")
             assert(open.contains("""role="listbox""""), "open: listbox role on the ul")
@@ -1005,7 +1005,7 @@ class GoldenRenderTest extends UicTest:
             assert(floating.contains("p-datepicker-panel"), "open: the SAME panel render inside the overlay")
             assert(!floating.contains("p-datepicker-panel-inline"), "open: no inline variant class on the floating panel")
             assert(floating.contains("p-uic-overlay-anchor"), "open: anchor glue class on the root")
-            assert(!floating.contains("data-kyo-focus-auto"), "open: NO focus seed — focus stays on the field")
+            assert(!floating.contains("data-kyo-focus-auto"), "open: NO focus seed, focus stays on the field")
             assert(floating.contains("p-datepicker-day-view"), "open: day grid renders in the floating panel")
             assert(floating.contains("keydown"), "open: Escape registered (field + panel)")
             assert(!closed.contains("p-datepicker-panel"), "closed ref: no panel")
@@ -1151,7 +1151,7 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("Changes stored."), "open: detail text")
             assert(open.contains("p-toast-close-button"), "open: close button (closable)")
             assert(open.contains("p-toast-close-icon"), "open: close icon")
-            assert(open.contains("""data-uic-duration="5000""""), "open: duration data hook (pure — no timer)")
+            assert(open.contains("""data-uic-duration="5000""""), "open: duration data hook (pure, no timer)")
             assert(open.contains("""role="alert""""), "open: alert role")
             assert(danger.contains("p-toast-message-error"), "Danger maps to Prime's error token")
             assert(danger.contains("p-toast-top-right"), "default position is Prime's top-right")
@@ -1492,16 +1492,16 @@ class GoldenRenderTest extends UicTest:
             // The constant is the same document with the SUBSCRIPTION taken away: a value that
             // cannot change needs nothing to watch it, so a bound table carries two things a
             // constant one does not, and nothing else. Both are named here rather than trimmed off
-            // the ends — which was only ever an accident of the region having wrapped the whole
+            // the ends, which was only ever an accident of the region having wrapped the whole
             // document back when a bound selection re-rendered the whole table.
             //
             //   - the region's own comment markers, wherever they now sit;
             //   - the engine's `data-kyo-path` on the rows. A bound selection renders its rows as a
             //     KEYED list, and a keyed child is addressed by its key while a static one is
             //     addressed by its index. Addressing follows structure, so this is the one thing
-            //     that cannot be equal here — and it is not something a reader can see.
+            //     that cannot be equal here, and it is not something a reader can see.
             //
-            // Everything a reader CAN see — every element, class, attribute value and order — is
+            // Everything a reader CAN see (every element, class, attribute value and order) is
             // still compared byte for byte, including the selection mark this test is named after.
             def withoutSubscription(html: String): String =
                 html.replaceAll("<!--kyo-r[se]:[^>]*-->", "").replaceAll(" data-kyo-path=\"[^\"]*\"", "")
@@ -4271,7 +4271,7 @@ class GoldenRenderTest extends UicTest:
         )
         assert(
             uic.Theme.primeExtraCss.contains(".p-skeleton { position: relative; }"),
-            "skeleton position (remainder — Prime inline style)"
+            "skeleton position (remainder: Prime inline style)"
         )
         assert(uic.Theme.primeExtraCss.contains(".p-overlaybadge { display: inline-flex"), "overlaybadge hug (remainder)")
         assert(uic.Theme.primeExtraCss.contains("button.p-chip-remove-icon"), "chip remove button chrome strip (remainder)")
@@ -4333,7 +4333,7 @@ class GoldenRenderTest extends UicTest:
             assert(!readonly.contains("click"), "readonly registers no toggle click")
             assert(!readonly.contains(" disabled"), "readonly is not natively disabled (it keeps the normal look)")
             // `role="button"` has no readonly state to report, so the true thing it can say is
-            // that it cannot be operated — while staying focusable, which native disabled is not.
+            // that it cannot be operated, while staying focusable, which native disabled is not.
             assert(readonly.contains("""aria-disabled="true""""), "readonly says it cannot be operated")
             assert(readonly.contains("p-togglebutton"), "readonly keeps the base anatomy")
     }
@@ -4546,9 +4546,9 @@ class GoldenRenderTest extends UicTest:
         assert(extra.contains(".p-uic-tooltip > .p-tooltip-top"), "tooltip top placement (remainder)")
         assert(
             extra.contains(".p-tooltip-left .p-tooltip-arrow { right: 0; top: 50%; }"),
-            "tooltip arrow placement (remainder — Prime inline styles)"
+            "tooltip arrow placement (remainder: Prime inline styles)"
         )
-        assert(extra.contains(".p-popover { --p-popover-arrow-left: 0px; }"), "popover arrow-left fix (remainder — Prime sets it from JS)")
+        assert(extra.contains(".p-popover { --p-popover-arrow-left: 0px; }"), "popover arrow-left fix (remainder: Prime sets it from JS)")
         assert(
             extra.contains(".p-uic-overlay-panel.p-popover { margin-top: var(--p-popover-gutter); }"),
             "popover arrow gutter over the overlay geometry (remainder)"
@@ -5009,7 +5009,7 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("""data-uic-icon="check""""), "open: selected row's box shows the check glyph")
             assert(!open.contains("p-focus"), "open: no highlight before keyboard navigation")
             assert(highlight.contains("p-focus"), "highlight ref stamps Prime's .p-focus row")
-            // Every checkbox (header select-all + both rows) reads checked — 3 boxes.
+            // Every checkbox (header select-all + both rows) reads checked: 3 boxes.
             assert(("p-checkbox-checked".r.findAllIn(allPicked).size == 3), "all visible selected: select-all AND both rows checked")
             assert(featured.contains("p-multiselect-filter-container"), "filter(true): IconField filter container")
             assert(featured.contains("p-multiselect-filter"), "filter(true): the filter input")
@@ -5964,7 +5964,7 @@ class GoldenRenderTest extends UicTest:
                     exp <- Signal.initRef(Set.empty[String])
                     out <- UI.runRender(uic.OrganizationChart[String]().node(chart).expanded(exp)).take(1).run
                 yield out.mkString
-            // No bound ref means no toggles at all — Prime's collapsible=false, without a
+            // No bound ref means no toggles at all: Prime's collapsible=false, without a
             // separate flag to discover.
             static <- renderHtml(uic.OrganizationChart[String]().node(chart))
         yield
@@ -6268,7 +6268,7 @@ class GoldenRenderTest extends UicTest:
 
     "Overlay.geometryFor resolves flip + shift into ONE in-place Style: both vertical edges always set, x-overflow → negative margin-left" in {
         // geometryFor is patched onto the panel via bindStyleById (which MERGES, never
-        // clears), so it must set BOTH top and bottom every time — assert the serialized form.
+        // clears), so it must set BOTH top and bottom every time; assert the serialized form.
         def geom(rect: UI.Rect): String < Async =
             renderHtml(div.style(uic.Overlay.geometryFor(uic.OverlayAnchor.BottomStart, rect)))
         val overBottom = UI.Rect(x = 10, y = 500, width = 100, height = 200, viewportWidth = 1000, viewportHeight = 600)
@@ -6807,7 +6807,7 @@ class GoldenRenderTest extends UicTest:
 
     "every host of MenuItem resolves a reactive disabled" in {
         // `MenuItem` is ONE model type shared by six hosts, and a host that forgets to
-        // resolve does not fail — it reads `constTrue` on an unresolved `Dyn` and quietly
+        // resolve does not fail: it reads `constTrue` on an unresolved `Dyn` and quietly
         // renders the row enabled. This sweep is what makes that impossible to ship: each
         // host is given one item disabled by a signal that is `true`, and its row has to
         // carry `.p-disabled`. A host missing from the list below is a host with no guard.

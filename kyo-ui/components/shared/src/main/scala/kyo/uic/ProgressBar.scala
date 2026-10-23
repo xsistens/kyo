@@ -9,14 +9,14 @@ import kyo.UI.*
 enum ProgressBarMode derives CanEqual:
     case Determinate, Indeterminate
 
-/** ProgressBar — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** ProgressBar: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ProgressBar anatomy: `div.p-progressbar[role=progressbar]` with the
   * `.p-progressbar-determinate`/`-indeterminate` mode class > `.p-progressbar-value`
   * (width in %) > optional `.p-progressbar-label`), so the extracted `@primeuix`
   * progressbar CSS applies verbatim.
   *
   * The `value` binds either to a constant `Int` or, like [[Input]]/[[CheckBox]],
-  * reactively to a `SignalRef[Int]` via a const-or-ref carrier — a ref change
+  * reactively to a `SignalRef[Int]` via a const-or-ref carrier; a ref change
   * re-renders the bar width and `aria-valuenow`. The label shows `NN%` by
   * default (Prime's `showValue`); `valueTemplate` formats it, `showValue(false)`
   * hides it. Like Prime, a zero value renders no label.
@@ -30,7 +30,7 @@ final case class ProgressBar private (
 ) extends Node, HasAccessibleName:
     type Self = ProgressBar
 
-    /** The percentage shown (clamped to 0–100 at render). A constant renders the bar statically; any
+    /** The percentage shown (clamped to 0 to 100 at render). A constant renders the bar statically; any
       * `Signal[Int]` updates the bar width and `aria-valuenow` on emission.
       *
       * A progress bar is never edited by the reader, so the two-way case a writable `SignalRef` would
@@ -42,7 +42,7 @@ final case class ProgressBar private (
     /** `Determinate` (default) or the endless `Indeterminate` slide. */
     def mode(v: ProgressBarMode): ProgressBar = copy(modeV = v)
 
-    /** Shows the value label inside the bar (default true — Prime semantics). */
+    /** Shows the value label inside the bar (default true, Prime semantics). */
     def showValue(v: Boolean): ProgressBar = copy(showValueFlag = v)
 
     /** Formats the label from the current value (e.g. `v => s"$v/100"`). */

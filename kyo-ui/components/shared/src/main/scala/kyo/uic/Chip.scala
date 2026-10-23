@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Chip — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Chip
+/** Chip: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Chip
   * anatomy: `div.p-chip.p-component` > [`img.p-chip-image` | `.p-chip-icon`] +
   * `div.p-chip-label` + optional `.p-chip-remove-icon`), so the extracted
   * `@primeuix` chip CSS applies verbatim.
@@ -11,10 +11,10 @@ import kyo.UI.*
   * The leading visual follows Prime's precedence: `image` wins over `icon`.
   * The remove affordance only renders with `removable(true)` (Prime
   * semantics); `onRemove` runs when it is activated by click, Enter, Space, or
-  * Backspace (Prime's key set) — visibility stays app-owned, exactly like
+  * Backspace (Prime's key set); visibility stays app-owned, exactly like
   * [[Message.onDismissed]]. DEVIATION: the remove icon renders as a real
   * `<button class="p-chip-remove-icon">` around the glyph (Prime uses a bare
-  * `<svg>` with handlers) — same class vocabulary, native focus/keyboard
+  * `<svg>` with handlers): same class vocabulary, native focus/keyboard
   * semantics; the kyo remainder strips the button chrome.
   */
 final case class Chip private (
@@ -49,7 +49,7 @@ final case class Chip private (
     def removeIcon(glyph: IconGlyph): Chip = copy(removeIconV = Present(glyph))
 
     /** Runs `action` when the remove affordance is activated (implies nothing
-      * about visibility — hide the chip from your own state if you want it gone).
+      * about visibility; hide the chip from your own state if you want it gone).
       */
     def onRemove(action: => UI.Action)(using Frame): Chip =
         copy(onRemoveEff = Present(Callback(action)))
@@ -102,6 +102,6 @@ object Chip:
       */
     def apply(label: String | Signal[String]): Chip = new Chip(labelV = Present(ReactiveValue(label)))
 
-    /** An empty chip — fill the default slot via `apply(cs*)`. */
+    /** An empty chip; fill the default slot via `apply(cs*)`. */
     def apply(): Chip = new Chip()
 end Chip

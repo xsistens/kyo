@@ -6,7 +6,7 @@ import kyo.uic.MenuNav.OpenOp
 import kyo.uic.MenuNav.Orientation
 import kyo.uic.MenuNav.Step
 
-/** Pure-logic assertions for the [[MenuNav]] WAI-ARIA keyboard state machine —
+/** Pure-logic assertions for the [[MenuNav]] WAI-ARIA keyboard state machine:
   * no DOM, no effects (the semantics every menu-family component maps onto its
   * focus + submenu-open signals).
   */
@@ -27,7 +27,7 @@ class MenuNavTest extends UicTest:
         MenuItem("Help")
     )
 
-    // File | Disabled(off) | Help — for skip-over
+    // File | Disabled(off) | Help, for skip-over
     private val withDisabled: List[MenuItem] = List(
         MenuItem("File"),
         MenuItem("Off").disabled(true),

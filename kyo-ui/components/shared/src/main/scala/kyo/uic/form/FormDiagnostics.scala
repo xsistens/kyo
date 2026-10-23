@@ -8,7 +8,7 @@ import kyo.uic.KeyDiagnostics
   *
   * The form owns the id slot: `focusFirstInvalid` and the error summary both reach a field
   * through `Commands.focusId(domId)`, so an id that is not where the form thinks it is turns
-  * both of them into no-ops — silently, and only for the reader who submits an invalid form.
+  * both of them into no-ops: silently, and only for the reader who submits an invalid form.
   * The three checks below each rest on a fact rather than a guess:
   *
   *   - a control that already carried an id when `bind` stamped the field's own over it;
@@ -16,7 +16,7 @@ import kyo.uic.KeyDiagnostics
   *   - a `<label for="x">` with no `#x` anywhere in the form's tree.
   *
   * What is deliberately NOT checked: whether a field's own id appears in the tree at all.
-  * That reads as the most useful check of the three and is the one that cannot be trusted — a
+  * That reads as the most useful check of the three and is the one that cannot be trusted: a
   * field bound inside a reactive branch that happens to be closed at mount is absent for a
   * perfectly good reason, and a card a reader is told to sometimes ignore is worse than no
   * card. The dangling-`for` check catches the same mistake from the side that IS certain.
@@ -41,7 +41,7 @@ private[form] object FormDiagnostics:
                 else
                     Chunk(KeyDiagnostics.card(
                         "kyo.uic.form",
-                        "a control bound to a field already carried an id, which bind replaced — the form owns " +
+                        "a control bound to a field already carried an id, which bind replaced; the form owns " +
                             "that slot, so choose it at declaration with form.field(...).domId(...)",
                         conflicts
                     ))
@@ -51,7 +51,7 @@ private[form] object FormDiagnostics:
                 else
                     Chunk(KeyDiagnostics.card(
                         "kyo.uic.form",
-                        "two fields declare the same domId — getElementById answers with whichever came first, so " +
+                        "two fields declare the same domId; getElementById answers with whichever came first, so " +
                             "focus-first-invalid and the error summary will reach the wrong field",
                         dupes
                     ))
@@ -61,7 +61,7 @@ private[form] object FormDiagnostics:
                 else
                     Chunk(KeyDiagnostics.card(
                         "kyo.uic.form",
-                        "a label points at an id no element in this form carries — the usual cause is an id set on " +
+                        "a label points at an id no element in this form carries; the usual cause is an id set on " +
                             "a control AFTER bind, which the label's forId was read before",
                         dangling
                     ))

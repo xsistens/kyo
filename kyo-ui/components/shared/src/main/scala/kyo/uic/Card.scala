@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Card — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Card
+/** Card: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Card
   * anatomy: `div.p-card` > optional `div.p-card-header` (custom header slot) +
   * `div.p-card-body` > optional `div.p-card-caption` (`.p-card-title` +
   * `.p-card-subtitle`) + `div.p-card-content` + optional `div.p-card-footer`),
@@ -45,10 +45,10 @@ final case class Card private (
       */
     def additionalText(v: String | Signal[String]): Card = copy(additionalTextV = Present(ReactiveValue(v)))
 
-    /** Avatar slot rendered before the caption (kyo extension — `p-uic-card-avatar`). */
+    /** Avatar slot rendered before the caption (kyo extension, `p-uic-card-avatar`). */
     def headerAvatar(v: UI): Card = copy(headerAvatarV = Present(v))
 
-    /** Action slot rendered at the caption row's far end (kyo extension — `p-uic-card-action`). */
+    /** Action slot rendered at the caption row's far end (kyo extension, `p-uic-card-action`). */
     def headerAction(v: UI): Card = copy(headerActionV = Present(v))
 
     /** Makes the caption row a focusable button activated by click/Enter/Space. */
@@ -59,7 +59,7 @@ final case class Card private (
         copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true)
 
     /** Custom header slot rendered as `div.p-card-header` above the body (Prime's
-      * header slot — typically an image or free-form UI).
+      * header slot, typically an image or free-form UI).
       */
     def header(v: UI): Card = copy(customHeaderV = Present(v))
 

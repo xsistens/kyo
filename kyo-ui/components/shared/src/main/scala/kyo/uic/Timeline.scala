@@ -27,7 +27,7 @@ enum TimelineLayout derives CanEqual:
         case TimelineLayout.Horizontal => "horizontal"
 end TimelineLayout
 
-/** Timeline — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Timeline: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Timeline anatomy: `div.p-timeline.p-component.p-timeline-<align>
   * .p-timeline-<layout>` > per event `div.p-timeline-event` >
   * `div.p-timeline-event-opposite` + `div.p-timeline-event-separator`
@@ -58,10 +58,10 @@ final case class Timeline[A] private (
     /** Appends events. */
     def events(es: Seq[A]): Timeline[A] = copy(eventsV = eventsV ++ es.toList)
 
-    /** Content template — rendered in `div.p-timeline-event-content`. */
+    /** Content template, rendered in `div.p-timeline-event-content`. */
     def content(f: A => UI): Timeline[A] = copy(contentF = Present(f))
 
-    /** Opposite-side template — rendered in `div.p-timeline-event-opposite`. */
+    /** Opposite-side template, rendered in `div.p-timeline-event-opposite`. */
     def opposite(f: A => UI): Timeline[A] = copy(oppositeF = Present(f))
 
     /** Custom marker replacing Prime's default token dot in
@@ -84,7 +84,7 @@ final case class Timeline[A] private (
                 oppositeF.toList.map(f => toChild(f(a)))*
             )
             // Custom marker content replaces the default dot; the default marker is
-            // an empty div — Prime paints it entirely via ::before/::after.
+            // an empty div; Prime paints it entirely via ::before/::after.
             val markerEl: UI = markerF match
                 case Present(f) => div.cssClass("p-timeline-event-marker")(toChild(f(a)))
                 case Absent     => div.cssClass("p-timeline-event-marker")

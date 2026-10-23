@@ -3,20 +3,20 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Menubar — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Menubar: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Menubar anatomy: `div.p-menubar.p-component` > optional `div.p-menubar-start`
   * + `ul.p-menubar-root-list[role=menubar]` of `li.p-menubar-item` rows +
   * optional `div.p-menubar-end`), so the extracted `@primeuix` menubar CSS
   * applies verbatim.
   *
-  * Items with children open a NESTED floating submenu — below the root row
+  * Items with children open a NESTED floating submenu: below the root row
   * (`OverlayAnchor.BottomStart`), to the side on deeper levels (`RightStart`,
   * the sheet's `left: 100%; top: 0` geometry). Every submenu is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
-  * it), Escape closes ONE level too (each panel consumes its own keydown —
+  * it), Escape closes ONE level too (each panel consumes its own keydown,
   * the Overlay per-level story), and each panel seeds focus on open. Open state is
   * click-driven: clicking a parent row toggles its submenu (a deliberate
-  * deviation from Prime's desktop hover-open — a server round-trip per hover
+  * deviation from Prime's desktop hover-open: a server round-trip per hover
   * is heavy; the sheet's hover styling is untouched). The open row carries
   * Prime's `.p-menubar-item-active`.
   *
@@ -24,7 +24,7 @@ import kyo.UI.*
   * ArrowLeft/Right move Prime's `.p-focus` between root items (closing any open
   * submenu), ArrowDown opens the focused root's submenu (landing on its first
   * row; ArrowUp opens on the last). Inside a submenu ArrowUp/Down move siblings,
-  * ArrowRight opens a nested submenu — or, on a leaf, crosses to the next root —
+  * ArrowRight opens a nested submenu (or, on a leaf, crosses to the next root),
   * and ArrowLeft climbs out, crossing to the previous root at the first level.
   * Home/End jump, Enter/Space activate a leaf, Escape closes a level. Submenu
   * panels do NOT seed focus (the root list keeps the keys); `id(...)` wires
@@ -50,10 +50,10 @@ final case class Menubar private (
       */
     def items(is: MenuItemEntry*): Menubar = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
-    /** Content before the root list (`div.p-menubar-start` — logo slot). */
+    /** Content before the root list (`div.p-menubar-start`, the logo slot). */
     def start(ui: UI): Menubar = copy(startV = Present(ui))
 
-    /** Content after the root list (`div.p-menubar-end` — pushed to the far
+    /** Content after the root list (`div.p-menubar-end`, pushed to the far
       * edge by the sheet's `margin-left: auto`).
       */
     def end(ui: UI): Menubar = copy(endV = Present(ui))
@@ -110,7 +110,7 @@ final case class Menubar private (
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
@@ -147,7 +147,7 @@ final case class Menubar private (
 end Menubar
 
 object Menubar:
-    /** An empty menubar — add root items via [[Menubar.items]]. */
+    /** An empty menubar; add root items via [[Menubar.items]]. */
     def apply(): Menubar = new Menubar()
 
 /** Package-internal recursive tree renderer shared by Menubar and TieredMenu
@@ -161,7 +161,7 @@ private[uic] object MenuTree:
       * the horizontal menubar, every other level to the side).
       *
       * `focused` stamps Prime's `.p-focus` on the row at that path (hosts with
-      * panel-level keyboard navigation — ContextMenu); `onLeafActivate` runs
+      * panel-level keyboard navigation, e.g. ContextMenu); `onLeafActivate` runs
       * after a leaf item's action + the submenu-tree close (hosts whose whole
       * tree lives in a closable popup close their own root here).
       */
@@ -201,7 +201,7 @@ private[uic] object MenuTree:
                                 MenuRender.openExactly(rs, target)
                             case Absent => ()
                     val subIcon = if nested then Icons.angleRight else rootSubmenuIcon
-                    // A row that opens a submenu can be current too — a section whose page is the
+                    // A row that opens a submenu can be current too: a section whose page is the
                     // one open, in a nav that groups its links.
                     var row = MenuRender.markCurrent(
                         li
@@ -259,7 +259,7 @@ private[uic] object MenuTree:
                                             .matchWidth(false)
                                             .animate(false)
                                             // Roving hosts keep focus on the root container and drive the
-                                            // highlight declaratively, so a submenu must NOT seed focus —
+                                            // highlight declaratively, so a submenu must NOT seed focus:
                                             // that would pull focus off the host and stop its key handler.
                                             .seedFocus(!roving)
                                             .panelClass(s"p-$prefix-submenu")
