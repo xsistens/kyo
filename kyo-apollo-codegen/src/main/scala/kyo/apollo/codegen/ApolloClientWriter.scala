@@ -73,6 +73,12 @@ object ApolloClientWriter:
             "ID"      -> "String"
         )
 
+    /** The graphql-multipart-request-spec file scalar. Left unmapped, a custom scalar of
+      * this name is `kyo.apollo.Upload` with `ScalarCodec.upload`, which the client sends
+      * as a multipart file part; any other unmapped custom scalar is a `String`.
+      */
+    private val UploadScalar = "Upload"
+
     private val ReservedWords: Set[String] = Set(
         "type",
         "val",
@@ -335,6 +341,11 @@ object ApolloClientWriter:
           * imported `CustomScalars` givens).
           */
         private def emitInput(in: InputObjectTypeDefinition): GeneratedSource =
+            // An input object is encoded through its derived `Schema`, which has no file
+            // placeholder: a file field would be sent as a string, so it is refused here.
+            in.fields.find(f => isUnmappedUpload(f.ofType)).foreach { f =>
+                throw CodegenException.UploadInInputObject(in.name, f.name)
+            }
             val fields       = in.fields.map(f => dataField(f.name, f.ofType))
             val params       = fields.map(f => s"${f.scalaName}: ${f.scalaType}").mkString(", ")
             val scalarImport = customScalarImport(fields.map(_.scalaType))
@@ -769,8 +780,9 @@ object ApolloClientWriter:
                 if enumNames(other) || inputNames(other) then s"ScalarCodec.fromSchema[$other]"
                 else if customScalarNames(other) then
                     config.scalarMappings.get(other) match
-                        case Some(scala) => s"ScalarCodec.fromSchema[$scala]"
-                        case None        => "ScalarCodec.string"
+                        case Some(scala)                   => s"ScalarCodec.fromSchema[$scala]"
+                        case None if other == UploadScalar => "ScalarCodec.upload"
+                        case None                          => "ScalarCodec.string"
                 else throw new IllegalStateException(s"no codec for type `$other`, which passed type validation")
 
         /** The Scala value type for a field whose object leaf named tuple is `a`,
@@ -828,12 +840,19 @@ object ApolloClientWriter:
                 case Some(scala) => scala
                 case None        =>
                     if enumNames(name) then name // Scala 3 `enum` emitted by writeSchemaTypes.
-                    else if customScalarNames(name) then config.scalarMappings.getOrElse(name, "String")
+                    else if customScalarNames(name) then
+                        config.scalarMappings.getOrElse(name, if name == UploadScalar then "kyo.apollo.Upload" else "String")
                     else if inputNames(name) then name // input case class emitted by writeSchemaTypes.
                     else if objectNames(name) then name
                     else if unionMembers.contains(name) then name // union marker trait emitted by emitSelectors.
                     else if interfaceNames(name) then name        // interface marker trait emitted by emitSelectors.
                     else throw new IllegalStateException(s"no Scala type for `$name`, which passed type validation")
+
+        /** Whether `t`, under its list and non-null wrappers, is the unmapped `Upload` scalar. */
+        private def isUnmappedUpload(t: Type): Boolean = t match
+            case Type.NamedType(name, _) =>
+                name == UploadScalar && customScalarNames(name) && !config.scalarMappings.contains(name)
+            case Type.ListType(ofType, _) => isUnmappedUpload(ofType)
 
         /** Whether a GraphQL type reference is non-null (a required variable). */
         private def isNonNull(t: Type): Boolean = t match
