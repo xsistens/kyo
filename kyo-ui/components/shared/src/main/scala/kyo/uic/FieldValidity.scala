@@ -16,7 +16,8 @@ import kyo.UI.*
   * lands in a node that is already gone, and focus and caret go with it. That is the reason there is no way here to
   * hand the control a plain `Boolean` snapshot of a reactive slot.
   *
-  * The red state is the explicit `invalid(Signal)` where one is bound, else the presence of the reactive message.
+  * The red state is the explicit `invalid`, constant or signal, where one is set, else the presence of the reactive
+  * message.
   * Without any reactive slot everything stays constant: `.p-invalid` and `aria-invalid="true"` are plain attributes
   * and the row is a sibling only when the control is invalid and has a message, exactly the static markup. A reactive
   * red state writes `aria-invalid="false"` while valid, which ARIA reads the same as no attribute: kyo-ui's attribute
@@ -76,6 +77,9 @@ private[uic] object FieldValidity:
             case (Present(red), Present(msg)) => Live(red, redFromMessage = false, Present(msg))
             case (Present(red), _)            =>
                 Live(red, redFromMessage = false, message.map(m => Signal.initConst[Maybe[String]](Present(m))))
+            // A constant `invalid` is as explicit as a signal one, so it decides the red state over the message too.
+            case (_, Present(msg)) if invalid.isDefined =>
+                Live(Signal.initConst(invalid.constTrue), redFromMessage = false, Present(msg))
             case (_, Present(msg)) => Live(msg.map(_.isDefined), redFromMessage = true, Present(msg))
             case _                 => Fixed(invalid.constTrue, message)
 
