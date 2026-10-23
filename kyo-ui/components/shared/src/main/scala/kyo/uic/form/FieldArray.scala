@@ -172,10 +172,10 @@ final class FieldArray[R] private[form] (
 
     // --- effectful walks over the CURRENT rows ---------------------------------
 
-    private[form] def validateRows(using Frame): Chunk[(FormField[?], Maybe[FieldError])] < Async =
+    private[form] def validateRows(skip: Chunk[FormField[?]])(using Frame): Chunk[(FormField[?], Maybe[FieldError])] < Async =
         for
             rows <- rowsRef.get
-            res  <- Kyo.foreach(rows)(_.form.validateSubtree)
+            res  <- Kyo.foreach(rows)(_.form.validateSubtree(skip))
         yield res.foldLeft(Chunk.empty[(FormField[?], Maybe[FieldError])])(_ ++ _)
 
     private[form] def runCheckRows(using Frame): Chunk[FieldError] < Async =
