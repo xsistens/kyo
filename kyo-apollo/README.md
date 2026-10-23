@@ -878,7 +878,7 @@ them:
 |------|---------------|--------------------------|---------|-----|
 | Selection value | `Country.name ~ Country.capital` | the fields, inline | any code holding the result | the same fields in several operations |
 | Cache fragment | `Fragment.of(Country)(...)` | not part of an operation | `ApolloStore`, at a `CacheKey` | reading or writing one record without an operation |
-| Entity fragment | `Fragment.entity(Country)(...)` | an opaque `Ref` | kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on a type with a `CacheIdentity` |
+| Entity fragment | `Fragment.entity(Country)(...)` | an opaque `Ref` | `ApolloStore.readFragment(ref)` and `watchFragment(ref)`, or kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on a type with a `CacheIdentity` |
 | Embedded fragment | `Fragment.embedded(PageInfo)(...)` | an opaque `Ref` | kyo-apollo-ui's `Apollo.fragment(ref)`, by convention only in the declaring component | a component's fields on an object without an identity |
 
 To pick one, ask what the fields are for:
@@ -961,12 +961,17 @@ one, the component can no longer drop that field without breaking the page.
 
 A masked fragment keeps the fields to the component. The query still fetches them, but
 its result holds only an opaque `Ref` with no field accessors. The fields a ref carries
-are private to kyo-apollo; kyo-apollo-ui's `Apollo.fragment(ref)` opens it, and by
-convention only the component that declared the fragment calls it:
+are private to kyo-apollo. Reading them takes an explicit opener, and by convention only
+the component that declared the fragment calls one:
 
 ```scala
 object CountryPlace:
     val fields = Fragment.entity(Country)(_.name, _.capital)
+
+    def render(client: ApolloClient, ref: fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
+        client.apolloStore.watchFragment(ref).foreach { place =>
+            Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
+        }
 end CountryPlace
 
 val placeQuery = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
@@ -980,7 +985,7 @@ val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: St
 -->
 
 `placeQuery` returns `(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])`.
-The page hands `countryPlace` to the `CountryPlace` component. The ref has no fields, so
+The page hands `countryPlace` to `CountryPlace.render`. The ref has no fields, so
 reading one from the result does not compile:
 
 ```scala doctest:scope=nested expect=fails-compile
@@ -992,9 +997,16 @@ When the page needs a field the component also shows, it selects that field itse
 (`Country.name ~ CountryPlace.fields.spread`). The server sends it once, and the page's
 dependency on it is visible in the page's own selection.
 
-In the component, `Apollo.fragment(ref)` (with the `ApolloClient` in scope) is a
-`Signal` of the fragment's fields, and fails with an `ApolloParseException` when the
-fields the ref captured do not decode.
+An entity ref opens in two ways in kyo-apollo, and in one more in kyo-apollo-ui:
+
+| Opener | Gives |
+|--------|-------|
+| `apolloStore.readFragment(ref)` | the record as the cache holds it now, or the fields the ref delivered when the record is gone or the store gives the type no key |
+| `apolloStore.watchFragment(ref)` | that read as a `Stream`, then again after every write that changes the record; keeps the record from garbage collection while it runs |
+| kyo-apollo-ui's `Apollo.fragment(ref)` (with the `ApolloClient` in scope) | the same follow as a `Signal`, for a kyo-ui component |
+
+Each one fails with an `ApolloParseException` when it has to fall back to the fields the
+ref captured and they do not decode.
 
 #### `Fragment.entity`: fields of a record
 
@@ -1002,15 +1014,16 @@ Use an entity fragment when the component should follow its record by itself. It
 the type's `CacheIdentity` (the `given` from [Normalized cache](#normalized-cache) here),
 or it does not compile. The spread adds `__typename` and the identity's key fields
 (`code`) to the document, so every ref carries what a key needs. The store keys the ref
-with the generator it was configured with, so `Apollo.fragment(ref)` reads the record
-without the page's query, starting from the record as the cache holds it now. If the
-record is gone, or that generator gives the type no identity, it starts from the fields
-the ref delivered.
+with the generator it was configured with, so the openers read the record without the
+page's query, starting from the record as the cache holds it now. If the record is gone,
+or that generator gives the type no identity, they start from the fields the ref
+delivered, and `watchFragment` on a type without an identity emits once and ends.
 
-The signal changes when a mutation, a subscription or a local write changes the capital
-of `Country:DE`, whether or not the page watches its own query, and while it is open the
-record is kept from garbage collection. An entity fragment only reads. To write its
-record, use a `Fragment.of` over the same fields with `updateFragment` or
+The watch in `CountryPlace.render` emits again when a mutation, a subscription or a
+local write changes the capital of `Country:DE`, whether or not the page watches its own
+query, and while it runs the record is kept from garbage collection. A write that lands
+while the watch reads is read again, not lost. An entity fragment only reads. To write
+its record, use a `Fragment.of` over the same fields with `updateFragment` or
 `writeFragment`.
 
 #### `Fragment.embedded`: fields of a value
@@ -1041,8 +1054,9 @@ val firstCountriesIsTyped: kyo.apollo.api.Query.Normalizable[
 ```
 -->
 
-`Apollo.fragment(ref)` on an embedded ref is a constant `Signal` of the delivered
-fields. A newer `PageInfo` arrives as a new ref in the parent's next result, so a watch
+An embedded ref has no record for the store to read, so `readFragment` and
+`watchFragment` do not take one; kyo-apollo-ui's `Apollo.fragment(ref)` opens it as a
+constant `Signal` of the delivered fields. A newer `PageInfo` arrives as a new ref in the parent's next result, so a watch
 on the page query brings it. `Fragment.entity(PageInfo)` would not compile here, because
 `PageInfo` has no identity. That is on purpose: an entity ref names its record, and a
 record named by position could hold a different object after the next refetch.
