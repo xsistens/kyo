@@ -120,12 +120,17 @@ sealed abstract class FieldSpec[A] private[form] (
       * Registration order is declaration order, which is the order `focusFirstInvalid` and the
       * error summary walk, so a field declared here is reachable even if it is never bound.
       */
-    def declare(using Frame): (FormField[A] { type Valid = FieldSpec.this.Valid }) < Sync =
+    def declare(using Frame): (FormField[A] { type Valid = FieldSpec.this.Valid }) < Sync = declareIn(form)
+
+    /** [[declare]] into `scope` rather than the form the spec was made from: how a field group declares its members,
+      * since a group's fields belong to the group's scope ([[Form.fields]]).
+      */
+    private[form] def declareIn(scope: Form)(using Frame): (FormField[A] { type Valid = FieldSpec.this.Valid }) < Sync =
         // Explicitly typed rather than folded: a match with one effectful and one plain branch
         // infers `Any` and lands the effect inert (the module's effect-as-value trap).
         val id: String < Sync = domIdV match
             case Present(i) => i
-            case Absent     => form.mintId()
+            case Absent     => scope.mintId()
         for
             id            <- id
             valueRef      <- Signal.initRef(initialV)
@@ -153,14 +158,15 @@ sealed abstract class FieldSpec[A] private[form] (
                 debounceV,
                 revealV,
                 focusableV,
-                form.translator,
-                form.submitCount,
-                namedRef
+                scope.translator,
+                scope.submitCount,
+                namedRef,
+                scope
             )
-            _ <- form.register(f)
+            _ <- scope.register(f)
         yield f
         end for
-    end declare
+    end declareIn
 end FieldSpec
 
 object FieldSpec:
@@ -230,8 +236,11 @@ sealed abstract class NumberFieldSpec[A] private[form] (
     def focusable(v: Boolean): NumberFieldSpec[A] { type Valid = NumberFieldSpec.this.Valid } = rebuild(under.focusable(v), rulesV)
 
     /** @see [[FieldSpec.declare]] */
-    def declare(using Frame): (NumberField[A] { type Valid = NumberFieldSpec.this.Valid }) < Sync =
-        under.rules(Rule[Double, Valid](d => rulesV.run(codec.fromDouble(d)))).declare
+    def declare(using Frame): (NumberField[A] { type Valid = NumberFieldSpec.this.Valid }) < Sync = declareIn(under.form)
+
+    /** @see [[FieldSpec.declareIn]] */
+    private[form] def declareIn(scope: Form)(using Frame): (NumberField[A] { type Valid = NumberFieldSpec.this.Valid }) < Sync =
+        under.rules(Rule[Double, Valid](d => rulesV.run(codec.fromDouble(d)))).declareIn(scope)
             .map(f => NumberField.of(f, codec))
 end NumberFieldSpec
 

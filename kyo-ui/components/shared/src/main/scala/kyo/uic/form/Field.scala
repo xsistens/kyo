@@ -30,6 +30,9 @@ trait Validated:
     /** The registered field the verdict belongs to: the one submit focuses, and the one it must not validate twice. */
     private[form] def submitField: FormField[?]
 
+    /** The scope the field was declared in, which is the scope a field group it heads belongs to ([[Form.scopeOf]]). */
+    private[form] def owner: Form
+
     /** Validate for submit (publishing the error as [[FormField.validateForSubmit]] does) and hand back what the rules
       * yielded.
       */
@@ -82,7 +85,8 @@ sealed abstract class FormField[A] private[form] (
     private[form] val focusableFlag: Boolean,
     translator: ErrorTranslator,
     submitCount: Signal[Int],
-    namedRef: SignalRef[Boolean]
+    namedRef: SignalRef[Boolean],
+    private[form] val owner: Form
 )(using CanEqual[A, A]) extends Validated derives CanEqual:
 
     /** The rule chain, typed by what it yields. Held in a [[RuleChain]] because [[addRule]] appends to it. */
@@ -397,7 +401,8 @@ object FormField:
         focusable: Boolean,
         translator: ErrorTranslator,
         submitCount: Signal[Int],
-        namedRef: SignalRef[Boolean]
+        namedRef: SignalRef[Boolean],
+        owner: Form
     )(using CanEqual[A, A]): FormField[A] { type Valid = B } =
         val rulesChain = new RuleChain(rules)
         new FormField[A](
@@ -417,7 +422,8 @@ object FormField:
             focusable,
             translator,
             submitCount,
-            namedRef
+            namedRef,
+            owner
         ):
             type Valid = B
             private[form] def chain: RuleChain[A, B] = rulesChain

@@ -72,6 +72,7 @@ class FormValidationTest extends UicTest:
             resetWrite <- AtomicRef.init(Maybe.empty[A])
             count      <- Signal.initRef(0)
             named      <- Signal.initRef(false)
+            owner      <- mkForm
         yield (
             FormField.declared[A, A](
                 valueRef,
@@ -91,7 +92,8 @@ class FormValidationTest extends UicTest:
                 true,
                 ErrorTranslator.default,
                 count,
-                named
+                named,
+                owner
             ),
             valueRef
         )
