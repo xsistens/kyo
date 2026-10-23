@@ -6,9 +6,9 @@ import scala.annotation.targetName
 /** The validation vocabulary every control that holds a user-supplied value carries,
   * and the surface the form-validation layer binds against: [[TextFormControl]] /
   * [[BooleanFormControl]] / [[NumberFormControl]] / [[ChoiceFormControl]] / [[MultiChoiceFormControl]] /
-  * [[FileFormControl]] each add their value binding and blur trigger on top, and each
-  * preserves the concrete `Self` type (Input, TextArea, Slider, ...) at the call site
-  * — no opaque wrapper.
+  * [[OptionalFormControl]] / [[FileFormControl]] each add their value binding and blur trigger on top, and each
+  * preserves the concrete `Self` type (Input, TextArea, Slider, ...) at the call site,
+  * with no opaque wrapper.
   *
   * The trait carries the validation setters ITSELF rather than declaring them. The
   * vocabulary used to be unevenly distributed — some controls had the pair, some had
@@ -95,6 +95,18 @@ trait MultiChoiceFormControl[A] extends FormControl:
     @targetName("onBlurSet")
     def onBlur(f: Set[A] => UI.Action)(using Frame): Self
 end MultiChoiceFormControl
+
+/** A control holding an optional value of the app's own type ([[DatePicker]], whose value type is its kind): the value bound
+  * two-way as `Maybe[A]`, `Absent` while nothing is picked, plus a focus-loss trigger that reports it.
+  *
+  * The field's value type is `Maybe[A]`, so `bind` takes a `FormField[Maybe[A]]` and a rule judges the typed value itself,
+  * with `Validator.chosen` as its `required` and `Validator.ifPresent` to state a rule over the value without making it
+  * required. There is no second, primitive field behind it: the control reads and writes the field's own ref.
+  */
+trait OptionalFormControl[A] extends FormControl:
+    def value(ref: SignalRef[Maybe[A]]): Self
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): Self
+end OptionalFormControl
 
 /** A `Boolean`-valued field (checkbox / switch / radio): checked binding plus
   * focus-loss. `onBlur` reports the field's current checked state.

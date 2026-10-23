@@ -168,6 +168,38 @@ There is no public setter that takes the key a component compares by. Rules:
   `updateRows`) is the crossing. `TableState` alone keeps keys, because it is what gets serialized;
   `restore(s, byKey)` resolves them back.
 
+## A date binds the value type, and the type is the mode
+
+`DatePicker[A]` holds what its `DateKind[A]` says (`LocalDate`, `LocalDateTime`, `LocalTime`, `YearMonth`,
+`Year`, or `DateKind.zoned` for a `ZonedDateTime`), and the kind decides the grid the picker opens on and
+picks in. There is no `view`, `showTime` or `timeOnly` setter, because each would be a second way to say
+what the type already says. Rules:
+
+- **A setter some kinds cannot honour asks for evidence**, never a silent no-op: `values`/`range` need
+  `DateKind.Days`, `hourFormat` `Clock`, `showWeek` `Weeks`, `currentView` `Drill`, `month` and
+  `referenceDate` `Calendar`. The markers are flat (no subtyping between them), so one given never
+  satisfies two of them ambiguously. `DatePickerTest` holds each refusal.
+- **Inside, everything is ISO text at the kind's precision**, because the grid math is integer arithmetic
+  over it. `DatePicker.Binding` is the one crossing: it reads the typed refs as a `Snapshot` of ISO strings
+  and writes back values parsed from them, comparing by the ISO image the way `SingleChoice` compares by
+  key. A write naming the value already held writes nothing and reports nothing, which is what keeps a
+  zoned value's instant through a pick of its own day.
+- **Bounds compare ISO strings of one kind**, and a time kind's bound reaches the time picker: a step that
+  would leave the bounds renders disabled, and a day pick on a bound's own day is clamped to it.
+- **Typed text is parsed, never bound.** The field shows the held value; a `change` that does not name a
+  value within the bounds writes nothing and parks the text in the mount's `draft` ref, which the blur
+  clears so the field shows the held value again. A const `value` alone cannot do that: re-rendering the
+  same string patches nothing, and the reader's text would stay on screen beside a value it never became.
+- **A set or a range is a type of its own** (`MultiDatePicker[A]` from `values`, `RangeDatePicker[A]` from
+  `range`), the `SelectButton.multiple` split: each has exactly one `onChange` and one `onBlur` over its own
+  value, so no callback can be set that never fires. The conversion drops the single-value binding and its
+  callbacks; the wrappers delegate every shared setter to the `DatePicker` they hold and render through it,
+  so no logic is duplicated. One type with three callback names, or with arity-one overloads, was the
+  alternative: the first leaves dead callbacks possible, the second breaks lambda inference.
+- **Only `DatePicker[A]` binds a form field** (`OptionalFormControl[A]`). The wrappers carry `FormControl`'s
+  validation vocabulary but no form binding: `MultiChoiceFormControl` binds through `selection`, which would
+  be a second name for the set `values` already bound, and no field holds a range's two refs.
+
 ## Typed builders: where inference dies
 
 A setter that takes a projection of the component's own element type (`Column`'s
@@ -478,11 +510,12 @@ default, which left the month and year grids, and the keyboard those grids had j
 unreachable in every picker that bound no `currentView`.
 
 - **The mount mints what the caller did not bind**, next to the ids it already mints
-  (`DatePicker.render`: the open, month, view and cursor refs), and hands them to the `wired`
+  (`DatePicker.render`: the open, month, view and cursor refs, and the held value itself when no
+  `value` is bound), and hands them to the `wired`
   seam. The static projection is the only place a control renders disabled for want of a ref, and
   that projection is inert throughout.
 - **The seam must mint the way the mount does**, from the component's own fields
-  (`dp.currentViewRefV` else `Signal.initRef(dp.viewV)`), or the golden documents a control the
+  (`dp.currentViewRefV` else `Signal.initRef(dp.kind.view)`), or the golden documents a control the
   reader never meets and a caller's own binding stops working through the seam.
 - `aria-disabled` is the right answer where the control is genuinely inapplicable right now: it
   keeps the tab stop and says so. Native `disabled` removes it from the keyboard entirely, which

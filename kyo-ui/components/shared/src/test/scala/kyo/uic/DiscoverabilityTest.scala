@@ -181,7 +181,7 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + """def x: uic.FormControl = uic.InputMask("999")""")
         typeCheck(preamble + """def x: uic.FormControl = uic.InputOtp()""")
         typeCheck(preamble + """def x: uic.FormControl = uic.AutoComplete[String]()""")
-        typeCheck(preamble + """def x: uic.FormControl = uic.DatePicker()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.DatePicker[java.time.LocalDate]()""")
         typeCheck(preamble + """def x: uic.FormControl = uic.Select[String]()""")
         typeCheck(preamble + """def x: uic.FormControl = uic.CascadeSelect[String]()""")
         typeCheck(preamble + """def x: uic.FormControl = uic.MultiSelect[String]()""")
@@ -481,8 +481,8 @@ class DiscoverabilityTest extends UicTest:
 
     "AutoComplete has the dropdown trigger; DatePicker has inline (typed Boolean)" in {
         typeCheck(preamble + """def x = uic.AutoComplete[String]().options(Seq("A")).dropdown(true)""")
-        typeCheck(preamble + """def x: uic.DatePicker = uic.DatePicker().inline(true)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().inline("yes")""")
+        typeCheck(preamble + """def x: uic.DatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().inline(true)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().inline("yes")""")
     }
 
     "Tooltip is CSS-driven: content + typed position, no open ref and no JS timer props" in {
@@ -506,9 +506,9 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Dialog().state(uic.ValueState.Negative)""")
         typeCheck(preamble + """def x = uic.Dialog().severity(uic.Severity.Danger).maximized(true)""")
         typeCheckFailure(preamble + """def x = uic.Dialog().stretch(true)""")
-        typeCheck(preamble + """def x = uic.DatePicker().invalid(true).invalidMessage("m").showWeek(true)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().valueState(uic.ValueState.Negative)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().hideWeekNumbers(true)""")
+        typeCheck(preamble + """def x = uic.DatePicker[java.time.LocalDate]().invalid(true).invalidMessage("m").showWeek(true)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().valueState(uic.ValueState.Negative)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().hideWeekNumbers(true)""")
     }
 
     "TextArea has rows/autoResize; Input does not have rows" in {
@@ -527,13 +527,15 @@ class DiscoverabilityTest extends UicTest:
     }
 
     "DatePicker opens only via SignalRef[Boolean] (no plain Boolean)" in {
-        typeCheck(preamble + """def x(o: SignalRef[Boolean]) = uic.DatePicker().open(o)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().open(true)""")
+        typeCheck(preamble + """def x(o: SignalRef[Boolean]) = uic.DatePicker[java.time.LocalDate]().open(o)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().open(true)""")
     }
 
     "new controls' chained setters keep the concrete type" in {
         typeCheck(preamble + """def x: uic.CheckBox = uic.CheckBox("a").disabled(true).invalid(true)""")
-        typeCheck(preamble + """def x: uic.DatePicker = uic.DatePicker().placeholder("p").disabled(true).referenceDate("2024-01-01")""")
+        typeCheck(
+            preamble + """def x: uic.DatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().placeholder("p").disabled(true).referenceDate(java.time.LocalDate.of(2024, 1, 1))"""
+        )
     }
 
     "Link keeps href/wrap/icon; the retired ui5 designs and interactiveAreaSize are gone" in {
@@ -1366,15 +1368,21 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     // ---- deepened DatePicker / Paginator / Stepper / MeterGroup ----
 
     "the deepened DatePicker / Paginator / Stepper / MeterGroup surfaces typecheck" in {
-        typeCheck(preamble + """def x(v: SignalRef[Set[String]]): uic.DatePicker = uic.DatePicker().values(v)""")
-        typeCheck(preamble + """def x(s: SignalRef[String], e: SignalRef[String]): uic.DatePicker = uic.DatePicker().range(s, e)""")
         typeCheck(
-            preamble + """def x(cv: SignalRef[uic.DatePickerView]): uic.DatePicker = uic.DatePicker().view(uic.DatePickerView.Month).currentView(cv)"""
+            preamble + """def x(v: SignalRef[Set[java.time.LocalDate]]): uic.MultiDatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().values(v).minDate(java.time.LocalDate.of(2026, 1, 1)).showWeek(true).onChange((s: Set[java.time.LocalDate]) => ())"""
         )
         typeCheck(
-            preamble + """def x: uic.DatePicker = uic.DatePicker().showTime(true).hourFormat(uic.HourFormat.H12).showButtonBar(true).today("2026-07-16")"""
+            preamble + """def x(s: SignalRef[Maybe[java.time.LocalDate]], e: SignalRef[Maybe[java.time.LocalDate]]): uic.RangeDatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().range(s, e).inline(true).onChange((a, b) => ())"""
         )
-        typeCheck(preamble + """def x: uic.DatePicker = uic.DatePicker().timeOnly(true)""")
+        typeCheck(
+            preamble + """def x(cv: SignalRef[uic.DatePickerView]): uic.DatePicker[java.time.YearMonth] = uic.DatePicker[java.time.YearMonth]().currentView(cv)"""
+        )
+        typeCheck(
+            preamble + """def x: uic.DatePicker[java.time.LocalDateTime] = uic.DatePicker[java.time.LocalDateTime]().hourFormat(uic.HourFormat.H12).showButtonBar(true).today(java.time.LocalDateTime.of(2026, 7, 16, 9, 0))"""
+        )
+        typeCheck(
+            preamble + """def x: uic.DatePicker[java.time.ZonedDateTime] = uic.DatePicker(uic.DateKind.zoned(java.time.ZoneId.of("UTC")))"""
+        )
         typeCheck(
             preamble + """def x(pg: SignalRef[Int], rows: SignalRef[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(rows).page(pg).pageLinkSize(3).rowsPerPageOptions(Seq(5, 10)).currentPageReport("{currentPage} of {totalPages}").jumpToPageInput(true)"""
         )
@@ -1402,10 +1410,14 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     }
 
     "the deepened surfaces stay typed: no string views/orientations, refs not bare values" in {
-        typeCheckFailure(preamble + """def x = uic.DatePicker().view("month")""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().values(Set("2026-01-01"))""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().range("2026-01-01", "2026-01-05")""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker().hourFormat("12")""")
+        // The kind decides the grid: there is no view, showTime or timeOnly setter to contradict it.
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().view(uic.DatePickerView.Month)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().showTime(true)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().timeOnly(true)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().values(Set(java.time.LocalDate.of(2026, 1, 1)))""")
+        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.DatePicker[java.time.LocalDate]().value(r)""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().today("2026-07-16")""")
+        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalTime]().hourFormat("12")""")
         typeCheckFailure(preamble + """def x = uic.Paginator().rowsPerPageOptions(Seq("10"))""")
         // The template is a list of VALUES, so Prime's space-separated string is not one.
         typeCheckFailure(preamble + """def x = uic.Paginator().template("PageLinks CurrentPageReport")""")

@@ -1,10 +1,10 @@
 # kyo-ui-components
 
-kyo-ui-components is a component library for kyo-ui: 84 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
+kyo-ui-components is a component library for kyo-ui: 86 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
 
 Everything reactive is kyo-ui's own vocabulary, unchanged. Every slot is one setter taking `A | Signal[A]`: a constant renders once, a `Signal[A]` patches in place, and on an editable slot a `SignalRef[A]` binds two way; a panel's visibility is a `SignalRef[Boolean]` you own. Rendering stays server-honest: state lives in signals, behaviour is computed from those signals at render time, and the only client-side machinery is the contract kyo-ui already ships (focus seeding, in-place attribute and class patching, pointer and scroll reporting). Two things you supply yourself: `uic.Theme.css` on the page (nothing is injected for you), and `import scala.language.implicitConversions` for the placement lift.
 
-The module cross-builds for every platform kyo-ui does: the JVM, Scala Native, and both of Scala.js' linker backends, JS and WebAssembly. There is no per-platform component API, because there is no per-platform source: every component lives in shared source and renders identically on all four, and the test suite runs on all four to keep it that way. Off the JVM the build pulls `scala-java-time` so `DateCodec` has a `java.time` to work against, along with the timezone, locale, and currency databases: those types exist without them but carry no data, so resolving one throws at run time, invisible to both compile and link.
+The module cross-builds for every platform kyo-ui does: the JVM, Scala Native, and both of Scala.js' linker backends, JS and WebAssembly. There is no per-platform component API, because there is no per-platform source: every component lives in shared source and renders identically on all four, and the test suite runs on all four to keep it that way. Off the JVM the build pulls `scala-java-time` so `DatePicker`'s value types have a `java.time` to work against, along with the timezone, locale, and currency databases: those types exist without them but carry no data, so resolving one throws at run time, invisible to both compile and link.
 
 <!-- doctest:setup
 ```scala
@@ -160,7 +160,7 @@ val saveRow: UI < Async =
 
 ## The shared vocabulary
 
-Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 84 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
+Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 86 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
 
 `Severity` has `Primary`, `Secondary`, `Success`, `Info`, `Warn`, `Danger`, `Help`, and `Contrast`. `Size` has `Small`, `Normal`, `Large`, and `XLarge`. Alongside those sit `SelectionMode`, `ButtonVariant`, `FieldVariant`, `Orientation`, `LabelPosition`, `OverlayPosition`, `OverlayAnchor`, `ColumnAlign`, `TitleLevel`, and `TextEmptyIndicatorMode`, plus per-component enums (`DatePickerView`, `MultiSelectDisplay`, `DrawerPosition`, `SkeletonShape`, and so on) that only one family needs.
 
@@ -564,24 +564,50 @@ val presentation: UI < Async =
 
 > **Caution:** `ColorPicker` is one of the two components with an explicit latency cost. Dragging its colour plane is one server round-trip per animation frame, which is crisp locally and visibly stepped over a slow link. The other is `VirtualScroller`, covered under [Displaying data](#displaying-data).
 
-### Dates are ISO-prefix strings
+### Dates are typed by what they hold
 
-The whole date surface binds `String`, not a `Date` object, and the string is always an ISO prefix: `YYYY-MM-DD` normally, `YYYY-MM-DDTHH:MM` with `showTime`, `HH:MM` with `timeOnly`, `YYYY-MM` under `view(Month)`, and `YYYY` under `view(Year)`.
+A `DatePicker` is typed by the value it holds, and that type decides what it shows: `DatePicker[LocalDate]` picks a day, `[LocalDateTime]` a day and a time, `[LocalTime]` a time alone, `[YearMonth]` a month and `[Year]` a year. A `ZonedDateTime` is a day at a fixed zone and time of day, so its kind is passed explicitly: `uic.DatePicker(uic.DateKind.zoned(zone))`. The value binds two way as `Maybe[A]`, `Absent` while nothing is picked.
 
 ```scala
+import java.time.LocalDate
+import java.time.LocalTime
+import kyo.uic.DateKind.given
+
 val restock: UI < Async =
     for
-        date <- Signal.initRef("2026-08-16")
+        date <- Signal.initRef(Maybe(LocalDate.of(2026, 8, 16)))
         open <- Signal.initRef(false)
-    yield uic.DatePicker()
+    yield uic.DatePicker[LocalDate]()
         .value(date)
         .open(open)
+        .minDate(LocalDate.of(2026, 1, 1))
         .showButtonBar(true)
-        .today("2026-08-16")
+        .today(LocalDate.of(2026, 8, 16))
         .placeholder("YYYY-MM-DD"): UI
+
+val opening: UI < Async =
+    for time <- Signal.initRef(Maybe.empty[LocalTime])
+    yield uic.DatePicker[LocalTime]().value(time).minDate(LocalTime.of(8, 0)).hourFormat(uic.HourFormat.H12): UI
 ```
 
-> **Note:** `today(iso)` is explicit, and deliberately so. A pure render never reads a clock, so the component cannot know which day to circle unless you tell it. The same picker also covers multiple selection (`values(SignalRef[Set[String]])`), ranges (`range(startRef, endRef)`), and time (`showTime`, `timeOnly`, `hourFormat`), all on the same string model.
+`import kyo.uic.DateKind.given` brings the strict-equality instances the `java.time` types do not declare themselves, which a `SignalRef` over them needs. A setter that only some kinds can honour does not compile on the others: there is no week column on a `YearMonth` picker, no hour format on a `LocalDate` one, and no month to page on a `LocalTime` one. The field shows the value as ISO text and reads a typed text back; text that does not name a value within the bounds writes nothing and goes back to the held value when the field loses focus. `onChange` reports the typed value and fires only when a write changed it, so a pick of the day already held reports nothing, and with a zoned kind it also leaves the app's own instant in place.
+
+> **Note:** `today(value)` is explicit, and deliberately so. A pure render never reads a clock, so the component cannot know which day to circle unless you tell it. A day picker (`LocalDate`, or zoned) also covers multiple selection and ranges, each as a type of its own because its value is not one day: `values(SignalRef[Set[LocalDate]])` makes a `MultiDatePicker`, whose `onChange` and `onBlur` report the `Set`, and `range(startRef, endRef)` makes a `RangeDatePicker`, whose `onChange` and `onBlur` report the start and the end. The single-value binding and its callbacks do not carry over, so no callback is left that could never fire; every other setter does, bounds and button bar included.
+
+```scala
+import java.time.LocalDate
+import kyo.uic.DateKind.given
+
+val leave: UI < Async =
+    for
+        days  <- Signal.initRef(Set.empty[LocalDate])
+        start <- Signal.initRef(Maybe.empty[LocalDate])
+        end   <- Signal.initRef(Maybe.empty[LocalDate])
+    yield div(
+        uic.DatePicker[LocalDate]().values(days).onChange(ds => Console.printLine(s"${ds.size} days picked")),
+        uic.DatePicker[LocalDate]().range(start, end).onChange((from, to) => Console.printLine(s"$from to $to"))
+    )
+```
 
 ### File selection
 
@@ -1864,7 +1890,7 @@ val bound: UI =
     }
 ```
 
-`bind` compiles only against a control implementing the matching `FormControl` trait, and the field's value type picks which one. Text fields bind to `Input`, `TextArea`, `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `DatePicker`, and `ColorPicker`. A choice field's value type is the option type: a `FormField[A]` or a `FormField[Maybe[A]]` binds to a `Select[A]`, a `CascadeSelect[A]` or a single-select `SelectButton[A]`, with `Validator.chosen()` as the `required` of the `Maybe` form, and a `FormField[Set[A]]` binds to a `MultiSelect[A]` or a `MultiSelectButton[A]` (`Validator.chosenAny()`). Boolean fields bind to `CheckBox`, `RadioButton`, `ToggleSwitch`, and `ToggleButton`. Number fields bind to `InputNumber`, `Slider`, `Knob`, and `Rating`. A `FormField[Set[K]]` of item ids binds to a `TreeSelect[K]` or a `Listbox[K]`. A file field (`Seq[UI.FilePayload]`) binds to `FileUpload`, which is what lets a rule check a size cap or an extension against the metadata the picker handed over.
+`bind` compiles only against a control implementing the matching `FormControl` trait, and the field's value type picks which one. Text fields bind to `Input`, `TextArea`, `Password`, `InputMask`, `InputOtp`, `AutoComplete`, and `ColorPicker`. A choice field's value type is the option type: a `FormField[A]` or a `FormField[Maybe[A]]` binds to a `Select[A]`, a `CascadeSelect[A]` or a single-select `SelectButton[A]`, with `Validator.chosen()` as the `required` of the `Maybe` form, and a `FormField[Set[A]]` binds to a `MultiSelect[A]` or a `MultiSelectButton[A]` (`Validator.chosenAny()`). Boolean fields bind to `CheckBox`, `RadioButton`, `ToggleSwitch`, and `ToggleButton`. Number fields bind to `InputNumber`, `Slider`, `Knob`, and `Rating`. A date field is a `FormField[Maybe[A]]` over the picker's own value type and binds to a `DatePicker[A]`, again with `Validator.chosen()` as its `required`. A `FormField[Set[K]]` of item ids binds to a `TreeSelect[K]` or a `Listbox[K]`. A file field (`Seq[UI.FilePayload]`) binds to `FileUpload`, which is what lets a rule check a size cap or an extension against the metadata the picker handed over.
 
 The rule behind that list is that every control holding a user-supplied value is a `FormControl`, and `FormControl` declares the whole validation vocabulary: `invalid` and `invalidMessage` in both their constant and reactive forms, plus `id`. A control cannot carry half of it. `size` and `variant` are deliberately not part of the contract: the PrimeOne sheet defines `.p-*-sm`/`-lg` and `.p-variant-filled` only for the field-shaped controls, so requiring them would mean inventing CSS Prime does not ship for a `Slider` or a `Rating`.
 
@@ -1872,26 +1898,28 @@ The rule behind that list is that every control holding a user-supplied value is
 
 ### Typed values: dates and numbers
 
-`dateField` and `numberField` are typed facades over the `String` and `Double` a control actually holds. The underlying primitive value stays the single source of truth (a `SignalRef` has no bidirectional map, so a second typed ref could not stay honest), and the typed value is derived through a codec.
+A date field holds the picker's own value type, so it is declared like any other field and the picker reads and writes its ref directly. A rule about the date itself goes through `Validator.ifPresent`, which leaves an empty field to `Validator.chosen()`. `numberField` is a typed facade over the `Double` an `InputNumber` actually holds: the `Double` stays the single source of truth (a `SignalRef` has no bidirectional map, so a second typed ref could not stay honest), and the typed value is derived through a codec.
 
 ```scala
 import java.time.LocalDate
+import kyo.uic.DateKind.given
 
 val typedFields: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
             price   <- scope.numberField(0.0).rules(Validator.min(0.0) and Validator.max(10000.0)).declare
-            restock <- scope.dateField[LocalDate](Absent)
-                .rules(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1))))
+            restock <- scope.field(Maybe.empty[LocalDate])
+                .rules(Validator.chosen[LocalDate]() and
+                    Validator.ifPresent(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1)))))
                 .declare
         yield div(
             uic.InputNumber().bind(price).suffix(" EUR"),
-            uic.DatePicker().bind(restock).placeholder("YYYY-MM-DD")
+            uic.DatePicker[LocalDate]().bind(restock).placeholder("YYYY-MM-DD")
         )
     }
 ```
 
-`NumberCodec` ships `int`, `long`, and `double`; the whole-valued ones report `integer = true`, and `bind` flips the control's integer keystroke mask on for them, so a fraction cannot be entered into an `Int` field. `DateCodec.local` handles `LocalDate` and `DateCodec.zoned(zone, at)` builds a `ZonedDateTime` codec. `DateField.value` is a `Signal[Maybe[A]]`, because a picker can be empty; `NumberField.value` is a total `Signal[A]`, because an `InputNumber` always holds a number. Rules run against the typed value, and are skipped while a date picker is empty.
+`NumberCodec` ships `int`, `long`, and `double`; the whole-valued ones report `integer = true`, and `bind` flips the control's integer keystroke mask on for them, so a fraction cannot be entered into an `Int` field. `NumberField.value` is a total `Signal[A]`, because an `InputNumber` always holds a number.
 
 ### Submitting
 
@@ -2065,7 +2093,7 @@ The library targets kyo-ui's server-push transport as a first-class deployment, 
 
 **Two components carry an explicit latency cost**, and both are documented at their own sections: dragging `ColorPicker`'s colour plane is a round-trip per animation frame, and scrolling `VirtualScroller` round-trips to recompute the window.
 
-**Render is pure.** No clock, no randomness, nothing scheduled while a component is being projected into a `UI`. `DatePicker.today(iso)` is an explicit parameter because a pure render cannot read a clock.
+**Render is pure.** No clock, no randomness, nothing scheduled while a component is being projected into a `UI`. `DatePicker.today(value)` is an explicit parameter because a pure render cannot read a clock.
 
 Fibers follow one rule from there. A component may own one spawned inside its own `UI.mounted`, because the mount's `Scope` is that component's lifetime and unmount cancels it; `Carousel`'s autoplay is the one that does. A timer that has to outlive any single render belongs to a service instead, which forks it unscoped and owns the cancellation: that is why a single `Toast` emits its `duration` as a data attribute and runs no timer of its own, while `ToastService` owns its dismissal fibers.
 

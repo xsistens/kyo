@@ -1,8 +1,14 @@
 package kyo.uic.test
 
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.Year
+import java.time.YearMonth
 import kyo.*
 import kyo.UI.*
 import kyo.uic
+import kyo.uic.DateKind.given
 import kyo.uic.UicTest
 import scala.language.implicitConversions
 
@@ -24,20 +30,24 @@ class GoldenRenderTest extends UicTest:
       * a mount, and a golden render shows a mount only as its placeholder, so these go through
       * the `wired` seam like every other mount-based component.
       */
-    private def dpHtml(dp: uic.DatePicker, oref: SignalRef[Boolean], mref: Maybe[SignalRef[String]] = Absent)(using
+    private def dpHtml[A](dp: uic.DatePicker[A], oref: SignalRef[Boolean], mref: Maybe[SignalRef[YearMonth]] = Absent)(using
         Frame
     ): String < Async =
         for
             minted <- Signal.initRef("")
             cursor <- Signal.initRef("")
-            // The mount lifts a caller's view ref and mints one at the static view otherwise;
+            // The mount lifts a caller's view ref and mints one at the kind's own grid otherwise;
             // rendering the seam by hand has to do the same or the golden shows the wrong grid.
             view <- dp.currentViewRefV match
                 case Present(r) => Kyo.lift(r)
-                case Absent     => Signal.initRef(dp.viewV)
+                case Absent     => Signal.initRef(dp.kind.view)
             seed    <- Signal.initRef(false)
             restore <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
-            refs = uic.DatePicker.Refs(oref, mref.getOrElse(minted), cursor, view, seed, restore)
+            draft   <- Signal.initRef(Maybe.empty[String])
+            shown: uic.DatePicker.ShownMonth = mref match
+                case Present(r) => uic.DatePicker.ShownMonth.Bound(r)
+                case Absent     => uic.DatePicker.ShownMonth.Own(minted)
+            refs = uic.DatePicker.Refs(oref, shown, cursor, view, seed, restore, draft)
             out <- UI.runRender(dp.wired(refs, "dp", _ => ())).take(1).run
         yield out.mkString
 
@@ -906,40 +916,40 @@ class GoldenRenderTest extends UicTest:
     }
 
     "DatePicker inline(true) renders the in-flow Prime panel; month navigation + week numbers" in {
-        def picker(vref: SignalRef[String], oref: SignalRef[Boolean])(using Frame): uic.DatePicker =
-            uic.DatePicker().inline(true).value(vref).open(oref)
+        def picker(vref: SignalRef[Maybe[LocalDate]], oref: SignalRef[Boolean])(using Frame): uic.DatePicker[LocalDate] =
+            uic.DatePicker[LocalDate]().inline(true).value(vref).open(oref)
 
         for
             open <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
                     oref <- Signal.initRef(true)
                     out  <- dpHtml(picker(vref, oref), oref)
                 yield out.mkString
             closed <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
                     oref <- Signal.initRef(false)
                     out  <- dpHtml(picker(vref, oref), oref)
                 yield out.mkString
             alwaysOn <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
                     on   <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().inline(true).value(vref), on)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().inline(true).value(vref), on)
                 yield out.mkString
             withMonth <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
-                    mref <- Signal.initRef("2024-05")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
+                    mref <- Signal.initRef(YearMonth.of(2024, 5))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().inline(true).value(vref).month(mref), oref, Present(mref))
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().inline(true).value(vref).month(mref), oref, Present(mref))
                 yield out.mkString
             weeks <-
                 for
                     oref <- Signal.initRef(true)
                     out  <- UI.runRender(
-                        uic.DatePicker().inline(true).referenceDate("2026-07-01").showWeek(true).open(oref)
+                        uic.DatePicker[LocalDate]().inline(true).referenceDate(LocalDate.of(2026, 7, 1)).showWeek(true).open(oref)
                     ).take(1).run
                 yield out.mkString
         yield
@@ -974,20 +984,20 @@ class GoldenRenderTest extends UicTest:
         for
             floating <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().value(vref), oref)
                 yield out.mkString
             closed <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
                     oref <- Signal.initRef(false)
-                    out  <- dpHtml(uic.DatePicker().value(vref), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().value(vref), oref)
                 yield out.mkString
             selfManaged <-
                 for
-                    vref <- Signal.initRef("2024-03-15")
-                    out  <- UI.runRender(uic.DatePicker().value(vref)).take(1).run
+                    vref <- Signal.initRef(Maybe(LocalDate.of(2024, 3, 15)))
+                    out  <- UI.runRender(uic.DatePicker[LocalDate]().value(vref)).take(1).run
                 yield out.mkString
         yield
             assert(floating.contains("p-uic-overlay-backdrop"), "open: outside-click backdrop (Overlay primitive)")
@@ -3830,11 +3840,11 @@ class GoldenRenderTest extends UicTest:
     "DatePicker drills into Prime's month/year views through the currentView ref" in {
         def picker(view: uic.DatePickerView): String < Async =
             for
-                vref  <- Signal.initRef("2026-07-15")
-                mref  <- Signal.initRef("2026-07")
+                vref  <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 15)))
+                mref  <- Signal.initRef(YearMonth.of(2026, 7))
                 cvref <- Signal.initRef(view)
                 oref  <- Signal.initRef(true)
-                out   <- dpHtml(uic.DatePicker().value(vref).month(mref).currentView(cvref), oref, Present(mref))
+                out   <- dpHtml(uic.DatePicker[LocalDate]().value(vref).month(mref).currentView(cvref), oref, Present(mref))
             yield out.mkString
         for
             date   <- picker(uic.DatePickerView.Date)
@@ -3843,7 +3853,7 @@ class GoldenRenderTest extends UicTest:
             noRefs <-
                 for
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().referenceDate("2026-07-01"), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().referenceDate(LocalDate.of(2026, 7, 1)), oref)
                 yield out.mkString
         yield
             // The event attribute opens the tag (it is half of the path decision), so the title is matched as a
@@ -3878,28 +3888,29 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
-    "DatePicker view(Month|Year) picks ISO-prefix values from the granularity grids" in {
+    "DatePicker[YearMonth] and DatePicker[Year] pick from the granularity grids" in {
         for
             monthPicker <-
                 for
-                    vref <- Signal.initRef("2026-07")
+                    vref <- Signal.initRef(Maybe(YearMonth.of(2026, 7)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).view(uic.DatePickerView.Month), oref)
+                    out  <- dpHtml(uic.DatePicker[YearMonth]().value(vref), oref)
                 yield out.mkString
             yearPicker <-
                 for
-                    vref <- Signal.initRef("2026")
+                    vref <- Signal.initRef(Maybe(Year.of(2026)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).view(uic.DatePickerView.Year), oref)
+                    out  <- dpHtml(uic.DatePicker[Year]().value(vref), oref)
                 yield out.mkString
         yield
-            assert(monthPicker.contains("p-datepicker-month-view"), "view(Month): starts in the month grid")
-            assert(monthPicker.contains("p-datepicker-month-selected"), "view(Month): YYYY-MM value selects its month")
-            assert(monthPicker.contains("click"), "view(Month): month cells are clickable without drill-down refs")
-            assert(!monthPicker.contains("p-datepicker-day-view"), "view(Month): no day grid")
-            assert(yearPicker.contains("p-datepicker-year-view"), "view(Year): starts in the year grid")
-            assert(yearPicker.contains("p-datepicker-year-selected"), "view(Year): YYYY value selects its year")
-            assert(yearPicker.contains("2026"), "view(Year): year cell text")
+            assert(monthPicker.contains("p-datepicker-month-view"), "YearMonth: starts in the month grid")
+            assert(monthPicker.contains("p-datepicker-month-selected"), "YearMonth: the held month is selected")
+            assert(monthPicker.contains("click"), "YearMonth: month cells are clickable without drill-down refs")
+            assert(!monthPicker.contains("p-datepicker-day-view"), "YearMonth: no day grid")
+            assert(monthPicker.contains("""value="2026-07""""), "YearMonth: the field shows the held month")
+            assert(yearPicker.contains("p-datepicker-year-view"), "Year: starts in the year grid")
+            assert(yearPicker.contains("p-datepicker-year-selected"), "Year: the held year is selected")
+            assert(yearPicker.contains("2026"), "Year: year cell text")
     }
 
     "DatePicker multiple + range selection render Prime's day state classes" in {
@@ -3911,23 +3922,23 @@ class GoldenRenderTest extends UicTest:
         for
             multi <-
                 for
-                    sel  <- Signal.initRef(Set("2026-07-03", "2026-07-10"))
+                    sel  <- Signal.initRef(Set(LocalDate.of(2026, 7, 3), LocalDate.of(2026, 7, 10)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().values(sel), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().values(sel).picker, oref)
                 yield out.mkString
             range <-
                 for
-                    s    <- Signal.initRef("2026-07-06")
-                    e    <- Signal.initRef("2026-07-09")
+                    s    <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 6)))
+                    e    <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 9)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().range(s, e), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().range(s, e).picker, oref)
                 yield out.mkString
             rangeOpen <-
                 for
-                    s    <- Signal.initRef("2026-07-06")
-                    e    <- Signal.initRef("")
+                    s    <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 6)))
+                    e    <- Signal.initRef(Maybe.empty[LocalDate])
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().range(s, e), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDate]().range(s, e).picker, oref)
                 yield out.mkString
         yield
             assert(selectedDays(multi) == 2, "multiple: both set members selected")
@@ -3940,31 +3951,31 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
-    "DatePicker time picker renders Prime anatomy; timeOnly drops the calendar" in {
+    "DatePicker time picker renders Prime anatomy; a LocalTime picker drops the calendar" in {
         for
             dateTime <-
                 for
-                    vref <- Signal.initRef("2026-07-16T14:30")
+                    vref <- Signal.initRef(Maybe(LocalDateTime.of(2026, 7, 16, 14, 30)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).showTime(true), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDateTime]().value(vref), oref)
                 yield out.mkString
             twelve <-
                 for
-                    vref <- Signal.initRef("2026-07-16T14:30")
+                    vref <- Signal.initRef(Maybe(LocalDateTime.of(2026, 7, 16, 14, 30)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).showTime(true).hourFormat(uic.HourFormat.H12), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDateTime]().value(vref).hourFormat(uic.HourFormat.H12), oref)
                 yield out.mkString
             clock <-
                 for
-                    vref <- Signal.initRef("09:15")
+                    vref <- Signal.initRef(Maybe(LocalTime.of(9, 15)))
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).timeOnly(true), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalTime]().value(vref), oref)
                 yield out.mkString
             empty <-
                 for
-                    vref <- Signal.initRef("")
+                    vref <- Signal.initRef(Maybe.empty[LocalDateTime])
                     oref <- Signal.initRef(true)
-                    out  <- dpHtml(uic.DatePicker().value(vref).showTime(true).referenceDate("2026-07-01"), oref)
+                    out  <- dpHtml(uic.DatePicker[LocalDateTime]().value(vref).referenceDate(LocalDateTime.of(2026, 7, 1, 0, 0)), oref)
                 yield out.mkString
         yield
             assert(dateTime.contains("p-datepicker-time-picker"), "time picker container")
@@ -3975,41 +3986,41 @@ class GoldenRenderTest extends UicTest:
             assert(dateTime.contains("""data-uic-icon="chevron-up""""), "chevron-up glyph")
             assert(dateTime.contains(">14<"), "24h hour display")
             assert(dateTime.contains(">30<"), "minute display")
-            assert(dateTime.contains("p-datepicker-day-view"), "showTime keeps the day grid")
+            assert(dateTime.contains("p-datepicker-day-view"), "a LocalDateTime keeps the day grid")
             assert(!dateTime.contains("p-datepicker-ampm-picker"), "24h: no AM/PM column")
-            assert(!dateTime.contains("p-datepicker-timeonly"), "showTime alone is not timeonly")
+            assert(!dateTime.contains("p-datepicker-timeonly"), "a LocalDateTime is not timeonly")
             assert(twelve.contains("p-datepicker-ampm-picker"), "12h: AM/PM column")
             assert(twelve.contains(">02<"), "12h: 14 renders as 02")
             assert(twelve.contains(">PM<"), "12h: PM label")
-            assert(clock.contains("p-datepicker-timeonly"), "timeOnly: panel modifier class")
-            assert(clock.contains(">09<"), "timeOnly: hour from the HH:MM value")
-            assert(!clock.contains("p-datepicker-calendar-container"), "timeOnly: no calendar")
+            assert(clock.contains("p-datepicker-timeonly"), "LocalTime: panel modifier class")
+            assert(clock.contains(">09<"), "LocalTime: hour from the held value")
+            assert(!clock.contains("p-datepicker-calendar-container"), "LocalTime: no calendar")
             assert(
                 empty.contains("""aria-label="Next Hour" data-kyo-prop-type="button" type="submit" disabled"""),
-                "empty value + showTime: spin buttons disabled (no clock to default to)"
+                "an empty LocalDateTime: spin buttons disabled (no clock to default to)"
             )
     }
 
-    "DatePicker button bar renders Clear always, Today only with an explicit today(iso)" in {
+    "DatePicker button bar renders Clear always, Today only with an explicit today" in {
         def picker(withToday: Boolean): String < Async =
             for
-                vref <- Signal.initRef("2026-07-15")
+                vref <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 15)))
                 oref <- Signal.initRef(true)
-                base = uic.DatePicker().value(vref).showButtonBar(true).open(oref)
-                out <- dpHtml(if withToday then base.today("2026-07-16") else base, oref)
+                base = uic.DatePicker[LocalDate]().value(vref).showButtonBar(true).open(oref)
+                out <- dpHtml(if withToday then base.today(LocalDate.of(2026, 7, 16)) else base, oref)
             yield out
         for
             withToday <- picker(true)
             without   <- picker(false)
         yield
             assert(withToday.contains("p-datepicker-buttonbar"), "button bar container")
-            assert(withToday.contains("p-datepicker-today-button"), "today button with today(iso)")
+            assert(withToday.contains("p-datepicker-today-button"), "today button with an explicit today")
             assert(withToday.contains(">Today<"), "today label")
             assert(withToday.contains("p-datepicker-clear-button"), "clear button")
             assert(withToday.contains(">Clear<"), "clear label")
             assert(withToday.contains("p-button-sm"), "Prime's small text-button skin")
             assert(without.contains("p-datepicker-buttonbar"), "bar renders without today too")
-            assert(!without.contains("p-datepicker-today-button"), "no Today button without an explicit today(iso) — the render is pure")
+            assert(!without.contains("p-datepicker-today-button"), "no Today button without an explicit today: the render is pure")
         end for
     }
 
@@ -6718,12 +6729,17 @@ class GoldenRenderTest extends UicTest:
             dpOpen     <- Signal.initRef(true)
             dpMonth    <- Signal.initRef("2026-07")
             dpCursor   <- Signal.initRef("2026-07-15")
-            dpValue    <- Signal.initRef("2026-07-15")
+            dpValue    <- Signal.initRef(Maybe(LocalDate.of(2026, 7, 15)))
             dpView     <- Signal.initRef(uic.DatePickerView.Date)
             dpSeed     <- Signal.initRef(false)
             dpUndo     <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
+            dpDraft    <- Signal.initRef(Maybe.empty[String])
             datePicker <- renderHtml(
-                uic.DatePicker().value(dpValue).wired(uic.DatePicker.Refs(dpOpen, dpMonth, dpCursor, dpView, dpSeed, dpUndo), "dp", _ => ())
+                uic.DatePicker[LocalDate]().value(dpValue).wired(
+                    uic.DatePicker.Refs(dpOpen, uic.DatePicker.ShownMonth.Own(dpMonth), dpCursor, dpView, dpSeed, dpUndo, dpDraft),
+                    "dp",
+                    _ => ()
+                )
             )
             selOpen  <- Signal.initRef(true)
             selHi    <- Signal.initRef(1)
