@@ -3,67 +3,57 @@ package kyo.uic.form
 import kyo.*
 import scala.util.matching.Regex
 
-/** A validator maps a value to an optional error in the one effect a mounted event
-  * handler actually runs in: `Async`. A pure/sync rule widens for free; an async
-  * rule (a kyo-apollo mutation, a REST call, anything) discharges its OWN failure
-  * channel into a [[FieldError]] BEFORE it becomes a `Validator`, so the core
-  * never depends on any transport library. Failure-as-error, not failure-as-Abort:
-  * `Absent` = valid, `Present(e)` = invalid.
+/** A rule that checks a value without changing its type: what a field's chain, a cell type and every built-in except
+  * [[Validator.chosen]] and [[Validator.ifPresent]] state. The name every existing rule and call site already uses.
   */
-opaque type Validator[-A] = A => Maybe[FieldError] < Async
+type Validator[A] = Rule[A, A]
 
 object Validator:
 
-    def apply[A](f: A => Maybe[FieldError] < Async): Validator[A] = f
+    /** A check from a function: `Absent` = valid, `Present(e)` = invalid. The value passes through unchanged; for a rule
+      * that yields another type, see [[Rule.apply]] and [[refine]].
+      */
+    def apply[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(f)
 
     /** Async escape hatch (identical to [[apply]]; reads clearly at call sites where
       * the body actually suspends, e.g. a mutation). The author folds any `Abort`
       * into a `Maybe[FieldError]` here, keeping the core transport-agnostic.
       */
-    def async[A](f: A => Maybe[FieldError] < Async): Validator[A] = f
-
-    extension [A](self: Validator[A])
-        // `private[uic]` and not `private[form]`: a form field was the first host of these
-        // rules and is no longer the only one. A DataTable cell runs the same chain over
-        // the value its column parsed, and the opaque type is what keeps the function
-        // itself out of reach either way.
-        private[uic] def run(a: A)(using Frame): Maybe[FieldError] < Async = self(a)
-
-        /** Ordered short-circuit: run `self`; on the first failure stop and report it,
-          * otherwise run `next`. A field shows only ONE error at a time: the first
-          * open rule of the chain (e.g. `required and minLength(5)` shows "required"
-          * until the field is non-empty, then "min-length").
-          */
-        infix def and(next: Validator[A])(using Frame): Validator[A] =
-            a =>
-                self(a).map {
-                    case p @ Present(_) => (p: Maybe[FieldError])
-                    case Absent         => next(a)
-                }
-    end extension
+    def async[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(f)
 
     /** No rules: every value passes. The default of a field that only holds a value:
       * `Form.field` starts every spec here, so a caller declaring no rules writes nothing.
       *
-      * It is also the identity of [[and]], which is what `all()` over an empty sequence
+      * It is also the identity of [[Rule.and]], which is what `all()` over an empty sequence
       * already returned; that spelling was the only way to say "no rules" and read as an
       * accident. Needs no `Frame`, so it can be the default of a PURE field spec.
       */
-    def none[A]: Validator[A] = _ => (Absent: Maybe[FieldError])
+    def none[A]: Validator[A] = Rule.pure(a => Result.Success(a))
 
-    /** Chains validators left-to-right with the ordered short-circuit of [[and]]. */
+    /** Chains checks left-to-right with the ordered short-circuit of [[Rule.and]]. */
     def all[A](vs: Validator[A]*)(using Frame): Validator[A] =
         if vs.isEmpty then none[A] else vs.reduce(_ and _)
 
     /** A rule that applies only when `cond` holds: the escape hatch for
-      * "rule depends on a condition / on other form state".
+      * "rule depends on a condition / on other form state". A check, since a value the rule skipped has nothing to refine.
       */
     def when[A](cond: A => Boolean)(v: Validator[A]): Validator[A] =
-        a => if cond(a) then v(a) else (Absent: Maybe[FieldError])
+        Rule.guarded(cond)(v)
 
     /** A pure predicate rule: fail with `code`(+`args`) when `p` is false. */
     def satisfy[A](code: String, args: Map[String, String] = Map.empty)(p: A => Boolean): Validator[A] =
-        a => (if p(a) then Absent else Present(FieldError(code, args))): Maybe[FieldError]
+        Rule.pure(a => if p(a) then Result.Success(a) else Result.Failure(FieldError(code, args)))
+
+    /** A pure refining rule: `f` either yields the refined value or `Absent`, which fails with `code`(+`args`). The
+      * refining counterpart of [[satisfy]]: `refine("not-a-number")((s: String) => Maybe.fromOption(s.toIntOption))` is a
+      * `Rule[String, Int]`.
+      */
+    def refine[A, B](code: String, args: Map[String, String] = Map.empty)(f: A => Maybe[B]): Rule[A, B] =
+        Rule.pure { a =>
+            f(a) match
+                case Present(b) => Result.Success(b)
+                case Absent     => Result.Failure(FieldError(code, args))
+        }
 
     // ---- built-in String rules ------------------------------------------------
 
@@ -99,20 +89,30 @@ object Validator:
     /** A field that may stay empty must hold a value: the `required` of a `FormField[Maybe[A]]`, whether it holds a choice
       * (a `Select[A]`) or a picked date (a `DatePicker[A]`), under the same code, so one translation covers a text field, a
       * choice and a date alike.
+      *
+      * It refines: what passes is the `A` the field was required to hold, so a rule chained after it is stated over `A`
+      * (`chosen() and Validator.min(cutoff)`), and the field's validated type is `A`, which is what [[Form.submit]] hands
+      * the handler.
       */
-    def chosen[A](code: String = "required"): Validator[Maybe[A]] =
-        satisfy(code)(_.isDefined)
+    def chosen[A](code: String = "required"): Rule[Maybe[A], A] =
+        refine(code)(identity)
 
-    /** Runs `v` on the value a `FormField[Maybe[A]]` holds and passes while it holds none, so a rule over the value itself
-      * (a date after a cutoff) does not also make the field required. Chain it after [[chosen]] where both apply.
+    /** Runs `r` on the value a `FormField[Maybe[A]]` holds and passes while it holds none, so a rule over the value itself
+      * (a date after a cutoff) does not also make the field required. A refining `r` refines inside the `Maybe`. Where the
+      * field IS required, chain the rule after [[chosen]] instead, which hands it the value itself.
       */
-    def ifPresent[A](v: Validator[A]): Validator[Maybe[A]] =
-        m =>
-            m match
-                case Present(a) => v(a)
-                case Absent     => (Absent: Maybe[FieldError])
+    def ifPresent[A, B](r: Rule[A, B])(using Frame): Rule[Maybe[A], Maybe[B]] =
+        Rule[Maybe[A], Maybe[B]] {
+            case Present(a) =>
+                r.run(a).map(_.foldPartial[Result.Partial[FieldError, Maybe[B]]](b => Result.Success(Present(b)), e => Result.Failure(e)))
+            case Absent => Result.Success(Absent)
+        }
 
-    /** A choice of several must hold at least one option, again under the `required` code. */
+    /** A choice of several must hold at least one option, again under the `required` code.
+      *
+      * A check, not a refinement: "a set with at least one element" has no type of its own here, and inventing one would
+      * hand the submit handler a type no control binds and no other API takes, for a fact the handler can see anyway.
+      */
     def chosenAny[A](code: String = "required"): Validator[Set[A]] =
         satisfy(code)(_.nonEmpty)
 
@@ -135,5 +135,5 @@ object Validator:
       * `field.dependsOn(other)` for as-you-type re-validation when the other field changes.
       */
     def matchesField[A](other: Signal[A], code: String = "must-match")(using CanEqual[A, A], Frame): Validator[A] =
-        a => other.currentWith(o => (if a == o then Absent else Present(FieldError(code))): Maybe[FieldError])
+        Validator(a => other.currentWith(o => (if a == o then Absent else Present(FieldError(code))): Maybe[FieldError]))
 end Validator

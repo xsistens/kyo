@@ -45,7 +45,8 @@ final class CellType[V] private (
       * message.
       *
       * One rule per type; compose several with `Validator.all` or `and` at the call site,
-      * where a `Frame` is in scope.
+      * where a `Frame` is in scope. What the rule yields is what the column writes, so a rule
+      * that normalizes (trims, rounds) stores the normalized value.
       */
     def validate(v: Validator[V]): CellType[V] = new CellType(format, parse, editor, v, order)
 end CellType
@@ -55,10 +56,10 @@ object CellType:
     def apply[V](format: V => String)(parse: String => Result[FieldError, V])(editor: CellEditor): CellType[V] =
         new CellType(format, parse, editor, always, Absent)
 
-    /** The empty rule chain: every parsed value passes. Not `Validator.all()`, which needs
-      * a `Frame` this object cannot derive.
+    /** The empty rule chain: every parsed value passes. `Validator.none`, which needs no `Frame`, unlike
+      * `Validator.all()`, and this object has none to give.
       */
-    private def always[V]: Validator[V] = Validator[V](_ => (Absent: Maybe[FieldError]))
+    private def always[V]: Validator[V] = Validator.none[V]
 
     /** A fixed set of values, labelled and edited through a Select.
       *

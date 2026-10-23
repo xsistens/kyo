@@ -1838,34 +1838,43 @@ val translatorLayer: Layer[ErrorTranslator, Any] =
 
 A validation failure has to survive a locale change, a summary that renders it somewhere else on the page, and a test that asserts on it, so it never arrives as a sentence. A `FieldError` is a flat `code`, a `Map[String, String]` of args for interpolation, and an optional literal `fallback`. The validation core never turns a code into a message; an `ErrorTranslator` does, returning a `Signal[String]` so a locale change re-renders every message already on screen.
 
-```scala
-val tooLong: FieldError = FieldError("max-length", Map("max" -> "80"))
+A `Rule[A, B]` checks an `A` and, when it passes, yields a `B`: failure as an error value (a `Result.Partial[FieldError, B]` in `Async`), not as an `Abort`. Most rules only check, and yield their input unchanged; that is a `Validator[A]`, which is `Rule[A, A]`. The built-ins cover `required`, `minLength`, `maxLength`, `email`, `pattern`, `url`, `min`, `max`, and `matchesField`, and `and` chains them with an ordered short-circuit so a field shows exactly one message at a time.
 
-val errorTable: ErrorTranslator =
-    ErrorTranslator.englishMap(
-        Map(
-            "required"   -> "Required",
-            "min-length" -> "Too short",
-            "max-length" -> "Too long"
-        )
-    )
-```
-
-`Validator[A]` maps a value to `Maybe[FieldError]` in `Async`. `Absent` is valid, `Present(e)` is invalid: failure as an error value, not as an `Abort`. The built-ins cover `required`, `minLength`, `maxLength`, `email`, `pattern`, `url`, `min`, `max`, and `matchesField`, and `and` chains them with an ordered short-circuit so a field shows exactly one message at a time.
+The text a reader sees belongs to the rule that failed, so it is stated there. `.message(text)` gives one rule its words, and `ErrorTranslator.default` shows them with no table at all. Put it on each rule rather than on a chain: on a chain it becomes the text of whichever rule in it fails.
 
 ```scala
-val nameRules: Validator[String] = Validator.required() and Validator.minLength(2) and Validator.maxLength(80)
+val commentRules: Validator[String] =
+    Validator.required().message("Write something first.") and
+        Validator.minLength(3).message("A comment has at least 3 characters.")
 
 val skuRules: Validator[String] = Validator.required("sku-required") and Validator.pattern("[a-z0-9-]+".r)
 
 val positive: Validator[Double] = Validator.satisfy[Double]("must-be-positive")(_ > 0)
 ```
 
-An async rule (a uniqueness check against your backend, say) folds its own failure channel into a `Maybe[FieldError]` before it becomes a `Validator`, which is what keeps this layer free of any transport dependency.
+A rule may also refine the type it hands on, which is "parse, don't validate": `Validator.refine` turns a function into `Maybe` into a rule that fails with a code on `Absent`, and `and` composes left to right, each rule receiving what the one before it yielded. The chain's type is what it validates to, and a field declared with it hands that type to its submit handler.
+
+```scala
+val quantity: Rule[String, Int] =
+    Validator.required() and
+        Validator.refine[String, Int]("not-a-number")(s => Maybe.fromOption(s.trim.toIntOption)) and
+        Validator.min(1)
+```
+
+An async rule (a uniqueness check against your backend, say) folds its own failure channel into a `Maybe[FieldError]` before it becomes a `Validator`, which is what keeps this layer free of any transport dependency. `Rule(f)` is the same for a rule that yields another type.
 
 ```scala
 def skuAvailable(check: String => Boolean < Async): Validator[String] =
     Validator.async(sku => check(sku).map(ok => if ok then Absent else Present(FieldError("sku-taken"))))
+```
+
+A table of codes is for an app that wants one wording everywhere, or a translation. Whatever translator the form has speaks first for a code it knows, then the error's own text, then the raw code: that order is what lets an i18n translator replace every visible string, a rule's own message included. So a field that needs its own words under an app-wide table gets a code of its own.
+
+```scala
+val errorTable: ErrorTranslator =
+    ErrorTranslator.englishMap(Map("required" -> "Required", "max-length" -> "Too long"))
+
+val ownWords: Validator[String] = Validator.required("comment-empty").message("Write something first.")
 ```
 
 ### Activation and Reveal are different questions
@@ -1917,7 +1926,7 @@ The rule behind that list is that every control holding a user-supplied value is
 
 ### Typed values: dates and numbers
 
-A date field holds the picker's own value type, so it is declared like any other field and the picker reads and writes its ref directly. A rule about the date itself goes through `Validator.ifPresent`, which leaves an empty field to `Validator.chosen()`. `numberField` is a typed facade over the `Double` an `InputNumber` actually holds: the `Double` stays the single source of truth (a `SignalRef` has no bidirectional map, so a second typed ref could not stay honest), and the typed value is derived through a codec.
+A date field holds the picker's own value type, so it is declared like any other field and the picker reads and writes its ref directly. `Validator.chosen()` is its `required`, and it refines: what passes is the date itself, so a rule chained after it is stated over the date, and the field validates to `LocalDate` rather than `Maybe[LocalDate]`. A date that may stay empty states its rule through `Validator.ifPresent` instead, which passes the empty field. `numberField` is a typed facade over the `Double` an `InputNumber` actually holds: the `Double` stays the single source of truth (a `SignalRef` has no bidirectional map, so a second typed ref could not stay honest), and the typed value is derived through a codec.
 
 ```scala
 import java.time.LocalDate
@@ -1928,12 +1937,15 @@ val typedFields: UI =
         for
             price   <- scope.numberField(0.0).rules(Validator.min(0.0) and Validator.max(10000.0)).declare
             restock <- scope.field(Maybe.empty[LocalDate])
-                .rules(Validator.chosen[LocalDate]() and
-                    Validator.ifPresent(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1)))))
+                .rules(Validator.chosen[LocalDate]() and Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1))))
+                .declare
+            review <- scope.field(Maybe.empty[LocalDate])
+                .rules(Validator.ifPresent(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1)))))
                 .declare
         yield div(
             uic.InputNumber().bind(price).suffix(" EUR"),
-            uic.DatePicker[LocalDate]().bind(restock).placeholder("YYYY-MM-DD")
+            uic.DatePicker[LocalDate]().bind(restock).placeholder("YYYY-MM-DD"),
+            uic.DatePicker[LocalDate]().bind(review).placeholder("optional")
         )
     }
 ```
@@ -1965,17 +1977,55 @@ That choice of setter is not left to the reader. `submitDisabled` returns a `Sub
 
 `submitDisabled` is the usual gate: blocked while submitting or while any field error is currently displayed, but open for a pristine form, so the first click runs submit-reveal.
 
+A handler that needs the values names their fields, and receives what each field's rules validated to, from the same run of the rules that decided the form was valid: `scope.submit(field)(value => ...)`, up to four fields at once. A field whose rules only check hands over its value; a `Maybe[LocalDate]` field required with `Validator.chosen()` hands over the `LocalDate`. An edit that lands while an async rule is still in flight cannot reach the handler, because the value was read once, before the rules ran. Everything else is the plain `submit`: the whole form is validated, focus goes to the first invalid field, and the handler runs only when everything holds.
+
+```scala
+import java.time.LocalDate
+import kyo.uic.DateKind.given
+
+final case class Comment(issue: String, body: String, due: LocalDate)
+
+def comments(issueId: String, post: Comment => Unit < Abort[String]): UI =
+    Form.mountedWith(ErrorTranslator.default) { form =>
+        for
+            body <- form.field
+                .rules(
+                    Validator.required().message("Write something first.") and
+                        Validator.minLength(3).message("A comment has at least 3 characters.")
+                )
+                .declare
+            due     <- form.field(Maybe.empty[LocalDate]).rules(Validator.chosen[LocalDate]().message("Pick a due date.")).declare
+            summary <- Form.errorSummary(form)
+        yield div(
+            uic.TextArea().bind(body),
+            uic.DatePicker[LocalDate]().bind(due),
+            summary,
+            uic.Button("Comment").onClick(
+                form.submit(body, due) { (text, day) =>
+                    Abort.run[String](post(Comment(issueId, text, day))).map {
+                        case Result.Success(_) => form.reset
+                        case _                 => form.raise("The comment could not be saved, try again.")
+                    }
+                }
+            )
+        )
+    }.keyed(issueId)
+```
+
 > **Note:** `submitDisabled` deliberately ignores form-level `raise` errors. Those can only be cleared by re-submitting, so gating on them would disable the very button that produced them. They surface in the error summary instead. Field-level server errors do gate, because they are value-scoped and vanish on the first edit.
 
 `isValid(onlyVisible = false)` is the raw view, reflecting the client and server verdict even for untouched fields, which is what you want for a button that should light up the moment the data becomes valid. `isValid(onlyVisible = true)` is the gated view. `isDirty` compares each field against its live baseline, `markPristine` moves that baseline to the current values (after a successful save), and `reset` returns to it.
 
 ### Server verdicts
 
-`FormField.setError` pushes an error from outside the rule chain, which is how a server-side validation result lands on a field. It is recorded against the value it judged.
+`FormField.setError` pushes an error from outside the rule chain, which is how a server-side validation result lands on a field. It is recorded against the value it judged. A server that answers in text needs no code invented for it: `setError(text)` and `scope.raise(text)` take the sentence as it is, under the one code `FieldError.messageCode` (`FieldError.message(text)` builds the error itself).
 
 ```scala
 def onSave(name: FormField[String], taken: Boolean): Unit < Sync =
     if taken then name.setError(Present(FieldError("name-taken"))) else name.setError(Absent)
+
+def onServerSays(name: FormField[String], sentence: String): Unit < Sync =
+    name.setError(sentence)
 ```
 
 > **Note:** a server error is scoped to the value it was set against, so the first edit hides it. A stale server verdict can never outlive its value, and hiding it re-enables the submit button, which is the only way to re-check a server-side rule at all.
@@ -2009,7 +2059,7 @@ val crossField: UI =
     }
 ```
 
-`scope.raise(e)` pushes a form-level error with no field attached, which is where "invalid credentials" from a submit handler belongs. `scope.anchor(id)` names an element for the summary to jump focus to for those errors.
+`scope.raise(e)` (or `scope.raise(text)`) pushes a form-level error with no field attached, which is where "invalid credentials" from a submit handler belongs. `scope.anchor(id)` names an element for the summary to jump focus to for those errors.
 
 ### Nesting and repetition
 

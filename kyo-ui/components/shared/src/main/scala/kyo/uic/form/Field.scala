@@ -11,17 +11,44 @@ import kyo.uic.OptionalFormControl
 import kyo.uic.TextFormControl
 import scala.annotation.targetName
 
+/** A form handle that yields a validated value at submit: a [[FormField]] or a [[NumberField]]. What
+  * [[Form.submit]] takes, so one handler can receive the validated values of fields of either kind.
+  *
+  * `Valid` is the type the handle's rule chain yields when it passes: the field's value type when its
+  * rules only check, the refined type when they refine (`Validator.chosen()` turns a `Maybe[A]` field into
+  * one that validates to `A`). It is a type member rather than a type parameter so that every signature
+  * naming `FormField[A]` keeps meaning what it meant; a declared field is a `FormField[A] { type Valid = B }`,
+  * which is a `FormField[A]` wherever one is asked for.
+  *
+  * Its members are package-private, so it cannot be implemented outside this package.
+  */
+trait Validated:
+
+    /** The type the rule chain yields once it passes. */
+    type Valid
+
+    /** The registered field the verdict belongs to: the one submit focuses, and the one it must not validate twice. */
+    private[form] def submitField: FormField[?]
+
+    /** Validate for submit (publishing the error as [[FormField.validateForSubmit]] does) and hand back what the rules
+      * yielded.
+      */
+    private[form] def verdict(using Frame): Result.Partial[FieldError, Valid] < Async
+end Validated
+
 /** A single validated field of value type `A`. Owns its value/touched/validating/error
   * signals and a mutable rule chain; the owning [[Form]] holds a reference and validates
   * it on submit. Display is gated: the error surfaces only once the field is `touched`
-  * (entered and left) OR the form has been submitted (`submitCount > 0`).
+  * (entered and left) OR the form has been submitted (`submitCount > 0`), or a submit of
+  * any form named this field (`Form.submit(field)`).
   *
   * `A` is the field's value type: `String` for text controls, `Boolean` for
   * checkbox/switch/radio, and so on. The gating, message, and aggregation logic is
   * value-agnostic (it only ever handles `Maybe[FieldError]`); only value binding and the
   * blur trigger are type-specific, which is why `bind` splits by control family below.
   * `CanEqual[A, A]` is required because a server error is scoped to the value it judged
-  * ([[serverVisible]]), and a `Signal[A]` demands it anyway.
+  * ([[serverVisible]]), and a `Signal[A]` demands it anyway. `Valid` (see [[Validated]]) is
+  * what the rules yield, and so what [[Form.submit]] hands its handler for this field.
   *
   * Two independent error channels feed the display:
   *   - the CLIENT error (`clientErrorRef`): the rule chain's verdict, re-derived on
@@ -38,7 +65,7 @@ import scala.annotation.targetName
   * is what a caller can only do AFTERWARDS: [[addRule]] and [[matches]], which need a second
   * field that does not exist yet when the first is declared.
   */
-final class FormField[A] private[form] (
+sealed abstract class FormField[A] private[form] (
     private[form] val valueRef: SignalRef[A],
     initial: A,
     baselineRef: SignalRef[A],
@@ -49,14 +76,17 @@ final class FormField[A] private[form] (
     serverErrorRef: SignalRef[Maybe[ServerError[A]]],
     epoch: AtomicInt,
     resetWrite: AtomicRef[Maybe[A]],
-    private var rules: Validator[A],
     triggers: Set[Activation.Field],
     debounce: Duration,
     revealMode: Reveal,
     private[form] val focusableFlag: Boolean,
     translator: ErrorTranslator,
-    submitCount: Signal[Int]
-)(using CanEqual[A, A]) derives CanEqual:
+    submitCount: Signal[Int],
+    namedRef: SignalRef[Boolean]
+)(using CanEqual[A, A]) extends Validated derives CanEqual:
+
+    /** The rule chain, typed by what it yields. Held in a [[RuleChain]] because [[addRule]] appends to it. */
+    private[form] def chain: RuleChain[A, Valid]
 
     /** The two-way value cell; bind it to a control, or read it at submit. */
     val value: Signal[A] = valueRef
@@ -90,11 +120,23 @@ final class FormField[A] private[form] (
         revealMode match
             case Reveal.Immediate   => error
             case Reveal.Manual      => Signal.initConst(Absent)
-            case Reveal.OnSubmit    => gated(submitCount.map(_ > 0))
+            case Reveal.OnSubmit    => gated(submitted)
             case Reveal.WhenTouched =>
-                gated(touchedRef.combineLatest(submitCount).map((t, c) => t || c > 0))
+                gated(touchedRef.combineLatest(submitted).map((t, s) => t || s))
         end match
     end visibleError
+
+    /** Whether a submit has opened this field's gate: its own form's (`submitCount > 0`), or any form's submit that
+      * named it ([[openGate]]). The second is what lets a field of another form, named in `submit(field)`, show the error
+      * that blocked that submit, without revealing the unnamed fields of its own form.
+      */
+    private def submitted(using Frame): Signal[Boolean] =
+        submitCount.combineLatest(namedRef).map((c, n) => c > 0 || n)
+
+    /** A submit named this field: open its gate as its own form's submit would, whichever form ran it. Not `touched`,
+      * which says the reader was here, and which an [[Reveal.OnSubmit]] field does not read.
+      */
+    private[form] def openGate(using Frame): Unit < Sync = namedRef.set(true)
 
     /** The gated, translated message for inline display: `Present` shows the row and
       * turns the field red. Re-renders on locale change (translator returns a Signal).
@@ -112,11 +154,21 @@ final class FormField[A] private[form] (
     def setError(e: Maybe[FieldError])(using Frame): Unit < Sync =
         valueRef.get.map(v => serverErrorRef.set(e.map(err => ServerError(err, v))))
 
+    /** Set the error from outside as text, with no code to invent: `setError(Present(FieldError.message(text)))`.
+      * Value-scoped exactly like the [[FieldError]] form.
+      */
+    def setError(message: String)(using Frame): Unit < Sync =
+        setError(Present(FieldError.message(message)))
+
     /** Append another rule (ordered short-circuit), e.g. a cross-field rule that
       * reads a sibling handle. Returns this field for chaining.
+      *
+      * The rule runs on the field's value, after the declared chain has passed, and what it
+      * yields is not kept: the field still validates to the type its declared rules yield
+      * ([[Valid]]), so a later check can never change what submit hands over.
       */
-    def addRule(v: Validator[A])(using Frame): FormField[A] =
-        rules = rules and v
+    def addRule(v: Rule[A, Any])(using Frame): this.type =
+        chain.append(v)
         this
 
     /** Append a predicate rule in the same `satisfy(code)(pred)` shape used at the form level
@@ -125,7 +177,7 @@ final class FormField[A] private[form] (
       * `addRule(Validator.satisfy(code, args)(p))`; `true` = valid. Reach for [[addRule]] directly
       * for built-in rules (`required`/`email`) or compositions (`a and b`). Chainable.
       */
-    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): FormField[A] =
+    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): this.type =
         addRule(Validator.satisfy(code, args)(p))
 
     /** The field's original default value: the baseline it was constructed with (also
@@ -250,21 +302,30 @@ final class FormField[A] private[form] (
             mine <- epoch.incrementAndGet
             _    <- validatingRef.set(true)
             _    <- if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit
-            res  <- rules.run(v)
+            res  <- chain.run(v)
             cur  <- epoch.get
-            _    <- if cur == mine then clientErrorRef.set(res).andThen(validatingRef.set(false))
+            _    <- if cur == mine then clientErrorRef.set(res.failure).andThen(validatingRef.set(false))
             else Kyo.unit
         yield ()
 
-    /** Validate unconditionally for submit (ignores triggers), publish, and report. */
-    private[form] def validateForSubmit(using Frame): Maybe[FieldError] < Async =
+    /** Validate unconditionally for submit (ignores triggers), publish the error, and hand back what the rules yielded
+      * for the value read here: ONE run, so submit decides validity and receives the validated value from the same
+      * verdict, and a value written after the read cannot reach the handler.
+      */
+    private[form] def verdict(using Frame): Result.Partial[FieldError, Valid] < Async =
         for
             v    <- valueRef.get
             mine <- epoch.incrementAndGet
-            res  <- rules.run(v)
+            res  <- chain.run(v)
             cur  <- epoch.get
-            _    <- if cur == mine then clientErrorRef.set(res) else Kyo.unit
+            _    <- if cur == mine then clientErrorRef.set(res.failure) else Kyo.unit
         yield res
+
+    /** [[verdict]] reduced to the error it publishes. */
+    private[form] def validateForSubmit(using Frame): Maybe[FieldError] < Async =
+        verdict.map(_.failure)
+
+    private[form] def submitField: FormField[?] = this
 
     /** For summary aggregation: the gated error as a (0-or-1) chunk. */
     private[form] def visibleErrorChunk(using Frame): Signal[Chunk[FieldError]] =
@@ -283,7 +344,8 @@ final class FormField[A] private[form] (
         visibleError.map(e => e.map(err => Chunk(Form.ErrorEntry(err, Present(domId)))).getOrElse(Chunk.empty))
 
     /** Revert value to the live baseline (the last [[rebase]], else [[initialValue]]),
-      * and clear touched, error (client + server), and validating (form reset).
+      * and clear touched, error (client + server), validating, and the gate a submit naming
+      * this field opened (form reset).
       *
       * The change observer would read the value the reset writes as the reader's edit and mark
       * the field touched, which shows the error of a field a successful submit just emptied. So
@@ -298,6 +360,7 @@ final class FormField[A] private[form] (
             _       <- if current == base then Kyo.unit
             else (if wantsChange then resetWrite.set(Present(base)) else Kyo.unit).andThen(valueRef.set(base))
             _ <- touchedRef.set(false)
+            _ <- namedRef.set(false)
             _ <- clientErrorRef.set(Absent)
             _ <- serverErrorRef.set(Absent)
             _ <- validatingRef.set(false)
@@ -310,6 +373,72 @@ end FormField
   * `derives CanEqual` is load-bearing: it rides a `Signal`, which requires `CanEqual`.
   */
 final private[form] case class ServerError[A](err: FieldError, value: A) derives CanEqual
+
+object FormField:
+
+    /** A live field over `A` whose rules yield `B`. The one constructor [[FieldSpec.declare]] (and a test's hand-built
+      * field) goes through, so the refinement is stated once.
+      */
+    private[form] def declared[A, B](
+        valueRef: SignalRef[A],
+        initial: A,
+        baselineRef: SignalRef[A],
+        domId: String,
+        touchedRef: SignalRef[Boolean],
+        validatingRef: SignalRef[Boolean],
+        clientErrorRef: SignalRef[Maybe[FieldError]],
+        serverErrorRef: SignalRef[Maybe[ServerError[A]]],
+        epoch: AtomicInt,
+        resetWrite: AtomicRef[Maybe[A]],
+        rules: Rule[A, B],
+        triggers: Set[Activation.Field],
+        debounce: Duration,
+        revealMode: Reveal,
+        focusable: Boolean,
+        translator: ErrorTranslator,
+        submitCount: Signal[Int],
+        namedRef: SignalRef[Boolean]
+    )(using CanEqual[A, A]): FormField[A] { type Valid = B } =
+        val rulesChain = new RuleChain(rules)
+        new FormField[A](
+            valueRef,
+            initial,
+            baselineRef,
+            domId,
+            touchedRef,
+            validatingRef,
+            clientErrorRef,
+            serverErrorRef,
+            epoch,
+            resetWrite,
+            triggers,
+            debounce,
+            revealMode,
+            focusable,
+            translator,
+            submitCount,
+            namedRef
+        ):
+            type Valid = B
+            private[form] def chain: RuleChain[A, B] = rulesChain
+        end new
+    end declared
+end FormField
+
+/** A field's rule chain: what it was declared with, plus whatever [[FormField.addRule]] appended since. Typed by what the
+  * declared chain yields, which an appended check keeps (see [[Rule.andCheck]]).
+  *
+  * A plain `var` for the reason `Form.checks` is one: rules are appended while the form is built, single-threaded,
+  * before any run reads them.
+  */
+final private[form] class RuleChain[A, B](initial: Rule[A, B]):
+    private var current: Rule[A, B] = initial
+
+    def run(a: A)(using Frame): Result.Partial[FieldError, B] < Async = current.run(a)
+
+    def append(v: Rule[A, Any])(using Frame): Unit =
+        current = current.andCheck(v)
+end RuleChain
 
 /** Stamps the field's id onto the control, and notices when that displaces one the caller
   * had already set.
