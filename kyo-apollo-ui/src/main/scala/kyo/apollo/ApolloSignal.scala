@@ -15,10 +15,10 @@ import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 
-/** The **reactive / UI** half of the `kyo-ui` binding (Phase 09, Task 5).
+/** The **reactive / UI** half of the `kyo-ui` binding.
   *
   * Turns a prepared [[kyo.apollo.ApolloCall]]'s cache watcher into the two reactive
-  * shapes app code consumes behind the single `import kyo.apollo.*` (ADR D1):
+  * shapes app code consumes behind the single `import kyo.apollo.*`:
   *
   *   - `call.watchSignal` — a `kyo-ui` [[Signal]] of [[QueryState]] that seeds
   *     `Loading`, then re-emits on every watcher push (network reply *and* later

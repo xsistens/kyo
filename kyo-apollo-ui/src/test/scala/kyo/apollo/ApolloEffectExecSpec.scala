@@ -11,8 +11,8 @@ import kyo.apollo.network.ws.FakeWebSocketEngine
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.network.ws.WsTestSupport
 
-/** Task 8 — the effect form driven to completion, now on kyo-test. Each leaf
-  * body IS the effect: the runner executes it, so there is no `KyoRun` bridge.
+/** The effect form driven to completion. Each leaf body IS the effect: the
+  * runner executes it.
   * `.data`'s typed `Abort` outcome is surfaced with `Abort.run`.
   */
 class ApolloEffectExecSpec extends kyo.test.Test[Any]:

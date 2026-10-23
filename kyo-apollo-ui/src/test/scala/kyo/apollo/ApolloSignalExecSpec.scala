@@ -5,8 +5,8 @@ import kyo.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.exception.ApolloException
 
-/** Task 8 — the reactive form driven to completion, now on kyo-test. Each leaf
-  * body is the effect; the runner executes it (no `KyoRun` bridge). A signal is
+/** The reactive form driven to completion. Each leaf body is the effect; the
+  * runner executes it. A signal is
   * driven by a background watcher fiber, so every read waits on the value it
   * expects (`assertEventually`) or on a barrier (the gated engine's parked
   * request), never on a pause.

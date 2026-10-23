@@ -10,8 +10,8 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.CacheInfo
 import kyo.apollo.network.Uuid
 
-/** Pure tests for the reactive form's response→[[QueryState]] projection
-  * (Phase 09, Task 5), now on kyo-test. [[ApolloSignal.project]] is pure, so
+/** Pure tests for the reactive form's response→[[QueryState]] projection.
+  * [[ApolloSignal.project]] is pure, so
   * these leaves need no effect execution.
   */
 class ApolloSignalSpec extends kyo.test.Test[Any]:
