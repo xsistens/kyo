@@ -99,8 +99,8 @@ extension [A](sb: SelectionBuilder[RootQuery, A])
 end extension
 
 extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
-    /** Turn a single-connection query into a *page builder* — the seam the kyo-ui
-      * `.paginated` sugar sits on. Yields `Maybe[String] => Query.Normalizable[A]`:
+    /** Turn a single-connection query into a *page builder*, the seam kyo-apollo-ui's
+      * `.paginated` sits on. Yields `Maybe[String] => Query.Normalizable[A]`:
       * the same document on every call, with only the pagination cursor argument's
       * value swapped (`Absent` → `null` for the first page, `Present(c)` → that
       * cursor). Normalizable, because merging a page into the cached list writes it.
@@ -109,9 +109,9 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
       * variable's *value* changes across pages — the document (and its APQ hash) is
       * stable. `cursorArg` names the field argument that carries the cursor
       * (Relay's `after`); the query must declare it, else this fails fast. Intended
-      * for a *single* connection — for several connections in one query, use
-      * [[kyo.apollo.usePaginatedQuery]] with an explicit page builder, so each
-      * connection's cursor is set independently.
+      * for a *single* connection: a query over several connections builds each page
+      * itself, with one cursor argument per connection (kyo-apollo-ui's
+      * `Apollo.paginatedQuery` takes such a page builder).
       */
     def pagedBy(
         cursorArg: String = "after",
