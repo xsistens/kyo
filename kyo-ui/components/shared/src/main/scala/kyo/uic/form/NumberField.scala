@@ -27,6 +27,8 @@ sealed abstract class NumberField[A] private[form] (
 
     private[form] def submitField: FormField[?] = underlying
 
+    private[form] def owner: Form = underlying.owner
+
     private[form] def verdict(using Frame): Result.Partial[FieldError, Valid] < Async = underlying.verdict
 
     private given CanEqual[A, A] = codec.equality
