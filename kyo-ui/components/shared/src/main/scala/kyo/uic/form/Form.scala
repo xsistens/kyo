@@ -41,15 +41,6 @@ final class Form private[form] (
       */
     def field: FieldSpec[String] = FieldSpec.init(this, "")
 
-    /** Declare a typed, optionally zone-aware date field bound to a `uic.DatePicker`.
-      * The picker's ISO string is the source of truth; rules stated on the spec validate the
-      * parsed value (via the given [[DateCodec]]) and are skipped while the picker is empty.
-      * `initial` seeds the value (`Absent` = empty). `.declare` yields a [[DateField]] whose
-      * `value` is a `Signal[Maybe[A]]`; bind it with `uic.DatePicker().bind(field)`.
-      */
-    def dateField[A](initial: Maybe[A])(using codec: DateCodec[A]): DateFieldSpec[A] =
-        DateFieldSpec(FieldSpec.init(this, initial.map(codec.toInput).getOrElse("")), codec, Validator.none[A])
-
     /** Declare a typed numeric field (`Int` / `Long` / `Double`) bound to a `uic.InputNumber`.
       * The bound `Double` is the source of truth; rules stated on the spec validate the typed
       * value (via the given [[NumberCodec]]). Whole-valued types mask decimal entry

@@ -96,11 +96,21 @@ object Validator:
 
     // ---- built-in choice rules ------------------------------------------------
 
-    /** A choice that may stay empty must hold an option: the `required` of a `FormField[Maybe[A]]`, under the same code, so
-      * one translation covers a text field and a choice alike.
+    /** A field that may stay empty must hold a value: the `required` of a `FormField[Maybe[A]]`, whether it holds a choice
+      * (a `Select[A]`) or a picked date (a `DatePicker[A]`), under the same code, so one translation covers a text field, a
+      * choice and a date alike.
       */
     def chosen[A](code: String = "required"): Validator[Maybe[A]] =
         satisfy(code)(_.isDefined)
+
+    /** Runs `v` on the value a `FormField[Maybe[A]]` holds and passes while it holds none, so a rule over the value itself
+      * (a date after a cutoff) does not also make the field required. Chain it after [[chosen]] where both apply.
+      */
+    def ifPresent[A](v: Validator[A]): Validator[Maybe[A]] =
+        m =>
+            m match
+                case Present(a) => v(a)
+                case Absent     => (Absent: Maybe[FieldError])
 
     /** A choice of several must hold at least one option, again under the `required` code. */
     def chosenAny[A](code: String = "required"): Validator[Set[A]] =

@@ -78,8 +78,7 @@ final case class Paginator private (
     /** Renders Prime's rows-per-page Select (`.p-paginator-rpp-dropdown`) after
       * the nav buttons. Interactive only with the `rows(SignalRef[Int])` binding —
       * picking an option writes the ref and repositions to the page that keeps
-      * the first visible record visible; without the binding it renders disabled
-      * (the `month`-ref precedent on DatePicker).
+      * the first visible record visible; without the binding it renders disabled.
       */
     def rowsPerPageOptions(opts: Seq[Int]): Paginator =
         copy(rppOptionsV = opts.toList.filter(_ >= 1))

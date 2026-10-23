@@ -157,9 +157,9 @@ end Orientation
 enum LabelPosition derives CanEqual:
     case Start, End
 
-/** DatePicker picking granularity (Prime's `view="date"|"month"|"year"`): which
-  * grid picks the VALUE — day cells (ISO `YYYY-MM-DD`), month cells (`YYYY-MM`),
-  * or year cells (`YYYY`).
+/** A DatePicker grid (Prime's `view="date"|"month"|"year"`): the day, month or year
+  * cells. The picker's [[DateKind]] decides which one picks its value; the others are
+  * the coarser grids a reader drills through, and `currentView` binds which is on screen.
   */
 enum DatePickerView derives CanEqual:
     case Date, Month, Year

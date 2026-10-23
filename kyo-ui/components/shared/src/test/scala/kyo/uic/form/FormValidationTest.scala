@@ -1,15 +1,10 @@
 package kyo.uic.form
 
 import java.time.LocalDate
-import java.time.ZoneId
 import kyo.*
 import kyo.UI.*
+import kyo.uic.DateKind.given
 import kyo.uic.UicTest
-
-// The date cases compare java.time values directly, which under strict equality needs an instance.
-// The library itself does not: DateCodec carries the equality its typed field needs.
-private given CanEqual[LocalDate, LocalDate] = CanEqual.derived
-private given CanEqual[ZoneId, ZoneId]       = CanEqual.derived
 
 /** Deterministic checks for the validation layer's error-lifecycle contract: the
   * behaviour that keeps a server verdict from deadlocking the submit button, plus the
@@ -873,55 +868,63 @@ class FormValidationTest extends UicTest:
             assert((rounded == 4), "a stray 3.5 rounds to 4 (rint), never a fractional Int")
     }
 
-    "a LocalDate dateField parses the ISO string and skips its rules while empty" in {
-        import java.time.LocalDate
+    "a FormField[Maybe[LocalDate]] binds a DatePicker, and Validator.chosen is its required" in {
+        import kyo.uic
         for
-            (emptyValue, emptyValid, parsed, pastFails, futureOk) <-
+            (emptyErr, picked, pickedErr, blurred) <-
                 for
-                    form <- mkForm
-                    df   <- form.dateField[LocalDate](Absent)
-                        .rules(Validator.satisfy[LocalDate]("after-2020")(_.isAfter(LocalDate.of(2020, 1, 1))))
-                        .on(Activation.Submit)
-                        .declare
-                    v0 <- df.value.current                // empty → Absent
-                    r0 <- df.underlying.validateForSubmit // empty → the date rule is skipped
-                    _  <- df.underlying.valueRef.set("2019-06-01")
-                    v1 <- df.value.current                // parses to a typed LocalDate
-                    r1 <- df.underlying.validateForSubmit // 2019 fails after-2020
-                    _  <- df.underlying.valueRef.set("2021-06-01")
-                    r2 <- df.underlying.validateForSubmit // 2021 passes
-                yield (v0.isEmpty, r0.isEmpty, v1.contains(LocalDate.of(2019, 6, 1)), r1.isDefined, r2.isEmpty)
+                    form    <- mkForm
+                    field   <- form.field(Maybe.empty[LocalDate]).rules(Validator.chosen()).on(Activation.Blur).declare
+                    r0      <- field.validateForSubmit // nothing picked: the required rule fails
+                    oref    <- Signal.initRef(true)
+                    mref    <- Signal.initRef("2026-07")
+                    cur     <- Signal.initRef("")
+                    vref    <- Signal.initRef(uic.DatePickerView.Date)
+                    seed    <- Signal.initRef(false)
+                    restore <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
+                    draft   <- Signal.initRef(Maybe.empty[String])
+                    refs = uic.DatePicker.Refs(oref, uic.DatePicker.ShownMonth.Own(mref), cur, vref, seed, restore, draft)
+                    ui   = uic.DatePicker[LocalDate]().bind(field).wired(refs, "dp", _ => ())
+                    days <- elements(ui).map(_.filter(d =>
+                        d.attrs.cssClasses.contains("p-datepicker-day") && d.children.exists(_ == UI.Ast.Text("9"))
+                    ))
+                    _     <- click(days.head)
+                    v1    <- field.valueRef.get // the pick wrote the field's own ref, typed
+                    r1    <- field.validateForSubmit
+                    input <- elements(ui).map(_.find(_.attrs.cssClasses.contains("p-datepicker-input")).get)
+                    _     <- input.attrs.onBlur match
+                        case Present(eff) => handled(eff)
+                        case Absent       => throw new AssertionError("bind wires no blur trigger")
+                    t <- field.touched.current
+                yield (r0.map(_.code), v1, r1, t)
         yield
-            assert(emptyValue, "empty picker → Absent value")
-            assert(emptyValid, "empty picker → date rule skipped, valid")
-            assert(parsed, "ISO string parses to the typed LocalDate")
-            assert(pastFails, "2019 fails the after-2020 rule")
-            assert(futureOk, "2021 passes")
+            assert(emptyErr.contains("required"), "an empty picker fails the required rule")
+            assert(picked == Present(LocalDate.of(2026, 7, 9)), "the pick is the field's value, no string behind it")
+            assert(pickedErr.isEmpty, "a picked date passes")
+            assert(blurred, "the picker's blur is the field's Blur trigger")
         end for
     }
 
-    "a ZonedDateTime dateField applies the codec's configured zone" in {
-        import java.time.{LocalDate, ZoneId, ZonedDateTime}
-        given DateCodec[ZonedDateTime] = DateCodec.zoned(ZoneId.of("Europe/Berlin"))
+    "Validator.ifPresent states a rule over the date without making it required" in {
+        val cutoff = LocalDate.of(2020, 1, 1)
         for
-            (rightZone, rightDay, midnight, roundTrips) <-
+            (empty, early, late) <-
                 for
-                    form <- mkForm
-                    df   <- form.dateField[ZonedDateTime](Absent).on(Activation.Submit).declare
-                    _    <- df.underlying.valueRef.set("2026-08-01")
-                    v    <- df.value.current
-                    iso  <- df.underlying.valueRef.get
-                yield (
-                    v.exists(_.getZone == ZoneId.of("Europe/Berlin")),
-                    v.exists(_.toLocalDate == LocalDate.of(2026, 8, 1)),
-                    v.exists(_.getHour == 0),
-                    iso == "2026-08-01"
-                )
+                    form  <- mkForm
+                    field <- form.field(Maybe.empty[LocalDate])
+                        .rules(Validator.ifPresent(Validator.satisfy[LocalDate]("after-2020")(_.isAfter(cutoff))))
+                        .on(Activation.Submit)
+                        .declare
+                    r0 <- field.validateForSubmit
+                    _  <- field.valueRef.set(Present(LocalDate.of(2019, 6, 1)))
+                    r1 <- field.validateForSubmit
+                    _  <- field.valueRef.set(Present(LocalDate.of(2021, 6, 1)))
+                    r2 <- field.validateForSubmit
+                yield (r0, r1.map(_.code), r2)
         yield
-            assert(rightZone, "value carries the configured zone")
-            assert(rightDay, "value is the picked calendar day")
-            assert(midnight, "value is at start-of-day (default LocalTime.MIDNIGHT)")
-            assert(roundTrips, "the ISO source string is unchanged")
+            assert(empty.isEmpty, "an empty field passes: the rule is about the date, not about having one")
+            assert(early.contains("after-2020"))
+            assert(late.isEmpty)
         end for
     }
 
