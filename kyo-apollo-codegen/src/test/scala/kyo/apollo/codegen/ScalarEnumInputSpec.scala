@@ -177,5 +177,58 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
             assert(!opSrc.contains("CustomScalars.given"), opSrc)
             assert(!schemaTypes(config).contains("CustomScalars.scala"), schemaTypes(config).keySet.toString)
         }
+
+        // -- the Upload scalar --------------------------------------------------------
+
+        val uploadSchema = SchemaLoader.fromString(
+            """scalar Upload
+              |type Country { code: ID! }
+              |type Query { country(code: ID!): Country }
+              |type Mutation {
+              |  uploadFlag(code: ID!, file: Upload!): Country!
+              |  uploadFlags(files: [Upload!]!): Country!
+              |}
+              |""".stripMargin
+        )
+
+        def mutations(config: CodegenConfig)(using kyo.test.AssertScope): String =
+            ApolloClientWriter.writeSelectors(uploadSchema, config)
+                .find(_.contents.contains("uploadFlag"))
+                .getOrElse(fail("no source with the uploadFlag selector"))
+                .contents
+
+        "scalar: an unmapped Upload is kyo.apollo.Upload sent through ScalarCodec.upload" in {
+            val src = mutations(CodegenConfig(packageName = "kyo.apollo.example.generated"))
+            assert(src.contains("file: kyo.apollo.Upload"), src)
+            assert(src.contains("ScalarCodec.upload.encode(file)"), src)
+            assert(src.contains("files: Chunk[kyo.apollo.Upload]"), src)
+            assert(src.contains("ScalarCodec.chunk(ScalarCodec.upload)"), src)
+        }
+
+        "scalar: an explicit mapping of Upload takes precedence" in {
+            val src = mutations(CodegenConfig(
+                packageName = "kyo.apollo.example.generated",
+                scalarMappings = Map("Upload" -> "com.example.File")
+            ))
+            assert(src.contains("file: com.example.File"), src)
+            assert(src.contains("ScalarCodec.fromSchema[com.example.File]"), src)
+            assert(!src.contains("ScalarCodec.upload"), src)
+        }
+
+        "scalar: an Upload field inside an input object stops generation, naming the field" in {
+            val withInput = SchemaLoader.fromString(
+                """scalar Upload
+                  |input FlagInput { code: ID!, file: Upload! }
+                  |type Country { code: ID! }
+                  |type Query { country(code: ID!): Country }
+                  |type Mutation { setFlag(input: FlagInput!): Country! }
+                  |""".stripMargin
+            )
+            scala.util.Try(ApolloClientWriter.writeSchemaTypes(withInput, CodegenConfig(packageName = "p"))) match
+                case scala.util.Failure(e: CodegenException.UploadInInputObject) =>
+                    assert(e.input == "FlagInput" && e.field == "file", e.getMessage)
+                case other => fail(s"expected UploadInInputObject, got $other")
+            end match
+        }
     }
 end ScalarEnumInputSpec

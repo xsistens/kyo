@@ -72,6 +72,7 @@ is one line on stderr and a non-zero exit.
 | `enum Color { RED GREEN BLUE }` | `enum Color` with an extra `Unknown__(raw)` case, `values: Chunk[Color]` and `valueOf(name): Maybe[Color]` |
 | `input UpdateCountryInput { ... }` | `final case class UpdateCountryInput(...) derives Schema` |
 | a mapped `scalar DateTime` | a `given Schema` for the mapped Scala type in `CustomScalars` |
+| an unmapped `scalar Upload` | arguments of type `kyo.apollo.Upload`, sent as multipart file parts; an input object field of type `Upload` stops generation |
 | every `--client-field` | a descriptor in `ClientFields` and a selector next to the server fields |
 | all object types | `SchemaIdentities.generator`, a cache key generator over the `CacheIdentity` givens in scope |
 
