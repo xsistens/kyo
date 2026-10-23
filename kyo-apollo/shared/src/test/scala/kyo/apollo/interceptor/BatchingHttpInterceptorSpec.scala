@@ -17,9 +17,10 @@ import kyo.apollo.network.http.HttpRequestBody
   * shared as that failure, malformed array fails all with an engine failure, a
   * throwing send panics all), and the two ownership contracts: an interrupted
   * caller is not sent on its behalf, and ending the owning `Scope` stops the window
-  * and answers whoever is still waiting. One leaf runs on real worker threads: a
+  * and answers whoever is still waiting. Two leaves run on real worker threads: a
   * batch member interrupted while the batch is cut must not leave the others
-  * without a lead.
+  * without a lead, and a caller interrupted as it joins an empty queue must not
+  * leave the caller after it without a window.
   */
 class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
 
@@ -122,6 +123,35 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                     _     <- advanceUntilDone(control, fb)
                     rb    <- fb.get
                 yield rb
+            }
+        }
+
+    /** One round of the join-versus-interrupt race on real worker threads: `x` joins an empty queue while another fiber
+      * interrupts it after `lag` suspension steps and then sends `y`, both released by one latch. Returns whether `y` was
+      * answered within a bounded number of windows and scheduler passes; a `y` that no window ever cuts never is.
+      */
+    private def interruptWhileJoining(lag: Int)(using Frame): Boolean < Async =
+        Clock.withTimeControl { control =>
+            Scope.run {
+                for
+                    batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 3)
+                    chain = chainOf(batching, batchAwareEngine)
+                    start <- Latch.init(1)
+                    fx    <- Fiber.init(start.await.andThen(chain.proceed(post("""{"query":"x"}"""))))
+                    fy    <- Fiber.init(
+                        start.await.andThen(Loop.repeat(lag)(Sync.defer(()))).andThen(fx.interrupt)
+                            .andThen(chain.proceed(post("""{"query":"y"}""")))
+                    )
+                    _        <- start.release
+                    _        <- fx.getResult
+                    answered <- Loop.indexed { i =>
+                        fy.done.map { done =>
+                            if done then Loop.done[Unit, Boolean](true)
+                            else if i == 1000 then Loop.done[Unit, Boolean](false)
+                            else control.advance(interval, Duration.Zero).andThen(yieldOnce).andThen(Loop.continue)
+                        }
+                    }
+                yield answered
             }
         }
 
@@ -264,6 +294,18 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                     val stranded = answered.count(!_)
                     assert(stranded == 0, s"$stranded of $rounds rounds left y or z waiting forever")
                 }
+        }
+
+        "a caller interrupted as it joins an empty queue does not leave the next caller without a window" in {
+            // The interrupt has to land between x joining the queue and x asking for its window, two steps with nothing
+            // in between that a test could hold, so the leaf races them on worker threads with the interrupt shifted a
+            // few suspension steps further each round. Before joining and asking became one step, about 1 round in 100
+            // left y queued behind a window nobody had asked for.
+            val rounds = 40000
+            Async.foreach(0 until rounds, 8)(i => interruptWhileJoining((i % 50) * 4)).map { answered =>
+                val stranded = answered.count(!_)
+                assert(stranded == 0, s"$stranded of $rounds rounds left y waiting forever")
+            }
         }
 
         "ending the owning Scope stops the window and answers waiting callers with Closed" in Clock.withTimeControl {
