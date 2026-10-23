@@ -348,10 +348,33 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded                   = q.dataCodec.decode(parse(body)).getOrThrow
             val ref: PageBadge.fields.Ref = decoded.pageInfo.pageBadge
             assert(decoded.pageInfo.hasNextPage == true)
-            assert(ref.value == Result.succeed((hasNextPage = true, endCursor = Present("c42"))))
             assert(!ref.toString.contains("c42"))
             assert(!(ref: Any).isInstanceOf[Product])
             typeCheckFailure("ref.productIterator")("productIterator")
+            ref.value.map(page => assert(page == (hasNextPage = true, endCursor = Present("c42"))))
+        }
+
+        "value answers the carried fields on every call" in {
+            val q    = pageInfoField(PageBadge.fields.spread).toQuery("Q")
+            val body = """{"pageInfo":{"__typename":"PageInfo","hasNextPage":false,"endCursor":null}}"""
+            val ref  = q.dataCodec.decode(parse(body)).getOrThrow.pageInfo.pageBadge
+            for
+                first  <- ref.value
+                second <- ref.value
+            yield
+                assert(first == (hasNextPage = false, endCursor = Absent))
+                assert(second == first)
+            end for
+        }
+
+        "value aborts with ApolloParseException when the carried slice misses a fragment field" in {
+            // The ref is built without decoding, so a slice that lacks `hasNextPage`
+            // surfaces when the ref is opened, as the parse error rather than a defect.
+            val ref = PageBadge.fields.refFromRow(Map("endCursor" -> Json.JStr("c42")))
+            Abort.run[ApolloParseException](ref.value).map { result =>
+                assert(result.isFailure)
+                assert(!result.isPanic)
+            }
         }
     }
 
