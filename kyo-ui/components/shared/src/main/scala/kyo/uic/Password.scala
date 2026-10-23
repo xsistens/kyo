@@ -133,40 +133,35 @@ final case class Password private (
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        if !toggleMaskFlag then withValue(Absent)
+        if !toggleMaskFlag then validated(withValue(Absent, _))
         else
             UI.mounted {
                 Signal.initRef(false).map(r => wired(r))
-            }.placeholder(withValue(Absent))
+            }.placeholder(validated(withValue(Absent, _)))
 
     /** The subscription tree the mount publishes (golden-test seam): the internal
       * reveal state driving the password/text type switch.
       */
     private[uic] def wired(revealed: SignalRef[Boolean])(using Frame): UI =
-        revealed.render(r => withValue(Present((revealed, r))))
+        validated(validity => revealed.render(r => withValue(Present((revealed, r)), validity)))
+
+    /** The field built once with its validity handed to `build`, followed by the message row. */
+    private def validated(build: FieldValidity => UI)(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(build(validity))
 
     /** Resolves the bound value: the meter needs the CURRENT text, so with
       * `feedback(true)` the body renders under `ref.render`; without feedback the
       * ref binds directly (no re-render per keystroke).
       */
-    private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)])(using Frame): UI =
+    private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         valueBinding match
             case Present(Input.Value.Ref(ref)) if feedbackFlag =>
-                ref.render(v => body(v, rev))
-            case Present(Input.Value.Const(v)) => body(v, rev)
-            case _                             => body("", rev)
+                ref.render(v => body(v, rev, validity))
+            case Present(Input.Value.Const(v)) => body(v, rev, validity)
+            case _                             => body("", rev, validity)
 
-    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)])(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription, never around the
-        // UI.mounted node): with a reactive slot set, re-render field + meter + message
-        // through the shared helper; otherwise the untouched static form.
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => bodyStatic(current, rev)
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).bodyStatic(current, rev)
-                )
-
-    private def bodyStatic(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)])(using Frame): UI =
+    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         val revealed = rev.exists(_._2)
 
         // === the field (Input carries the shared text-field contract) ===========
@@ -176,7 +171,7 @@ final case class Password private (
             .size(sizeV)
             .variant(variantV)
             .fluid(fluidFlag)
-            .invalid(invalidV.constTrue)
+            .invalid(validity.red)
         valueBinding match
             case Present(Input.Value.Ref(r)) if !feedbackFlag => in = in.value(r)
             case Present(_)                                   => in = in.value(current)
@@ -267,10 +262,8 @@ final case class Password private (
                     )
                 )
 
-        val withMeter: UI =
-            if meter.isEmpty then root else fragment((root :: meter)*)
-        FieldInvalid.withMessage(withMeter, invalidV.constTrue, invalidMsgV)
-    end bodyStatic
+        if meter.isEmpty then root else fragment((root :: meter)*)
+    end body
 end Password
 
 object Password:

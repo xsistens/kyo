@@ -581,6 +581,24 @@ refs themselves held the correct result.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of
   its own: the columns and their cursors are one state.
 
+## Validity is a channel, never a region
+
+`invalid(Signal)` / `invalidMessage(Signal)` reach every control through `FieldValidity`, built once at
+the top of the render. `mark` (or `markClass` / `markAria`, where the sheet hooks `.p-invalid` on another
+element than the one carrying `aria-invalid`) stamps class and attribute channels; `follow` appends the
+message row as a region of its own AFTER the control. The control is never rebuilt by its validity: a
+rebuild replaced the textarea a reader was typing into at the very keystroke that turned it invalid.
+
+- **Place `follow` outside the control's own value and open regions**, inside a mount where there is
+  one (the static HTML keeps the row inside the mount's host). The exception is a field with a trailing
+  sibling: the pickers' `.p-uic-key-error` card follows the field, and the row belongs between the two,
+  so there `follow` wraps the field alone inside the body. The row region is then rebuilt with an open
+  or highlight change, the field still never by its validity. `FieldValidityTest` sweeps every control:
+  no validity region above the root, the channels on exactly the elements the constant render marks,
+  one message region. A new form control belongs in that sweep.
+- **A composite hands the slots on**: `InputMask` passes them to its `Input`; `Password` and `InputOtp`
+  pass `validity.red` to their inner inputs and follow the whole with the one row.
+
 ## An unbound ref is not a reason to disable a control
 
 Optional bindings (`month`, `currentView`, `selected`) exist so a page CAN drive a component from

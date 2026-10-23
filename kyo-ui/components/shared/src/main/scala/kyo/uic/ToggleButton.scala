@@ -119,17 +119,12 @@ final case class ToggleButton private (
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
-        checkedBinding match
-            case Present(ToggleButton.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref))))
-            case Present(ToggleButton.Checked.Const(v)) => body(v, onChangeF)
-            case Absent                                 => body(false, onChangeF)
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(checkedBinding match
+            case Present(ToggleButton.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
+            case Present(ToggleButton.Checked.Const(v)) => body(v, onChangeF, validity)
+            case Absent                                 => body(false, onChangeF, validity))
+    end render
 
     /** Two-way handler: write the toggled value into `ref`, then run the user callback. */
     private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
@@ -142,11 +137,11 @@ final case class ToggleButton private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
         idV.foreach(v => el = el.id(v))
         if isChecked then el = el.cssClass("p-togglebutton-checked")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         sizeV match
             case Size.Small  => el = el.cssClass("p-togglebutton-sm").cssClass("p-inputfield-sm")
             case Size.Large  => el = el.cssClass("p-togglebutton-lg").cssClass("p-inputfield-lg")
@@ -197,11 +192,7 @@ final case class ToggleButton private (
                     case _                           => span.cssClass("p-togglebutton-label")("\u00A0"): UI
                 iconSlot :+ labelUI
 
-        FieldInvalid.withMessage(
-            el(span.cssClass("p-togglebutton-content")(contentChildren.map(toChild)*)),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        el(span.cssClass("p-togglebutton-content")(contentChildren.map(toChild)*))
     end body
 end ToggleButton
 

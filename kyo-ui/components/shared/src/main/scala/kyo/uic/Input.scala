@@ -152,27 +152,22 @@ final case class Input private (
     def inputMask(mask: String): Input = copy(inputMaskV = Present(mask))
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderStatic
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
-                )
-
-    private def renderStatic(using Frame): UI =
+        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field: UI = typeV match
             case InputType.Text =>
-                buildField(withConstraints(input), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
+                buildField(withConstraints(input), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Email =>
-                buildField(withConstraints(emailInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
-            case InputType.Number   => buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
+                buildField(withConstraints(emailInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+            case InputType.Number =>
+                buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Password =>
-                buildField(withConstraints(passwordInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
+                buildField(withConstraints(passwordInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Tel =>
-                buildField(withConstraints(telInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
+                buildField(withConstraints(telInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.URL =>
-                buildField(withConstraints(urlInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
-        FieldInvalid.withMessage(field, invalidV.constTrue, invalidMsgV)
-    end renderStatic
+                buildField(withConstraints(urlInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+        validity.follow(field)
+    end render
 
     /** Applies the shared attribute chain to a concrete kyo text-input factory. The
       * F-bounded refinement (`Self <: T`) keeps every `Self`-returning setter
@@ -187,7 +182,8 @@ final case class Input private (
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
-        setOnBlur: (T, UI.Action) => T
+        setOnBlur: (T, UI.Action) => T,
+        validity: FieldValidity
     )(using Frame): UI =
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
@@ -199,7 +195,7 @@ final case class Input private (
             case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
-        if invalidV.constTrue then b = b.cssClass("p-invalid").aria("invalid", "true")
+        b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-inputtext-fluid")
         valueBinding match
             case Present(Input.Value.Const(v)) => b = b.value(v)

@@ -106,40 +106,6 @@ private[uic] object SelectionPick:
     end next
 end SelectionPick
 
-/** Package-internal builder for the `invalidMessage` row shared by the migrated
-  * form fields: when the field is `invalid` AND a message is set, the field is
-  * followed by a `div.p-uic-invalid-message` (kyo extension; Prime leaves the
-  * message to the form layer). Emitted as a fragment, so no wrapper element is
-  * introduced around the field.
-  */
-private[uic] object FieldInvalid:
-    import kyo.*
-    import kyo.UI.*
-
-    def withMessage(field: UI, invalid: Boolean, message: Maybe[String])(using Frame): UI =
-        message match
-            case Present(m) if invalid => fragment(field, div.cssClass("p-uic-invalid-message")(m))
-            case _                     => field
-
-    /** Reactive validity seam shared by every form field's `invalid(Signal)` /
-      * `invalidMessage(Signal)` overloads. Derives the red state (explicit override,
-      * else message presence) and the message text from the reactive slots, then
-      * hands both to `build` inside a nested `Signal.render` boundary; `build`
-      * re-renders the field for that `(red, message)` snapshot so the `.p-invalid`
-      * stamp and the message row stay in sync. The const path never reaches here, so
-      * static output (golden tests) is unaffected. Callers on mounted fields must
-      * invoke this INSIDE their mount subscription, never around the `UI.mounted`
-      * node, to avoid re-mounting on every emission.
-      */
-    def reactive(invalidDyn: Maybe[Signal[Boolean]], msgDyn: Maybe[Signal[Maybe[String]]], msgConst: Maybe[String])(
-        build: (Boolean, Maybe[String]) => UI
-    )(using Frame): UI =
-        val msgSig: Signal[Maybe[String]] = msgDyn.getOrElse(Signal.initConst(msgConst))
-        val redSig: Signal[Boolean]       = invalidDyn.getOrElse(msgSig.map(_.isDefined))
-        redSig.render(red => msgSig.render(msg => build(red, msg)))
-    end reactive
-end FieldInvalid
-
 /** Layout orientation (`.p-*-horizontal` / `.p-*-vertical`; MeterGroup's meters
   * and label list, Prime's `orientation` / `labelOrientation` props).
   */

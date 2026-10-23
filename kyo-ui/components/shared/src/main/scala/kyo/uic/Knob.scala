@@ -140,17 +140,10 @@ final case class Knob private (
         if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderDisabledResolved
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
-                )
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
 
-    private def renderDisabledResolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
-
-    private def renderResolved(using Frame): UI =
+    private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
             case Present(ReactiveVariable(ref)) =>
                 // Pointer-drag + keyboard. The drag handler sits on the STABLE
@@ -160,30 +153,26 @@ final case class Knob private (
                 // LIVE, so a drag onto any angle sets that angle regardless of the
                 // render-time value.
                 val reactiveSvg: UI = ref.render(v => dialSvg(clamp(v), Present(ref)))
-                var root            = shellRoot
+                var root            = shellRoot(validity)
                 if interactive then
                     val onDrag = (e: PointerEvent) =>
                         commit(clamp(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV)), Present(ref))
                     root = root.onPointerDown(onDrag).onPointerMove(onDrag)
                 end if
-                withInvalidMessage(root(toChild(reactiveSvg)))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => staticRoot(clamp(v)))
-            case Present(ReactiveValue.Const(v)) => staticRoot(clamp(v))
-            case Absent                          => staticRoot(minV)
+                root(toChild(reactiveSvg))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => staticRoot(clamp(v), validity))
+            case Present(ReactiveValue.Const(v)) => staticRoot(clamp(v), validity)
+            case Absent                          => staticRoot(minV, validity)
 
     /** The root box shared by the interactive and static paths. */
-    private def shellRoot(using Frame): Ast.Div =
+    private def shellRoot(validity: FieldValidity)(using Frame): Ast.Div =
         var root = div.cssClass("p-knob").cssClass("p-component")
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
-        if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
-        root
+        validity.mark(root)
     end shellRoot
 
-    private def withInvalidMessage(el: UI)(using Frame): UI =
-        FieldInvalid.withMessage(el, invalidV.constTrue, invalidMsgV)
-
-    private def staticRoot(value: Double)(using Frame): UI =
-        withInvalidMessage(shellRoot(toChild(dialSvg(value, Absent))))
+    private def staticRoot(value: Double, validity: FieldValidity)(using Frame): UI =
+        shellRoot(validity)(toChild(dialSvg(value, Absent)))
 
     private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
         val write: UI.Action = ref match

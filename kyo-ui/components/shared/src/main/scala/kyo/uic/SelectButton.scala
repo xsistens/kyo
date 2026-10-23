@@ -168,38 +168,34 @@ final case class SelectButton[A] private (
     private[uic] def render(using Frame): UI =
         // Multiple select is a group of independent toggles, each its own tab stop, so it needs no
         // ids and no mount. Single select is a radio group, and the mount is where its ids come from.
-        if multipleFlag then invalidGate(Absent)
+        if multipleFlag then renderNav(Absent)
         else
             UI.mounted {
                 UI.commands.map { cmds =>
                     Kyo.foreach(items)(_ => cmds.freshId).map(ids =>
-                        invalidGate(Present((ids.toList, (id: String) => cmds.focusId(id))))
+                        renderNav(Present((ids.toList, (id: String) => cmds.focusId(id))))
                     )
                 }
-            }.placeholder(invalidGate(Absent))
+            }.placeholder(renderNav(Absent))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        invalidGate(Present((ids, focus)))
+        renderNav(Present((ids, focus)))
 
-    private def invalidGate(nav: Nav)(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderDisabledResolved(nav)
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                        .renderDisabledResolved(nav)
-                )
+    private def renderNav(nav: Nav)(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(
+            BoolValue.reactive(disabledFlag): d =>
+                BoolValue.reactive(loadingV): l =>
+                    copy(disabledFlag = d, loadingV = l).renderResolved(nav, validity)
+        )
+    end renderNav
 
-    private def renderDisabledResolved(nav: Nav)(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            BoolValue.reactive(loadingV): l =>
-                copy(disabledFlag = d, loadingV = l).renderResolved(nav)
-
-    private def renderResolved(nav: Nav)(using Frame): UI =
+    private def renderResolved(nav: Nav, validity: FieldValidity)(using Frame): UI =
         (single, multi) match
-            case (Present(c), _) if !multipleFlag => c.render(held => body(held.toList, nav))
-            case (_, Present(c)) if multipleFlag  => c.render(held => body(held.toList, nav))
-            case _                                => body(Nil, nav)
+            case (Present(c), _) if !multipleFlag => c.render(held => body(held.toList, nav, validity))
+            case (_, Present(c)) if multipleFlag  => c.render(held => body(held.toList, nav, validity))
+            case _                                => body(Nil, nav, validity)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
       *
@@ -233,7 +229,7 @@ final case class SelectButton[A] private (
                 focus(ids(step.focus)).andThen(selectOnly(items(step.focus)))
             case _ => ()
 
-    private def body(held: List[A], nav: Nav)(using Frame): UI =
+    private def body(held: List[A], nav: Nav, validity: FieldValidity)(using Frame): UI =
         val selected = held.map(key).toSet
         // Held options no button carries, once the options are said to be complete.
         val unknown = if loadingV.constTrue then Nil else held.filterNot(a => items.exists(i => key(i) == key(a)))
@@ -242,7 +238,7 @@ final case class SelectButton[A] private (
         // A choice of ONE is a radio group: it says so, holds one tab stop, and moves inside it
         // with the arrows. Several independent choices stay a group of toggle buttons.
         el = el.role(if multipleFlag then "group" else "radiogroup")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        el = validity.mark(el)
         // Blur fires even without a pick: the validation layer's Blur trigger. Reads the
         // bound ref LIVE, so it reports the selection at blur time. The element carries ONE
         // blur handler, so the arity in force decides which of the two is wired; a control
@@ -316,11 +312,7 @@ final case class SelectButton[A] private (
             end if
             tb.render
         }
-        FieldInvalid.withMessage(
-            el((keyCollisionCard ++ unknownCard(unknown) ++ buttons).map(toChild)*),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        el((keyCollisionCard ++ unknownCard(unknown) ++ buttons).map(toChild)*)
     end body
 
     /** The loud card rendered ahead of the fused buttons when the option keys

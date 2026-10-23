@@ -124,7 +124,6 @@ final case class FileUpload private (
         // The chosen-name label is reactive: a pick writes the picked name(s) into the
         // BOUND value ref when there is one, else into a signal owned by this mount; the
         // static projection shows the empty-state label until the transport attaches.
-        // The validity boundary is resolved inside `body`, never around `UI.mounted`.
         filesRef match
             case Present(_) => body(Absent)
             case Absent     =>
@@ -145,17 +144,8 @@ final case class FileUpload private (
                     case Present(TextValue.Dyn(s))   => span.cssClass("p-fileupload-filelabel")(s)
                     case Absent                      => span.cssClass("p-fileupload-filelabel")("No file chosen")
 
-    /** Resolves the reactive validity slots, then builds. The boundary sits HERE, inside
-      * the mount, rather than around `UI.mounted`: wrapping the mount would re-mount on
-      * every emission and drop the label signal (see [[FieldInvalid.reactive]]).
-      */
     private def body(shown: Maybe[SignalRef[Maybe[String]]])(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => bodyStatic(shown, invalidV.constTrue, invalidMsgV)
-            case _                =>
-                FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(shown, red, msg))
-
-    private def bodyStatic(shown: Maybe[SignalRef[Maybe[String]]], red: Boolean, redMsg: Maybe[String])(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         // The choose affordance: a real <label for> wearing Prime's Button classes,
         // so the native file dialog opens without any JS lifecycle.
         var choose = label
@@ -209,19 +199,16 @@ final case class FileUpload private (
             .cssClass("p-fileupload")
             .cssClass("p-fileupload-basic")
             .cssClass("p-component")
-        if red then root = root.cssClass("p-invalid").aria("invalid", "true")
-        FieldInvalid.withMessage(
-            root(
+        validity.follow(
+            validity.mark(root)(
                 div.cssClass("p-fileupload-basic-content")(
                     toChild(chooseEl),
                     toChild(fileLabelEl),
                     toChild(file)
                 )
-            ),
-            red,
-            redMsg
+            )
         )
-    end bodyStatic
+    end body
 end FileUpload
 
 object FileUpload:

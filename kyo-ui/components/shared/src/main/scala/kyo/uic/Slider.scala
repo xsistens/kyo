@@ -109,24 +109,17 @@ final case class Slider private (
         if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
-        (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderDisabledResolved
-            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
-                )
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
 
-    private def renderDisabledResolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
-
-    private def renderResolved(using Frame): UI =
+    private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref)))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent))
-            case Present(ReactiveValue.Const(v)) => body(v, Absent)
-            case Absent                          => body(minV, Absent)
+            case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref), validity))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
+            case Absent                          => body(minV, Absent, validity)
 
-    private def body(raw: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI =
+    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity)(using Frame): UI =
         val value = clamp(raw)
         val pct   =
             if maxV <= minV then 0.0
@@ -184,12 +177,7 @@ final case class Slider private (
             .cssClass("p-component")
             .cssClass(if horizontal then "p-slider-horizontal" else "p-slider-vertical")
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
-        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
-        FieldInvalid.withMessage(
-            el(toChild(range), toChild(handle), toChild(in: UI)),
-            invalidV.constTrue,
-            invalidMsgV
-        )
+        validity.mark(el)(toChild(range), toChild(handle), toChild(in: UI))
     end body
 end Slider
 

@@ -9,9 +9,10 @@ import kyo.UI.*
   * [[Input.Value]].
   *
   * A `Dyn` slot backing a plain boolean ATTRIBUTE (`disabled`) is patched in place through
-  * kyo-ui's boolean-attribute channel; a `Dyn` slot fused with other build-time logic
-  * (`invalid`'s class + message row) is resolved through [[reactive]] (`Signal.render`,
-  * re-rendering the element with the current boolean).
+  * kyo-ui's boolean-attribute channel; `invalid` becomes a class and an attribute channel plus
+  * a message region of its own through [[FieldValidity]]; a `Dyn` slot fused with other
+  * build-time logic is resolved through [[reactive]] (`Signal.render`, re-rendering the element
+  * with the current boolean).
   */
 private[uic] type BoolValue = ReactiveValue[Boolean]
 
@@ -69,7 +70,7 @@ extension (bv: Maybe[BoolValue])
     private[uic] def constTrue: Boolean = bv.flatMap(_.const).getOrElse(false)
 
     /** The signal iff the slot is `Dyn`, else `Absent`, for feeding a `Signal[Boolean]` seam
-      * (e.g. `FieldInvalid.reactive`) or deciding whether a slot needs the reactive render path.
+      * (e.g. [[FieldValidity]]) or deciding whether a slot needs the reactive render path.
       */
     private[uic] def dynSig: Maybe[Signal[Boolean]] = bv.flatMap(_.dyn)
 
