@@ -19,8 +19,7 @@ import kyo.apollo.runtime.ResponseStream
   * This interceptor expresses that entirely through the two APQ flags already on
   * [[ApolloRequest]] — the wire mechanics (adding the `persistedQuery` extension,
   * omitting `query`) live in [[kyo.apollo.network.http.HttpRequestComposer]], which
-  * hashes the document with the existing [[kyo.apollo.network.http.Sha256]] (the Task
-  * 1 reuse doc §2/§4: "APQ reuses it; do not add a second implementation"):
+  * hashes the document with [[kyo.apollo.network.http.Sha256]]:
   *   - **hash-only probe** — `sendApqExtensions = true`, `sendDocument = false`.
   *   - **register fallback** — `sendApqExtensions = true`, `sendDocument = true`,
   *     sent only after a `PersistedQueryNotFound`.
