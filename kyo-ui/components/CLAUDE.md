@@ -512,6 +512,11 @@ another control, Shift+Tab back, and land at the top with every arrow press to m
   handler is still worth its markup.
 - **Fall back in the order the reader would expect**: the cursor, else the row they chose, else the
   first. A cursor pointing at a row that a collapse took off the screen falls back the same way.
+- **The page as first rendered keeps the tab stop where the id is.** Before the client attaches the
+  mount has published nothing, so there is no cursor yet, but a field-shaped control's id is already
+  on the page, and `Label.forId` or a focus-by-id must find a tab stop there. `Listbox` once left its
+  rows as the tab stops in that projection while the id sat on the list; now the list is the one tab
+  stop from the first render (`ElementIdTest` checks the static projection of every field-shaped control).
 
 ## An opening key has to land on a row
 
