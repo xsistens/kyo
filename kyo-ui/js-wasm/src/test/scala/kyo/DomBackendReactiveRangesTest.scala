@@ -2,7 +2,9 @@ package kyo
 
 import kyo.UI.foreach
 import kyo.UI.foreachKeyed
+import kyo.UI.render
 import kyo.internal.DomBackend
+import kyo.internal.DomReactiveRegions
 import org.scalajs.dom
 import scala.scalajs.js as scalajs
 
@@ -1483,6 +1485,49 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             _     <- fiber.interrupt
             _     <- fiber.getResult
         yield assert(left == 0, s"stranded=$left")
+        end for
+    }
+
+    "a closed mount leaves no range registry of its own open" in {
+        for
+            show  <- Signal.initRef(true)
+            items <- Signal.initRef(Chunk("a", "b", "c"))
+            tick  <- Signal.initRef(0)
+            ui = UI.div(
+                show.render(on => if on then UI.div(UI.mounted(Kyo.lift(UI.span("top").id("cl-top"))).keyed("top")) else UI.span("off")),
+                items.foreachKeyed(identity)(id =>
+                    UI.div(tick.render(n => UI.div(UI.span(s"$id:$n").id(s"cl-$id"), UI.mounted(Kyo.lift(UI.span(s"m-$id"))).keyed("m"))))
+                ),
+                UI.div.id("cl-portal").portal(true)(tick.map(n => UI.span(s"p:$n").id("cl-p"): UI)),
+                Svg.svg(tick.render(n => Svg.g(Svg.circle.cx(n.toDouble).cy(5).r(3).id(s"cl-c$n"))))
+            )
+            before <- Sync.defer(DomReactiveRegions.openCount)
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("cl-top") == "top" && text("cl-p") == "p:0"))
+            during = ready.regions.exists(DomReactiveRegions.isOpen)
+            _ <- show.set(false)
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("cl-top") == null))
+            _ <- show.set(true)
+            _ <- assertEventually(Sync.defer(text("cl-top") == "top"))
+            _ <- items.set(Chunk("c", "a"))
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("cl-b") == null))
+            _ <- tick.set(1)
+            _ <- assertEventually(Sync.defer(
+                text("cl-a") == "a:1" && text("cl-c") == "c:1" && text("cl-p") == "p:1" && dom.document.getElementById("cl-c1") != null
+            ))
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+            // The fiber's result can come before the mount scope's last finalizers have run, the registry's close among them.
+            _ <- assertEventually(
+                Sync.defer {
+                    assert(!ready.regions.exists(DomReactiveRegions.isOpen), "the closed mount's registry is still open")
+                    assert(DomReactiveRegions.openCount == before, s"open registries: ${DomReactiveRegions.openCount}, before: $before")
+                    true
+                },
+                5.seconds
+            )
+        yield assert(during, "the mount's registry was not open while it ran")
         end for
     }
 

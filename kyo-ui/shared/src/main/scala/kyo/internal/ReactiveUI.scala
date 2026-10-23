@@ -138,6 +138,10 @@ final private[kyo] class MountDispatch(
 
     /** How many instances are registered over every mount: none once everything that showed one has been released. */
     def registered(using Frame): Int < Sync = cells.get.map(_.foldLeft(0)((n, _, held) => n + held.size))
+
+    /** How many boundary gates are registered and ranges held: none once every boundary that waited has been released. */
+    def gated(using Frame): Int < Sync =
+        gates.get.map(_.foldLeft(0)((n, _, held) => n + held.size)).map(n => holds.get.map(n + _.size))
 end MountDispatch
 
 private[kyo] object MountDispatch:
@@ -3478,6 +3482,11 @@ private[kyo] object ReactiveUI:
                 Chunk.empty
             )
 
+        /** The state of an evicted table, empty like [[empty]] but never `eq` to it or to any other state, so a change computed from a
+          * state read before the eviction fails its compare-and-set, and one computed from this state is never written.
+          */
+        val ended: TableState = empty.copy()
+
         /** `heldBy` after the entry at `key` went from holding `before` to holding `after`. */
         def reindex(
             heldBy: Dict[MountIdentity, Set[RegionKey]],
@@ -3592,8 +3601,14 @@ private[kyo] object ReactiveUI:
 
         private val open    = new java.util.concurrent.atomic.AtomicInteger()
         private val pending = AtomicRef.Unsafe.init(Set.empty[MountTable])
+        private val top     = AtomicRef.Unsafe.init(Maybe.empty[MountTable])
         val counters        = new MountCounters
         val audit           = if audited then Present(new MountAudit) else Maybe.empty[MountAudit]
+
+        /** The session's root table, once [[MountTable.root]] has made it. */
+        def root: Maybe[MountTable] = top.get()
+
+        private[ReactiveUI] def rooted(table: MountTable): Unit = top.set(Present(table))
 
         def isOpen: Boolean = open.get() > 0
 
@@ -3707,17 +3722,46 @@ private[kyo] object ReactiveUI:
         private val cut      = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
         private val wake     = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
         private val running  = new java.util.concurrent.atomic.AtomicBoolean()
-        private val closed   = new java.util.concurrent.atomic.AtomicBoolean()
 
         def frames: Failures.Scope = framesOf()
 
+        /** Whether [[evictAll]] has run: the table then holds nothing, follows no subscription and takes no change. */
+        private[ReactiveUI] def closed: Boolean = state.get() eq TableState.ended
+
         private[ReactiveUI] def read: TableState = state.get()
 
+        /** What the table still holds, one `part=count` per part that is not empty: nothing once it has been evicted and every
+          * subscription on it has ended. For tests.
+          */
+        def leftovers: Chunk[String] =
+            val s = state.get()
+            Chunk(
+                "instances" -> s.instances.size,
+                "regions"   -> s.regions.size,
+                "ordered"   -> s.ordered.size,
+                "heldBy"    -> s.heldBy.size,
+                "waiting"   -> s.waiting.size,
+                "views"     -> s.views.size,
+                "releasing" -> s.releasing.size,
+                "decided"   -> s.decided.size,
+                "watches"   -> watches.get().size,
+                "verdicts"  -> verdicts.get().size,
+                "cut"       -> cut.get().fold(0)(_ => 1),
+                "settling"  -> (if running.get() then 1 else 0)
+            ).filter(_._2 > 0).map((part, n) => s"$part=$n")
+        end leftovers
+
+        /** The paths of the regions the table has an entry for, in tree order. For tests. */
+        def regionPaths: Chunk[Seq[String]] = Chunk.from(state.get().ordered.iterator.map(_.path))
+
+        /** Changes the state by `f` and returns what `f` answered. Once the table is closed `f` sees the empty state it was left in, and
+          * what it would change is dropped: a pass, claim or subscription that comes late adds nothing to an evicted table.
+          */
         @scala.annotation.tailrec
         final private[ReactiveUI] def modify[A](f: TableState => (TableState, A)): A =
             val before       = state.get()
             val (after, out) = f(before)
-            if after eq before then out
+            if (after eq before) || (before eq TableState.ended) then out
             else if state.compareAndSet(before, after) then
                 session.audit.foreach(_.check(after))
                 if verdicts.get().nonEmpty then settleVerdicts()
@@ -3832,7 +3876,8 @@ private[kyo] object ReactiveUI:
           */
         private def decide(): Unit =
             val taken = cut.get()
-            if taken.nonEmpty && reached(taken.get) && cut.compareAndSet(taken, Absent) then
+            // A closed table has nothing to decide: evictAll released everything a cut could have.
+            if taken.nonEmpty && !closed && reached(taken.get) && cut.compareAndSet(taken, Absent) then
                 discard(session.counters.settled.incrementAndGet())
                 modify { s =>
                     var instances = s.instances
@@ -3890,7 +3935,7 @@ private[kyo] object ReactiveUI:
         private def settling(using Frame): Unit < Async =
             Sync.Unsafe.defer {
                 val signal = wake.get()
-                if closed.get() then
+                if closed then
                     running.set(false)
                     Kyo.unit
                 else
@@ -3949,14 +3994,19 @@ private[kyo] object ReactiveUI:
 
         /** Releases every instance, in transit or not, and waits for all of it, also for the releases a cut has already started: a
           * teardown of an instance that is already being torn down waits for that one to finish.
+          *
+          * The table is closed from then on (see [[closed]]): its state stays empty, a cut it had recorded is dropped, and the settling
+          * fiber stops. A region that renders, claims or reports a watch later changes nothing in it.
           */
         def evictAll(using Frame): Unit < Async =
             Sync.Unsafe.defer {
                 group.release()
-                closed.set(true)
-                val all = modify(s =>
-                    (TableState.empty, s.instances.foldLeft(s.releasing)((acc, _, slot) => acc.append(slot.instance)))
-                )
+                val last = state.getAndSet(TableState.ended)
+                val all  = last.instances.foldLeft(last.releasing)((acc, _, slot) => acc.append(slot.instance))
+                cut.set(Absent)
+                session.audit.foreach(_.check(TableState.ended))
+                settleVerdicts()
+                // Wakes the settling fiber, which stops on the closed table.
                 recheck()
                 if all.isEmpty then Kyo.unit
                 else Async.uninterruptible(Kyo.foreachDiscard(all)(_.teardown))
@@ -3971,7 +4021,7 @@ private[kyo] object ReactiveUI:
             Frame
         ): (MountTable, MountScope) < Sync =
             val table = new MountTable(session, () => Nil, group)
-            table.content(path, 0).map(scope => (table, scope))
+            Sync.Unsafe.defer(session.rooted(table)).andThen(table.content(path, 0).map(scope => (table, scope)))
         end root
     end MountTable
 
@@ -3993,16 +4043,19 @@ private[kyo] object ReactiveUI:
         def frames: Failures.Scope = boundaries ++ table.frames
 
         /** The entry this subscription acts on: its own, one it takes over as the newest subscription of a region without a covering
-          * pass, or a fresh one for a region that had none. `Absent` when a newer subscription follows the region.
+          * pass, or a fresh one for a region that had none. `Absent` when a newer subscription follows the region, and in a closed table,
+          * which follows none.
           */
         private def entryIn(s: TableState): Maybe[RegionEntry] =
-            s.regions.get(region) match
-                case Present(e) if e.cover == birth => Present(e)
-                case Present(e) if e.cover < birth  => Present(e.copy(cover = birth))
-                case Present(_)                     => Absent
-                case Absent                         =>
-                    if birth == MountPass.stale.id then Absent
-                    else Present(RegionEntry(birth, Set.empty, Absent, complete = false, MountPass.stale, Dict.empty))
+            if s eq TableState.ended then Absent
+            else
+                s.regions.get(region) match
+                    case Present(e) if e.cover == birth => Present(e)
+                    case Present(e) if e.cover < birth  => Present(e.copy(cover = birth))
+                    case Present(_)                     => Absent
+                    case Absent                         =>
+                        if birth == MountPass.stale.id then Absent
+                        else Present(RegionEntry(birth, Set.empty, Absent, complete = false, MountPass.stale, Dict.empty))
 
         /** Whether the table still follows this subscription. */
         def followed: Boolean = entryIn(table.read).nonEmpty

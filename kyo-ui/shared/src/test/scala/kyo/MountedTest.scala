@@ -377,6 +377,171 @@ class MountedTest extends kyo.test.Test[Any]:
         }
     }
 
+    /** What a closed session left behind: the parts of its root table that are not empty, watches that never ended, verdicts that still
+      * wait, and the mounts and boundaries its dispatch still finds.
+      */
+    private def leftAfterClose(session: ReactiveUI.MountSession, dispatch: MountDispatch)(using Frame): Chunk[String] < Sync =
+        for
+            cells <- dispatch.registered
+            gated <- dispatch.gated
+        yield
+            val c = session.counters
+            session.root.fold(Chunk("no root table"))(_.leftovers) ++
+                Chunk(
+                    "unended watches"  -> (c.registered.get - c.unregistered.get),
+                    "pending verdicts" -> c.pendingVerdicts.get,
+                    "dispatch cells"   -> cells.toLong,
+                    "boundary gates"   -> gated.toLong
+                ).filter(_._2 != 0).map((part, n) => s"$part=$n")
+
+    /** Whether a paint after the first `n` shows `text`. */
+    private def paintedSince(recorder: Recorder, n: Int, text: String)(using Frame): Boolean < Sync =
+        recorder.paintsAfter(n).map(_.exists(_._2.contains(text)))
+
+    "a closed page leaves nothing behind in its mount table, its watches or its dispatch" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            gate     <- Promise.init[Unit, Any]
+            show     <- Signal.initRef(true)
+            items    <- Signal.initRef(Chunk("a", "b", "c"))
+            tick     <- Signal.initRef(0)
+            node = (name: String, waits: Boolean) =>
+                UI.mounted(
+                    Scope.ensure(released.incrementAndGet.unit)
+                        .andThen(runs.incrementAndGet)
+                        .andThen(if waits then gate.get else Kyo.unit)
+                        .andThen(span(s"$name:mounted"))
+                ).keyed(name)
+            ui = div(
+                show.render(on => if on then div(node("top", false)) else span("off")),
+                items.foreachKeyed(identity)(id => div(tick.render(n => div(span(s"$id:$n"), node("row", false))))),
+                div.portal(true)(tick.render(n => div(span(s"portal:$n"), node("portal", false)))),
+                Svg.svg(tick.render(n => Svg.g(Svg.circle.cx(n.toDouble).cy(5).r(3)))),
+                UI.boundary.placeholder(span("skel"))(div(node("late", true)))
+            )
+            recorder = new Recorder(keepsRows = true)
+            _                               <- recorder.initial(ui)
+            root                            <- ReactiveUI.normalize(ui, Seq.empty)
+            (session, cellsOpen, gatesOpen) <- Scope.run {
+                for
+                    sub <- subscribeAudited(root, recorder)
+                    // top, three rows, the portal's and the boundary's, which waits for the gate.
+                    _ <- assertEventually(runs.get.map(_ == 6))
+                    p <- recorder.paintCount
+                    _ <- gate.completeUnitDiscard
+                    _ <- assertEventually(paintedSince(recorder, p, "late:mounted"))
+                    _ <- show.set(false)
+                    _ <- assertEventually(released.get.map(_ == 1))
+                    _ <- show.set(true)
+                    _ <- assertEventually(runs.get.map(_ == 7))
+                    // Row b goes, c moves before a.
+                    _ <- items.set(Chunk("c", "a"))
+                    _ <- assertEventually(released.get.map(_ == 2))
+                    // The list's pass that dropped row b dropped the entries of the regions in it too, though their subscriptions
+                    // ended only as the row closed.
+                    _ <- Sync.defer {
+                        val paths = sub.mountSession.root.fold(Chunk.empty[Seq[String]])(_.regionPaths)
+                        assert(
+                            !paths.exists(_.startsWith(Seq("1", "b"))) && paths.exists(_.startsWith(Seq("1", "a"))),
+                            s"regions after row b went: ${paths.mkString(", ")}"
+                        )
+                    }
+                    p <- recorder.paintCount
+                    _ <- tick.set(1)
+                    _ <-
+                        assertEventually(Kyo.foreach(Chunk("a:1", "c:1", "portal:1"))(paintedSince(recorder, p, _)).map(_.forall(identity)))
+                    _ <- assertConsistent(sub)
+                    // Five instances live: top, rows a and c, the portal's and the boundary's.
+                    cells <- root.mountDispatch.get.registered
+                    gates <- root.mountDispatch.get.gated
+                yield (sub.mountSession, cells, gates)
+            }
+            _ <- assertEventually(
+                leftAfterClose(session, root.mountDispatch.get).map { left =>
+                    assert(left.isEmpty, s"after close: ${left.mkString(", ")}")
+                    true
+                },
+                5.seconds
+            )
+            started <- runs.get
+            ended   <- released.get
+        yield
+            assert(cellsOpen == 5 && gatesOpen >= 1, s"while open: $cellsOpen dispatch cells, $gatesOpen boundary gates")
+            assert(started == 7 && ended == 7, s"$started instances started, $ended released")
+        end for
+    }
+
+    "a region whose watch ends after its table was evicted leaves no decision behind" in {
+        for
+            tick <- Signal.initRef(0)
+            root <- ReactiveUI.normalize(div(tick.render(_ => div(UI.mounted(Kyo.lift(span("held"))).keyed("k")))), Seq.empty)
+            region   = root.children.head
+            node     = mountedNodes(root).head
+            spec     = node.mounted.get
+            identity = spec.identity.get
+            (table, top) <- ReactiveUI.MountTable.root(Seq.empty, new ReactiveUI.MountSession(audited = true))
+            outer        <- top.beginWalk(Seq(root))
+            inner = top.child(outer, region)
+            _ <- Scope.run {
+                for
+                    watch <- inner.register
+                    pass  <- inner.beginWalk(region.children)
+                    _     <- inner.claim(node, identity, spec, pass)
+                    _     <- inner.endWalk
+                    // The region started a pass that has not recorded its walk, so the cut the next pass asks for is not reached.
+                    _ <- Sync.defer(watch.started(() => true))
+                    _ <- inner.beginWalk(Seq.empty)
+                    _ <- table.evictAll
+                yield ()
+            }
+            // The scope that registered the watch has closed after the eviction: the watch ended and reported the region caught up.
+            _ <- assertEventually(
+                Sync.defer(table.leftovers).map { left =>
+                    assert(left.isEmpty, s"the evicted table holds ${left.mkString(", ")}")
+                    true
+                },
+                5.seconds
+            )
+            found <- Sync.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
+        yield assert(found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
+        end for
+    }
+
+    "a pass, a claim and a subscription that come after the table was evicted add nothing to it" in {
+        for
+            released <- AtomicBoolean.init(false)
+            tick     <- Signal.initRef(0)
+            root     <- ReactiveUI.normalize(
+                div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                Seq.empty
+            )
+            region   = root.children.head
+            node     = mountedNodes(root).head
+            spec     = node.mounted.get
+            identity = spec.identity.get
+            (table, top) <- ReactiveUI.MountTable.root(Seq.empty, new ReactiveUI.MountSession(audited = true))
+            outer        <- top.beginWalk(Seq(root))
+            inner = top.child(outer, region)
+            _           <- table.evictAll
+            (left, ran) <- Scope.run {
+                for
+                    pass <- inner.beginWalk(region.children)
+                    live <- inner.claim(node, identity, spec, pass).map(liveOf)
+                    _    <- inner.endWalk
+                    _    <- table.content(Seq.empty, 0)
+                    _    <- assertEventually(live.fold(Kyo.lift(false))(_.cell.current.map(_.isInstanceOf[ReactiveUI.MountState.Ready])))
+                    left <- Sync.defer(table.leftovers)
+                yield (left, live.nonEmpty)
+            }
+            gone <- released.get
+        yield
+            assert(left.isEmpty, s"the evicted table took ${left.mkString(", ")}")
+            assert(ran, "the late claim showed no instance")
+            assert(gone, "the instance of the late claim outlived the scope that showed it")
+        end for
+    }
+
     "an event registration that ends leaves a later one at the same path in place" in {
         for
             dispatch <- MountDispatch.init
