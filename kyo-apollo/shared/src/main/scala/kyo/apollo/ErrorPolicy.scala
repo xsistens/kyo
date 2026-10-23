@@ -2,29 +2,29 @@ package kyo.apollo
 
 import kyo.apollo.network.ExecutionContext
 
-/** How the strict effect form (`ApolloCall.data`) treats GraphQL `errors` that
-  * accompany a response — the react-apollo `errorPolicy`.
+/** How GraphQL `errors` that accompany a response are treated when the response is
+  * reduced to its data: the react-apollo `errorPolicy`.
   *
   * Like [[kyo.apollo.cache.normalized.FetchPolicy]], an `ErrorPolicy` is an
   * [[ExecutionContext.Element]] keyed by its own companion, so it rides the
-  * per-request context bag: `ApolloCall.errorPolicy(p)` attaches it and the
-  * `.data` effect reads it back with `context.get(ErrorPolicy)`. When none is
-  * attached, [[ErrorPolicy.Default]] (`None`) applies.
+  * per-request context bag: `ApolloCall.errorPolicy(p)` attaches it and a consumer
+  * reads it back with `context.get(ErrorPolicy)`. When none is attached,
+  * [[ErrorPolicy.Default]] (`None`) applies.
   *
-  * It affects ONLY `.data` (the strict, `Abort`-raising path). `.response` always
-  * returns the full [[kyo.apollo.network.ApolloResponse]] — `data`, `errors`, and
-  * `exception` as values — regardless of policy, so it needs no `errorPolicy`.
+  * This module does not reduce responses itself. `ApolloCall.stream`, `execute` and
+  * `watch()` always return the full [[kyo.apollo.network.ApolloResponse]] with
+  * `data`, `errors` and `exception` as values, whatever the policy. The policy is
+  * for a layer on top that turns a response into either its data or a failure, such
+  * as kyo-apollo-ui's `call.data`:
   *
-  *   - `None`   — a response carrying GraphQL `errors` raises them on `Abort`
-  *                (the strict default; no data is returned).
-  *   - `Ignore` — GraphQL `errors` are discarded: `.data` returns the `data` if
-  *                present (raising only on a transport error or absent data).
-  *   - `All`    — `.data` likewise returns the `data` if present; the errors are
-  *                still observable via `.response`. (For `.data`, which yields only
-  *                `D`, `All` behaves like `Ignore`; the distinction — *seeing* the
-  *                errors — is served by `.response`.)
+  *   - `None`: a response carrying GraphQL `errors` fails with them, and no data is
+  *     returned (the strict default).
+  *   - `Ignore`: GraphQL `errors` are discarded and the `data` is returned if
+  *     present.
+  *   - `All`: the `data` is returned if present, as under `Ignore`; the errors stay
+  *     visible on the full response.
   *
-  * A transport/parse `exception` always raises on `Abort`, under every policy.
+  * A transport or parse `exception` fails under every policy.
   */
 enum ErrorPolicy extends ExecutionContext.Element derives CanEqual:
     case None, Ignore, All
@@ -34,5 +34,5 @@ enum ErrorPolicy extends ExecutionContext.Element derives CanEqual:
 end ErrorPolicy
 
 object ErrorPolicy extends ExecutionContext.Key[ErrorPolicy]:
-    /** The policy applied when a call pins none — strict, like apollo-kotlin. */
+    /** The policy applied when a call pins none: strict, like apollo-kotlin. */
     val Default: ErrorPolicy = None
