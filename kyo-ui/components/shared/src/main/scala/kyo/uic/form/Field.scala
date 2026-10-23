@@ -7,6 +7,7 @@ import kyo.uic.FileFormControl
 import kyo.uic.FormControl
 import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
+import kyo.uic.OptionalFormControl
 import kyo.uic.TextFormControl
 import scala.annotation.targetName
 
@@ -310,22 +311,13 @@ end FormField
   */
 final private[form] case class ServerError[A](err: FieldError, value: A) derives CanEqual
 
-/** Postfix binding: `uic.Input()...bind(field)` returns the same concrete control
-  * type (`C` is inferred from the receiver, so no type ascription is needed). The
-  * extension is split by control family — a `String` field binds to a text control,
-  * a `Boolean` field to a checkbox/switch — because only the value binding and the
-  * blur trigger are value-typed; everything gated stays shared on [[FormField]].
-  */
-/** The `String`-control binding, as a named helper so a wrapping control ([[DateField]]'s
-  * `DatePicker`) can reuse it without the `bind` name colliding with its own extension.
-  */
-/** Stamps the field's id onto the control — and notices when that displaces one the caller
+/** Stamps the field's id onto the control, and notices when that displaces one the caller
   * had already set.
   *
   * The slot belongs to the form: `focusFirstInvalid` and the error summary both address the
   * field through `Commands.focusId(domId)`, so a control answering to something else is a
-  * field they cannot reach. That used to happen in silence. It cannot be refused here — `bind`
-  * is a pure `C => C` — so the fact is recorded on the field and the form reports it at mount.
+  * field they cannot reach. That used to happen in silence. It cannot be refused here (`bind`
+  * is a pure `C => C`), so the fact is recorded on the field and the form reports it at mount.
   * The way to choose an id is `form.field(...).domId(...)`, which settles it before anything
   * reads it.
   */
@@ -333,28 +325,26 @@ private def stampId[C <: FormControl { type Self <: C }](control: C, field: Form
     control.elementId.foreach(field.noteIdConflict)
     control.id(field.domId)
 
-private[form] def wireText[C <: TextFormControl { type Self <: C }](control: C, field: FormField[String])(using Frame): C =
-    var b: C = stampId(control.value(field.valueRef), field)
-    b = b.invalidMessage(field.message)
-    if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
-    b
-end wireText
-
-private[form] def wireTextControlOnly[C <: TextFormControl { type Self <: C }](control: C, field: FormField[String])(using Frame): C =
-    var b: C = stampId(control.value(field.valueRef), field)
-    b = b.invalid(field.visibleError.map(_.isDefined))
-    if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
-    b
-end wireTextControlOnly
-
+/** Postfix binding: `uic.Input()...bind(field)` returns the same concrete control
+  * type (`C` is inferred from the receiver, so no type ascription is needed). The
+  * extension is split by control family (a `String` field binds to a text control,
+  * a `Boolean` field to a checkbox or switch) because only the value binding and the
+  * blur trigger are value-typed; everything gated stays shared on [[FormField]].
+  */
 extension [C <: TextFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[String])(using Frame): C            = wireText(control, field)
-    def bindControlOnly(field: FormField[String])(using Frame): C = wireTextControlOnly(control, field)
-    // Typed date façade (`uic.DatePicker().bind(dateField)`): binds the underlying String
-    // field, so it reuses the reactive value + gated message + Blur path. Co-located as an
-    // overload in THIS clause — overloaded extension `bind`s must share one receiver group.
-    def bind(field: DateField[?])(using Frame): C            = wireText(control, field.underlying)
-    def bindControlOnly(field: DateField[?])(using Frame): C = wireTextControlOnly(control, field.underlying)
+    def bind(field: FormField[String])(using Frame): C =
+        var b: C = stampId(control.value(field.valueRef), field)
+        b = b.invalidMessage(field.message)
+        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b
+    end bind
+
+    def bindControlOnly(field: FormField[String])(using Frame): C =
+        var b: C = stampId(control.value(field.valueRef), field)
+        b = b.invalid(field.visibleError.map(_.isDefined))
+        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b
+    end bindControlOnly
 end extension
 
 extension [C <: BooleanFormControl { type Self <: C }](control: C)
@@ -468,6 +458,28 @@ extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
         if field.wantsBlur then b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent))
+        b
+    end bindControlOnly
+end extension
+
+/** The binding of a control holding an optional typed value ([[kyo.uic.DatePicker]]): the field's value type is `Maybe[A]`,
+  * the control reads and writes the field's own ref, and the blur trigger validates what the field holds, which is what the
+  * control was just showing.
+  */
+extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
+    @targetName("bindOptional")
+    def bind(field: FormField[Maybe[A]])(using Frame): C =
+        var b: C = stampId(control.value(field.valueRef), field)
+        b = b.invalidMessage(field.message)
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b
+    end bind
+
+    @targetName("bindControlOnlyOptional")
+    def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
+        var b: C = stampId(control.value(field.valueRef), field)
+        b = b.invalid(field.visibleError.map(_.isDefined))
+        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
         b
     end bindControlOnly
 end extension
