@@ -7,10 +7,11 @@ import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.network.http.HttpEngine
 
-/** `Apollo.fragment(ref)` — the masked `useFragment`: seeds from the cache the
+/** `Apollo.fragment(ref)`, the masked `useFragment`: seeds from the cache the
   * network response was normalized into, re-emits when a targeted write touches
   * the entity, holds its record while it lives, and stays total (the ref's own
-  * slice covers a cache-less read and a type the store gives no identity).
+  * slice covers a cache-less read and a type the store gives no identity). Also
+  * `Apollo.fragment(fragment, key)`, the unmasked read of one record.
   */
 class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
 
@@ -66,6 +67,18 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
 
     private def client(body: String): ApolloClient < (Sync & Scope) =
         ApolloClient.init(identified.httpEngine(StaticEngine(body)))
+
+    /** A client over `cache` that keys a country by its `code`. */
+    private def trapped(cache: NormalizedCache): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config(serverUrl)
+                .normalizedCache(cache, CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
+                .httpEngine(StaticEngine(germanyBody))
+        )
+
+    /** Rename the country under `key` with a targeted store write. */
+    private def rename(c: ApolloClient, key: CacheKey, name: String)(using Frame): Unit < Sync =
+        c.apolloStore.writeFragment(CountryCard.fields.cacheFragment, key, (name = name)).unit
 
     private val germanyBody =
         """{"data":{"country":{"__typename":"Country","code":"DE","name":"Germany"}}}"""
@@ -139,6 +152,25 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                 assert(current == (name = "Germany"))
         }
 
+        "sees a write that lands between its first read and its subscription to the store" in {
+            // The write runs on the reading fiber right after the first read loaded
+            // `Country:DE`, before the signal exists. A signal that subscribes only after
+            // that read would show Germany until some later write touched the record.
+            val cache = TrapCache(MemoryCache())
+            for
+                c    <- trapped(cache)
+                data <- c.query(countryQuery).data
+                ref = data.country.countryCard
+                key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
+                _   <- cache.arm(key)(rename(c, key, "Deutschland"))
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragment(ref)
+                current <- sig.current
+            yield assert(current == (name = "Deutschland"), s"the write during the first read was lost: $current")
+            end for
+        }
+
         "stays total for a type the store gives no identity: the ref's own slice seeds the signal" in {
             for
                 // The default generator keys objects by `id`, which a country does not have.
@@ -151,6 +183,46 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                     Apollo.fragment(data.country.countryCard)
                 current <- sig.current
             yield assert(current == (name = "Germany"))
+        }
+    }
+
+    "Apollo.fragment(fragment, key)" - {
+
+        "sees a write that lands between its first read and its subscription to the store" in {
+            val cache = TrapCache(MemoryCache())
+            for
+                c    <- trapped(cache)
+                data <- c.query(countryQuery).data
+                ref = data.country.countryCard
+                key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
+                _   <- cache.arm(key)(rename(c, key, "Deutschland"))
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragment(CountryCard.fields.cacheFragment, key)
+                current <- sig.current
+            yield assert(current == Present((name = "Deutschland")), s"the write during the first read was lost: $current")
+            end for
+        }
+
+        "follows the record, and blanks while it is gone" in {
+            for
+                c    <- client(germanyBody)
+                data <- c.query(countryQuery).data
+                ref = data.country.countryCard
+                key <- c.apolloStore.keyOf(ref.typeName, ref.raw)
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragment(CountryCard.fields.cacheFragment, key)
+                first   <- sig.current
+                _       <- rename(c, key, "Deutschland")
+                renamed <- awaitSignal(sig)(_ == Present((name = "Deutschland")))
+                _       <- c.apolloStore.evict(key)
+                gone    <- awaitSignal(sig)(_ == Absent)
+            yield
+                assert(first == Present((name = "Germany")))
+                assert(renamed == Present((name = "Deutschland")))
+                assert(gone == Absent)
+            end for
         }
     }
 end MaskedFragmentSignalSpec

@@ -8,6 +8,7 @@ import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.network.http.HttpEngine
 
@@ -133,3 +134,33 @@ object CountryFixture:
                 .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
         )
 end CountryFixture
+
+/** A cache whose read can be armed once: the first read that loads `key` after arming
+  * completes normally and THEN runs `write`, before the read returns to the store. The
+  * write lands on the reading fiber, between a read and whatever its reader does next,
+  * so a reader that subscribes to the store only after its first read never hears of it.
+  * Single threaded and without a block, so every platform hits the window the same way.
+  */
+final class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+    private given AllowUnsafe = AllowUnsafe.embrace.danger
+    private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, Unit < Sync)])
+
+    def arm(key: CacheKey)(write: => Unit < Sync)(using Frame): Unit < Sync =
+        Sync.defer(discard(trap.getAndSet(Present((key, Sync.defer(write))))))
+
+    override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+        val loadedArmed = AtomicBoolean.Unsafe.init(false)
+        delegate.read { loader =>
+            f { keys =>
+                if trap.get().exists((armed, _) => keys.contains(armed)) then loadedArmed.set(true)
+                loader.load(keys)
+            }
+        }.map { result =>
+            trap.get() match
+                case Present((_, write)) if loadedArmed.get() =>
+                    discard(trap.getAndSet(Absent))
+                    write.andThen(result)
+                case _ => result
+        }
+    end read
+end TrapCache
