@@ -58,14 +58,16 @@ import scala.collection.immutable.VectorMap
   * timer and are ignored once that timer is no longer part of the phase.
   *
   * '''Backpressure.''' Each subscription has a channel of
-  * [[subscriptionBufferSize]] responses, and its stream hands the consumer at
-  * most that many responses per chunk. The owner delivers into it and waits
-  * while it is full; the socket drain holds one credit per frame and hands over
-  * the next frame only once the owner has processed the previous one, so a
-  * consumer that does not keep up stops the socket read instead of growing a
-  * buffer. One socket carries every subscription, so a full subscriber holds the
-  * others back too. Once [[close]] has begun, a delivery into a full channel is
-  * dropped instead of waited for.
+  * [[subscriptionBufferSize]] responses, rounded up to the next power of two
+  * (300 holds 512), and its stream hands the consumer at most
+  * [[subscriptionBufferSize]] responses per chunk. The owner delivers into the
+  * channel and waits while it is full; the transport's drain holds one credit
+  * per frame and hands over the next frame only once the owner has processed the
+  * previous one. A consumer that does not keep up therefore stops the transport
+  * from processing frames for every subscription on the socket, but the engine
+  * keeps reading the socket and buffers the incoming frames in memory without a
+  * bound (a browser `WebSocket` cannot pause reading at all). Once [[close]] has
+  * begun, a delivery into a full channel is dropped instead of waited for.
   *
   * '''Failures are values''': a socket drop or terminal server close surfaces as
   * `ApolloResponse.error` (an [[ApolloWebSocketClosedException]]) pushed to
@@ -96,7 +98,8 @@ import scala.collection.immutable.VectorMap
   * @param backoff                the delays before successive reconnection attempts;
   *                               defaults to 1s, doubling, each capped at 30s
   * @param subscriptionBufferSize how many responses a subscription buffers before
-  *                               its consumer's pace holds the socket read back
+  *                               its consumer's pace holds back frame processing on
+  *                               the socket, rounded up to the next power of two
   */
 final class WebSocketNetworkTransport private[apollo] (
     serverUrl: String,
@@ -135,7 +138,8 @@ final class WebSocketNetworkTransport private[apollo] (
     /** A cold [[ResponseStream]] for `request`'s subscription. Consuming it (within
       * an `Async & Scope` context) registers the operation on the shared socket:
       * server frames are decoded and delivered into a per-subscription channel of
-      * [[subscriptionBufferSize]] responses that drives the stream, and the
+      * [[subscriptionBufferSize]] responses (rounded up to the next power of two)
+      * that drives the stream, and the
       * enclosing `Scope`'s teardown sends the protocol stop for this operation and
       * closes the channel. On a closed transport the stream is one response whose
       * error is an [[ApolloWebSocketClosedException]].
@@ -708,7 +712,9 @@ object WebSocketNetworkTransport:
     /** The default reconnection delays: 1s, doubling, each capped at 30s, without end. */
     val defaultBackoff: Schedule = Schedule.exponentialBackoff(1.second, 2.0, 30.seconds)
 
-    /** The default number of responses a subscription buffers for its consumer. */
+    /** The default number of responses a subscription buffers for its consumer (a
+      * power of two, so the channel holds exactly this many).
+      */
     val defaultSubscriptionBufferSize: Int = 256
 
     /** Create a transport owned by the enclosing `Scope`: its owner fiber is forked in

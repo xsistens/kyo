@@ -297,7 +297,8 @@ object ApolloClient:
       * @param webSocketConnectTimeout    how long the default socket engine may take to
       *                                   open a socket (ignored with an injected engine)
       * @param subscriptionBufferSize     how many responses a subscription buffers before
-      *                                   its consumer's pace holds the socket read back
+      *                                   its consumer's pace holds back frame processing
+      *                                   on the socket, rounded up to the next power of two
       */
     final case class Config(
         serverUrl: String,
@@ -382,7 +383,9 @@ object ApolloClient:
         /** How long the default socket engine may take to open a socket. */
         def webSocketConnectTimeout(timeout: Duration): Config = copy(webSocketConnectTimeout = timeout)
 
-        /** How many responses a subscription buffers before its consumer's pace holds the socket read back. */
+        /** How many responses a subscription buffers before its consumer's pace holds back frame processing on the
+          * socket, rounded up to the next power of two.
+          */
         def subscriptionBufferSize(size: Int): Config = copy(subscriptionBufferSize = size)
     end Config
 
