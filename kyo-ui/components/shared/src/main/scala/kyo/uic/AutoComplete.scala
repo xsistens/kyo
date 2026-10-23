@@ -94,11 +94,11 @@ final case class AutoComplete[A] private (
     private[uic] def elementId: Maybe[String] = idV
 
     /** Appends typed options with their text projection. */
-    def options(is: Seq[A])(label: A => String): AutoComplete[A] =
+    def options(is: Iterable[A])(label: A => String): AutoComplete[A] =
         copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)
 
     /** Convenience for plain string options (label = identity). */
-    def options(is: Seq[String])(using ev: String =:= A): AutoComplete[A] =
+    def options(is: Iterable[String])(using ev: String =:= A): AutoComplete[A] =
         copy(optionsV = optionsV ++ is.map(a => OptionItem.Item(ev(a))), labelF = a => ev.flip(a))
 
     /** Appends grouped suggestions: [[OptionItem.group]] rows render their
@@ -108,7 +108,7 @@ final case class AutoComplete[A] private (
       * erase to the same signature. Grouping changes the panel only, and a query
       * that empties a group removes its header with it.
       */
-    def optionGroups(is: Seq[OptionItem[A]])(label: A => String): AutoComplete[A] =
+    def optionGroups(is: Iterable[OptionItem[A]])(label: A => String): AutoComplete[A] =
         copy(optionsV = optionsV ++ is.toList, labelF = label)
 
     /** Stable per-option key (defaults to the label projection). */

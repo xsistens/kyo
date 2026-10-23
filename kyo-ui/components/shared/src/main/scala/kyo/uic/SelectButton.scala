@@ -63,11 +63,11 @@ final case class SelectButton[A] private (
     private[uic] def elementId: Maybe[String] = idV
 
     /** Appends typed options with their text projection. */
-    def options(is: Seq[A])(label: A => String): SelectButton[A] =
+    def options(is: Iterable[A])(label: A => String): SelectButton[A] =
         copy(items = items ++ is.toList, labelF = label)
 
     /** Convenience for plain string options (label = identity). */
-    def options(is: Seq[String])(using ev: String =:= A): SelectButton[A] =
+    def options(is: Iterable[String])(using ev: String =:= A): SelectButton[A] =
         copy(items = items ++ is.map(ev).toList, labelF = a => ev.flip(a))
 
     /** Stable per-option key: the value written into the bound ref(s); defaults
@@ -88,8 +88,8 @@ final case class SelectButton[A] private (
       * `Present(b)` for each value, labelled `label(b)`. An [[itemTemplate]] sees the none option too. Only a group whose
       * options are `Maybe[B]` takes it.
       */
-    def optionsWithNone[B](none: String, is: Seq[B])(label: B => String)(using ev: Maybe[B] =:= A): SelectButton[A] =
-        val all: Seq[Maybe[B]] = (Absent: Maybe[B]) +: is.map(b => Present(b): Maybe[B])
+    def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): SelectButton[A] =
+        val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
         copy(items = items ++ all.map(ev).toList, labelF = a => ev.flip(a).fold(none)(label))
     end optionsWithNone
 
@@ -388,10 +388,10 @@ final case class MultiSelectButton[A] private[uic] (private[uic] val group: Sele
     private def on(g: SelectButton[A]): MultiSelectButton[A] = copy(group = g)
 
     /** Appends typed options with their text projection, as [[SelectButton.options]]. */
-    def options(is: Seq[A])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))
+    def options(is: Iterable[A])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))
 
     /** Convenience for plain string options (label = identity). */
-    def options(is: Seq[String])(using ev: String =:= A): MultiSelectButton[A] = on(group.options(is))
+    def options(is: Iterable[String])(using ev: String =:= A): MultiSelectButton[A] = on(group.options(is))
 
     /** Stable per-option key, what options are matched by; defaults to the label projection. */
     def optionKey(f: A => String): MultiSelectButton[A] = on(group.optionKey(f))

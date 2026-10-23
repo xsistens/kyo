@@ -681,7 +681,7 @@ val handRolled: UI < Async =
 
 ## Choosing from options
 
-Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the option itself, never as a key standing in for it: `selection(ref)` takes a `SignalRef[Maybe[A]]` for a choice that may stay empty under its placeholder, or a `SignalRef[A]` for one that always holds an option (a single-choice picker also takes a read-only `Signal`, below). Keys stay inside the component, where the panel, the keyboard and a hidden `<input name>` compare them. `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
+Every picker shares one typed shape: any `Iterable[A]` of options (an enum's `values` array or a `Set` passes as it is), a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the option itself, never as a key standing in for it: `selection(ref)` takes a `SignalRef[Maybe[A]]` for a choice that may stay empty under its placeholder, or a `SignalRef[A]` for one that always holds an option (a single-choice picker also takes a read-only `Signal`, below). Keys stay inside the component, where the panel, the keyboard and a hidden `<input name>` compare them. `TreeSelect` takes the same shape plus one projection more, `children: A => Iterable[A]`, which is the whole difference between a tree-shaped picker and a flat one.
 
 ```scala
 val categoryPicker: UI < Async =
@@ -711,7 +711,7 @@ val viewControls: UI < Async =
         order    <- Signal.initRef(SortBy.Rank)
         category <- Signal.initRef(Maybe.empty[Category])
     yield div(
-        uic.Select[SortBy]().options(SortBy.values.toSeq)(_.toString).selection(order),
+        uic.Select[SortBy]().options(SortBy.values)(_.toString).selection(order),
         uic.Select[Maybe[Category]]()
             .optionsWithNone("All categories", categories)(_.label)
             .optionKey(_.fold("all")(_.id))
@@ -736,7 +736,7 @@ final class Router(current: SignalRef[Page]):
 
 def pageSwitcher(router: Router): UI =
     uic.Select[Page]()
-        .options(Page.values.toSeq)(_.toString)
+        .options(Page.values)(_.toString)
         .selection(router.page)
         .onPick(p => router.navigate(p))
 ```
@@ -1084,7 +1084,7 @@ val compact: UI < Async =
 
 A `DataTable` reaches the same setters through `paginator(f)`, a function over the paginator it renders below its rows. Prime mirrors a handful of the paginator's props onto the table and a caller reaching for one it did not mirror has nowhere to go; here the paginator is a value, so one name covers all of them. The four the table owns are applied after `f` and cannot be overridden from there: the record count, the page size, the current page and the ref it writes to, since a paginator disagreeing with the rows above it would page a list nobody is looking at.
 
-`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[K])` keys each step by a value of the app's own type and survives steps being inserted or reordered. A step without a value is reachable through `active` only.
+`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[K])` keys each step by a value of the app's own type and survives steps being inserted or reordered. A step without a value is reachable through `active` only. `K` is the type of the step values and never needs spelling out: `uic.Stepper()` takes it from `value(ref)` or a step's `value`, and a stepper driven by `active` alone is a `Stepper[Nothing]`, which admits no step value at all.
 
 ```scala
 enum Phase derives CanEqual:
@@ -1092,7 +1092,7 @@ enum Phase derives CanEqual:
 
 val wizard: UI < Async =
     for step <- Signal.initRef(Phase.Details)
-    yield uic.Stepper[Phase]()
+    yield uic.Stepper()
         .value(step)
         .linear(true)
         .step("Details", value = Present(Phase.Details))(p("Step 1"))

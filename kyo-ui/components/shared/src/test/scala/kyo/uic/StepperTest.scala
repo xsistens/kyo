@@ -14,8 +14,9 @@ class StepperTest extends UicTest:
 
     private val ids = List("s0", "s1", "s2")
 
+    // Driven by position alone, so no type argument: see [[Stepper.apply]].
     private def steps(using Frame) =
-        uic.Stepper[String]()
+        uic.Stepper()
             .step("One")(p("first"))
             .step("Two")(p("second"))
             .step("Three")(p("third"))
@@ -78,6 +79,33 @@ class StepperTest extends UicTest:
             _       <- press(headers(0), UI.Keyboard.ArrowRight)
             to      <- moved.get
         yield assert(to == Absent)
+    }
+
+    "a stepper needs no type argument: K comes from the values, and is Nothing without any" in {
+        val pre = "import kyo.*\nimport kyo.UI.*\nimport kyo.uic\n"
+        typeCheck(pre + "def x(r: SignalRef[Int])(using Frame): uic.Stepper[Nothing] = uic.Stepper().active(r).step(\"One\")(p(\"a\"))")
+        typeCheck(
+            pre +
+                "def x(r: SignalRef[String])(using Frame): uic.Stepper[String] = uic.Stepper().value(r).step(\"One\", value = Present(\"one\"))(p(\"a\"))"
+        )
+        // Once settled at Nothing, a value has nowhere to go.
+        typeCheckFailure(
+            pre +
+                "def x(r: SignalRef[Int])(using Frame) =\n  val s = uic.Stepper().active(r).step(\"One\")(p(\"a\"))\n  s.step(\"Two\", value = Present(\"two\"))(p(\"b\"))"
+        )
+        // And a value of another type than the bound one does not compile either.
+        typeCheckFailure(pre +
+            "def x(r: SignalRef[String])(using Frame) = uic.Stepper().value(r).step(\"One\", value = Present(1))(p(\"a\"))")
+    }
+
+    "and a header click moves it by position" in {
+        for
+            active <- Signal.initRef(0)
+            ui = steps.active(active).wired(ids, _ => ())
+            headers <- elementsWithClass(ui, "p-step-header")
+            _       <- click(headers(2))
+            now     <- active.get
+        yield assert(now == 2)
     }
 
 end StepperTest

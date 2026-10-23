@@ -37,7 +37,7 @@ sealed abstract class NumberField[A] private[form] (
     /** True once the field has been entered and left (first blur/commit). */
     def touched: Signal[Boolean] = underlying.touched
 
-    /** True while an async validator is in flight. */
+    /** True while an async validator is in flight; drive a spinner off this. */
     def validating: Signal[Boolean] = underlying.validating
 
     /** Set/replace a server error (value-scoped, delegated to the underlying field). */
