@@ -14,7 +14,7 @@ class OrderListTest extends UicTest:
         for
             xs  <- Signal.initRef(items)
             sel <- Signal.initRef(selected)
-            ui = uic.OrderList[String]().items(xs)(identity).selected(sel).render
+            ui = uic.OrderList[String]().items(xs)(identity).selection(sel).render
         yield (xs, sel, ui)
 
     private def button(ui: UI, name: String)(using Frame): UI.Ast.Button < Sync =
@@ -56,7 +56,7 @@ class OrderListTest extends UicTest:
             xs  <- Signal.initRef(items)
             sel <- Signal.initRef(selected)
             hi  <- Signal.initRef(-1)
-            ui = uic.OrderList[String]().items(xs)(identity).selected(sel)
+            ui = uic.OrderList[String]().items(xs)(identity).selection(sel)
                 .wired(Present(uic.ListReorder.Cursor(hi, "o")))
         yield (xs, ui)
 

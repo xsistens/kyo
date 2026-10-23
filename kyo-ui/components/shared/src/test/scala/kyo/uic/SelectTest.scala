@@ -31,14 +31,14 @@ class SelectTest extends UicTest:
     private def keyboardHost(ui: UI, filter: Boolean)(using Frame): UI.Ast.Element < Sync =
         elementWithClass(ui, if filter then "p-select-filter" else "p-select")
 
-    private def panel(from: Int, filter: Boolean)(using Frame): (SignalRef[Int], SignalRef[String], UI) < Async =
+    private def panel(from: Int, filter: Boolean)(using Frame): (SignalRef[Int], SignalRef[Maybe[Fruit]], UI) < Async =
         for
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(from)
             query <- Signal.initRef("")
-            value <- Signal.initRef("")
+            value <- Signal.initRef(Maybe.empty[Fruit])
             base = if filter then select.filterable(true) else select
-        yield (hi, value, base.value(value).wired(open, hi, query, Present("sel")))
+        yield (hi, value, base.selection(value).wired(open, hi, query, Present("sel")))
 
     /** Opens the panel with the highlight at `from`, presses `key`, and reports where it landed. */
     private def after(from: Int, key: UI.Keyboard, filter: Boolean = false)(using Frame): Int < Async =
@@ -57,8 +57,8 @@ class SelectTest extends UicTest:
             open  <- Signal.initRef(false)
             hi    <- Signal.initRef(-1)
             query <- Signal.initRef("")
-            ref   <- Signal.initRef(value)
-            ui = select.value(ref).wired(open, hi, query, Present("sel"))
+            ref   <- Signal.initRef(Maybe.fromOption(fruit.find(_.id == value)))
+            ui = select.selection(ref).wired(open, hi, query, Present("sel"))
             trigger <- elementWithClass(ui, "p-select")
             _       <- press(trigger, key)
             isOpen  <- open.get
@@ -73,9 +73,9 @@ class SelectTest extends UicTest:
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(1)
             query <- Signal.initRef("")
-            value <- Signal.initRef("")
+            value <- Signal.initRef(Maybe.empty[Fruit])
             base = if filter then select.filterable(true) else select
-            ui   = base.value(value).wired(open, hi, query, Present("sel"))
+            ui   = base.selection(value).wired(open, hi, query, Present("sel"))
             host  <- keyboardHost(ui, filter)
             _     <- press(host, key, mods)
             still <- open.get
@@ -121,11 +121,11 @@ class SelectTest extends UicTest:
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(2)
             query <- Signal.initRef("")
-            value <- Signal.initRef("")
-            ui = select.value(value).wired(open, hi, query, Present("sel"))
+            value <- Signal.initRef(Maybe.empty[Fruit])
+            ui = select.selection(value).wired(open, hi, query, Present("sel"))
             trigger <- elementWithClass(ui, "p-select")
             _       <- press(trigger, UI.Keyboard.Enter)
-            got     <- value.get
+            got     <- value.get.map(_.fold("")(_.id))
             still   <- open.get
         yield assert(got == "c" && !still, "it picks and closes")
     }
@@ -135,7 +135,7 @@ class SelectTest extends UicTest:
             (_, value, ui) <- panel(2, filter = false)
             trigger        <- elementWithClass(ui, "p-select")
             _              <- press(trigger, UI.Keyboard.Space)
-            got            <- value.get
+            got            <- value.get.map(_.fold("")(_.id))
         yield assert(got == "c")
     }
 
@@ -144,7 +144,7 @@ class SelectTest extends UicTest:
             (_, value, ui) <- panel(2, filter = true)
             host           <- keyboardHost(ui, filter = true)
             _              <- press(host, UI.Keyboard.Space)
-            got            <- value.get
+            got            <- value.get.map(_.fold("")(_.id))
         yield assert(got.isEmpty)
     }
 
@@ -153,8 +153,8 @@ class SelectTest extends UicTest:
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(2)
             query <- Signal.initRef("")
-            value <- Signal.initRef("")
-            ui = select.value(value).wired(open, hi, query, Present("sel"))
+            value <- Signal.initRef(Maybe.empty[Fruit])
+            ui = select.selection(value).wired(open, hi, query, Present("sel"))
             trigger <- elementWithClass(ui, "p-select")
             _       <- press(trigger, UI.Keyboard.Escape)
             still   <- open.get
@@ -242,11 +242,11 @@ class SelectTest extends UicTest:
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(0)
             query <- Signal.initRef("")
-            value <- Signal.initRef("")
-            ui = select.value(value).onChange(_ => Abort.fail("rejected")).wired(open, hi, query, Present("sel"))
+            value <- Signal.initRef(Maybe.empty[Fruit])
+            ui = select.selection(value).onChange(_ => Abort.fail("rejected")).wired(open, hi, query, Present("sel"))
             host   <- keyboardHost(ui, filter = false)
             _      <- press(host, UI.Keyboard.Enter)
-            picked <- value.get
+            picked <- value.get.map(_.fold("")(_.id))
             still  <- open.get
         yield assert(picked == "a" && !still, s"the select finished its own work; value=$picked open=$still")
     }
@@ -315,14 +315,20 @@ class SelectTest extends UicTest:
         given CanEqual[Plain, Plain] = CanEqual.derived
         val plain                    = List(Plain("a", "Apple"), Plain("c", "Cherry"))
         for
-            ref <- Signal.initRef(Plain("c", "a copy of Cherry"))
-            ui  <- opened(uic.Select[Plain]().options(plain)(_.name).optionKey(_.id).selection(ref))
-            lbl <- elementWithClass(ui, "p-select-label")
-            rs  <- rows(ui)
-            _   <- click(rs(1))
-            got <- ref.get
+            ref  <- Signal.initRef(Plain("c", "a copy of Cherry"))
+            ui   <- opened(uic.Select[Plain]().options(plain)(_.name).optionKey(_.id).selection(ref))
+            lbl  <- elementWithClass(ui, "p-select-label")
+            rs   <- rows(ui)
+            card <- elementsWithClass(ui, "p-uic-key-error")
+            _    <- click(rs(1))
+            got  <- ref.get
         yield
-            assert(textOf(lbl) == "Cherry")
+            assert(
+                rs.map(_.attrs.cssClasses.contains("p-select-option-selected")) == Chunk(false, true),
+                "the row keyed c is the chosen one"
+            )
+            assert(card.isEmpty, "so the held value is not reported as unknown")
+            assert(textOf(lbl) == "Cherry", "the trigger shows the option the value matches")
             assert(got.name == "a copy of Cherry", "picking the row already chosen keeps the value the app holds")
         end for
     }
@@ -346,23 +352,64 @@ class SelectTest extends UicTest:
         )
     }
 
-    "the binding set last wins, whether it is a key or the option" in {
+    "there is no key binding beside the option, so a key no option carries cannot be bound" in {
+        typeCheckFailure(
+            "import kyo.*\nimport kyo.uic\ndef x(r: SignalRef[String]) = uic.Select[String]().options(Seq(\"a\")).value(r)"
+        )
+    }
+
+    "onChange reports the option written, and a pick of the one already chosen fires nothing" in {
         for
-            keys  <- Signal.initRef("")
-            typed <- Signal.initRef(fruit(0))
-            ui    <- opened(select.selection(typed).value(keys))
-            rs    <- rows(ui)
-            _     <- click(rs(2))
-            k     <- keys.get
-            t     <- typed.get
-            ui2   <- opened(select.value(keys).selection(typed))
-            rs2   <- rows(ui2)
-            _     <- click(rs2(3))
-            k2    <- keys.get
-            t2    <- typed.get
+            ref  <- Signal.initRef(Maybe(fruit(0)))
+            seen <- Signal.initRef(List.empty[Maybe[String]])
+            ui   <- opened(select.selection(ref).onChange(m => seen.updateAndGet(_ :+ m.map(_.id)).unit))
+            rs   <- rows(ui)
+            _    <- click(rs(0))
+            _    <- click(rs(2))
+            got  <- seen.get
+        yield assert(got == List(Present("c")))
+    }
+
+    "a held option no row carries is named in a card, and shown from the value itself" in {
+        val gone = Fruit("z", "Zucchini", false)
+        for
+            ref  <- Signal.initRef(Maybe(gone))
+            ui   <- opened(select.selection(ref))
+            lbl  <- elementWithClass(ui, "p-select-label")
+            card <- elementWithClass(ui, "p-uic-key-error")
         yield
-            assert(k == "c" && t == fruit(0))
-            assert(k2 == "c" && t2 == fruit(3))
+            assert(textOf(lbl) == "Zucchini")
+            assert(textOf(card).contains("Zucchini"))
+        end for
+    }
+
+    "while loading the same option is not reported, and the spinner stands in for the chevron" in {
+        val gone = Fruit("z", "Zucchini", false)
+        for
+            ref     <- Signal.initRef(Maybe(gone))
+            ui      <- opened(select.loading(true).selection(ref))
+            cards   <- elementsWithClass(ui, "p-uic-key-error")
+            spinner <- elementsWithClass(ui, "p-select-loading-icon")
+            root    <- elementWithClass(ui, "p-select")
+        yield
+            assert(cards.isEmpty)
+            assert(spinner.size == 1)
+            assert(root.attrs.ariaAttrs.get("busy").contains("true"))
+        end for
+    }
+
+    "a loading signal brings the card in once the load ends" in {
+        val gone = Fruit("z", "Zucchini", false)
+        for
+            ref     <- Signal.initRef(Maybe(gone))
+            loading <- Signal.initRef(true)
+            ui1     <- opened(select.loading(loading).selection(ref))
+            during  <- elementsWithClass(ui1, "p-uic-key-error")
+            _       <- loading.set(false)
+            ui2     <- opened(select.loading(loading).selection(ref))
+            after   <- elementsWithClass(ui2, "p-uic-key-error")
+        yield assert(during.isEmpty && after.size == 1)
+        end for
     }
 
     "itemTemplate draws each row and the chosen value, and the label stays their name" in {

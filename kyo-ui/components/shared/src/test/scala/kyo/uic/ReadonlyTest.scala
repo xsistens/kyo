@@ -75,8 +75,8 @@ class ReadonlyTest extends UicTest:
 
     "a readonly select keeps its tab stop and opens nothing" in {
         for
-            value <- Signal.initRef("")
-            ui = uic.Select[String]().options(Seq("a"))(identity).optionKey(identity).value(value).readonly(true).render
+            value <- Signal.initRef(Maybe.empty[String])
+            ui = uic.Select[String]().options(Seq("a"))(identity).optionKey(identity).selection(value).readonly(true).render
             field <- elementWithClass(ui, "p-select")
         yield
             assert(field.attrs.tabIndex.contains(0), "a readonly field is still one a reader can land on")

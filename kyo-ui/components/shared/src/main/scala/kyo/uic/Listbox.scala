@@ -4,15 +4,15 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** One option of a [[Listbox]] — a hand-authored carrier (not a `kyo.UI`): a
-  * `text` label, a stable `id` used as the selection key and the `onItemClick`
-  * payload, an optional leading `icon` glyph (kyo extension —
+/** One option of a [[Listbox]], a hand-authored carrier (not a `kyo.UI`): a
+  * `text` label, a stable `id` of the app's own type `K` that the selection holds
+  * and `onItemClick` reports, an optional leading `icon` glyph (kyo extension,
   * `.p-uic-option-icon`), an optional right-aligned `additionalText` (kyo
-  * extension — `.p-uic-option-extra`), and a native `tooltip` (title attribute).
+  * extension, `.p-uic-option-extra`), and a native `tooltip` (title attribute).
   */
-final case class ListItem(
+final case class ListItem[K](
     text: TextValue,
-    id: String,
+    id: K,
     icon: Maybe[IconGlyph] = Absent,
     additionalText: Maybe[String] = Absent,
     tooltip: Maybe[String] = Absent
@@ -25,64 +25,67 @@ object ListItem:
       * A distinct name (not an `apply` overload) because Scala 3 forbids two `apply` variants that both
       * carry default arguments.
       */
-    def of(
+    def of[K](
         text: String,
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         tooltip: Maybe[String] = Absent
-    ): ListItem = ListItem(TextValue.Const(text), id, icon, additionalText, tooltip)
+    ): ListItem[K] = ListItem(TextValue.Const(text), id, icon, additionalText, tooltip)
 end ListItem
 
 /** A Listbox option, built directly or as `_.item(...)` (see [[ListItemScope]]). */
-type ListItemEntry = Entry[ListItem, ListItemScope]
+type ListItemEntry[K] = Entry[ListItem[K], ListItemScope[K]]
 
 /** What `_` stands for in [[Listbox.items]] and inside a group of [[Listbox.optionGroups]]: `_.item("Paris", "par")`. The label
   * takes a `Signal[String]` too, as [[Listbox.item]] does.
   */
-final class ListItemScope private ():
+final class ListItemScope[K] private ():
     /** An option keyed by `id`, as [[ListItem.of]], with a constant or reactive label. */
     def item(
         text: String | Signal[String],
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         tooltip: Maybe[String] = Absent
-    ): ListItem = ListItem(ReactiveValue(text), id, icon, additionalText, tooltip)
+    ): ListItem[K] = ListItem(ReactiveValue(text), id, icon, additionalText, tooltip)
 end ListItemScope
 
 object ListItemScope:
-    private val scope = new ListItemScope
+    // The scope holds nothing of its own type, so one instance serves every `K`.
+    private val scope = new ListItemScope[Any]
 
-    private[uic] def resolve(entries: Seq[ListItemEntry]): List[ListItem] = Entry.resolve(scope, entries)
+    private[uic] def resolve[K](entries: Seq[ListItemEntry[K]]): List[ListItem[K]] =
+        Entry.resolve(scope.asInstanceOf[ListItemScope[K]], entries)
 end ListItemScope
 
 /** An option or a group of options, built directly or as `_.item(...)` or `_.group(...)(...)` (see [[ListOptionScope]]). */
-type ListOptionEntry = Entry[OptionItem[ListItem], ListOptionScope]
+type ListOptionEntry[K] = Entry[OptionItem[ListItem[K]], ListOptionScope[K]]
 
 /** What `_` stands for in [[Listbox.optionGroups]]: `_.item(...)` for an option beside the groups and `_.group("Europe")(...)` for a
   * labelled group, whose own entries are built the way [[Listbox.items]] builds them.
   */
-final class ListOptionScope private ():
+final class ListOptionScope[K] private ():
     /** An ungrouped option, as [[OptionItem.item]] over [[ListItemScope.item]]. */
     def item(
         text: String | Signal[String],
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         tooltip: Maybe[String] = Absent
-    ): OptionItem[ListItem] = OptionItem.Item(ListItem(ReactiveValue(text), id, icon, additionalText, tooltip))
+    ): OptionItem[ListItem[K]] = OptionItem.Item(ListItem(ReactiveValue(text), id, icon, additionalText, tooltip))
 
     /** A group labelled `label`, as [[OptionItem.group]]. */
-    def group(label: String)(items: ListItemEntry*): OptionItem[ListItem] =
+    def group(label: String)(items: ListItemEntry[K]*): OptionItem[ListItem[K]] =
         OptionItem.Group(label, ListItemScope.resolve(items))
 end ListOptionScope
 
 object ListOptionScope:
-    private val scope = new ListOptionScope
+    // As in [[ListItemScope]]: nothing in the scope depends on `K`.
+    private val scope = new ListOptionScope[Any]
 
-    private[uic] def resolve(entries: Seq[ListOptionEntry]): List[OptionItem[ListItem]] =
-        Entry.resolve(scope, entries)
+    private[uic] def resolve[K](entries: Seq[ListOptionEntry[K]]): List[OptionItem[ListItem[K]]] =
+        Entry.resolve(scope.asInstanceOf[ListOptionScope[K]], entries)
 end ListOptionScope
 
 /** Listbox — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -92,7 +95,7 @@ end ListOptionScope
   * `li.p-listbox-empty-message` when there is nothing to show), so the
   * extracted `@primeuix` listbox CSS applies verbatim.
   *
-  * Selection binds two-way to a `SignalRef[Set[String]]`: the list re-renders
+  * Selection binds two-way to a `SignalRef[Set[K]]` of item ids: the list re-renders
   * reactively so each row's `aria-selected` tracks the set, and clicking a row
   * (when a [[SelectionMode]] other than `None` is set) writes the updated set
   * back before firing `onItemClick`. `checkmark(true)` renders Prime's per-row
@@ -100,7 +103,9 @@ end ListOptionScope
   *
   * `optionGroups(...)` takes [[OptionItem]] rows instead of plain items,
   * rendering each group under a labelled header. Grouping is a list concern
-  * only: selection stays keyed by `id` across the whole listbox.
+  * only: selection stays keyed by `id` across the whole listbox. `K` is the app's
+  * own id type (`uic.Listbox[CityId]()`), so the set a page reads is never a set of
+  * strings standing in for its values.
   *
   * Keyboard (WAI-ARIA listbox, the shared [[ListNav]] machine): the list is ONE tab stop and
   * roves Prime's `.p-focus` highlight inside it, rather than making every option its own tab
@@ -125,15 +130,15 @@ end ListOptionScope
   * renders it over a query the app owns. Either way the options are filtered by
   * a case-insensitive contains at render time.
   */
-final case class Listbox private (
-    optionsV: List[OptionItem[ListItem]] = Nil,
+final case class Listbox[K] private (
+    optionsV: List[OptionItem[ListItem[K]]] = Nil,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    selectedRef: Maybe[SetBinding[K]] = Absent,
     filterQueryRef: Maybe[SignalRef[String]] = Absent,
     filterableFlag: Boolean = false,
-    onItemClickF: Maybe[String => UI.Action] = Absent,
-    templateF: Maybe[ListItem => UI] = Absent,
+    onItemClickF: Maybe[K => UI.Action] = Absent,
+    templateF: Maybe[ListItem[K] => UI] = Absent,
     checkmarkFlag: Boolean = false,
     disabledFlag: Boolean = false,
     invalidV: Maybe[BoolValue] = Absent,
@@ -142,14 +147,14 @@ final case class Listbox private (
     emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => UI.Action] = Absent,
+    onBlurF: Maybe[Set[K] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
-) extends Node, MultiSelectFormControl, HasEmptyContent, HasAccessibleNameRef:
-    type Self = Listbox
+) extends Node, MultiChoiceFormControl[K], HasEmptyContent, HasAccessibleNameRef:
+    type Self = Listbox[K]
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Listbox = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Listbox[K] = copy(idV = v)
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -161,16 +166,16 @@ final case class Listbox private (
       * `Absent` leaves the chord to the list and then to the browser, so a host cannot swallow the
       * navigation it is nested in.
       */
-    private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox = copy(hostKeyF = Present(f))
+    private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox[K] = copy(hostKeyF = Present(f))
 
     /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]). */
-    def items(is: ListItemEntry*): Listbox = copy(optionsV = optionsV ++ ListItemScope.resolve(is).map(OptionItem.Item(_)))
+    def items(is: ListItemEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListItemScope.resolve(is).map(OptionItem.Item(_)))
 
     /** Appends a single option (ergonomic builder — no need to construct [[ListItem]]). A
       * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
       * selection key either way, and `icon` keeps its default for both label shapes.
       */
-    def item(text: String | Signal[String], id: String, icon: Maybe[IconGlyph] = Absent): Listbox =
+    def item(text: String | Signal[String], id: K, icon: Maybe[IconGlyph] = Absent): Listbox[K] =
         copy(optionsV = optionsV :+ OptionItem.Item(ListItem(ReactiveValue(text), id, icon)))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their items
@@ -180,13 +185,13 @@ final case class Listbox private (
       * across the whole listbox, and the filter drops a group once it has
       * emptied it. Each entry is built directly or from `_` (see [[ListOptionScope]]).
       */
-    def optionGroups(is: ListOptionEntry*): Listbox = copy(optionsV = optionsV ++ ListOptionScope.resolve(is))
+    def optionGroups(is: ListOptionEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListOptionScope.resolve(is))
 
     /** Selection semantics: `None` (default — rows inert unless `onItemClick` is
       * set), `Single` (picking replaces the selection; re-picking clears it), or
       * `Multiple` (picking toggles the row in the set).
       */
-    def selectionMode(v: SelectionMode): Listbox = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): Listbox[K] = copy(selectionModeV = v)
 
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -198,14 +203,17 @@ final case class Listbox private (
       *
       * There is no shift-range here, matching Prime, which ranges on shift in `DataTable` only.
       */
-    def metaKeySelection(v: Boolean): Listbox = copy(metaKeyFlag = v)
+    def metaKeySelection(v: Boolean): Listbox[K] = copy(metaKeyFlag = v)
 
-    /** Binds selection two-way to `ref`: clicks update the set, ref changes re-render
-      * `aria-selected`. Spelled `value` like every other picker's bound selection — a
-      * Listbox is the always-visible member of that family, not a different concept.
+    /** Binds the selection two-way to the set of chosen item ids: clicks update the set, ref changes re-render
+      * `aria-selected`. Spelled `selection` like every other picker's bound choice: a Listbox is the always-visible
+      * member of that family, not a different concept.
       */
-    @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): Listbox = copy(selectedRef = Present(ref))
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[K]]): Listbox[K] = copy(selectedRef = Present(SetBinding.of(ref)))
+
+    /** Package-internal: an embedding host's typed selection, read and written through its own keys. */
+    private[uic] def selectionBinding(b: SetBinding[K]): Listbox[K] = copy(selectedRef = Present(b))
 
     /** Renders Prime's header filter input (`div.p-listbox-header` >
       * `input.p-listbox-filter.p-inputtext`) over a query the listbox allocates
@@ -213,45 +221,46 @@ final case class Listbox private (
       * [[Select.filterable]] and [[MultiSelect.filterable]]. Use [[filterQuery]]
       * when the app needs to read or write the query.
       */
-    def filterable(v: Boolean): Listbox = copy(filterableFlag = v)
+    def filterable(v: Boolean): Listbox[K] = copy(filterableFlag = v)
 
     /** Renders the same header filter, bound two-way to `ref`: typing writes the
       * query, external writes re-filter the options (a case-insensitive contains
       * on the label).
       */
-    def filterQuery(ref: SignalRef[String]): Listbox = copy(filterQueryRef = Present(ref))
+    def filterQuery(ref: SignalRef[String]): Listbox[K] = copy(filterQueryRef = Present(ref))
 
-    def onItemClick(f: String => UI.Action)(using Frame): Listbox = copy(onItemClickF = Present(Callback.of(f)))
+    /** Fired with the id of the row clicked or picked by key, after the selection write. */
+    def onItemClick(f: K => UI.Action)(using Frame): Listbox[K] = copy(onItemClickF = Present(Callback.of(f)))
 
     /** Custom option content (Prime's `#option` slot): renders instead of the plain
       * text label; the checkmark column and leading icon keep their places.
       */
-    def itemTemplate(f: ListItem => UI): Listbox = copy(templateF = Present(f))
+    def itemTemplate(f: ListItem[K] => UI): Listbox[K] = copy(templateF = Present(f))
 
     /** Renders Prime's option check-icon column: the check glyph on selected rows
       * (`.p-listbox-option-check-icon`), a blank placeholder on the rest.
       */
-    def checkmark(v: Boolean): Listbox = copy(checkmarkFlag = v)
+    def checkmark(v: Boolean): Listbox[K] = copy(checkmarkFlag = v)
 
     /** Disables the whole listbox (`.p-disabled`): rows keep their look but stop
       * responding to clicks.
       */
-    def disabled(v: Boolean): Listbox = copy(disabledFlag = v)
+    def disabled(v: Boolean): Listbox[K] = copy(disabledFlag = v)
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Listbox                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Listbox                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Listbox[K]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Listbox[K]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox[K] = copy(invalidMsgDynV = v)
 
     /** Fires on focus loss with the current selection — the validation layer's Blur
       * trigger.
       */
-    @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => UI.Action)(using Frame): Listbox = copy(onBlurF = Present(Callback.of(f)))
+    @targetName("onBlurSet")
+    def onBlur(f: Set[K] => UI.Action)(using Frame): Listbox[K] = copy(onBlurF = Present(Callback.of(f)))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox[K] = copy(emptyContentV = v)
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox = copy(accessibleNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox[K] = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox[K] = copy(accessibleNameRefV = v)
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
@@ -263,7 +272,7 @@ final case class Listbox private (
       * against the outer replace (the Overlay renderOpen lesson). The click
       * handlers still write through the BOUND refs.
       */
-    private[uic] def resolved(sel: Set[String], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
+    private[uic] def resolved(sel: Set[K], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
         body(sel, query, Absent, hi, idV, focused)
@@ -318,7 +327,7 @@ final case class Listbox private (
             case _                                => body(Set.empty, "", Absent, Absent, idBase)
 
     private def body(
-        sel: Set[String],
+        sel: Set[K],
         query: String,
         qRef: Maybe[SignalRef[String]],
         hiRef: Maybe[SignalRef[Int]],
@@ -379,7 +388,7 @@ final case class Listbox private (
         // bound ref LIVE, so it reports the selection at blur time.
         val fireBlur: UI.Action = onBlurF match
             case Present(f) => selectedRef match
-                    case Present(r) => r.use(f)
+                    case Present(r) => r.read(f)
                     case Absent     => f(sel)
             case Absent => ()
 
@@ -454,8 +463,8 @@ final case class Listbox private (
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
 
     private def renderOption(
-        it: ListItem,
-        sel: Set[String],
+        it: ListItem[K],
+        sel: Set[K],
         index: Int,
         focused: Boolean,
         hiRef: Maybe[SignalRef[Int]],
@@ -516,10 +525,10 @@ final case class Listbox private (
     end renderOption
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onItemClick`. */
-    private def activate(id: String, meta: Boolean = false)(using Frame): UI.Action =
+    private def activate(id: K, meta: Boolean = false)(using Frame): UI.Action =
         val setSelection: UI.Action = selectedRef match
             case Present(ref) if selectionModeV != SelectionMode.None =>
-                ref.getAndUpdate(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
+                ref.update(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
             case _ => ()
         val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)
@@ -534,7 +543,7 @@ final case class Listbox private (
 end Listbox
 
 object Listbox:
-    def apply(): Listbox = new Listbox()
+    def apply[K](): Listbox[K] = new Listbox[K]()
 
     /** One chord a host claims, carrying the effect it answers with.
       *

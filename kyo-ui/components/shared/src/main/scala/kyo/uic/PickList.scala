@@ -32,8 +32,8 @@ final case class PickList[A] private (
     labelF: Maybe[A => String] = Absent,
     keyF: Maybe[A => String] = Absent,
     templateF: Maybe[A => UI] = Absent,
-    sourceSelectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    targetSelectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    sourceSelectedRef: Maybe[SignalRef[Set[A]]] = Absent,
+    targetSelectedRef: Maybe[SignalRef[Set[A]]] = Absent,
     showSourceControlsFlag: Boolean = true,
     showTargetControlsFlag: Boolean = true,
     disabledFlag: Boolean = false,
@@ -59,12 +59,12 @@ final case class PickList[A] private (
     /** Custom row content (Prime's option slot) for both columns. */
     def itemTemplate(f: A => UI): PickList[A] = copy(templateF = Present(f))
 
-    /** Binds the source column's selection two-way (a set of [[itemKey]] ids). */
-    def sourceSelected(ref: SignalRef[Set[String]]): PickList[A] =
+    /** Binds the source column's selection two-way, as the set of chosen items matched by [[itemKey]]. */
+    def sourceSelection(ref: SignalRef[Set[A]]): PickList[A] =
         copy(sourceSelectedRef = Present(ref))
 
-    /** Binds the target column's selection two-way (a set of [[itemKey]] ids). */
-    def targetSelected(ref: SignalRef[Set[String]]): PickList[A] =
+    /** Binds the target column's selection two-way, as the set of chosen items matched by [[itemKey]]. */
+    def targetSelection(ref: SignalRef[Set[A]]): PickList[A] =
         copy(targetSelectedRef = Present(ref))
 
     /** Renders the source column's reorder rail (default true, like Prime). */
@@ -105,6 +105,12 @@ final case class PickList[A] private (
             case Present(r) => r
             case Absent     => Signal.initConst(fallback)
 
+    /** A column's selection as the keys its rows are matched by. */
+    private def selectionKeys(ref: Maybe[SignalRef[Set[A]]])(using Frame): Signal[Set[String]] =
+        ref match
+            case Present(r) => r.map(_.map(keyOf))
+            case Absent     => Signal.initConst(Set.empty[String])
+
     /** Everything one render of this control reads, as ONE signal.
       *
       * It was four nested renders, one per ref, and a transfer writes THREE of them. The outer
@@ -119,7 +125,7 @@ final case class PickList[A] private (
       */
     private def snapshot(source: Maybe[ListReorder.Cursor], target: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
         val columns    = sig(sourceRef, Seq.empty[A]).combineLatest(sig(targetRef, Seq.empty[A]))
-        val selections = sig(sourceSelectedRef, Set.empty[String]).combineLatest(sig(targetSelectedRef, Set.empty[String]))
+        val selections = selectionKeys(sourceSelectedRef).combineLatest(selectionKeys(targetSelectedRef))
         val cursors    = sig(source.map(_.highlight), -1).combineLatest(sig(target.map(_.highlight), -1))
         columns.combineLatest(selections).combineLatest(cursors)
     end snapshot
@@ -192,7 +198,7 @@ final case class PickList[A] private (
         // both act on the column's SELECTION, and neither can do what the other cannot.
         def keys(
             ref: Maybe[SignalRef[Seq[A]]],
-            selRef: Maybe[SignalRef[Set[String]]],
+            selRef: Maybe[SignalRef[Set[A]]],
             other: Maybe[SignalRef[Seq[A]]],
             toward: Keyboard,
             cursor: Maybe[ListReorder.Cursor],
@@ -210,7 +216,7 @@ final case class PickList[A] private (
                 Listbox.HostKey(keepingCursor(cursor, ref, xs, hi, eff))
             }
 
-        def reorderRail(cls: String, ref: Maybe[SignalRef[Seq[A]]], selRef: Maybe[SignalRef[Set[String]]], off: Boolean): UI =
+        def reorderRail(cls: String, ref: Maybe[SignalRef[Seq[A]]], selRef: Maybe[SignalRef[Set[A]]], off: Boolean): UI =
             div.cssClass("p-picklist-controls").cssClass(cls)(
                 toChild(moveButton(Icons.angleUp, "Move Up", off, reorder(ref, selRef, ListReorder.moveUp))),
                 toChild(moveButton(Icons.angleDoubleUp, "Move Top", off, reorder(ref, selRef, ListReorder.moveTop))),
@@ -222,19 +228,19 @@ final case class PickList[A] private (
             cls: String,
             xs: Seq[A],
             sel: Set[String],
-            selRef: Maybe[SignalRef[Set[String]]],
+            selRef: Maybe[SignalRef[Set[A]]],
             cursor: Maybe[ListReorder.Cursor],
             focused: Int,
             hostKeys: UI.KeyboardEvent => Maybe[Listbox.HostKey]
         ): UI =
-            var lb = Listbox()
+            var lb = Listbox[String]()
                 .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
                 .selectionMode(SelectionMode.Multiple)
                 .metaKeySelection(metaKeyFlag)
                 .disabled(disabledFlag)
                 .onHostKey(hostKeys)
             cursor.foreach(c => lb = lb.id(c.id))
-            selRef.foreach(r => lb = lb.value(r))
+            selRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(r), xs, keyOf)))
             templateF.foreach { f =>
                 val byKey = xs.map(a => keyOf(a) -> a).toMap
                 lb = lb.itemTemplate(li =>
@@ -332,13 +338,13 @@ final case class PickList[A] private (
       */
     private def reorder(
         ref: Maybe[SignalRef[Seq[A]]],
-        selRef: Maybe[SignalRef[Set[String]]],
+        selRef: Maybe[SignalRef[Set[A]]],
         move: (List[A], A => Boolean) => List[A]
     )(using Frame): UI.Action =
         (ref, selRef) match
             case (Present(r), Present(sr)) =>
                 for
-                    sel <- sr.get
+                    sel <- sr.get.map(_.map(keyOf))
                     _   <- r.getAndUpdate(xs => move(xs.toList, a => sel.contains(keyOf(a))))
                 yield ()
             case _ => ()
@@ -349,12 +355,12 @@ final case class PickList[A] private (
     private def transferSelected(
         from: Maybe[SignalRef[Seq[A]]],
         to: Maybe[SignalRef[Seq[A]]],
-        selRef: Maybe[SignalRef[Set[String]]]
+        selRef: Maybe[SignalRef[Set[A]]]
     )(using Frame): UI.Action =
         (from, to, selRef) match
             case (Present(f), Present(t), Present(sr)) =>
                 for
-                    sel <- sr.get
+                    sel <- sr.get.map(_.map(keyOf))
                     xs  <- f.get
                     split = xs.partition(a => sel.contains(keyOf(a)))
                     _ <- f.set(split._2)
@@ -367,7 +373,7 @@ final case class PickList[A] private (
     private def transferAll(
         from: Maybe[SignalRef[Seq[A]]],
         to: Maybe[SignalRef[Seq[A]]],
-        selRef: Maybe[SignalRef[Set[String]]]
+        selRef: Maybe[SignalRef[Set[A]]]
     )(using Frame): UI.Action =
         (from, to, selRef) match
             case (Present(f), Present(t), Present(sr)) =>

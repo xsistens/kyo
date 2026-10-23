@@ -33,8 +33,8 @@ class CascadeSelectTest extends UicTest:
             open  <- Signal.initRef(false)
             refs  <- refsOf
             focus <- Signal.initRef(List.empty[Int])
-            value <- Signal.initRef("")
-            ui = cascade.value(value).wired(open, refs, focus, Present("cs"))
+            value <- Signal.initRef(Maybe.empty[String])
+            ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
             _       <- press(trigger, key)
             isOpen  <- open.get
@@ -56,8 +56,8 @@ class CascadeSelectTest extends UicTest:
             refs  <- refsOf
             _     <- Kyo.foreach(refs)((_, r) => r.set(true))
             focus <- Signal.initRef(List(0, 0, 1))
-            value <- Signal.initRef("")
-            ui = cascade.value(value).wired(open, refs, focus, Present("cs"))
+            value <- Signal.initRef(Maybe.empty[String])
+            ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
             _       <- press(trigger, UI.Keyboard.Tab)
             still   <- open.get
@@ -65,7 +65,7 @@ class CascadeSelectTest extends UicTest:
             back    <- Signal.initRef(true)
             refs2   <- refsOf
             focus2  <- Signal.initRef(List(0))
-            ui2 = cascade.value(value).wired(back, refs2, focus2, Present("cs"))
+            ui2 = cascade.selection(value).wired(back, refs2, focus2, Present("cs"))
             trigger2  <- elementWithClass(ui2, "p-cascadeselect")
             _         <- press(trigger2, UI.Keyboard.Tab, shift)
             stillBack <- back.get
@@ -81,8 +81,8 @@ class CascadeSelectTest extends UicTest:
             open  <- Signal.initRef(true)
             refs  <- refsOf
             focus <- Signal.initRef(List(0))
-            value <- Signal.initRef("")
-            ui = cascade.value(value).wired(open, refs, focus, Present("cs"))
+            value <- Signal.initRef(Maybe.empty[String])
+            ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
             _       <- press(trigger, UI.Keyboard.ArrowDown)
             at      <- focus.get

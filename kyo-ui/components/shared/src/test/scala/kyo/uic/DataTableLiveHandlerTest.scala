@@ -39,12 +39,12 @@ class DataTableLiveHandlerTest extends UicTest:
     "a range spans the list as it is now, not as it was painted" in {
         for
             rows   <- Signal.initRef[Seq[Item]](trio)
-            sel    <- Signal.initRef(Set.empty[String])
-            anchor <- Signal.initRef(Absent: Maybe[String])
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            sel    <- Signal.initRef(Set.empty[Item])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selected(sel)
+                .selection(sel)
                 .metaKeySelection(true)
                 .selectionMode(uic.SelectionMode.Multiple)
                 .selectionAnchor(anchor)
@@ -60,9 +60,9 @@ class DataTableLiveHandlerTest extends UicTest:
             _     <- shiftClick(painted(1))
             after <- sel.get
         yield
-            assert(at == Present("1"), s"the first click left the anchor at $at")
+            assert(at == Present(Item("1", "A")), s"the first click left the anchor at $at")
             assert(
-                after == Set("1", "9", "2"),
+                after == Set(Item("1", "A"), Item("9", "X"), Item("2", "B")),
                 s"the range spanned $after; over the painted list it would have been Set(1, 2)"
             )
     }
@@ -70,7 +70,7 @@ class DataTableLiveHandlerTest extends UicTest:
     "a reorder writes the list as it is now" in {
         for
             rows  <- Signal.initRef[Seq[Item]](trio)
-            err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             drag  <- Signal.initRef(Absent: Maybe[uic.RowDrag])
             moved <- Signal.initRef(List.empty[List[String]])
             table = uic.DataTable[Item]().rows(rows).rowKey(_.id)
@@ -118,9 +118,9 @@ class DataTableLiveHandlerTest extends UicTest:
     "an open cell commits against the rows that are there now" in {
         for
             rows    <- Signal.initRef[Seq[Item]](trio)
-            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
             name    <- Signal.initRef("")
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             edited  <- Signal.initRef(List.empty[String])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
                 .columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))

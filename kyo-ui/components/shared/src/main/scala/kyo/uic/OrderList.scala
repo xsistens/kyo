@@ -13,8 +13,8 @@ import kyo.UI.*
   * The ITEM ORDER is the model: `items` binds a `SignalRef[Seq[A]]` two-way —
   * the move buttons write the reordered Seq back (Prime's exact move-up/-top/
   * -down/-bottom semantics), and external ref writes re-render the list. The
-  * `selected` ref (keyed by `itemKey`, falling back to the label) drives which
-  * rows move; all four buttons go `aria-disabled` while the selection is empty
+  * `selection` ref (a `Set[A]` of the items themselves, matched by `itemKey`,
+  * falling back to the label) drives which rows move; all four buttons go `aria-disabled` while the selection is empty
   * (Prime's `moveDisabled`) rather than natively disabled, so a button never
   * leaves the tab order under a reader who is standing on it, and natively
   * disabled only when the whole control is. Rendering goes through the real
@@ -26,7 +26,7 @@ final case class OrderList[A] private (
     labelF: Maybe[A => String] = Absent,
     keyF: Maybe[A => String] = Absent,
     templateF: Maybe[A => UI] = Absent,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    selectedRef: Maybe[SignalRef[Set[A]]] = Absent,
     disabledFlag: Boolean = false,
     metaKeyFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent
@@ -47,10 +47,10 @@ final case class OrderList[A] private (
     /** Custom row content (Prime's option slot), replacing the plain label text. */
     def itemTemplate(f: A => UI): OrderList[A] = copy(templateF = Present(f))
 
-    /** Binds the selection two-way (a set of [[itemKey]] ids); the selected rows
-      * are the ones the move buttons act on.
+    /** Binds the selection two-way to the set of chosen items, matched by [[itemKey]]; the selected rows are the ones
+      * the move buttons act on.
       */
-    def selected(ref: SignalRef[Set[String]]): OrderList[A] = copy(selectedRef = Present(ref))
+    def selection(ref: SignalRef[Set[A]]): OrderList[A] = copy(selectedRef = Present(ref))
 
     /** Disables the whole control: the listbox dims and the buttons lock. */
     def disabled(v: Boolean): OrderList[A] = copy(disabledFlag = v)
@@ -86,7 +86,7 @@ final case class OrderList[A] private (
             case Present(r) => r: Signal[Seq[A]]
             case Absent     => Signal.initConst(Seq.empty[A])
         val sel = selectedRef match
-            case Present(r) => r: Signal[Set[String]]
+            case Present(r) => r.map(_.map(keyOf))
             case Absent     => Signal.initConst(Set.empty[String])
         val hi = cursor match
             case Present(c) => c.highlight: Signal[Int]
@@ -159,14 +159,14 @@ final case class OrderList[A] private (
         // The embedded Listbox renders through `resolved` — this render already
         // subscribes to the selection ref, so a second nested subscription would
         // race (the Overlay renderOpen lesson); clicks still write the bound ref.
-        var lb = Listbox()
+        var lb = Listbox[String]()
             .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
             .selectionMode(SelectionMode.Multiple)
             .metaKeySelection(metaKeyFlag)
             .disabled(disabledFlag)
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
-        selectedRef.foreach(r => lb = lb.value(r))
+        selectedRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(r), xs, keyOf)))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)
@@ -213,7 +213,7 @@ final case class OrderList[A] private (
         (itemsRef, selectedRef) match
             case (Present(ir), Present(sr)) =>
                 for
-                    sel <- sr.get
+                    sel <- sr.get.map(_.map(keyOf))
                     _   <- ir.getAndUpdate(xs => move(xs.toList, a => sel.contains(keyOf(a))))
                 yield ()
             case _ => ()

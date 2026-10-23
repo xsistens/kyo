@@ -13,7 +13,7 @@ class OrganizationChartTest extends UicTest:
     private def toggledBy(key: UI.Keyboard)(using Frame): Set[String] < Async =
         for
             expanded <- Signal.initRef(Set("ceo"))
-            ui = uic.OrganizationChart().node(chart).expanded(expanded).render
+            ui = uic.OrganizationChart[String]().node(chart).expanded(expanded).render
             el    <- elementWithClass(ui, "p-organizationchart-node-toggle-button")
             _     <- press(el, key)
             after <- expanded.get
@@ -29,7 +29,7 @@ class OrganizationChartTest extends UicTest:
     "the toggle says it is a button, since an anchor without an href does not" in {
         for
             expanded <- Signal.initRef(Set("ceo"))
-            ui = uic.OrganizationChart().node(chart).expanded(expanded).render
+            ui = uic.OrganizationChart[String]().node(chart).expanded(expanded).render
             el <- elementWithClass(ui, "p-organizationchart-node-toggle-button")
         yield
             assert(el.attrs.role.contains("button"))

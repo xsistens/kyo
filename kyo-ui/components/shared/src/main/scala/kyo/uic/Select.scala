@@ -28,15 +28,17 @@ import scala.annotation.targetName
   * set; `checkmark(true)` Prime's per-option check column.
   *
   * Options are TYPED: `options(items)(label)` projects any `A` to its visible
-  * text; `optionKey` (defaults to the label projection) supplies the stable value
-  * written into the bound ref. `optionGroups(...)` takes [[OptionItem]] rows
+  * text; `optionKey` (defaults to the label projection) supplies the stable key
+  * options are matched by. `optionGroups(...)` takes [[OptionItem]] rows
   * instead, rendering each group under a labelled header; grouping is a panel
   * concern only, so the value model, the key projection and the keyboard address
   * the same flat option sequence either way, and a filter that empties a group
-  * removes its header with it. `value(ref)` binds the chosen key two-way,
-  * `selection(ref)` the chosen option itself (over `A`, or over `Maybe[A]` for a
-  * field that may stay empty), and `optionsWithNone` adds a labelled none row to a
-  * select over `Maybe`; `itemTemplate` draws the rows and the chosen value. `open(ref)`
+  * removes its header with it. `selection(ref)` binds the chosen option two-way
+  * (over `A`, or over `Maybe[A]` for a field that may stay empty), and
+  * `optionsWithNone` adds a labelled none row to a select over `Maybe`;
+  * `itemTemplate` draws the rows and the chosen value; `loading` says the options
+  * are still arriving, and without it a held option no row carries is named in a
+  * `.p-uic-key-error` card. `open(ref)`
   * optionally exposes the panel visibility (it is self-managed otherwise). The interaction
   * state (open/highlight/filter query) lives in signals allocated by an
   * effectful `UI.mounted` region; static projections (SSG, the SSR page HTML)
@@ -74,15 +76,16 @@ final case class Select[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent,
-    currentV: Maybe[String] = Absent,
+    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+    currentV: Maybe[Maybe[A]] = Absent,
+    loadingV: Maybe[BoolValue] = Absent,
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     inputwrapperFlag: Boolean = false,
     portalFlag: Boolean = false,
     scrollV: Overlay.Scroll = Overlay.Scroll.Close
-) extends Node, TextFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+) extends Node, ChoiceFormControl[A], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = Select[A]
 
     /** Package-internal class hook: hosts (Paginator) stamp Prime's contextual
@@ -107,7 +110,7 @@ final case class Select[A] private (
       * supply the resolved selection directly (no nested subscription; writes go
       * through `onChange`).
       */
-    private[uic] def current(v: String): Select[A] = copy(currentV = Present(v))
+    private[uic] def current(v: Maybe[A]): Select[A] = copy(currentV = Present(v))
 
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): Select[A] =
@@ -161,14 +164,8 @@ final case class Select[A] private (
       */
     def itemTemplate(f: A => UI): Select[A] = copy(itemTemplateF = Present(f))
 
-    /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: picks write the
-      * key back into the ref, ref changes reselect the matching option.
-      */
-    def value(ref: SignalRef[String]): Select[A] = copy(choice = Present(SingleChoice.Keys(ref)))
-
     /** Binds the selection two-way to the option itself: a pick writes the option, a write to `ref` selects the row whose
       * [[optionKey]] it carries. The ref always holds an option, so there is no clear (`showClear` draws nothing).
-      * Replaces a [[value]] binding, as [[value]] replaces this one.
       */
     def selection(ref: SignalRef[A]): Select[A] = copy(choice = Present(SingleChoice.Value(ref)))
 
@@ -201,8 +198,8 @@ final case class Select[A] private (
       */
     def filterQuery(ref: SignalRef[String]): Select[A] = copy(filterQueryRefV = Present(ref))
 
-    /** Renders the clear affordance on the trigger while a value is set — clears
-      * the bound ref to `""` and fires `onChange("")`.
+    /** Renders the clear affordance on the trigger while an option is chosen: it writes `Absent` into a `selection` over
+      * `Maybe[A]` and fires `onChange(Absent)`. A `selection` over `A` cannot hold none, so it draws nothing there.
       */
     def showClear(v: Boolean): Select[A] = copy(showClearFlag = v)
 
@@ -221,6 +218,13 @@ final case class Select[A] private (
       * (`.p-select-option-check-icon`), a blank placeholder on the rest.
       */
     def checkmark(v: Boolean): Select[A] = copy(checkmarkFlag = v)
+
+    /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no option row
+      * carries yet is shown from the value itself rather than reported. Without it, such an option is a mistake the field
+      * names in a `.p-uic-key-error` card, since a typed value that matches no option can only mean the data and the
+      * binding disagree. A `Signal[Boolean]` follows the load.
+      */
+    def loading(v: Boolean | Signal[Boolean]): Select[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Select[A] = copy(emptyContentV = v)
 
@@ -260,13 +264,15 @@ final case class Select[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = copy(accNameRefV = v)
 
-    /** Fired with the newly selected option key (also with `""` on clear). */
-    def onChange(f: String => UI.Action)(using Frame): Select[A] = copy(onChangeF = Present(Callback.of(f)))
-
-    /** Fires when the trigger loses focus, with the currently selected key — the
-      * form-validation layer's Blur trigger.
+    /** Fired with the option now chosen, after the write (`Absent` on clear). A pick of the option already chosen changes
+      * nothing and fires nothing.
       */
-    def onBlur(f: String => UI.Action)(using Frame): Select[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): Select[A] = copy(onChangeF = Present(Callback.of(f)))
+
+    /** Fires when the trigger loses focus, with the option held (`Absent` for none): the form-validation layer's Blur
+      * trigger.
+      */
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): Select[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Every pickable option in render order, groups flattened away. The value
       * binding, the key-collision check and the keyboard all work on this.
@@ -342,35 +348,53 @@ final case class Select[A] private (
     /** Renders through the value binding: hosts supply `currentV` resolved, a
       * bound ref subscribes, an unbound select is empty.
       */
-    private def withValue(f: String => UI)(using Frame): UI =
+    private def withValue(f: Maybe[A] => UI)(using Frame): UI =
         currentV match
             case Present(cur) => f(cur)
             case Absent       =>
                 choice match
-                    case Present(c) => c.render(key)(f)
-                    case Absent     => f("")
+                    case Present(c) => c.render(f)
+                    case Absent     => f(Absent)
 
-    private def body(current: String, st: Maybe[State])(using Frame): UI =
+    private def body(held: Maybe[A], st: Maybe[State])(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
         // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
         // than through `copy(...)` (a copied instance's `State` would not match).
-        TextValue.reactive(placeholderV): ph =>
-            (invalidV.dynSig, invalidMsgDynV) match
-                case (Absent, Absent) => bodyStatic(current, st, ph, invalidV.constTrue, invalidMsgV)
-                case _                =>
-                    FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(current, st, ph, red, msg))
+        BoolValue.reactive(loadingV): ld =>
+            val loading = ld.constTrue
+            TextValue.reactive(placeholderV): ph =>
+                (invalidV.dynSig, invalidMsgDynV) match
+                    case (Absent, Absent) => bodyStatic(held, st, ph, invalidV.constTrue, invalidMsgV, loading)
+                    case _                =>
+                        FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                            bodyStatic(held, st, ph, red, msg, loading)
+                        )
 
-    private def bodyStatic(current: String, st: Maybe[State], placeholder: Maybe[String], redFlag: Boolean, redMsg: Maybe[String])(using
-        Frame
-    ): UI =
+    private def bodyStatic(
+        held: Maybe[A],
+        st: Maybe[State],
+        placeholder: Maybe[String],
+        redFlag: Boolean,
+        redMsg: Maybe[String],
+        loading: Boolean
+    )(using Frame): UI =
         val isOpen  = st.exists(_.isOpen)
         val all     = items
+        val current = held.fold("")(key)
         val selIdx  = all.indexWhere(a => key(a) == current)
-        val selText = if selIdx >= 0 then labelF(all(selIdx)) else ""
+        // The trigger shows the option the held value matches, and the value itself where no option carries it yet,
+        // so a field whose options are still arriving does not read empty.
+        val shownOpt: Maybe[A] = if selIdx >= 0 then Present(all(selIdx)) else held
+        val selText            = shownOpt.fold("")(labelF)
         // The chosen option drawn by the template, where there is one and an option is chosen.
-        val selDrawn: Maybe[UI] =
-            if selIdx >= 0 then itemTemplateF.map(_(all(selIdx))) else Absent
+        val selDrawn: Maybe[UI] = shownOpt.flatMap(a => itemTemplateF.map(_(a)))
+        // A held option no row carries, once the options are said to be complete.
+        val unknownCard: List[UI] =
+            held match
+                case Present(a) if selIdx < 0 && !loading =>
+                    List(KeyDiagnostics.unknown("Select", Seq(labelF(a))))
+                case _ => Nil
 
         /** Where an opening key lands: the selected option, or the first one a highlight may sit
           * on where nothing is selected. Opening has to land ON an option, or the arrow that
@@ -380,20 +404,9 @@ final case class Select[A] private (
         val openHighlight: Int =
             if selIdx >= 0 then selIdx else all.indexWhere(a => !isOptionDisabled(a))
 
-        // Writes the picked key, fires onChange, closes the panel.
+        // Writes the picked option, fires onChange where that changed it, closes the panel.
         def pick(a: A)(s: State): UI.Action =
-            val k = key(a)
-            for
-                _ <- choice match
-                    case Present(c) => c.update(items, key)(_ => k)
-                    case Absent     => (): UI.Action
-                _ <- onChangeF match
-                    case Present(g) => g(k)
-                    case Absent     => (): UI.Action
-                _ <- s.open.set(false)
-            yield ()
-            end for
-        end pick
+            write(Present(a)).andThen(s.open.set(false))
 
         // Opens with the highlight seeded on the selected option and a fresh query.
         def openPanel(s: State): UI.Action =
@@ -407,7 +420,7 @@ final case class Select[A] private (
             if s.isOpen then s.open.set(false) else openPanel(s)
 
         // === closed trigger ======================================================
-        val showPlaceholder = current.isEmpty && placeholder.isDefined
+        val showPlaceholder = held.isEmpty && placeholder.isDefined
         val labelText       = if showPlaceholder then placeholder.getOrElse("") else selText
 
         var lbl = span.cssClass("p-select-label")
@@ -426,18 +439,11 @@ final case class Select[A] private (
         val clearEffect: UI.Action =
             st match
                 case Present(_) =>
-                    for
-                        _ <- choice match
-                            case Present(c) => c.update(items, key)(_ => "")
-                            case Absent     => (): UI.Action
-                        _ <- onChangeF match
-                            case Present(g) => g("")
-                            case Absent     => (): UI.Action
-                    yield ()
+                    write(Absent)
                 case Absent => ()
 
         val clearUI: List[UI] =
-            if showClearFlag && interactive && current.nonEmpty && choice.forall(_.clearable) then
+            if showClearFlag && interactive && held.isDefined && choice.forall(_.clearable) then
                 List(
                     button
                         .cssClass("p-select-clear-icon")
@@ -449,7 +455,10 @@ final case class Select[A] private (
 
         var dd = span.cssClass("p-select-dropdown")
         st.foreach(s => if interactive then dd = dd.onClick(toggle(s)))
-        val dropdownUI: UI = dd(toChild(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon")))
+        // PrimeVue's loading slot: the spinner takes the chevron's place in the dropdown cell.
+        val dropdownUI: UI =
+            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin")))
+            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon")))
 
         // Hidden form carrier: a div trigger has no native form value.
         val hiddenCarrier: List[UI] =
@@ -465,13 +474,14 @@ final case class Select[A] private (
             el = el.cssClass("p-inputwrapper")
             // The float hook: a selected value fills the field; a non-empty placeholder
             // shows text too, so the label must float over it.
-            if current.nonEmpty || placeholder.exists(_.nonEmpty) then el = el.cssClass("p-inputwrapper-filled")
+            if held.isDefined || placeholder.exists(_.nonEmpty) then el = el.cssClass("p-inputwrapper-filled")
         end if
         if isOpen then el = el.cssClass("p-select-open").cssClass("p-uic-overlay-anchor")
         if redFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
         if disabledFlag then el = el.cssClass("p-disabled")
         if readonlyFlag then el = el.cssClass("p-uic-select-readonly").aria("readonly", "true")
         if requiredFlag then el = el.aria("required", "true")
+        if loading then el = el.aria("busy", "true")
         sizeV match
             case Size.Small  => el = el.cssClass("p-select-sm")
             case Size.Large  => el = el.cssClass("p-select-lg")
@@ -532,17 +542,35 @@ final case class Select[A] private (
             // current value when unbound) — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
-                    case Present(c) => c.read(key)(f)
-                    case Absent     => f(current))
+                    case Present(c) => c.read(f)
+                    case Absent     => f(held))
             }
         end if
 
-        FieldInvalid.withMessage(
+        val field = FieldInvalid.withMessage(
             el(((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
             redFlag,
             redMsg
         )
+        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
+
+    /** Writes `next` through the binding, then fires `onChange` with what the field now holds, where the write changed it.
+      * An unbound field (a host supplying `current`) has nothing to write and reports the pick as it is.
+      */
+    private def write(next: Maybe[A])(using Frame): UI.Action =
+        val changed: Maybe[Maybe[A]] < Sync =
+            choice match
+                case Present(c) => c.write(next, key)
+                case Absent     => Present(next)
+        changed.map {
+            case Present(now) =>
+                onChangeF match
+                    case Present(g) => g(now)
+                    case Absent     => (): UI.Action
+            case Absent => (): UI.Action
+        }
+    end write
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
 

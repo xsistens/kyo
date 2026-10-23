@@ -18,28 +18,31 @@ import kyo.UI.*
   * extracted `@primeuix` stepper CSS verbatim (including the
   * completed-separator accent via `.p-step:has(~ .p-step-active)`).
   *
-  * Steps are value-keyed like Prime's: each step carries a String value
-  * (defaulting to its 1-based position, Prime's convention) and `value(ref)`
-  * binds the ACTIVE VALUE two-way; the index-based `active(ref)` binding stays
-  * as the compatibility path (`value` wins when both are bound). Header clicks
+  * Steps are value-keyed like Prime's: a step may carry a value of the app's own
+  * type `K` and `value(ref)` binds the ACTIVE VALUE two-way; the index-based
+  * `active(ref)` binding needs no values at all (`value` wins when both are
+  * bound). Header clicks
   * write the bound ref back before firing `onActivate`. `linear(true)` renders
   * the stepper readonly-forward: headers AHEAD of the active step are disabled
   * (backward navigation stays allowed); per-step `disabled = true` blocks a
   * header unconditionally. The app advances by writing the ref (a "Next"
   * button).
   */
-final case class Stepper private (
-    steps: List[Stepper.StepDef] = Nil,
+final case class Stepper[K] private (
+    steps: List[Stepper.StepDef[K]] = Nil,
     activeRef: Maybe[SignalRef[Int]] = Absent,
-    valueRef: Maybe[SignalRef[String]] = Absent,
+    valueRef: Maybe[SignalRef[K]] = Absent,
     linearFlag: Boolean = false,
     verticalFlag: Boolean = false,
     onActivateF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
-    type Self = Stepper
+    type Self = Stepper[K]
 
-    /** Appends one step: its header `title`, an optional stable `value` (defaults
-      * to the 1-based position, Prime's convention), an optional unconditional
+    // Step values compare by `equals`, the identity an app's own type already has.
+    private given CanEqual[K, K] = CanEqual.derived
+
+    /** Appends one step: its header `title`, an optional stable `value` (what a
+      * [[value]] binding holds while this step is active), an optional unconditional
       * `disabled`, plus the panel content. A `Signal[String]` title re-renders the step header
       * in place on emission (e.g. a locale-driven `I18n.t` leaf).
       *
@@ -47,35 +50,33 @@ final case class Stepper private (
       * could not: the synthesized default-arg getters of same-named methods clash, so the
       * reactive variant had to spell both out at every call site.
       */
-    def step(title: String | Signal[String], value: Maybe[String] = Absent, disabled: Boolean = false)(
+    def step(title: String | Signal[String], value: Maybe[K] = Absent, disabled: Boolean = false)(
         content: UI*
-    ): Stepper =
+    ): Stepper[K] =
         copy(steps = steps :+ new Stepper.StepDef(ReactiveValue(title), value, disabled, content.toList))
 
     /** Binds the 0-based active step index two-way to `ref` (clamped at render). */
-    def active(ref: SignalRef[Int]): Stepper = copy(activeRef = Present(ref))
+    def active(ref: SignalRef[Int]): Stepper[K] = copy(activeRef = Present(ref))
 
     /** Binds the ACTIVE STEP VALUE two-way to `ref` (Prime's `v-model:value`):
-      * header clicks write the step's value back; an unknown ref value falls back
-      * to the first step. Wins over [[active]] when both are bound.
+      * header clicks write the step's value back (a step with no value writes
+      * nothing); a ref value no step carries falls back to the first step. Wins
+      * over [[active]] when both are bound.
       */
-    def value(ref: SignalRef[String]): Stepper = copy(valueRef = Present(ref))
+    def value(ref: SignalRef[K]): Stepper[K] = copy(valueRef = Present(ref))
 
     /** Linear mode: header clicks cannot jump AHEAD of the active step
       * (backward stays allowed); advance by writing the bound ref.
       */
-    def linear(v: Boolean): Stepper = copy(linearFlag = v)
+    def linear(v: Boolean): Stepper[K] = copy(linearFlag = v)
 
     /** Vertical layout (Prime's StepItem composition): each step's panel renders
       * inline UNDER its header with the vertical connecting separator.
       */
-    def vertical(v: Boolean): Stepper = copy(verticalFlag = v)
+    def vertical(v: Boolean): Stepper[K] = copy(verticalFlag = v)
 
     /** Fired with the target step index after a header click's ref write-back. */
-    def onActivate(f: Int => UI.Action)(using Frame): Stepper = copy(onActivateF = Present(Callback.of(f)))
-
-    /** The step's stable value: explicit, else the 1-based position (Prime). */
-    private def stepValue(i: Int): String = steps(i).value.getOrElse((i + 1).toString)
+    def onActivate(f: Int => UI.Action)(using Frame): Stepper[K] = copy(onActivateF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         UI.mounted {
@@ -91,7 +92,7 @@ final case class Stepper private (
     private def shown(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         valueRef match
             case Present(ref) =>
-                ref.render(v => body(steps.indices.find(stepValue(_) == v).getOrElse(0), ids, focus))
+                ref.render(v => body(steps.indices.find(steps(_).value.contains(v)).getOrElse(0), ids, focus))
             case Absent =>
                 activeRef match
                     case Present(ref) => ref.render(a => body(a, ids, focus))
@@ -131,7 +132,7 @@ final case class Stepper private (
       * added on top exactly as [[Accordion]] has them.
       */
     private def stepHeader(
-        st: Stepper.StepDef,
+        st: Stepper.StepDef[K],
         i: Int,
         cur: Int,
         tablist: Boolean,
@@ -193,7 +194,7 @@ final case class Stepper private (
     /** The `div.p-steppanel` for the active horizontal step; `animated` adds the
       * crossfade transition hooks (only the live mount, never the placeholder).
       */
-    private def horizontalPanel(st: Stepper.StepDef, animated: Boolean)(using Frame): UI =
+    private def horizontalPanel(st: Stepper.StepDef[K], animated: Boolean)(using Frame): UI =
         var p = div.cssClass("p-steppanel").role("tabpanel")
         if animated then
             p = p.cssClass("p-uic-steppanel-anim").enterTransition("p-uic-enter-fade").leaveTransition("p-uic-leave-fade")
@@ -259,8 +260,11 @@ final case class Stepper private (
       */
     private def activate(i: Int)(using Frame): UI.Action =
         val write: UI.Action = valueRef match
-            case Present(ref) => ref.set(stepValue(i))
-            case Absent       =>
+            case Present(ref) =>
+                steps(i).value match
+                    case Present(v) => ref.set(v)
+                    case Absent     => ()
+            case Absent =>
                 activeRef match
                     case Present(ref) => ref.set(i)
                     case Absent       => ()
@@ -276,14 +280,13 @@ final case class Stepper private (
 end Stepper
 
 object Stepper:
-    def apply(): Stepper = new Stepper()
+    def apply[K](): Stepper[K] = new Stepper[K]()
 
-    /** One step definition: header `title`, optional stable `value` (defaults to
-      * the 1-based position), unconditional `disabled`, and the panel content.
+    /** One step definition: header `title`, optional stable `value`, unconditional `disabled`, and the panel content.
       */
-    final case class StepDef private[uic] (
+    final case class StepDef[K] private[uic] (
         title: TextValue,
-        value: Maybe[String] = Absent,
+        value: Maybe[K] = Absent,
         disabled: Boolean = false,
         content: List[UI] = Nil
     )

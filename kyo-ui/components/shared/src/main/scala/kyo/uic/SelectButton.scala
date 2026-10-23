@@ -12,17 +12,18 @@ import scala.annotation.targetName
   *
   * Options are TYPED like Select: `options(items)(label)` projects any `A` to
   * its visible text; `optionKey` (defaults to the label projection) supplies
-  * the stable key written into the bound ref(s). Single-select binds
-  * `value(SignalRef[String])`; `multiple(true)` switches to Set semantics bound
-  * via `value(SignalRef[Set[String]])`. `selection(ref)` binds the options
-  * themselves instead (`A`, `Maybe[A]` or `Set[A]`), and `optionsWithNone` adds a
-  * labelled none option to a group over `Maybe`. `allowEmpty(false)` blocks clearing the
-  * last selection (Prime semantics).
+  * the stable key options are matched by. A SelectButton chooses ONE option:
+  * `selection(ref)` binds it over `A`, or over `Maybe[A]` where nothing may be
+  * chosen, and `optionsWithNone` adds a labelled none option to a group over
+  * `Maybe`. `allowEmpty(false)` blocks clearing the last selection (Prime
+  * semantics). `multiple` turns the group into a [[MultiSelectButton]], a type of
+  * its own because what it holds is a `Set[A]`: each type has one binding and one
+  * `onChange` of exactly its value type, and a set bound to a single-choice group
+  * does not compile.
   *
-  * Both arities are form controls — [[TextFormControl]] single,
-  * [[MultiSelectFormControl]] multiple — so `uic.SelectButton[A]().bind(field)`
-  * wires value, validity, message and the blur trigger, and the field's value type
-  * picks the arity.
+  * It is a [[ChoiceFormControl]], so `uic.SelectButton[A]().bind(field)` wires the
+  * selection, validity, message and the blur trigger for a `FormField[A]` or a
+  * `FormField[Maybe[A]]`.
   */
 final case class SelectButton[A] private (
     items: List[A],
@@ -41,11 +42,13 @@ final case class SelectButton[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent,
-    onBlurSetF: Maybe[Set[String] => UI.Action] = Absent,
+    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,
+    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
+    loadingV: Maybe[BoolValue] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl, MultiSelectFormControl, HasAccessibleNameRef:
+) extends Node, ChoiceFormControl[A], HasAccessibleNameRef:
     type Self = SelectButton[A]
 
     /** Stores the element id. */
@@ -85,11 +88,8 @@ final case class SelectButton[A] private (
         copy(items = items ++ all.map(ev).toList, labelF = a => ev.flip(a).fold(none)(label))
     end optionsWithNone
 
-    /** Binds the SINGLE selection two-way to `ref` (empty string = no selection). */
-    def value(ref: SignalRef[String]): SelectButton[A] = copy(single = Present(SingleChoice.Keys(ref)))
-
     /** Binds the SINGLE selection two-way to the option itself, matched by [[optionKey]]. The ref always holds an
-      * option, so a click on the chosen one keeps it whatever [[allowEmpty]] says. Replaces a single [[value]] binding.
+      * option, so a click on the chosen one keeps it whatever [[allowEmpty]] says.
       */
     def selection(ref: SignalRef[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ref)))
 
@@ -99,21 +99,21 @@ final case class SelectButton[A] private (
     @targetName("selectionMaybe")
     def selection(ref: SignalRef[Maybe[A]]): SelectButton[A] = copy(single = Present(SingleChoice.Optional(ref)))
 
-    /** Binds the MULTI selection two-way to the set of chosen options (pair with [[multiple]]). A member no option
-      * carries stays in the set while the others toggle.
+    /** The same group with several options on at once: a [[MultiSelectButton]], which binds a `Set[A]`. What is set so far
+      * (options, templates, state) carries over; a single-choice binding and its events do not, since they hold one option.
       */
-    @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[A]]): SelectButton[A] = copy(multi = Present(MultiChoice.Values(ref)))
+    def multiple: MultiSelectButton[A] =
+        MultiSelectButton(copy(multipleFlag = true, single = Absent, onChangeF = Absent, onBlurF = Absent))
 
-    /** Switches to multi-select semantics (pair with the `Set` [[value]] binding). */
-    def multiple(v: Boolean): SelectButton[A] = copy(multipleFlag = v)
+    /** Package-internal: the multi-choice half [[MultiSelectButton]] drives. */
+    private[uic] def withMulti(ref: SignalRef[Set[A]]): SelectButton[A]                  = copy(multi = Present(MultiChoice(ref)))
+    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeSetF = Present(Callback.of(f)))
+    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A]   = copy(onBlurSetF = Present(Callback.of(f)))
 
-    /** Binds the MULTI selection two-way to `ref` (a set of option keys). Spelled `value`
-      * like the single-select binding — the [[MultiSelectFormControl]] member — because
-      * they are one concept at two arities, and the type already says which is which.
+    /** Says the options are still arriving (`aria-busy` on the group): a held option no button carries yet is left
+      * alone rather than reported in a `.p-uic-key-error` card. Prime's SelectButton has no loading look, so none is drawn.
       */
-    @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): SelectButton[A] = copy(multi = Present(MultiChoice.Keys(ref)))
+    def loading(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Whether clicking the selected option may clear the selection entirely
       * (Prime default true).
@@ -133,19 +133,13 @@ final case class SelectButton[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = copy(accNameRefV = v)
 
-    /** Fired with the clicked option's key after the selection write. */
-    def onChange(f: String => UI.Action)(using Frame): SelectButton[A] = copy(onChangeF = Present(Callback.of(f)))
-
-    /** Fires on focus loss with the SINGLE selection (empty string = none) — the
-      * validation layer's Blur trigger for a `String`-valued field.
+    /** Fired with the selection now held, after a click or an arrow changed it (`Absent` where a click cleared it).
+      * A click that changes nothing fires nothing.
       */
-    def onBlur(f: String => UI.Action)(using Frame): SelectButton[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the MULTI selection — the Blur trigger for a
-      * `Set[String]`-valued field. `@targetName` because both erase to `onBlur(Function1)`.
-      */
-    @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => UI.Action)(using Frame): SelectButton[A] = copy(onBlurSetF = Present(Callback.of(f)))
+    /** Fires on focus loss with the selection held (`Absent` for none): the validation layer's Blur trigger. */
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -184,28 +178,39 @@ final case class SelectButton[A] private (
 
     private def renderDisabledResolved(nav: Nav)(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved(nav)
+            BoolValue.reactive(loadingV): l =>
+                copy(disabledFlag = d, loadingV = l).renderResolved(nav)
 
     private def renderResolved(nav: Nav)(using Frame): UI =
         (single, multi) match
-            case (Present(c), _) if !multipleFlag => c.render(key)(v => body(if v.isEmpty then Set.empty else Set(v), nav))
-            case (_, Present(c)) if multipleFlag  => c.render(key)(body(_, nav))
-            case _                                => body(Set.empty, nav)
+            case (Present(c), _) if !multipleFlag => c.render(held => body(held.toList, nav))
+            case (_, Present(c)) if multipleFlag  => c.render(held => body(held.toList, nav))
+            case _                                => body(Nil, nav)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
       *
       * An arrow moves and selects in one gesture (the radio pattern), so it must never land on an
       * option and clear it: Home pressed on the option already chosen would empty the group.
       */
-    private def selectOnly(k: String)(using Frame): UI.Action =
-        val write: UI.Action = single match
-            case Present(c) => c.update(items, key)(_ => k)
-            case Absent     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(k)
-            case Absent     => ()
-        write.andThen(fire)
-    end selectOnly
+    private def selectOnly(a: A)(using Frame): UI.Action =
+        stepSingle(_ => Present(a))
+
+    /** Applies `f` to the single selection through the binding, then fires `onChange` with what it now holds, where that
+      * changed. Unbound, there is nothing held, and `f` of none is reported as it is.
+      */
+    private def stepSingle(f: Maybe[A] => Maybe[A])(using Frame): UI.Action =
+        val changed: Maybe[Maybe[A]] < Sync =
+            single match
+                case Present(c) => c.update(key)(f)
+                case Absent     => Present(f(Absent))
+        changed.map {
+            case Present(now) =>
+                onChangeF match
+                    case Present(g) => g(now)
+                    case Absent     => (): UI.Action
+            case Absent => (): UI.Action
+        }
+    end stepSingle
 
     /** One key on a single-select option: the arrows move focus to the next option a highlight may
       * sit on and select it, Home and End reach the ends the same way, and the group wraps as the
@@ -217,11 +222,15 @@ final case class SelectButton[A] private (
     )(using Frame): UI.Action =
         ListNav.onKey(navigable, self, e.key, wrap = true, ListNav.Orientation.Both) match
             case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) && items.isDefinedAt(step.focus) =>
-                focus(ids(step.focus)).andThen(selectOnly(key(items(step.focus))))
+                focus(ids(step.focus)).andThen(selectOnly(items(step.focus)))
             case _ => ()
 
-    private def body(selected: Set[String], nav: Nav)(using Frame): UI =
-        var el = div.cssClass("p-selectbutton").cssClass("p-component")
+    private def body(held: List[A], nav: Nav)(using Frame): UI =
+        val selected = held.map(key).toSet
+        // Held options no button carries, once the options are said to be complete.
+        val unknown = if loadingV.constTrue then Nil else held.filterNot(a => items.exists(i => key(i) == key(a)))
+        var el      = div.cssClass("p-selectbutton").cssClass("p-component")
+        if loadingV.constTrue then el = el.aria("busy", "true")
         // A choice of ONE is a radio group: it says so, holds one tab stop, and moves inside it
         // with the arrows. Several independent choices stay a group of toggle buttons.
         el = el.role(if multipleFlag then "group" else "radiogroup")
@@ -235,14 +244,14 @@ final case class SelectButton[A] private (
             if multipleFlag then
                 onBlurSetF.map(f =>
                     multi match
-                        case Present(c) => c.read(key)(f)
+                        case Present(c) => c.read(f)
                         case Absent     => f(Set.empty)
                 )
             else
                 onBlurF.map(f =>
                     single match
-                        case Present(c) => c.read(key)(f)
-                        case Absent     => f("")
+                        case Present(c) => c.read(f)
+                        case Absent     => f(Absent)
                 )
         blurHandler.foreach(h => el = el.onBlur(h))
         accNameV match
@@ -274,7 +283,7 @@ final case class SelectButton[A] private (
                 .size(sizeV)
             itemTemplateF.foreach(t => tb = tb.content(t(a)).accessibleName(label))
             if disabledFlag.constTrue || optionDisabledF.exists(_(a)) then tb = tb.disabled(true)
-            else tb = tb.onChange(_ => activate(k))
+            else tb = tb.onChange(_ => activate(a))
             if !multipleFlag then
                 nav match
                     case Present((ids, focus)) if ids.isDefinedAt(i) =>
@@ -286,7 +295,7 @@ final case class SelectButton[A] private (
             tb.render
         }
         FieldInvalid.withMessage(
-            el((keyCollisionCard ++ buttons).map(toChild)*),
+            el((keyCollisionCard ++ unknownCard(unknown) ++ buttons).map(toChild)*),
             invalidV.constTrue,
             invalidMsgV
         )
@@ -308,34 +317,101 @@ final case class SelectButton[A] private (
         end if
     end keyCollisionCard
 
+    /** The card naming held options no button carries (see [[KeyDiagnostics.unknown]]). */
+    private def unknownCard(unknown: List[A])(using Frame): List[UI] =
+        if unknown.isEmpty then Nil else List(KeyDiagnostics.unknown("SelectButton", unknown.map(labelF)))
+
     /** Clicking an option updates the bound selection (single replaces, multiple
-      * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`.
+      * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`
+      * with what the selection now holds, where the click changed it.
       */
-    private def activate(k: String)(using Frame): UI.Action =
-        val write: UI.Action =
-            if multipleFlag then
+    private def activate(a: A)(using Frame): UI.Action =
+        val k = key(a)
+        if multipleFlag then
+            val changed: Maybe[Set[A]] < Sync =
                 multi match
                     case Present(c) =>
                         c.update(items, key) { cur =>
                             if cur.contains(k) then if allowEmptyFlag || cur.size > 1 then cur - k else cur
                             else cur + k
                         }
-                    case Absent => ()
-            else
-                single match
-                    case Present(c) =>
-                        c.update(items, key)(cur => if cur == k then (if allowEmptyFlag then "" else cur) else k)
-                    case Absent => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(k)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
+                    case Absent => Present(Set(a))
+            changed.map {
+                case Present(now) =>
+                    onChangeSetF match
+                        case Present(g) => g(now)
+                        case Absent     => (): UI.Action
+                case Absent => (): UI.Action
+            }
+        else stepSingle(held => if held.exists(h => key(h) == k) then (if allowEmptyFlag then Absent else held) else Present(a))
+        end if
     end activate
 end SelectButton
 
 object SelectButton:
     def apply[A](): SelectButton[A] = new SelectButton[A](Nil, _.toString)
+
+/** A [[SelectButton]] where several options may be on at once (Prime's `multiple`): a row of independent toggle buttons,
+  * each its own tab stop, bound to the `Set[A]` of the options that are on. Made by [[SelectButton.multiple]], and a type
+  * of its own because its value is a set: it has one binding and one `onChange`, both over `Set[A]`, and it is a
+  * [[MultiChoiceFormControl]], so `bind` takes a `FormField[Set[A]]`.
+  *
+  * It renders through the group it was made from, so the two share every option, template and state setter and the
+  * same anatomy.
+  */
+final case class MultiSelectButton[A] private[uic] (private[uic] val group: SelectButton[A])
+    extends Node, MultiChoiceFormControl[A], HasAccessibleNameRef:
+    type Self = MultiSelectButton[A]
+
+    private def on(g: SelectButton[A]): MultiSelectButton[A] = copy(group = g)
+
+    /** Appends typed options with their text projection, as [[SelectButton.options]]. */
+    def options(is: Seq[A])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))
+
+    /** Convenience for plain string options (label = identity). */
+    def options(is: Seq[String])(using ev: String =:= A): MultiSelectButton[A] = on(group.options(is))
+
+    /** Stable per-option key, what options are matched by; defaults to the label projection. */
+    def optionKey(f: A => String): MultiSelectButton[A] = on(group.optionKey(f))
+
+    /** Custom option content, as [[SelectButton.itemTemplate]]. */
+    def itemTemplate(f: A => UI): MultiSelectButton[A] = on(group.itemTemplate(f))
+
+    /** Renders matching options disabled. */
+    def optionDisabled(f: A => Boolean): MultiSelectButton[A] = on(group.optionDisabled(f))
+
+    /** Binds the set of chosen options two-way. A member no option carries stays in the set while the others toggle. */
+    @targetName("selectionSet")
+    def selection(ref: SignalRef[Set[A]]): MultiSelectButton[A] = on(group.withMulti(ref))
+
+    /** Fired with the set now held, after a click changed it. */
+    def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = on(group.withChangeSet(f))
+
+    /** Fires on focus loss with the set held: the validation layer's Blur trigger. */
+    @targetName("onBlurSet")
+    def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = on(group.withBlurSet(f))
+
+    /** Whether clicking the last option on may turn it off (Prime default true). */
+    def allowEmpty(v: Boolean): MultiSelectButton[A] = on(group.allowEmpty(v))
+
+    /** Says the options are still arriving, as [[SelectButton.loading]]. */
+    def loading(v: Boolean | Signal[Boolean]): MultiSelectButton[A] = on(group.loading(v))
+
+    /** Size of the fused buttons. */
+    def size(v: Size): MultiSelectButton[A] = on(group.size(v))
+
+    /** Disables the whole group; a `Signal[Boolean]` toggles it reactively. */
+    def disabled(v: Boolean | Signal[Boolean]): MultiSelectButton[A] = on(group.disabled(v))
+
+    private[uic] def withElementId(v: Maybe[String]): MultiSelectButton[A] = on(group.withElementId(v))
+    private[uic] def elementId: Maybe[String]                              = group.elementId
+
+    private[uic] def withInvalid(v: Maybe[BoolValue]): MultiSelectButton[A]                       = on(group.withInvalid(v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): MultiSelectButton[A]                   = on(group.withInvalidMessage(v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): MultiSelectButton[A] = on(group.withInvalidMessageDyn(v))
+
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelectButton[A] = on(group.withAccessibleName(v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelectButton[A] = on(group.withAccessibleNameRef(v))
+
+    private[uic] def render(using Frame): UI = group.render
+end MultiSelectButton

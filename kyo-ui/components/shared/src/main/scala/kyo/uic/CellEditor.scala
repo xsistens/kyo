@@ -93,8 +93,8 @@ object CellEditor:
                 Select[String]()
                     .options(options)
                     .id(p.id)
-                    .current(cur)
-                    .onChange(v => p.draft.set(v).andThen(p.commit))
+                    .current(if cur.isEmpty then Absent else Present(cur))
+                    .onChange(v => p.draft.set(v.getOrElse("")).andThen(p.commit))
                     .toUI
             }
 

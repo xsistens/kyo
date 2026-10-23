@@ -67,7 +67,7 @@ final case class Breadcrumb private (
     itemsV: List[BreadcrumbItem] = Nil,
     separatorV: Maybe[IconGlyph] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
-    onItemClickF: Maybe[String => UI.Action] = Absent
+    onItemClickF: Maybe[BreadcrumbItem => UI.Action] = Absent
 ) extends Node, HasAccessibleName:
     type Self = Breadcrumb
 
@@ -93,10 +93,8 @@ final case class Breadcrumb private (
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Breadcrumb = copy(accessibleNameV = v)
 
-    /** Fired with the item's href (or its text when hrefless) on click, in addition
-      * to the anchor's native navigation.
-      */
-    def onItemClick(f: String => UI.Action)(using Frame): Breadcrumb = copy(onItemClickF = Present(Callback.of(f)))
+    /** Fired with the item clicked, in addition to the anchor's native navigation. */
+    def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb = copy(onItemClickF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         val sepGlyph                                  = separatorV.getOrElse(Icons.chevronRight)
@@ -136,8 +134,7 @@ final case class Breadcrumb private (
       * current told a screen reader the trail ends in two places at once.
       */
     private def renderLink(it: BreadcrumbItem, isCurrent: Boolean)(using Frame): UI =
-        val payload = it.href.getOrElse(it.text.constOrEmpty)
-        var anchor  = a.cssClass("p-breadcrumb-item-link")
+        var anchor = a.cssClass("p-breadcrumb-item-link")
         it.href match
             case Present(h) =>
                 anchor = anchor.href(Href.Path(h))
@@ -153,7 +150,7 @@ final case class Breadcrumb private (
         // The click handler sits on a display-contents wrapper so kyo does not
         // suppress the anchor's native navigation; the handler fires in addition.
         onItemClickF match
-            case Present(f) => span.cssClass("p-uic-link-wrapper").onClick(f(payload))(toChild(linked))
+            case Present(f) => span.cssClass("p-uic-link-wrapper").onClick(f(it))(toChild(linked))
             case Absent     => linked
     end renderLink
 end Breadcrumb
