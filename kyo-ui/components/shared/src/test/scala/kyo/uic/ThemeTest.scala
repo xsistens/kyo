@@ -1,12 +1,14 @@
 package kyo.uic
 
 import kyo.*
+import kyo.uic.Theme.themed
 
 /** The token layer's SELECTOR contract: the part of theming that decides whether an
   * override lands, and that used to live only in a source comment.
   *
-  * Everything here is pure string and pair algebra: `Theme` emits blocks, `preset` emits
-  * a consumer's block in the same shape, and `tokens` reads the same list back. What the
+  * Everything here is pure string and pair algebra: `Theme` emits blocks, `brand` emits
+  * a consumer's block in the same shape, `tokens` reads the same list back, and `themed`
+  * stamps the two attributes the blocks select by. What the
   * browser then does with the cascade is asserted in the consuming app's walk, not here.
   */
 class ThemeTest extends UicTest:
@@ -116,10 +118,10 @@ class ThemeTest extends UicTest:
         onlyFromAuraDark.foreach((n, vl) => assert(folded.get(n).contains(vl), s"$n survives from the Aura dark set"))
     }
 
-    // ── the consumer preset ─────────────────────────────────────────────────────────
+    // ── the consumer brand ──────────────────────────────────────────────────────────
 
-    "preset emits the plain block and the paired dark block that out-specifies it" in {
-        val css     = Theme.preset("brand", Seq("p-primary-400" -> "#1ed760")).render
+    "brand emits the plain block and the paired dark block that out-specifies it" in {
+        val css     = Theme.brand("brand", Seq("p-primary-400" -> "#1ed760")).sheet.render
         val iPlain  = css.indexOf("""[data-theme="brand"] {""")
         val iPaired = css.indexOf("""[data-theme="brand"][data-scheme="dark"] {""")
         assert(iPlain >= 0 && iPaired > iPlain)
@@ -127,7 +129,7 @@ class ThemeTest extends UicTest:
     }
 
     "the paired block repeats the light tokens, so a dark scheme does not lose them" in {
-        val css  = Theme.preset("brand", Seq("p-primary-400" -> "#1ed760", "p-surface-900" -> "#121212")).render
+        val css  = Theme.brand("brand", Seq("p-primary-400" -> "#1ed760", "p-surface-900" -> "#121212")).sheet.render
         val dark = css.substring(css.indexOf("""[data-theme="brand"][data-scheme="dark"] {"""))
         assert(dark.contains("--p-primary-400: #1ed760;"))
         assert(dark.contains("--p-surface-900: #121212;"))
@@ -135,7 +137,8 @@ class ThemeTest extends UicTest:
 
     "a dark delta lands after its light counterpart in the paired block" in {
         val css = Theme
-            .preset("brand", Seq("p-primary-400" -> "#111111"), Seq("p-primary-400" -> "#222222"))
+            .brand("brand", Seq("p-primary-400" -> "#111111"), Seq("p-primary-400" -> "#222222"))
+            .sheet
             .render
         val dark = css.substring(css.indexOf("""[data-theme="brand"][data-scheme="dark"] {"""))
         assert(dark.indexOf("#111111") < dark.indexOf("#222222"), "later declaration wins, so it goes last")
@@ -144,20 +147,20 @@ class ThemeTest extends UicTest:
         assert(plain.contains("#111111") && !plain.contains("#222222"))
     }
 
-    "a preset with nothing to say emits nothing" in {
-        assert(Theme.preset("brand", Nil).isEmpty)
-        assert(Theme.preset("brand", Nil, Nil).isEmpty)
+    "a brand with nothing to say emits nothing" in {
+        assert(Theme.brand("brand", Nil).sheet.isEmpty)
+        assert(Theme.brand("brand", Nil, Nil).sheet.isEmpty)
     }
 
-    "a dark-only preset emits just the paired block" in {
-        val css = Theme.preset("brand", Nil, Seq("p-surface-900" -> "#000000")).render
+    "a dark-only brand emits just the paired block" in {
+        val css = Theme.brand("brand", Nil, Seq("p-surface-900" -> "#000000")).sheet.render
         assert(!css.contains("""[data-theme="brand"] {"""))
         assert(css.contains("""[data-theme="brand"][data-scheme="dark"] {"""))
     }
 
-    "a derived preset starts from a shipped one" in {
+    "a derived brand starts from a shipped one" in {
         val derived = Theme.tokens(Theme.Preset.Aura, Theme.Scheme.Dark) ++ Seq("p-primary-400" -> "#1ed760")
-        val css     = Theme.preset("brand", derived).render
+        val css     = Theme.brand("brand", derived).sheet.render
         assert(css.contains("--p-primary-400: #1ed760;"))
         // Last declaration wins inside the block, so the override sits after the base value.
         val block = css.substring(css.indexOf("""[data-theme="brand"] {"""))
@@ -242,10 +245,61 @@ class ThemeTest extends UicTest:
         assert(!lightOnly.contains("""[data-scheme="dark"]{"""))
     }
 
-    "a brand preset composes onto a slim sheet the same way it does onto the full one" in {
-        val brand = Theme.preset("brand", Seq("p-primary-400" -> "#1ed760"))
-        val sheet = slim + "\n" + brand.render
+    "a brand composes onto a slim sheet the same way it does onto the full one" in {
+        val brand = Theme.brand("brand", Seq("p-primary-400" -> "#1ed760"))
+        val sheet = slim + "\n" + brand.sheet.render
         assert(sheet.indexOf("""[data-theme="brand"] {""") > sheet.indexOf(""":root, [data-theme]"""))
         assert(sheet.contains("--p-primary-400: #1ed760;"))
+    }
+
+    // ── themed: the attributes the blocks select by ─────────────────────────────────
+
+    private def renderHtml(ui: UI)(using Frame): String < Async =
+        UI.runRender(ui).take(1).run.map(_.mkString)
+
+    "themed stamps the preset and the scheme the sheet keys on" in {
+        val el = UI.div("x").themed(Theme.Preset.Material, Theme.Scheme.Dark)
+        assert(el.attrs.dataAttrs == Map("theme" -> "material", "scheme" -> "dark"))
+        assert(el.attrs.reactiveAttrs.isEmpty)
+    }
+
+    "light is written rather than left out, so a light subtree inside a dark one resets" in {
+        val el = UI.div("x").themed(Theme.Preset.Aura)
+        assert(el.attrs.dataAttrs.get("scheme").contains("light"))
+        // The base block the light tokens land on matches any element carrying the attribute.
+        assert(Theme.primeTokensCss.contains(""":root, [data-theme], [data-scheme]{"""))
+    }
+
+    "a brand themes by the name its sheet was made for" in {
+        val brand = Theme.brand("spotify", Seq("p-primary-400" -> "#1ed760"))
+        val el    = UI.div("x").themed(brand, Theme.Scheme.Dark)
+        assert(el.attrs.dataAttrs.get("theme").contains("spotify"))
+        assert(brand.sheet.render.contains("""[data-theme="spotify"][data-scheme="dark"] {"""))
+    }
+
+    "a signal binds the attribute in place, and a static render writes its current value" in {
+        for
+            palette <- Signal.initRef[Theme.Preset](Theme.Preset.Lara)
+            dark    <- Signal.initRef(Theme.Scheme.Dark)
+            el = UI.div("x").themed(palette, dark)
+            html <- renderHtml(el)
+        yield
+            assert(el.attrs.dataAttrs.isEmpty, "no constant beside the signal")
+            assert(el.attrs.reactiveAttrs.keySet == Set("data-theme", "data-scheme"))
+            assert(html.contains("""data-theme="lara"""") && html.contains("""data-scheme="dark""""))
+    }
+
+    "a second themed replaces the first, whichever form each took" in {
+        for
+            dark <- Signal.initRef(Theme.Scheme.Dark)
+            el = UI.div("x").themed(Theme.Preset.Nora, dark).themed(Theme.Preset.Aura, Theme.Scheme.Light)
+        yield
+            assert(el.attrs.dataAttrs == Map("theme" -> "aura", "scheme" -> "light"))
+            assert(el.attrs.reactiveAttrs.isEmpty, "the earlier signal is gone, not left to overwrite the constant")
+    }
+
+    "themed keeps the element's own type and attributes" in {
+        val el: UI.Ast.Main = UI.main("x").id("shell").cssClass("app").themed(Theme.Preset.Aura, Theme.Scheme.Dark)
+        assert(el.attrs.identifier.contains("shell") && el.attrs.cssClasses == Chunk("app"))
     }
 end ThemeTest
