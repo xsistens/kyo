@@ -17,7 +17,7 @@ import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Unit tests for Phase 04 denormalization ([[CacheBatchReader]]): walking an
+/** Unit tests for denormalization ([[CacheBatchReader]]): walking an
   * operation's selection tree back over stored [[Record]]s to reassemble a
   * response `data` map and decode it into typed data, with a
   * [[CacheMissException]] failure on any gap and a panic on a defect.
@@ -392,7 +392,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         // --- Batching: one load per level of the selection tree ------------------
 
         "a list of a hundred references is one load, not a hundred" in {
-            // P2-26: the reader used to resolve every reference with its own lookup. The
+            // The reader loads a whole level at once, not each reference on its own. The
             // root is level one, the hundred items level two — two loads in total.
             val itemKeys = Chunk.from(1 to 100).map(i => CacheKey("Item", i.toString))
             val records  = itemKeys.map(k => k -> Record(k, Map(fk("id") -> RecordValue.Scalar(jstr(k.render))))).toMap +

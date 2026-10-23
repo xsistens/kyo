@@ -425,7 +425,7 @@ object ApolloClientWriter:
                 fields.map(f => FieldSpec(f.name, f.ofType, f.args.map(a => ArgSpec(a.name, a.ofType))))
             val objects = schema.objectTypeDefinitions.map { obj =>
                 roots.get(obj.name) match
-                    // Roots use the universal `RootQuery`/… markers from `core` (imported via
+                    // Roots use the universal `RootQuery`/… markers from kyo-apollo (imported via
                     // the wildcard), so no per-schema phantom trait is emitted for them.
                     case Some((origin, objectName)) =>
                         renderSelectorObject(objectName, origin, obj.name, specs(obj.fields), Nil, emitTrait = false)
@@ -510,7 +510,7 @@ object ApolloClientWriter:
         /** Render an `object <objectName>` of selector methods rooted in `originName`,
           * optionally preceded by its own `sealed trait <originName>` phantom marker
           * (object, interface and union types own theirs; the operation roots share
-          * `core`'s). `branches` are the object types an `on<Type>` inline-fragment
+          * kyo-apollo's). `branches` are the object types an `on<Type>` inline-fragment
           * branch is emitted for: the implementors of an interface, the members of a
           * union, none for an object type.
           *

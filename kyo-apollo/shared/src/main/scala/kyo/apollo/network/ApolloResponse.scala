@@ -42,7 +42,7 @@ import kyo.apollo.json.Json
   * @param extensions        top-level response `extensions`, passed through raw
   * @param executionContext  metadata accumulated across the interceptor chain
   * @param cacheInfo         how the normalized cache produced this response, when
-  *                          it flowed through the cache interceptor (Phase 04);
+  *                          it flowed through the cache interceptor;
   *                          absent for a plain networked response
   * @param complete          false while an incremental delivery (`@defer` /
   *                          `@stream`) still has payloads outstanding (the wire

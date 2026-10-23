@@ -5,19 +5,19 @@ import kyo.*
 import scala.io.Source
 import scala.util.Using
 
-/** Wiring smoke test for the Phase 08 `codegen` module (Task 3).
+/** Wiring smoke test for the `kyo-apollo-codegen` module.
   *
-  * It asserts the two things this module-creation task delivers:
+  * It asserts the two things the module's setup must provide:
   *
   *   1. The `caliban-tools` dependency (and, transitively, `caliban`'s parser)
   *      is on the classpath and USABLE — we actually parse an operation document
-  *      through `caliban.parsing.Parser`, the reuse boundary ADR-001 committed to.
+  *      through `caliban.parsing.Parser`, the parser the generator builds on.
   *   2. The `codegenExample` schema + operation documents are packaged as
-  *      resources and readable, so downstream tasks have fixtures to generate
-  *      from.
+  *      resources and readable, so the generator suites have fixtures to
+  *      generate from.
   *
-  * The real emitter behaviour is covered later by Task 8; this only proves the
-  * scaffolding is sound.
+  * The emitter's behaviour is covered by the other suites; this only proves the
+  * wiring is sound.
   */
 class CodegenModuleSpec extends kyo.test.Test[Any]:
 

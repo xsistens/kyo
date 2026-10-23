@@ -9,7 +9,7 @@ import scala.NamedTuple.AnyNamedTuple
 /** Unit tests for the `.streamed(initialCount)` combinator: it marks the last-added
   * list field with an auto-labelled `@stream` directive while leaving the result
   * type UNCHANGED (`Chunk[A]` stays `Chunk[A]` — no `Maybe` wrapper, unlike
-  * `.deferred`). Mirrors the hand-written selector layer of [[SelectionBuilderSpikeSpec]].
+  * `.deferred`). Mirrors the hand-written selector layer of [[HandWrittenSelectorSpec]].
   */
 class StreamBuilderSpec extends kyo.test.Test[Any]:
 

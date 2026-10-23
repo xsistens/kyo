@@ -11,9 +11,9 @@ import scala.collection.immutable.VectorMap
 /** The store under real concurrency: a store operation is parked in the middle of its
   * load by a [[LatchingCache]] while a competing operation runs on another fiber, and
   * the outcome is asserted once both have finished. Each case is an interleaving the
-  * store used to get wrong — a read torn by a write (P2-37), two updates of one list
-  * losing one (P2-38), a rollback splitting a read between two layer stacks (P2-36) —
-  * forced with latches, so it is deterministic.
+  * store must survive (a read torn by a write, two updates of one list losing one, a
+  * rollback splitting a read between two layer stacks), forced with latches, so it is
+  * deterministic.
   */
 class StoreConcurrencySpec extends kyo.test.Test[Any]:
 

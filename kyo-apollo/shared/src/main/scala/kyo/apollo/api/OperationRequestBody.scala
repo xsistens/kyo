@@ -9,8 +9,7 @@ import scala.collection.immutable.VectorMap
   * body `{ "query", "operationName", "variables", "extensions" }`. The
   * `variables` object is the operation's own [[Operation.variables]] (a
   * [[Json.JObj]] built per-variable through each value's `Schema`), so this type
-  * no longer needs a custom-scalar registry. This replaces the ad-hoc
-  * `Json.JObj(...)` request building the Phase 01 demo did inline.
+  * needs no custom-scalar registry.
   *
   * Field order is fixed (`query`, `operationName`, `variables`, then an optional
   * `extensions`) so request bodies serialise deterministically and are

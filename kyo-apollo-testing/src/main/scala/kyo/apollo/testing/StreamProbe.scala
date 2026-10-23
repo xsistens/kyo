@@ -2,10 +2,8 @@ package kyo.apollo.testing
 
 import kyo.*
 
-/** Effect-native stream probes for the kyo-test suites — promoted verbatim from
-  * `core`'s test-scoped `kyo.apollo.StreamProbe` (ADR §3, the highest-value /
-  * lowest-risk promotion: already generic over `Stream[A, Async & Scope]` and
-  * effect-neutral, with zero spec-specific coupling).
+/** Effect-native stream probes for the kyo-test suites, generic over
+  * `Stream[A, Async & Scope]` and effect-neutral.
   *
   * The whole stack is kyo-effect-native (an operation yields
   * `ApolloResponse[D] < (Async & Scope)`, an interceptor chain a

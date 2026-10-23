@@ -4,17 +4,16 @@ import kyo.*
 import scala.io.Source
 import scala.util.Using
 
-/** Task 5 tests: scalar, enum, and input-object handling.
-  *
-  * Covers the three Task 5 deliverables against the `codegenExample` fixtures:
-  *   - GraphQL enums → Scala 3 `enum`s with an `Adapter`;
+/** Scalar, enum, and input-object handling, against the `codegenExample` fixtures:
+  *   - GraphQL enums → Scala 3 `enum`s with a string-transform `Schema`, and an
+  *     `Unknown__` case for a value the schema does not know;
   *   - custom scalars → configurable Scala types via `scalarMappings`, with a
-  *     generated `CustomScalars` registry and `Adapter.forScalar` references;
-  *   - input object types → case classes with an `ObjectAdapter`-based `Adapter`.
+  *     generated `CustomScalars` object of `given Schema`s where one is needed;
+  *   - input object types → case classes deriving `Schema`.
   *
   * Assertions are on the emitted source text (the emitter's contract), matching
-  * [[ApolloClientWriterSpec]]'s style; compiling the generated code against `core`
-  * is Task 8.
+  * [[ApolloClientWriterSpec]]'s style; `kyo-apollo-codegen-it` compiles the
+  * generated code against kyo-apollo.
   */
 class ScalarEnumInputSpec extends kyo.test.Test[Any]:
 
@@ -156,7 +155,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
         }
 
         "scalar: mapping to a type with its own companion given emits no CustomScalars and no import" in {
-            // A project opaque/Iron id (e.g. `civolution.common.ids.GameId`) carries its
+            // A project opaque/Iron id (e.g. `com.example.ids.GameId`) carries its
             // own `given Schema` in its companion. Codegen has no recipe for it, so it is
             // treated like a builtin: the selector is typed to the FQN and its codec is
             // `ScalarCodec.fromSchema[FQN]` (resolving the companion given) — no registry,
