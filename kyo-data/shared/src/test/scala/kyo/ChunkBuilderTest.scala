@@ -57,5 +57,39 @@ class ChunkBuilderTest extends kyo.test.Test[Any]:
             hinted.sizeHint(2)
             assert(hinted.toString() == "ChunkBuilder(size = 1)")
         }
+
+        "a released buffer keeps no element reachable" - {
+            "after result" in {
+                val builder = ChunkBuilder.init[String]
+                (0 until 100).foreach(i => builder.addOne(i.toString))
+                assert(builder.result().size == 100)
+                assert(ChunkBuilder.pooledReferences() == 0)
+            }
+
+            "after clear and a smaller result" in {
+                val builder = ChunkBuilder.init[String]
+                (0 until 100).foreach(i => builder.addOne(i.toString))
+                builder.clear()
+                builder.addOne("a")
+                assert(builder.result() == Chunk("a"))
+                assert(ChunkBuilder.pooledReferences() == 0)
+            }
+
+            "after Chunk.foreach over appended elements" in {
+                val chunk = Chunk("a").append("b").append("c")
+                var seen  = List.empty[String]
+                chunk.foreach(s => seen = seen :+ s)
+                assert(seen == List("a", "b", "c"))
+                assert(ChunkBuilder.pooledReferences() == 0)
+            }
+        }
+
+        "null elements" in {
+            val builder = ChunkBuilder.init[String]
+            builder.addOne("a")
+            builder.addOne(null)
+            builder.addOne("c")
+            assert(builder.result() == Chunk("a", null, "c"))
+        }
     }
 end ChunkBuilderTest

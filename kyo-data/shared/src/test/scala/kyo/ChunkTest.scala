@@ -1108,6 +1108,14 @@ class ChunkTest extends kyo.test.Test[Any]:
             assert(result == List(2, 3, 4))
         }
 
+        "with appended null elements" in {
+            val chunk = Chunk("a").append(null).append("c").append(null)
+
+            var result = List.empty[String]
+            chunk.foreach(x => result = result :+ x)
+            assert(result == List("a", null, "c", null))
+        }
+
         "with chained appends and nested drops" in {
             val chunk = Chunk.empty[Int]
                 .append(1)
