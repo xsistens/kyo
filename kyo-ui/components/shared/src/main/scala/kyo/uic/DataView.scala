@@ -12,7 +12,7 @@ enum DataViewLayout derives CanEqual:
         case DataViewLayout.Grid => "grid"
 end DataViewLayout
 
-/** DataView — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** DataView: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataView anatomy: `div.p-dataview.p-component.p-dataview-list|-grid` >
   * [`div.p-dataview-header`] + `div.p-dataview-content` + [the standalone
   * [[Paginator]] stamped `p-dataview-paginator-bottom`] +
@@ -21,13 +21,13 @@ end DataViewLayout
   *
   * Items are TYPED: `items(Seq[A])` supplies the data, `itemTemplate` renders
   * each item in the list layout, `gridItemTemplate` (falling back to
-  * `itemTemplate`) in the grid layout — item layout inside the content is
+  * `itemTemplate`) in the grid layout. Item layout inside the content is
   * template-owned, exactly like Prime. `layout` is a static enum; apps that
   * want a live list/grid switcher re-render with the other value (pair it
   * with a [[SelectButton]]). `paginate(rows)(pageRef)` slices the items and
   * embeds the paginator bound two-way to the 0-based page ref.
   *
-  * A list that GROWS — a stream of pages, a search that refines — supplies the
+  * A list that GROWS (a stream of pages, a search that refines) supplies the
   * data as `items(Signal[Chunk[A]])` instead. The rows then become a kyo-ui list
   * region reconciled per emission, so an appended page renders the new cards and
   * leaves the ones already on screen alone; the build-time `Seq` form rebuilds
@@ -37,12 +37,12 @@ end DataViewLayout
   *
   * `loading(true)` renders PrimeReact's busy state: the sheet's
   * `.p-dataview-loading-overlay` (composed with `.p-overlay-mask` for the
-  * dimmed backdrop) over the content, holding a [[ProgressSpinner]] — the
+  * dimmed backdrop) over the content, holding a [[ProgressSpinner]]; the
   * root's `position: relative` anchor is a `.p-uic-*` remainder rule keyed on
   * `.p-dataview-loading` (PrimeReact's root modifier).
   *
   * Sorting is deliberately NOT a component prop (Prime's `sortField`/
-  * `sortOrder` re-order internally): sort the `Seq` before `items(...)` — the
+  * `sortOrder` re-order internally): sort the `Seq` before `items(...)`: the
   * template owns row layout either way, and a plain `sortBy` keeps the data
   * flow visible.
   */
@@ -71,14 +71,14 @@ final case class DataView[A] private (
     /** Reactive items: the list is carried as a signal and the rows are reconciled per emission through
       * kyo-ui's list region (`Signal.foreach`), instead of the whole content being rebuilt.
       *
-      * This is the form for data that arrives over time — a stream of pages, a query that refines. With the
+      * This is the form for data that arrives over time: a stream of pages, a query that refines. With the
       * build-time [[items(Seq)]] form an emission means rebuilding the component, so every card is
       * re-rendered even though only the tail changed; here an appended page renders the appended rows and
       * leaves the rows already on screen untouched. Without [[itemKey]] rows are matched by POSITION, which
       * is right for appends and wrong for reorders and mid-list insertions.
       *
       * Two limits worth knowing before reaching for it. Clears a previously set static list (the sources are
-      * exclusive, last one wins), and a [[paginate]]d DataView falls back to the build-time path — the page
+      * exclusive, last one wins), and a [[paginate]]d DataView falls back to the build-time path: the page
       * slice is build-time arithmetic over the whole list, so the rows cannot be a list region at all; the
       * signal then drives a plain region around the component, which is the same cost as rebuilding.
       */
@@ -89,7 +89,7 @@ final case class DataView[A] private (
       * DOM instead of being re-rendered into the position it moved to.
       *
       * Only the [[items(Signal)]] source reconciles, so this has no effect on a static list or on a
-      * paginated one. The key must be an actual identity for the data — kyo-ui warns on duplicates, and a
+      * paginated one. The key must be an actual identity for the data: kyo-ui warns on duplicates, and a
       * key that collides applies a row's update to the wrong record.
       */
     def itemKey(f: A => String): DataView[A] = copy(itemKeyF = Present(f))
@@ -128,7 +128,7 @@ final case class DataView[A] private (
       *
       * A page slice is arithmetic over the WHOLE list (`totalRecords`, the clamped page count, the
       * `slice`), all of it build-time work the row region cannot do. So a paginated reactive DataView
-      * resolves its signal into a plain region and renders the build-time path underneath — an honest
+      * resolves its signal into a plain region and renders the build-time path underneath, an honest
       * whole-component rebuild per emission rather than a keyed list that is not keyed. The paginator's own
       * page region nests inside it, which is the one place in this component where two regions stack: the
       * inner one is re-created by every emission of the outer, so it cannot outlive the list it sliced.
@@ -184,7 +184,7 @@ final case class DataView[A] private (
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-dataview-footer")(toChild(f)))
 
         // PrimeReact's busy state: the sheet's absolute overlay composed with the
-        // dimming .p-overlay-mask (position resolves to absolute — the dataview rule
+        // dimming .p-overlay-mask (position resolves to absolute: the dataview rule
         // wins over the mask's fixed), holding our ProgressSpinner.
         def overlayDiv: UI =
             div

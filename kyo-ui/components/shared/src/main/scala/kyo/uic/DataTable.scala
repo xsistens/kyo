@@ -84,13 +84,13 @@ end NavState
 /** What a row click needs beyond the selection itself, once [[DataTable.metaKeySelection]] is
   * on: where a range would be measured, and where it would start.
   *
-  * `keys` is the FILTERED rows in the order the reader sees them, across every page — the same
+  * `keys` is the FILTERED rows in the order the reader sees them, across every page: the same
   * list the select-all header covers, so a range and a select-all cannot disagree about what
   * "all of them" means. It is empty when no range is possible, which is also how the render
   * without a mount says so.
   *
   * `anchor` is the last row picked WITHOUT shift. It is the one piece of selection state the
-  * caller does not own — a `Set` has no order, so it cannot be derived from the selection — and
+  * caller does not own (a `Set` has no order, so it cannot be derived from the selection), and
   * the only reason a table with modifier selection needs a mount at all. A shift-click READS it
   * and leaves it where it is, which is what makes widening and narrowing the same range one
   * gesture repeated rather than a walk.
@@ -275,7 +275,7 @@ final private[uic] case class Paging[A](rows: List[A], base: Int, current: Int)
 
 /** What the ROWS of a table are made of, as one value.
   *
-  * The table's other bindings — column order, visibility, sort, filter, page, widths — rebuild
+  * The table's other bindings (column order, visibility, sort, filter, page, widths) rebuild
   * every cell when they move, so resolving them around the body is right and costs nothing. These
   * do not. A selection, a context row, a picked cell, an expanded row, a collapsed group each
   * change a handful of `<tr>`s; and the row list itself, when it re-emits, usually carries mostly
@@ -283,8 +283,8 @@ final private[uic] case class Paging[A](rows: List[A], base: Int, current: Int)
   * component around it.
   *
   * The rows belong here even though they look like the table's most fundamental input, and that is
-  * the whole point: a caller whose selection lives in the DATA — a client field on the row, with
-  * `selected` derived from the same signal — never emits a selection, only rows. Leaving the rows
+  * the whole point: a caller whose selection lives in the DATA (a client field on the row, with
+  * `selected` derived from the same signal) never emits a selection, only rows. Leaving the rows
   * outside would have made the reuse unreachable for exactly the callers who need it most.
   */
 final private[uic] case class RowInputs[A](
@@ -332,7 +332,7 @@ final private[uic] case class BodyView[A](
   * A body does not emit one element per row: a row with an expansion is two, a group contributes a
   * header and a summary that belong to no row, and a windowed body pads with spacers and draws slots
   * for rows the source has not reached. So the body's list is the stream of `<tr>`s, and this is one
-  * element of it — a description complete enough that rendering it needs nothing else.
+  * element of it: a description complete enough that rendering it needs nothing else.
   *
   * Why the shape matters. A keyed list region reuses a row only when it paints as exactly ONE
   * element, and only when the value it was rendered from is `equals` to the previous one. Splitting
@@ -346,7 +346,7 @@ private[uic] object RowSpec:
 
     /** Entries are compared to decide whether a row has to be rendered again, so equality here is
       * the question "would this `<tr>` come out differently". The cases are case classes, so it is
-      * their fields — and a field holding a function compares by reference, which is why what a
+      * their fields, and a field holding a function compares by reference, which is why what a
       * handler needs about the whole list is READ at event time (see [[BodyView]]) rather than
       * carried here: a lambda rebuilt per emission would make every row unequal and reuse nothing.
       */
@@ -454,7 +454,7 @@ final case class TableState(
   */
 final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
 
-/** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** DataTable: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
   * [.p-datatable-striped][.p-datatable-gridlines][.p-datatable-sm|-lg]` >
   * `div.p-datatable-table-container` > `table.p-datatable-table` with
@@ -497,9 +497,9 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   *     restores the column at the rank it had. While two or more columns sort, each
   *     sorted header carries its 1-based rank in a `.p-datatable-sort-badge`, which is
   *     the only thing that says which key wins.
-  *   - `globalFilter(ref)` — case-insensitive contains-match over the columns'
+  *   - `globalFilter(ref)`: case-insensitive contains-match over the columns'
   *     text projections.
-  *   - `paginate(size)(pageRef)` — slices the (filtered, sorted) rows and renders
+  *   - `paginate(size)(pageRef)`: slices the (filtered, sorted) rows and renders
   *     the embedded Prime paginator; the page ref is 0-based and clamped.
   *   - `lazyRows(total)`: the rows are a WINDOW onto `total` rows filtered, sorted and
   *     paged somewhere else. The table renders them verbatim and paginates over the
@@ -514,11 +514,11 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   *   - `source(rowSource)`: the same thing wired in one call from a [[RowSource]], which
   *     owns the block cache and the prefetch behind it, so stepping to the next page is
   *     served from the buffer and raises no busy mask at all.
-  *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
+  *   - `selectionMode` + `selected(ref)`: `Single`/`Multiple` select on row
   *     click; `Checkbox` renders Prime's checkbox column, whose header carries the
   *     binary select-all over every row that survived the global filter (`Radio`
   *     follows single-select semantics without a radio column for now).
-  *   - `expanded(ref)` + `rowExpansionTemplate` — an expander-button column is
+  *   - `expanded(ref)` + `rowExpansionTemplate`: an expander-button column is
   *     auto-added; expanded rows are followed by a full-colspan
   *     `tr.p-datatable-row-expansion`.
   *   - `editingRows(ref)` / `editingCell(ref)` + `Column.editor`: the table decides
@@ -551,7 +551,7 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   * `onRowClick` payload. It is REQUIRED in practice whenever any of those is
   * bound: without it rows fall back to their position in the ORIGINAL rows list,
   * which survives sorting and filtering (both computed here) but not a data
-  * change — reorder the rows and every selection, expansion and click payload
+  * change: reorder the rows and every selection, expansion and click payload
   * re-associates with a different record, silently. A table that binds identity
   * without a key therefore renders a loud `.p-uic-key-error` card above itself
   * rather than shipping that failure to production data.
@@ -628,7 +628,7 @@ final case class DataTable[A] private (
     /** Appends data rows. */
     def rows(rs: Seq[A]): DataTable[A] = copy(rowsV = rowsV ++ rs.toList)
 
-    /** Stable row identity — the selection/expansion key and the `onRowClick`
+    /** Stable row identity: the selection/expansion key and the `onRowClick`
       * payload. Required for reliable selection/expansion.
       */
     def rowKey(f: A => String): DataTable[A] = copy(rowKeyF = Present(f))
@@ -850,15 +850,15 @@ final case class DataTable[A] private (
 
     /** The selected rows, matched by [[rowKey]].
       *
-      * A `SignalRef` binds two way — the table writes the reader's clicks back into it. A plain
+      * A `SignalRef` binds two way: the table writes the reader's clicks back into it. A plain
       * `Signal` binds ONE way: the table paints what the signal says and never writes to it, which
-      * is what a selection whose source of truth lives elsewhere needs — a URL, a parent, a record
+      * is what a selection whose source of truth lives elsewhere needs: a URL, a parent, a record
       * in a normalized cache the rows are read from. A constant set is a selection that cannot
       * change at all.
       *
       * Reading needs no write access (`Signal.render` serves every case), so only four paths care
       * which form this is: a row click, the checkbox column, its select-all, and [[restore]]. Under
-      * a one-way binding each of those has nowhere to write, so each does nothing — and
+      * a one-way binding each of those has nowhere to write, so each does nothing, and
       * [[onRowClick]] still fires on every row click, which is how a caller owning the state
       * elsewhere closes the loop: the click writes THERE, and the new value arrives back through
       * this signal. `Checkbox` mode has no such outlet, and a one-way binding without an
@@ -873,7 +873,7 @@ final case class DataTable[A] private (
       * behaviour a checkbox list has without the checkboxes. On, a row click reads like a file
       * manager and a spreadsheet:
       *
-      *   - a plain click REPLACES the selection with the row it landed on — including when that
+      *   - a plain click REPLACES the selection with the row it landed on, including when that
       *     row was already selected, which collapses a selection to one rather than clearing it
       *   - Ctrl or Cmd + click toggles that row into or out of the selection
       *   - Shift + click selects the RANGE from the last row picked without shift up to this one,
@@ -886,7 +886,7 @@ final case class DataTable[A] private (
       *
       * Two consequences worth knowing before turning it on. The range needs an ANCHOR: unless the
       * caller binds one with [[selectionAnchor]], the table mints it in a mount and renders as a
-      * placeholder under a pure render — which is why it is opt-in rather than the shape every
+      * placeholder under a pure render, which is why it is opt-in rather than the shape every
       * selectable table pays for. And [[selectableWhen]] still applies: a range steps over the
       * rows it rejects rather than dragging them in.
       *
@@ -900,12 +900,12 @@ final case class DataTable[A] private (
       *
       * The anchor is the one thing a selection cannot be asked for: a `Set` has no order, so
       * "the last row picked without shift" is not derivable from what is selected. Unbound, the
-      * table mints it inside its own mount — and a mount's state lives exactly as long as the
+      * table mints it inside its own mount, and a mount's state lives exactly as long as the
       * region enclosing it, so a page that re-renders around the table re-allocates the anchor
       * and a shift-click reads one no click ever wrote. That is not a fault in the mount: keyed
       * continuity spans re-renders of the immediately enclosing region and ends with it, by
       * design. It is the same reason [[sort]], the page (bound through [[paginator]]), the column filters and the column
-      * widths are all bindable — state that has to outlive the table's own render belongs to
+      * widths are all bindable: state that has to outlive the table's own render belongs to
       * the caller.
       *
       * Bind it and two things follow: the anchor survives whatever the page does, and ranging
@@ -1188,7 +1188,7 @@ final case class DataTable[A] private (
       * emission and writes nothing back.
       *
       * This is the shape a computed row list actually has. A list mapped out of a query
-      * state, a paginated connection, a `combineLatestAll` over per-row signals — none of
+      * state, a paginated connection, a `combineLatestAll` over per-row signals: none of
       * them is a cell anyone can write into, so none of them is a `SignalRef`, and
       * mirroring one into a ref just to satisfy a binding puts a second thing in the
       * program that claims to be the row list. Reach for [[rows(ref:SignalRef[Seq[A]])*]]
@@ -1296,7 +1296,7 @@ final case class DataTable[A] private (
       * The write-side counterpart of a one-way [[selection]], and the only outlet that can carry
       * [[metaKeySelection]]: the table resolves the mode, the modifier and the range into a new
       * set, and hands that set over instead of writing it, so a caller whose selection lives
-      * somewhere else — a URL, a parent, a record in a normalized cache — applies it there.
+      * somewhere else (a URL, a parent, a record in a normalized cache) applies it there.
       * [[onRowClick]] cannot do this job once modifiers are on, because a row says which one was
       * clicked and not what the selection became.
       *
@@ -1525,7 +1525,7 @@ final case class DataTable[A] private (
       * from outside: a select-all header asks the whole selection whether every row is picked, a
       * frozen row group renders a second body from the same five values, and a windowed body
       * already drives its rows from the scroll. Any of those and they stay where they were, which
-      * is exactly what the table did before — no gain there yet, and no change either.
+      * is exactly what the table did before: no gain there yet, and no change either.
       */
     private def rowInputsBelow: Boolean =
         !checkboxColumn && !windowOn && !windowedSource && !hasFooter
@@ -1578,8 +1578,8 @@ final case class DataTable[A] private (
     /** Resolves the row bindings, below the body where that is allowed and around it otherwise.
       *
       * On the signal path `k`'s first argument is the empty value and MUST NOT be read for anything
-      * outside the row stream: the four features that would read it there — a select-all header, a
-      * frozen row group, a windowed body, a column footer — are exactly what makes
+      * outside the row stream: the four features that would read it there (a select-all header, a
+      * frozen row group, a windowed body, a column footer) are exactly what makes
       * [[rowInputsBelow]] false. What legitimately needs the rows outside the stream, the
       * diagnostic cards and the paginator, goes through `chrome`, which resolves them in a region
       * of its own so a rows emission repaints those and reconciles the rows.
@@ -1682,7 +1682,7 @@ final case class DataTable[A] private (
 
     /** Whether the table has to MINT the anchor, which is the only reason ranging forces a mount.
       * A caller who bound one has already supplied it, and supplied it somewhere that outlives
-      * this table's mount — see [[selectionAnchor]].
+      * this table's mount (see [[selectionAnchor]]).
       */
     private def mintsAnchor: Boolean = rangeOn && anchorRef.isEmpty
 
@@ -2255,7 +2255,7 @@ final case class DataTable[A] private (
             // Everything this mount allocates is state the table owns and nobody else can hand
             // back: the shift anchor, the column grab and drag, the row drag, the scroll offset,
             // the measured frozen-header height, the editing drafts. Keyless, all of it is
-            // re-allocated on every emission of whatever region encloses the table — a page that
+            // re-allocated on every emission of whatever region encloses the table: a page that
             // re-renders on a store write rebuilds the table several times between two clicks,
             // and a shift-click then reads an anchor ref that no click ever wrote. Measured that
             // way: `anchorSet ref=70`, then `shift anchor=Absent ref=74`.
@@ -2266,7 +2266,7 @@ final case class DataTable[A] private (
             //
             // What a key costs is the documented price of any keyed mount: the effect runs once,
             // so the column set and the editable/filterable leaves are read at mount time.
-            // Anything that must change afterwards belongs in a `Signal` — which is what `rows`,
+            // Anything that must change afterwards belongs in a `Signal`, which is what `rows`,
             // `sort`, `page` and the bound refs already are.
             idV match
                 case Present(id) => mount.keyed(id)
@@ -2498,7 +2498,7 @@ final case class DataTable[A] private (
     /** The same values, as they are NOW rather than as they were when the row was rendered.
       *
       * Every input is read from the ref the render read it from, and the arrangement is the same
-      * one — so a handler that takes this sees what a fresh render would have painted. A table
+      * one, so a handler that takes this sees what a fresh render would have painted. A table
       * bound to nothing reads its own constants back and this is the render's answer exactly.
       */
     private def bodyViewNow(using Frame): BodyView[A] < Async =
@@ -2855,7 +2855,7 @@ final case class DataTable[A] private (
         /** The `<tr>` stream for one value of the row bindings.
           *
           * Everything the rows depend on is computed HERE, from `in`, and nothing is taken from the
-          * enclosing render — which is what makes the stream a function of the bindings rather than
+          * enclosing render, which is what makes the stream a function of the bindings rather than
           * of the pass that happened to build it.
           */
         def specsFor(in: RowInputs[A]): List[RowSpec[A]] =
@@ -2994,7 +2994,7 @@ final case class DataTable[A] private (
             liveInputs match
                 // Its own keyed list, in its own tbody. The two bodies are separate regions, so a
                 // frozen row sharing a key with a body row is two keys in two namespaces rather
-                // than a duplicate — which is a diagnosed state, not a silent one, and stays that.
+                // than a duplicate, which is a diagnosed state, not a silent one, and stays that.
                 case Present(sig) =>
                     group(toChild(sig.map(in => Chunk.from(frozenSpecs(rows, in))).foreachKeyed(rowSpecKey)(renderTr)))
                 case Absent => group(frozenSpecs(rows, staticInputs).map(renderTr).map(toChild)*)
@@ -3155,8 +3155,8 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            // Three of the cards read the rows — a repeated rowKey, a frozen group taller than the
-            // page, a lazy total that does not add up — so they answer for the rows the reader is
+            // Three of the cards read the rows (a repeated rowKey, a frozen group taller than the
+            // page, a lazy total that does not add up), so they answer for the rows the reader is
             // looking at and go through `chrome`, which is transparent unless the rows drive the
             // body themselves. Two calls rather than one, so the cards keep the order they had.
             // The rest are about the table's declaration and never move.
@@ -3244,7 +3244,7 @@ final case class DataTable[A] private (
                 ))
         // A rowKey that is not an identity costs twice, and neither cost reaches the page: the
         // reader's selection lands on both rows at once, and the body's keyed list refuses to
-        // reuse anything at all — it warns to the console and rebuilds the whole emission. The
+        // reuse anything at all: it warns to the console and rebuilds the whole emission. The
         // column keys have had this card since they were introduced; the row keys read from the
         // caller's own data, which is where a duplicate is likelier and harder to see.
         val repeated =
@@ -3559,10 +3559,10 @@ final case class DataTable[A] private (
                         "Radio are about a column of the table, which a cell is not in",
                     List(selectionModeV.toString)
                 ))
-        // A one-way `selected` paints but never writes, which is the point of it — the caller owns
+        // A one-way `selected` paints but never writes, which is the point of it: the caller owns
         // the set and closes the loop through `onRowClick`. Two shapes have no loop to close, and
         // both look exactly like a working selection until a reader clicks one.
-        // A one-way `selected` paints but never writes, which is the point of it — the caller owns
+        // A one-way `selected` paints but never writes, which is the point of it: the caller owns
         // the set and applies the change themselves. `onSelectionChange` is the outlet that
         // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
         // a range or a replacement became.
@@ -3574,7 +3574,7 @@ final case class DataTable[A] private (
                 List(KeyDiagnostics.card(
                     "DataTable",
                     "selection is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
-                        "click, so onRowClick is no outlet for it — bind onSelectionChange, or a SignalRef",
+                        "click, so onRowClick is no outlet for it; bind onSelectionChange, or a SignalRef",
                     List(selectionModeV.toString)
                 ))
         val inert =
@@ -4777,7 +4777,7 @@ final case class DataTable[A] private (
             val actPlain: UI.Action = act(MouseEvent(Absent, Modifiers.none))
             // A click that passed through a control of the reader's own is that control's, not the
             // row's: following a link in a cell, pressing the expander, starting a row edit. Without
-            // this the row selects as well, and the control cannot decline the click for it — one
+            // this the row selects as well, and the control cannot decline the click for it: one
             // that navigates natively declares no kyo handler, so it has no `stopPropagation` to set
             // (and giving an anchor one costs it the middle click). The keyboard path below is
             // deliberately untouched: Enter on the ROW is the row's, whatever it contains.
@@ -4951,7 +4951,7 @@ final case class DataTable[A] private (
     /** Writes a new selection wherever it can go: into the bound ref if there is one to write,
       * and to [[onSelectionChange]] either way.
       *
-      * Both, not one or the other — a caller may bind a `SignalRef` and still want to hear about
+      * Both, not one or the other: a caller may bind a `SignalRef` and still want to hear about
       * the change, and a caller with a one-way binding has nothing BUT the callback. The ref is
       * written first so the two see the same value in the same order.
       */
@@ -5256,7 +5256,7 @@ final case class DataTable[A] private (
       * open editor, and there is nothing left to commit.
       */
     private def commitOpen(open: CellKey, nav: NavState[A], edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
-        // Read live, because failing to find the row here does not report anything — it answers
+        // Read live, because failing to find the row here does not report anything: it answers
         // "committed" and DROPS what the reader typed. A handler holding the rows as they were
         // would do that to any row that moved under an open editor.
         navNow(nav).map { now =>
@@ -5452,7 +5452,7 @@ end DataTable
 object DataTable:
     def apply[A](): DataTable[A] = new DataTable[A]()
 
-    /** The keys from `from` to `to` inclusive, in either direction — what a shift-click picks.
+    /** The keys from `from` to `to` inclusive, in either direction: what a shift-click picks.
       *
       * `keys` is the reader's own order, so a range is what they see between the two rows and
       * not what the underlying list happens to hold. A key that is not there (the anchor row was

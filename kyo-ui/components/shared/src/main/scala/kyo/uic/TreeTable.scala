@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
 
-/** One row of a [[TreeTable]] — a recursive hand-authored carrier: the typed row
+/** One row of a [[TreeTable]]: a recursive hand-authored carrier: the typed row
   * `data` plus its `children` (empty for a leaf). Row identity comes from the
   * table's `rowKey` projection over `data`.
   */
@@ -27,14 +27,14 @@ object TreeTableNodeScope:
         Entry.resolve(new TreeTableNodeScope[A], entries)
 end TreeTableNodeScope
 
-/** TreeTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** TreeTable: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * TreeTable anatomy: `div.p-treetable.p-component[.p-treetable-hoverable]
   * [.p-treetable-gridlines][.p-treetable-sm|-lg]` >
   * `div.p-treetable-table-container` > `table.p-treetable-table[role=treegrid]`
   * with `th.p-treetable-header-cell[.p-treetable-sortable-column]
   * [.p-treetable-column-sorted]` headers (each a
   * `div.p-treetable-column-header-content` > `span.p-treetable-column-title` +
-  * the sort icon) over recursive body rows — every cell wraps its content in
+  * the sort icon) over recursive body rows; every cell wraps its content in
   * `div.p-treetable-body-cell-content`, and the FIRST column carries the
   * `button.p-treetable-node-toggle-button` whose indent is `depth × 1rem`
   * (Prime's inline `marginLeft`; leaf togglers keep their box but hide, Prime's
@@ -57,7 +57,7 @@ end TreeTableNodeScope
   *     plain click cycles the only sorted column through all three states but merely
   *     reverses one of several, Ctrl or Cmd adds a column or advances one in place.
   *
-  * Pagination is deferred (Prime paginates root rows only — revisit with a
+  * Pagination is deferred (Prime paginates root rows only; revisit with a
   * concrete need).
   */
 final case class TreeTable[A] private (
@@ -84,7 +84,7 @@ final case class TreeTable[A] private (
     def nodes(ns: TreeTableNodeEntry[A]*): TreeTable[A] =
         copy(nodeList = nodeList ++ TreeTableNodeScope.resolve(ns))
 
-    /** Stable row identity — the expansion/selection key and the event payloads.
+    /** Stable row identity: the expansion/selection key and the event payloads.
       * Required for reliable expansion/selection (the fallback is the row's
       * position in the tree as authored, which does not survive data changes, and
       * matches a bound row by its own equality).
@@ -130,11 +130,11 @@ final case class TreeTable[A] private (
     /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
       *
       * Off (the default, and Prime's) every click toggles its row. On, a plain click replaces
-      * the selection with the row it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
-      * never one of the two. See [[SelectionPick]] for the rule every component offering this
+      * the selection with the row it landed on and Ctrl or Cmd toggles (`metaKey || ctrlKey`,
+      * never one of the two). See [[SelectionPick]] for the rule every component offering this
       * shares.
       *
-      * No shift-range, matching Prime, which ranges in `DataTable` only — and here that is also
+      * No shift-range, matching Prime, which ranges in `DataTable` only, and here that is also
       * the honest answer, since a range over a tree would have to say what it means to reach
       * across a collapsed branch.
       */
@@ -372,7 +372,7 @@ final case class TreeTable[A] private (
         root(div.cssClass("p-treetable-table-container")(toChild(tableEl)))
     end body
 
-    /** Applies the sort spec to one sibling list (stable, back-to-front — the
+    /** Applies the sort spec to one sibling list (stable, back-to-front: the
       * DataTable technique, per level).
       */
     private def sortSiblings(ns: List[(TreeTableNode[A], Int)], sort: List[SortKey]): List[(TreeTableNode[A], Int)] =

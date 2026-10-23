@@ -21,21 +21,21 @@ object PaginatorElement:
         List(FirstPageLink, PrevPageLink, PageLinks, NextPageLink, LastPageLink)
 end PaginatorElement
 
-/** Paginator — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Paginator: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Paginator anatomy: `div.p-paginator.p-component[role=navigation]` >
   * `button.p-paginator-first`/`-prev` + `span.p-paginator-pages` of
   * `button.p-paginator-page[.p-paginator-page-selected]` + `-next`/`-last`,
-  * then the optional template slots — the `.p-paginator-rpp-dropdown` Select,
-  * the `.p-paginator-current` report, the `.p-paginator-jtp-input` field — in
+  * then the optional template slots (the `.p-paginator-rpp-dropdown` Select,
+  * the `.p-paginator-current` report, the `.p-paginator-jtp-input` field) in
   * Prime's default template order), so the extracted `@primeuix` paginator CSS
   * applies verbatim. This is the SAME markup DataTable and DataView embed
   * below their content.
   *
   * `page(ref)` binds the 0-based page index two-way (clamped at render);
   * clicking a target writes the ref back before firing `onPage`. Page links
-  * window to `pageLinkSize` (Prime default 5) centered on the current page —
+  * window to `pageLinkSize` (Prime default 5) centered on the current page,
   * exactly PrimeVue's boundary math; like PrimeVue, the window just shifts (no
-  * ellipsis buttons — the extracted sheet styles none). `rows` can bind to a
+  * ellipsis buttons: the extracted sheet styles none). `rows` can bind to a
   * `SignalRef[Int]` so the rows-per-page dropdown (`rowsPerPageOptions`) can
   * write it back; a rows change repositions to the page that keeps the first
   * visible record visible.
@@ -76,7 +76,7 @@ final case class Paginator private (
     def pageLinkSize(n: Int): Paginator = copy(pageLinkSizeV = math.max(1, n))
 
     /** Renders Prime's rows-per-page Select (`.p-paginator-rpp-dropdown`) after
-      * the nav buttons. Interactive only with the `rows(SignalRef[Int])` binding —
+      * the nav buttons. Interactive only with the `rows(SignalRef[Int])` binding:
       * picking an option writes the ref and repositions to the page that keeps
       * the first visible record visible; without the binding it renders disabled.
       */

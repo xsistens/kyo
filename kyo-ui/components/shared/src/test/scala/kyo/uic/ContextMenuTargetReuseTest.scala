@@ -8,7 +8,7 @@ import kyo.internal.UIExchange
 
 /** What a `ContextMenu` costs the content it is attached to.
   *
-  * A menu's items may read signals — that is the point of a reactive label and a reactive
+  * A menu's items may read signals: that is the point of a reactive label and a reactive
   * `disabled`, and it is how an item says "Add 3 selected to queue" while the menu stays open. The
   * question here is what else those signals reach. The target children are what the reader is
   * actually looking at, they do not depend on the items at all, and if they are rebuilt whenever an

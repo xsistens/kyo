@@ -3,11 +3,11 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Carousel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Carousel: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Carousel anatomy: `div.p-carousel.p-component.p-carousel-horizontal|-vertical`
   * > `div.p-carousel-content-container` > `div.p-carousel-content` with the
   * secondary/text/rounded prev/next Buttons (`.p-carousel-prev-button` /
-  * `.p-carousel-next-button`, chevron glyphs — up/down when vertical) flanking
+  * `.p-carousel-next-button`, chevron glyphs, up/down when vertical) flanking
   * `div.p-carousel-viewport` > `div.p-carousel-item-list` of
   * `div.p-carousel-item` entries, then the `ul.p-carousel-indicator-list` of
   * `li.p-carousel-indicator[.p-carousel-indicator-active]` dot buttons), so the
@@ -19,12 +19,12 @@ import kyo.UI.*
   * strip (`.p-carousel-item-list`, id-stamped) sized `itemCount/numVisible`
   * viewports wide (each item `flex: 0 0 (100/itemCount)%`, so `numVisible` fill
   * the clipping `.p-carousel-viewport`), and slides the strip by patching its
-  * `transform` IN PLACE through `bindStyleById` — `translateX(-(clampedStart *
+  * `transform` IN PLACE through `bindStyleById`: `translateX(-(clampedStart *
   * 100/itemCount)%)` (or `translateY` when vertical), where `clampedStart` is the
   * window's lead index. The strip element is NEVER re-rendered (that is the hard
-  * invariant — a replaced strip drops the CSS `transition` mid-flight), so the
+  * invariant: a replaced strip drops the CSS `transition` mid-flight), so the
   * nav buttons (disabled at the ends), the indicator dots (active dot), and each
-  * item's `p-carousel-item-active` class — all of which DO change per page — live
+  * item's `p-carousel-item-active` class (all of which DO change per page) live
   * OUTSIDE the strip: the nav row and indicator list are small `pageRef.render`
   * regions that are SIBLINGS of the strip, and the per-item active class is
   * toggled IN PLACE via `bindClassById` per item (its id minted alongside the
@@ -32,13 +32,13 @@ import kyo.UI.*
   * sibling regions; the strip's transition animates the turn.
   *
   * Placeholder / golden (server-honest, no runtime): the SSR/no-runtime
-  * `.placeholder` keeps the ORIGINAL window render — only the `numVisible` visible
-  * items (each `flex: 1 0 (100/numVisible)%`, Prime's inline window sizing), no
-  * transform — so the interactive slide is a pure runtime enhancement layered on a
+  * `.placeholder` keeps the ORIGINAL window render (only the `numVisible` visible
+  * items, each `flex: 1 0 (100/numVisible)%`, Prime's inline window sizing, no
+  * transform), so the interactive slide is a pure runtime enhancement layered on a
   * server-correct first paint.
   *
   * Autoplay ([[autoplay]], default off): a built-in scope-bound fiber spawned
-  * inside the interactive `UI.mounted` — `Fiber.init(Loop.forever { Async.sleep;
+  * inside the interactive `UI.mounted`: `Fiber.init(Loop.forever { Async.sleep;
   * advance })`. This is the component half of [[Node]]'s fiber-ownership rule:
   * the fiber is spawned inside the mount, so its Scope is the carousel's lifetime
   * and its scope cancels it on unmount (no leak); nothing is scheduled
@@ -47,12 +47,12 @@ import kyo.UI.*
   * cycling.
   *
   * `circular(true)` wraps prev/next past the ends (the wrap-around CLONE strip is
-  * part of Prime's translate machinery and stays DEFERRED — circular only wraps
+  * part of Prime's translate machinery and stays DEFERRED; circular only wraps
   * the page index); otherwise the nav buttons disable at the ends, exactly like
   * Prime.
   *
   * Touch/pointer swipe: when bound to a `page` ref, the STABLE strip
-  * carries `onPointerDown`/`onPointerUp` — a horizontal (or vertical) drag past a
+  * carries `onPointerDown`/`onPointerUp`: a horizontal (or vertical) drag past a
   * small threshold turns the page prev/next on release. The strip is never
   * re-rendered by the gesture (the in-place transform means the write
   * only re-styles it), so the release SLIDES via the transition and the drag
@@ -87,7 +87,7 @@ final case class Carousel[A] private (
     /** Items stepped per page turn (default 1). */
     def numScroll(v: Int): Carousel[A] = copy(numScrollV = math.max(1, v))
 
-    /** Wraps prev/next past the ends (default false — the buttons disable). */
+    /** Wraps prev/next past the ends (default false: the buttons disable). */
     def circular(v: Boolean): Carousel[A] = copy(circularFlag = v)
 
     /** Vertical orientation (`.p-carousel-vertical`, chevron-up/-down navigators);
@@ -96,12 +96,12 @@ final case class Carousel[A] private (
     def vertical(v: Boolean): Carousel[A] = copy(verticalFlag = v)
 
     /** Viewport height in vertical orientation (CSS length, Prime's
-      * `verticalViewPortHeight` — an inline style there too).
+      * `verticalViewPortHeight`, an inline style there too).
       */
     def verticalViewHeight(v: String): Carousel[A] = copy(verticalHeightV = Present(v))
 
     /** Renders the prev/next buttons flanking the viewport. Default true, which is
-      * PrimeVue/PrimeReact's own Carousel default — [[Galleria]] spells the same
+      * PrimeVue/PrimeReact's own Carousel default. [[Galleria]] spells the same
       * feature `showItemNavigators` and defaults it to false because Prime's
       * Galleria does, not because the two components disagree about the concept.
       */
@@ -131,7 +131,7 @@ final case class Carousel[A] private (
             case Present(r) =>
                 // The stable strip needs a session id (bindStyleById target), one id per
                 // item (bindClassById targets for the active class), and a swipe start-x
-                // ref — all minted once in the mount. The autoplay fiber is spawned here
+                // ref, all minted once in the mount. The autoplay fiber is spawned here
                 // too, so its Scope is this mount, which cancels it on unmount.
                 UI.mounted {
                     for
@@ -148,7 +148,7 @@ final case class Carousel[A] private (
             case Absent => body(0)
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
-      * cancels it on unmount, so it never leaks and never busy-blocks — it sleeps
+      * cancels it on unmount, so it never leaks and never busy-blocks: it sleeps
       * between steps). No-op when autoplay is off or there is nothing to cycle.
       * `onPageChange` is a [[Callback]], so a step whose callback fails or throws is
       * reported to the `onFailure` rules around the carousel, as a click's would be,
@@ -203,7 +203,7 @@ final case class Carousel[A] private (
         i >= cs && i < cs + numVisibleV
 
     /** The interactive (stable-strip + reactive siblings) subtree the mount
-      * publishes — the golden seam. The transform/active-class patches (Commands)
+      * publishes: the golden seam. The transform/active-class patches (Commands)
       * are applied separately by [[slideTrigger]], so this stays a pure render.
       */
     private[uic] def wired(
@@ -301,7 +301,7 @@ final case class Carousel[A] private (
         shell(content, indicators)
     end interactive
 
-    /** The placeholder (SSR/no-runtime/golden) render: the ORIGINAL window — only
+    /** The placeholder (SSR/no-runtime/golden) render: the ORIGINAL window, only
       * the `numVisible` visible items (Prime's inline window sizing), no transform.
       * Byte-identical to the pre-slide render, so the golden assertions stay green.
       */
@@ -457,7 +457,7 @@ object Carousel:
     private[uic] def clampPage(rawPage: Int, pages: Int): Int =
         if pages <= 0 then 0 else math.min(math.max(rawPage, 0), pages - 1)
 
-    /** The lead item index of the visible window at `page` — `page * numScroll`,
+    /** The lead item index of the visible window at `page`: `page * numScroll`,
       * clamped so the last window sits flush against the end (`itemCount -
       * numVisible`). Matches the placeholder's `start`.
       */
@@ -468,8 +468,8 @@ object Carousel:
     /** The strip's translate fraction (a percentage, negative) for a page:
       * `-(clampedStart * 100 / itemCount)`. The strip spans `itemCount/numVisible`
       * viewports, so this % of the strip's own size is exactly `clampedStart`
-      * item-widths — e.g. page 1 of a 1-visible/1-scroll strip over 5 items is
-      * `-20.0`, clamped to `-80.0` at the last window.
+      * item-widths. For example, page 1 of a 1-visible/1-scroll strip over 5 items
+      * is `-20.0`, clamped to `-80.0` at the last window.
       */
     private[uic] def translateFraction(page: Int, numScroll: Int, numVisible: Int, itemCount: Int): Double =
         if itemCount <= 0 then 0.0

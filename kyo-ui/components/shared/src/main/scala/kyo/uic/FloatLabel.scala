@@ -3,8 +3,8 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** FloatLabel variants — where the label rests once the field is focused or
-  * filled: `Over` (Prime default — above the field), `In` (inside the field's
+/** FloatLabel variants (where the label rests once the field is focused or
+  * filled): `Over` (Prime default, above the field), `In` (inside the field's
   * top padding), `On` (on the border line).
   */
 enum FloatLabelVariant derives CanEqual:
@@ -16,7 +16,7 @@ enum FloatLabelVariant derives CanEqual:
         case FloatLabelVariant.On   => "on"
 end FloatLabelVariant
 
-/** FloatLabel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** FloatLabel: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * FloatLabel anatomy: `div.p-floatlabel[.p-floatlabel-over|-in|-on]` wrapping
   * the field plus a `<label>`), so the extracted `@primeuix` floatlabel CSS
   * applies verbatim.
@@ -28,11 +28,11 @@ end FloatLabelVariant
   *
   * The float mechanics are pure CSS: `:has(input:focus)` floats the label on
   * focus with no JS, and the filled state is Prime's `.p-filled` class on the
-  * field — stamped here at render time from the wrapped field's value binding
+  * field, stamped here at render time from the wrapped field's value binding
   * (a `SignalRef` value re-renders on change, so `.p-filled` tracks the bound
   * text; a `change` event commits on blur, exactly when the focus float ends).
   * NOTE: Prime floats the label permanently when the field has a `placeholder`
-  * (they would overlap) — same behaviour here via `:has(input[placeholder])`.
+  * (they would overlap); same behaviour here via `:has(input[placeholder])`.
   *
   * Hosts beyond [[Input]]: [[TextArea]] floats via the sheet's `textarea`
   * selectors; [[AutoComplete]] via `.p-filled` on its inner input; [[Select]]
@@ -40,7 +40,7 @@ end FloatLabelVariant
   * selected), with a `.p-uic-*` remainder mirroring the focus float for the
   * native `<select>`. A Select host without a placeholder gets an EMPTY
   * placeholder option stamped, so the closed field renders blank until a pick
-  * — Prime's empty-label look; a non-empty placeholder floats the label
+  * (Prime's empty-label look); a non-empty placeholder floats the label
   * permanently, like `input[placeholder]`.
   */
 final case class FloatLabel private (
@@ -147,13 +147,13 @@ object FloatLabel:
     end renderWrapper
 end FloatLabel
 
-/** IftaLabel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** IftaLabel: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * IftaLabel: `div.p-iftalabel` wrapping the field plus a permanently visible
-  * small `<label>` inside the field's top padding — "infield top-aligned
+  * small `<label>` inside the field's top padding, "infield top-aligned
   * label"), so the extracted `@primeuix` iftalabel CSS applies verbatim. No
   * variants and no float: the label always rests in the field.
   *
-  * Same four hosts as [[FloatLabel]] — Input, TextArea, Select, AutoComplete —
+  * Same four hosts as [[FloatLabel]] (Input, TextArea, Select, AutoComplete),
   * because the two components are one idea with different label placement, and
   * Prime's own iftalabel sheet already carries the `textarea:focus` and
   * `.p-inputwrapper-focus` selectors the other three hosts need.

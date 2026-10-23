@@ -105,7 +105,7 @@ class ContextMenuTest extends UicTest:
     }
 
     // A menu whose mount is keyless is rebuilt by every emission of the region around it, and
-    // `openRef` IS that mount's state — so the menu resets, and a subscription of the departing
+    // `openRef` IS that mount's state, so the menu resets, and a subscription of the departing
     // content that emits into a range the rebuild has already taken away dies on `Unknown
     // reactive range` and never paints again. The id the caller gave is the identity that stops
     // it; without one the mount stays keyless, exactly as it was.
@@ -125,7 +125,7 @@ class ContextMenuTest extends UicTest:
     // ---- targetless: the panel without the wrapper `div` ----
     //
     // The wrapping form's target is a `div`, and a `div` may not sit between a `<table>` and its
-    // `<tr>` — the parser hoists it out. So the placement a context menu is most often wanted for
+    // `<tr>`: the parser hoists it out. So the placement a context menu is most often wanted for
     // is the one the wrapper cannot have. The targetless form takes the listener off the component
     // and leaves the panel, which is the only part that had to be a component at all.
 
@@ -163,7 +163,7 @@ class ContextMenuTest extends UicTest:
 
     // The reset a caller could not have known to do. Escape and an outside click close the menu
     // through the Overlay's own ref write, which leaves the highlight and any open submenu exactly
-    // where they were — the wrapping form flushes them on the NEXT right-click, and `openAt` is
+    // where they were. The wrapping form flushes them on the NEXT right-click, and `openAt` is
     // where that lives once the right-click is the caller's.
     "openAt flushes the highlight and the submenu tree the last visit left open" in {
         for
@@ -181,7 +181,7 @@ class ContextMenuTest extends UicTest:
             assert(on, "and the menu is open")
     }
 
-    "close is for the closes the panel cannot see — the row it was opened on going away" in {
+    "close is for the closes the panel cannot see, such as the row it was opened on going away" in {
         for
             st <- allocState(rows)
             _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))

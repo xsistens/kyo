@@ -31,7 +31,7 @@ enum SpeedDialDirection derives CanEqual:
         case SpeedDialDirection.Right => Keyboard.ArrowRight
 end SpeedDialDirection
 
-/** SpeedDial — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** SpeedDial: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * SpeedDial anatomy: `div.p-speeddial.p-component.p-speeddial-<direction>
   * [.p-speeddial-open]` > toggle `button.p-speeddial-button.p-speeddial-rotate`
   * (a rounded icon [[Button]]; the sheet rotates the plus glyph 45° while open)
@@ -59,7 +59,7 @@ end SpeedDialDirection
   * need JS-measured per-item offsets); the fan-in/out transition is omitted
   * (kyo re-renders replace the subtree, restarting CSS transitions); no mask
   * variant (Prime styles the mask via inline styles and a JS-managed backdrop);
-  * no outside-click dismissal (the fan is not an Overlay — close with Escape or
+  * no outside-click dismissal (the fan is not an Overlay; close with Escape or
   * by toggling).
   */
 final case class SpeedDial private (
@@ -77,7 +77,7 @@ final case class SpeedDial private (
     /** Fan direction (default `Up`). */
     def direction(v: SpeedDialDirection): SpeedDial = copy(directionV = v)
 
-    /** Binds the fan visibility two-way to `ref` (optional — self-managed
+    /** Binds the fan visibility two-way to `ref` (optional; self-managed
       * otherwise).
       */
     def open(ref: SignalRef[Boolean]): SpeedDial = copy(openRefV = Present(ref))
@@ -250,5 +250,5 @@ final case class SpeedDial private (
 end SpeedDial
 
 object SpeedDial:
-    /** An empty speed dial — add actions via [[SpeedDial.items]]. */
+    /** An empty speed dial; add actions via [[SpeedDial.items]]. */
     def apply(): SpeedDial = new SpeedDial()

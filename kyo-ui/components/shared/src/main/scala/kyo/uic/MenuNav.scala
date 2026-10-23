@@ -8,7 +8,7 @@ import kyo.UI.Keyboard
   * option panels are the same machine under a different skin. It operates over a tree of
   * nodes and the current focus PATH (an index chain from the root; `Nil` = nothing focused)
   * and returns the [[MenuNav.Step]] the host maps onto its focus + submenu-open signals. No
-  * DOM and no effects — the semantics are unit-tested directly (`MenuNavTest`).
+  * DOM and no effects: the semantics are unit-tested directly (`MenuNavTest`).
   *
   * The tree is reached through [[Nodes]] rather than being a [[MenuItem]] list, because a
   * cascade's options nest exactly the way a menu's items do and one navigation is better than
@@ -58,7 +58,7 @@ private[uic] object MenuNav:
 
     // ---- tree queries ----
 
-    /** The item list at `parent` — the root list when empty, the addressed item's
+    /** The item list at `parent`: the root list when empty, the addressed item's
       * children deeper (an out-of-range index yields an empty level).
       */
     private def levelItems[N](items: List[N], parent: List[Int])(using nodes: Nodes[N]): List[N] =
@@ -73,7 +73,7 @@ private[uic] object MenuNav:
         }
 
     /** The item addressed by `path` (`Absent` for the root or an out-of-range
-      * index) — hosts use it to resolve the focused leaf's action on activation.
+      * index); hosts use it to resolve the focused leaf's action on activation.
       */
     private[uic] def itemAt[N: Nodes](items: List[N], path: List[Int]): Maybe[N] =
         if path.isEmpty then Absent

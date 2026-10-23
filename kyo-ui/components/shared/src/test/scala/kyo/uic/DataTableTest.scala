@@ -1216,7 +1216,7 @@ class DataTableTest extends UicTest:
     "rows bound to a read-only signal are read, and re-read when it emits" in {
         for
             source <- Signal.initRef[Seq[Item]](items)
-            // A derived signal — exactly what a query state or a paginated
+            // A derived signal: exactly what a query state or a paginated
             // connection hands a caller, and not something anyone can write into.
             derived = source.map(_.filter(_.price >= 20))
             table   = uic.DataTable[Item]().rows(derived).rowKey(_.id).columns(
@@ -1232,7 +1232,7 @@ class DataTableTest extends UicTest:
 
     "a rowKey that repeats is reported, since it costs the selection and the reuse both" in {
         // Two rows the projection cannot tell apart. Selecting one selects both, and the body's
-        // keyed list refuses to reuse anything and rebuilds every emission — neither of which
+        // keyed list refuses to reuse anything and rebuilds every emission, neither of which
         // shows on the page, and the second only became a cost once the body was keyed.
         val twins = List(Item("1", "A", 10), Item("2", "A", 20), Item("3", "B", 30))
         for text <- cards(uic.DataTable[Item]().rows(twins).rowKey(_.name).columns(
@@ -1559,7 +1559,7 @@ class DataTableTest extends UicTest:
     "a click that passed through a control in the row is that control's, not the row's" in {
         // Following a link in a cell, pressing the expander, starting a row edit: each is a click the
         // reader aimed at something, and a row that also selected on it would be answering a question
-        // nobody asked. The control cannot decline the click for the row — one that navigates natively
+        // nobody asked. The control cannot decline the click for the row: one that navigates natively
         // declares no kyo handler, so it has no `stopPropagation` to set.
         for
             sel <- Signal.initRef(Set.empty[Item])
@@ -1882,7 +1882,7 @@ class DataTableTest extends UicTest:
             anchor <- Signal.initRef(Absent: Maybe[Item])
             ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple)
-                // One way in, and the callback is the only way out — the shape a selection whose
+                // One way in, and the callback is the only way out: the shape a selection whose
                 // truth lives in a cache has.
                 .selection(src.map(identity))
                 .metaKeySelection(true)
@@ -2683,7 +2683,7 @@ class DataTableTest extends UicTest:
             .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
             .selectionAnchor(anchor).render
 
-    "an anchor the caller bound survives the table being rendered again — a minted one cannot" in {
+    "an anchor the caller bound survives the table being rendered again; a minted one cannot" in {
         // Two independent renders of the same table is what a page re-render produces, and it is
         // where a minted anchor is lost: it lives in the table's mount, whose state ends with the
         // region enclosing it. Bound, the range is measured across the gap.
@@ -2725,7 +2725,7 @@ class DataTableTest extends UicTest:
     // Everything behind this mount is state the table owns and no caller can hand back: the
     // shift anchor, the column grab and drag, the row drag, the scroll offset, the measured
     // frozen-header height. Keyless, the mount's effect re-runs on every emission of whatever
-    // region encloses the table, and all of it is re-allocated — so a shift-click reads an
+    // region encloses the table, and all of it is re-allocated, so a shift-click reads an
     // anchor ref that no click ever wrote, which is what a range failing on a live page looks
     // like. The three cases below pin the identity that stops it.
 
@@ -2752,7 +2752,7 @@ class DataTableTest extends UicTest:
     }
 
     "two renders of the same named table carry the same key, which is the whole point" in {
-        // A re-render builds the value again from scratch — this is that, and the key has to
+        // A re-render builds the value again from scratch; this is that, and the key has to
         // survive it or the instance behind the mount does not.
         (stateful(Present("t1")), stateful(Present("t1"))) match
             case (x: Ast.Mounted, y: Ast.Mounted) =>

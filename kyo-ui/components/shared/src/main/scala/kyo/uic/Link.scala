@@ -10,7 +10,7 @@ enum LinkAccessibleRole derives CanEqual:
     private[uic] def token: String = this.toString
 end LinkAccessibleRole
 
-/** Link — native kyo-ui, PrimeOne design. Prime ships no Link component, so the
+/** Link: native kyo-ui, PrimeOne design. Prime ships no Link component, so the
   * vocabulary is the kyo extension `a.p-uic-link`, styled like Prime Button's
   * Link variant (primary color, underline on hover). Composes the native kyo
   * `<a>` element so the real `href`, focus, and click behaviour are inherited.
@@ -38,7 +38,7 @@ final case class Link private (
     def href(v: String): Link      = copy(hrefV = Present(v))
     def disabled(v: Boolean): Link = copy(disabledFlag = v)
 
-    /** Whether the link text wraps onto multiple lines (default false — stays on
+    /** Whether the link text wraps onto multiple lines (default false: stays on
       * one line, `.p-uic-link-wrap`).
       */
     def wrap(v: Boolean): Link = copy(wrapFlag = v)
@@ -56,7 +56,7 @@ final case class Link private (
 
     private[uic] def withTooltip(v: Maybe[TextValue]): Link = copy(tooltipV = v)
 
-    /** ARIA role override — `Button` renders `role="button"` on the anchor. */
+    /** ARIA role override: `Button` renders `role="button"` on the anchor. */
     def accessibleRole(v: LinkAccessibleRole): Link = copy(accessibleRoleV = v)
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Link = copy(accessibleNameV = v)

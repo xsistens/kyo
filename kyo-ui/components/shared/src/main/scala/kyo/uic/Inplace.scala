@@ -3,19 +3,19 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Inplace — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Inplace: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Inplace anatomy: `div.p-inplace.p-component[aria-live=polite]` > EITHER the
   * clickable `div.p-inplace-display[role=button]` OR the active
-  * `div.p-inplace-content` — never both), so the extracted `@primeuix` inplace
+  * `div.p-inplace-content`, never both), so the extracted `@primeuix` inplace
   * CSS applies verbatim.
   *
   * The active state binds two-way to the `active` `SignalRef[Boolean]`
   * ([[Panel]]'s reactive pattern): clicking the display (or pressing Enter on
-  * it — Prime's key) sets it true and swaps in the content; external ref
+  * it, Prime's key) sets it true and swaps in the content; external ref
   * writes swap the sides reactively. `closable(true)` appends an icon-only
   * close button to the content that sets the ref back to false (PrimeReact's
-  * `closable`). `disabled(true)` renders the display side inert (`.p-disabled`
-  * — Prime's open guard). `onOpen`/`onClose` fire AFTER the ref write when the
+  * `closable`). `disabled(true)` renders the display side inert (`.p-disabled`,
+  * Prime's open guard). `onOpen`/`onClose` fire AFTER the ref write when the
   * user activates the display or the close button (Prime's open/close events;
   * external ref writes fire neither). Without a bound ref the display side
   * renders statically.
@@ -31,7 +31,7 @@ final case class Inplace private (
 ) extends Node:
     type Self = Inplace
 
-    /** The inactive side (`.p-inplace-display`) — clicking it activates the content. */
+    /** The inactive side (`.p-inplace-display`); clicking it activates the content. */
     def display(u: UI): Inplace = copy(displayV = Present(u))
 
     /** The active side (`.p-inplace-content`), shown while the ref is true. */
@@ -46,7 +46,7 @@ final case class Inplace private (
     def closable(v: Boolean): Inplace = copy(closableFlag = v)
 
     /** Renders the display side inert: `.p-disabled` look, no activation (Prime's
-      * `disabled` open guard — the content side is unaffected).
+      * `disabled` open guard; the content side is unaffected).
       */
     def disabled(v: Boolean): Inplace = copy(disabledFlag = v)
 

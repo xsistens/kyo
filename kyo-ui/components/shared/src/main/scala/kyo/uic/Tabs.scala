@@ -3,11 +3,11 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** One tab of a [[Tabs]] — a hand-authored carrier: a `text` label, the
+/** One tab of a [[Tabs]], a hand-authored carrier: a `text` label, the
   * already-rendered `content` shown when the tab is active, a stable `id` (the
   * value the `selected` binding holds and the `onTabSelect` payload), an optional
   * leading `icon` glyph, an optional `additionalText` count badge (kyo
-  * extension — `span.p-uic-tab-count`), an optional `url` (renders the header as
+  * extension: `span.p-uic-tab-count`), an optional `url` (renders the header as
   * a real anchor), and a `disabled` flag (non-clickable).
   */
 final case class Tab[K] private[uic] (
@@ -23,7 +23,7 @@ final case class Tab[K] private[uic] (
 ):
     /** Navigation target: the header renders as a real `<a href=…>` instead of a
       * `<button>`, so a plain click navigates, a middle click opens a new tab, the
-      * link can be copied, and a crawler can follow it — none of which a button
+      * link can be copied, and a crawler can follow it, none of which a button
       * offers. Same slot and same reasoning as [[MenuItem.url]].
       *
       * The component learns no navigation concept from this. It emits an anchor;
@@ -37,7 +37,7 @@ final case class Tab[K] private[uic] (
       * carries no button reset, so the extracted CSS applies to the anchor
       * unchanged.
       *
-      * `onTabSelect` still fires — but ADDING it to a url strip costs the modified
+      * `onTabSelect` still fires, but ADDING it to a url strip costs the modified
       * click. kyo-ui prevent-defaults a click on any anchor carrying a kyo click
       * handler, without exempting Ctrl/Cmd/Shift/Alt or the middle button, so the
       * handler that fires `onTabSelect` is also what stops the browser opening a new
@@ -89,7 +89,7 @@ object TabScope:
         Entry.resolve(scope.asInstanceOf[TabScope[K]], entries)
 end TabScope
 
-/** Tabs — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
+/** Tabs: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
   * Tabs anatomy: `div.p-tabs.p-component` > `div.p-tablist` >
   * `div.p-tablist-content.p-tablist-viewport` > `div.p-tablist-tab-list[role=tablist]`
   * of `button.p-tab[role=tab]` headers (the active one carrying `.p-tab-active`
@@ -105,11 +105,11 @@ end TabScope
   * app's own tab id type, so the
   * selection may live anywhere: a constant, a signal DERIVED from something else
   * (a route, a normalized cache record, a parent), or a writable `SignalRef` for
-  * the two-way case. Only the last writes back — see [[Tabs.selected]]. With
+  * the two-way case. Only the last writes back (see [[Tabs.selected]]). With
   * nothing bound, the first tab is shown.
   *
   * A header is a real `<button>`, or a real `<a href>` when the tab carries a
-  * [[Tab.url]] — the navigational strip, which is what Prime v4 answers with now
+  * [[Tab.url]]: the navigational strip, which is what Prime v4 answers with now
   * that `TabMenu` is gone (there is no `p-tabmenu` sheet to mirror, and `.p-tab`
   * carries no button reset, so the extracted CSS fits either element). Either way
   * keyboard activation (Enter/Space) is native; the tablist is ONE tab stop and
@@ -121,7 +121,7 @@ end TabScope
   * tab's own logical id, so a strip's headers are addressable without `Tab`
   * growing a second id slot beside the one it already has. Without a base the
   * mount mints them, which keeps the arrow wiring working unasked but leaves the
-  * ids arbitrary — and absent entirely from a golden render or an SSG page,
+  * ids arbitrary, and absent entirely from a golden render or an SSG page,
   * since minting needs a mount. With a base they are the same in all three.
   */
 final case class Tabs[K] private (
@@ -143,11 +143,11 @@ final case class Tabs[K] private (
     def tab(text: String | Signal[String], id: K)(content: UI*)(using Frame): Tabs[K] =
         copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
 
-    /** The active tab's id. A `SignalRef` binds two way — clicking a tab writes its
+    /** The active tab's id. A `SignalRef` binds two way: clicking a tab writes its
       * id back before firing `onTabSelect`, which is the self-contained panel
       * switcher. Any other `Signal` binds ONE way: the strip renders what the signal
       * says and fires `onTabSelect`, and never writes, which is what a selection
-      * owned elsewhere needs — a route is a `map` over the location and has no ref
+      * owned elsewhere needs: a route is a `map` over the location and has no ref
       * to write into. A plain `String` is the same contract without a stream.
       *
       * Reading needs no ref at all (`Signal.render` serves every case); only the
@@ -177,7 +177,7 @@ final case class Tabs[K] private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Header ids derived from a caller-set base — `s"$base-${tab.id}"`, chosen and stable.
+    /** Header ids derived from a caller-set base (`s"$base-${tab.id}"`), chosen and stable.
       * `Absent` when no base was given, which is what sends [[render]] to the mount to mint
       * them instead.
       */
@@ -197,7 +197,7 @@ final case class Tabs[K] private (
             .placeholder(renderTabs(derivedIds.getOrElse(Nil), _ => ()))
 
     /** The header ids: a caller's base wins, and only without one does the mount mint them.
-      * Same rule as [[Menu]]'s base — the ARIA and focus wiring works unasked, and a caller
+      * Same rule as [[Menu]]'s base: the ARIA and focus wiring works unasked, and a caller
       * who wants to address a header can.
       */
     private def idsFor(cmds: UI.Commands)(using Frame): List[String] < Sync =
@@ -241,7 +241,7 @@ final case class Tabs[K] private (
             case Present(ReactiveValue.Const(v)) => if resolve(Present(v)).contains(id) then el else el.hidden(true)
             case Absent                          => if resolve(Absent).contains(id) then el else el.hidden(true)
 
-    /** The ref to write back to — `Absent` unless the binding is two-way. */
+    /** The ref to write back to; `Absent` unless the binding is two-way. */
     private def selectedRef: Maybe[SignalRef[K]] = selectedBinding match
         case Present(ReactiveVariable(ref)) => Present(ref)
         case _                              => Absent
@@ -262,8 +262,8 @@ final case class Tabs[K] private (
     /** Everything a header carries regardless of which element it is: the tablist
       * roles, the active marker, the roving tabindex, the click, and the arrow-key
       * handler. Generic over the builder rather than written twice, because every
-      * setter here lives on `UI.Ast.Interactive` — which `Button` and `Anchor` both
-      * are — and each returns the builder's own `Self`.
+      * setter here lives on `UI.Ast.Interactive` (which `Button` and `Anchor` both
+      * are) and each returns the builder's own `Self`.
       */
     private def interactive[E <: UI.Ast.Interactive { type Self = E }](
         el: E,
@@ -278,7 +278,7 @@ final case class Tabs[K] private (
         if isActive then out = out.cssClass("p-tab-active")
         // The id goes on before the disabled branch, not inside it. While ids were minted
         // only to move the arrow focus, giving one to a header the arrows skip was pointless;
-        // a CHOSEN id is different — a caller who names a header may well be naming it to
+        // a CHOSEN id is different: a caller who names a header may well be naming it to
         // assert that it is disabled.
         if ids.isDefinedAt(i) then
             out = out.id(ids(i))
@@ -290,7 +290,7 @@ final case class Tabs[K] private (
             out = out.tabIndex(if isActive then 0 else -1)
             // A url header gets a click handler only if there is something for it to
             // do. It never writes back, so with no `onTabSelect` the handler would be
-            // empty — and an EMPTY handler is not free: kyo-ui prevent-defaults a click
+            // empty, and an EMPTY handler is not free: kyo-ui prevent-defaults a click
             // on any anchor that declares one (DomBackend, "the handler, not the href,
             // drives the action"), which also takes the middle-click and the
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
@@ -357,7 +357,7 @@ final case class Tabs[K] private (
             t.urlV match
                 case Present(u) =>
                     // An anchor has no native `disabled`, so a disabled nav tab drops its
-                    // href and says so through ARIA instead — Link's handling, for the same
+                    // href and says so through ARIA instead: Link's handling, for the same
                     // reason.
                     var el = interactive(a.cssClass("p-tab"), t, isActive, i, ids, focus, navigable)
                     if t.disabled then el = el.aria("disabled", "true")
@@ -392,7 +392,7 @@ final case class Tabs[K] private (
       * one), then fires `onTabSelect`.
       *
       * `write` is false for a `url` header: the navigation is the selection, and a
-      * write would race it — the ref would hold the new id while the location, and
+      * write would race it: the ref would hold the new id while the location, and
       * so anything derived from it, still held the old one.
       */
     private def select(id: K, write: Boolean)(using Frame): UI.Action =

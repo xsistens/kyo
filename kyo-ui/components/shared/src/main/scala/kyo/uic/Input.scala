@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Input type variants — selects which concrete kyo text-input factory backs the
+/** Input type variants: selects which concrete kyo text-input factory backs the
   * field, so the native `type` attribute is real (email keyboards on mobile,
   * password masking, numeric spinners, ...). Hand-authored: it belongs to the
   * hand-written [[Input]] control.
@@ -14,7 +14,7 @@ enum InputType derives CanEqual:
     private[uic] def token: String = this.toString
 end InputType
 
-/** Text input — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Text input: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * InputText: the component IS the bare `<input class="p-inputtext">`, no
   * wrapper element). Composes the kyo `<input>` element, so two-way binding
   * (`value(SignalRef)` → `Bound.Ref`), `onInput`/`onChange`, and the
@@ -99,7 +99,7 @@ final case class Input private (
     /** Native `name` for HTML form participation. */
     def name(v: String): Input = copy(nameV = Present(v))
 
-    /** Native `maxlength` — caps the number of characters. */
+    /** Native `maxlength`: caps the number of characters. */
     def maxLength(n: Int): Input = copy(maxLengthV = Present(math.max(0, n)))
 
     /** Selects the native input type; defaults to [[InputType.Text]]. */
@@ -108,7 +108,7 @@ final case class Input private (
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
     def size(v: Size): Input = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): Input = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
@@ -126,7 +126,7 @@ final case class Input private (
     def onInput(f: String => UI.Action)(using Frame): Input  = copy(onInputF = Present(Callback.of(f)))
     def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current value — unlike
+    /** Fires on focus loss (native `blur`) with the field's current value. Unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -134,8 +134,8 @@ final case class Input private (
 
     /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also
       * allows one separator, any other string is a whitelist charset. The client
-      * rejects disallowed `beforeinput` keystrokes BEFORE they reach the field, so —
-      * unlike a server-side `takeRight` reject — an invalid character never becomes
+      * rejects disallowed `beforeinput` keystrokes BEFORE they reach the field, so
+      * (unlike a server-side `takeRight` reject) an invalid character never becomes
       * visible. The already-filtered value is what reaches `onInput`/the ref.
       *
       * The string stays this library's surface; kyo takes a typed
@@ -262,7 +262,7 @@ object Input:
     def apply(): Input = new Input()
 
     /** Maps this library's filter string onto kyo's typed [[kyo.UI.InputFilter]]. `"int"` is
-      * `Digits` (digits only — kyo's set carries no sign character), `"decimal"` is `Decimal`,
+      * `Digits` (digits only; kyo's set carries no sign character), `"decimal"` is `Decimal`,
       * and anything else is taken as an explicit whitelist charset.
       */
     private[uic] def asInputFilter(pattern: String): UI.InputFilter =

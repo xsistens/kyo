@@ -3,14 +3,14 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** AvatarGroup — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** AvatarGroup: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * AvatarGroup anatomy: `div.p-avatar-group.p-component` wrapping [[Avatar]]
   * children). The `.p-avatar-group` rules live in the extracted avatar sheet
   * (Prime ships them there): adjacent avatars overlap by the group offset and
   * gain the group border, per size.
   *
   * Construct from avatars (`AvatarGroup(a, b, c)`) or push arbitrary children
-  * through `apply(cs*)` — e.g. a trailing `+N` counter Avatar.
+  * through `apply(cs*)`, e.g. a trailing `+N` counter Avatar.
   */
 final case class AvatarGroup private (
     avatarsV: List[Avatar] = Nil,

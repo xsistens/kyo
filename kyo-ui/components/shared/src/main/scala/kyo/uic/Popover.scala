@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Popover — native kyo-ui, PrimeOne design (mirrors PrimeVue's Popover /
+/** Popover: native kyo-ui, PrimeOne design (mirrors PrimeVue's Popover /
   * PrimeReact v10's OverlayPanel anatomy: floating `div.p-popover.p-component` >
   * `div.p-popover-content`, with the arrow drawn by the sheet's
   * `.p-popover:before/:after` border triangles), so the extracted `@primeuix`
@@ -15,7 +15,7 @@ import kyo.UI.*
   * out). `trigger(ui)` renders the toggling trigger and the panel together
   * inside the anchor wrapper (`div.p-uic-overlay-anchor.p-uic-popover-anchor`);
   * while open, a click on the trigger area lands on the Overlay backdrop and
-  * closes — Prime's toggle semantics. Without a trigger the popover renders just
+  * closes (Prime's toggle semantics). Without a trigger the popover renders just
   * the floating panel: place it inside your own `position: relative` anchor
   * (stamp `p-uic-overlay-anchor`) and open the ref yourself.
   *
@@ -23,12 +23,12 @@ import kyo.UI.*
   * it above and stamps Prime's `.p-popover-flipped` (the arrow moves to the
   * bottom edge, pointing down). The arrow sits at the sheet's
   * `--p-popover-arrow-offset` from the panel's start edge (Prime positions it
-  * under the pointer via JS measuring — server-side the offset is fixed).
+  * under the pointer via JS measuring; server-side the offset is fixed).
   *
   * Honest limitations (inherited from [[Overlay]]): no flip/shift at viewport
   * edges, no portal, no enter/leave animation. Additionally the sheet's
   * `.p-popover { will-change: transform }` makes the PANEL the containing block
-  * for `position: fixed` descendants — do not nest another overlay's backdrop
+  * for `position: fixed` descendants: do not nest another overlay's backdrop
   * expectation inside popover content that must escape it.
   */
 final case class Popover private (
@@ -54,7 +54,7 @@ final case class Popover private (
       */
     def anchor(v: OverlayAnchor): Popover = copy(anchorV = v)
 
-    /** Whether an outside click or Escape closes the popover (default true —
+    /** Whether an outside click or Escape closes the popover (default true,
       * Prime's `dismissable`).
       */
     def dismissable(v: Boolean): Popover = copy(dismissableV = v)
@@ -64,12 +64,12 @@ final case class Popover private (
       */
     def seedFocus(v: Boolean): Popover = copy(seedFocusV = v)
 
-    /** Whether the panel (and backdrop) re-home to `document.body` ([[Overlay.portal]]) — the
+    /** Whether the panel (and backdrop) re-home to `document.body` ([[Overlay.portal]]), the
       * escape from ancestor `overflow` clipping and `transform` containing blocks (default false).
       */
     def portal(v: Boolean): Popover = copy(portalV = v)
 
-    /** How the open panel responds to scroll outside it (default [[Overlay.Scroll.Close]] —
+    /** How the open panel responds to scroll outside it (default [[Overlay.Scroll.Close]],
       * Prime's hide-on-scroll). See [[Overlay.Scroll]].
       */
     def scroll(v: Overlay.Scroll): Popover = copy(scrollV = v)

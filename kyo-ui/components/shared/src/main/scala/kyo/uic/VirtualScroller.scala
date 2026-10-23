@@ -3,11 +3,11 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** VirtualScroller — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** VirtualScroller: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * VirtualScroller anatomy: the scroll viewport `div.p-virtualscroller` >
   * `div.p-virtualscroller-content` translated to the visible window), so the
   * extracted `@primeuix` virtualscroller CSS applies verbatim. Only the rows in
-  * the visible window (plus a small overscan) are ever rendered — a 10 000-row
+  * the visible window (plus a small overscan) are ever rendered: a 10 000-row
   * list ships a handful of `<div>`s, not ten thousand.
   *
   * Server-honest windowing: a fixed row height (`itemSize`) and a fixed
@@ -18,13 +18,13 @@ import kyo.UI.*
   * (`top = i·itemSize`) inside a full-height spacer, so the browser's native
   * scroll shows the correct rows. Writing the scroll ref re-renders the window.
   *
-  * Interaction is native scroll (`overflow: auto`, a real scrollbar — matching
+  * Interaction is native scroll (`overflow: auto`, a real scrollbar, matching
   * PrimeReact/PrimeVue): the browser owns the scroll and reports its resulting
   * position via the fork's `onScrollPosition`, which the viewport accumulates
   * into the scroll ref (clamped). `overscroll-behavior: contain` keeps the
   * wheel/trackpad from chaining to the page once the list reaches its edge. The
   * viewport is the stable reactive root, so its `scrollTop` persists across
-  * window re-renders — the server reads scroll position but never writes it back,
+  * window re-renders; the server reads scroll position but never writes it back,
   * so there is no feedback loop.
   *
   * HONEST cost: the row CONTENT is server-rendered, so a scroll round-trips to
@@ -82,8 +82,8 @@ final case class VirtualScroller[A] private (
     private def clampScroll(v: Double): Double = viewport.clamp(v, items.length)
 
     private[uic] def render(using Frame): UI =
-        // The scroll position lives in a signal allocated by this effectful mount. The VIEWPORT shell is stable — only
-        // its inner window is reactive — so the browser-owned `scrollTop` survives every window re-render. This matters
+        // The scroll position lives in a signal allocated by this effectful mount. The VIEWPORT shell is stable (only
+        // its inner window is reactive), so the browser-owned `scrollTop` survives every window re-render. This matters
         // because a reactive region updates via `el.outerHTML =` (full element replacement); if the shell itself were
         // reactive, each scroll would recreate it and reset `scrollTop` to 0, fighting the user. Static projections (SSG,
         // the SSR GET) show the placeholder window at scroll 0, inert, until the transport attaches.
@@ -99,7 +99,7 @@ final case class VirtualScroller[A] private (
             yield wired(scroll)
         }.placeholder(shell(Absent)(placeholderWindow))
 
-    /** The subscription tree the mount publishes — the golden seam. */
+    /** The subscription tree the mount publishes: the golden seam. */
     private[uic] def wired(scroll: SignalRef[Double])(using Frame): UI =
         sourceV match
             case Present(src) =>
@@ -128,7 +128,7 @@ final case class VirtualScroller[A] private (
                     .cssClass("p-component")
                     .cssClass("p-uic-vs-viewport")
                     .style(_.height(heightV.px).minHeight(heightV.px).position(_.relative))
-                // The server reads scroll position but never writes it back — no feedback loop.
+                // The server reads scroll position but never writes it back, so no feedback loop.
                 ref.foreach { r =>
                     v = v.onScrollPosition { (e: ScrollPositionEvent) =>
                         // Position and demand come out of the SAME reported number, so the
@@ -154,7 +154,7 @@ final case class VirtualScroller[A] private (
                 val (firstIdx, reach) = viewport.span(clampScroll(scrollTop))
                 val lastIdx           = math.min(items.length, reach)
                 // Positional children (no keys): the window of row slots is reused across scrolls, the diff just updates each
-                // slot's content + `top` — keying by absolute index would churn add/remove on every scroll. Each row is
+                // slot's content + `top`; keying by absolute index would churn add/remove on every scroll. Each row is
                 // absolutely positioned at its natural offset (`.p-uic-vs-item` supplies position/left/right/overflow), so
                 // native scroll shows the right rows. The container is unpositioned, so rows resolve against the shell.
                 val rows: List[UI] = (firstIdx until lastIdx).toList.map { i =>

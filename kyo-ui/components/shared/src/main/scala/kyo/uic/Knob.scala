@@ -4,13 +4,13 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** Knob — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Knob
+/** Knob: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Knob
   * anatomy: `div.p-knob.p-component` > `svg[viewBox=0 0 100 100]` with the
   * `.p-knob-range` background arc, the `.p-knob-value` value arc and the
   * `.p-knob-text` center label), so the extracted `@primeuix` knob CSS applies
   * verbatim. The arc paths use Prime's own dial math (radius 40 around
   * (50, 50), 240° sweep from 4π/3 to −π/3) computed server-side from the bound
-  * value — pure geometry, no client script.
+  * value: pure geometry, no client script.
   *
   * Interaction is keyboard AND pointer-drag. Keyboard (Prime's slider keys on
   * the focusable svg): ArrowUp/ArrowRight step up, ArrowDown/ArrowLeft step
@@ -101,7 +101,7 @@ final case class Knob private (
     /** Formats the center label from the current value. */
     def valueTemplate(f: Double => String): Knob = copy(valueTemplateV = Present(f))
 
-    /** Value-arc color — any CSS color or `var()` (default the knob value token). */
+    /** Value-arc color: any CSS color or `var()` (default the knob value token). */
     def valueColor(v: String): Knob = copy(valueColorV = Present(v))
 
     /** Background-arc color (default the knob range token). */
@@ -127,7 +127,7 @@ final case class Knob private (
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): Knob = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the knob's current value — unlike onChange it fires even
+    /** Fires on focus loss with the knob's current value; unlike onChange it fires even
       * when the dial was not moved. The validation layer's Blur trigger.
       */
     def onBlur(f: Double => UI.Action)(using Frame): Knob = copy(onBlurF = Present(Callback.of(f)))
@@ -246,7 +246,7 @@ final case class Knob private (
         idV.foreach(v => dial = dial.id(v))
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
-        // Blur fires even without a turn — the validation layer's Blur trigger. Reads the
+        // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
         // ref LIVE where there is one, so it reports the value at blur time.
         onBlurF.foreach { f =>
             dial = dial.onBlur(ref match

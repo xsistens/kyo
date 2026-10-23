@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
 
-/** Suggestion filter variants — how the option list is matched against the typed
+/** Suggestion filter variants: how the option list is matched against the typed
   * text. `StartsWithPerTerm` (the default) matches the start of any word,
   * `StartsWith` only the start of the whole text, `Contains` anywhere, and
   * `None` disables filtering (the caller pre-filters, e.g. server-side).
@@ -12,7 +12,7 @@ import kyo.UI.Ast.HtmlChildVal
 enum FilterMode derives CanEqual:
     case StartsWithPerTerm, StartsWith, Contains, None
 
-/** AutoComplete — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** AutoComplete: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * AutoComplete anatomy: `div.p-autocomplete.p-component[.p-invalid]
   * [.p-autocomplete-fluid]` > `input.p-autocomplete-input.p-inputtext.p-component`
   * + optional `button.p-autocomplete-dropdown`, over the floating suggestion
@@ -23,7 +23,7 @@ enum FilterMode derives CanEqual:
   * CSS applies verbatim.
   *
   * The suggestion panel is the REAL floating panel, built on the [[Overlay]]
-  * primitive with `seedFocus(false)` — focus STAYS in the input the whole time.
+  * primitive with `seedFocus(false)`: focus STAYS in the input the whole time.
   * Typing opens it (once the text reaches `minQueryLength`, default 1); a pick,
   * Escape, or an outside click closes it. The keyboard lives on the FIELD:
   * ArrowDown opens the panel / moves Prime's `.p-focus` highlight down, ArrowUp
@@ -36,7 +36,7 @@ enum FilterMode derives CanEqual:
   * defaulting to the label projection, or `optionGroups(...)` for
   * [[OptionItem]] rows under labelled headers; `itemTemplate` renders arbitrary UI per
   * suggestion row (the old `additionalText` column is expressed through it).
-  * `value(ref)` binds the raw TEXT two-way — typing and picks write back, ref
+  * `value(ref)` binds the raw TEXT two-way: typing and picks write back, ref
   * writes update the field and re-filter the list. The interaction state
   * (open/highlight/show-all) lives in signals allocated by an effectful
   * `UI.mounted` region; static projections (SSG, the SSR page HTML) render the
@@ -144,7 +144,7 @@ final case class AutoComplete[A] private (
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): AutoComplete[A] = copy(placeholderText = v)
 
-    /** Busy state — renders Prime's spinning `span.p-autocomplete-loader` inside
+    /** Busy state: renders Prime's spinning `span.p-autocomplete-loader` inside
       * the field while suggestions are being fetched. Bind a `Signal[Boolean]` to the
       * suggestion-fetch in-flight signal; only the in-field loader spinner toggles in its
       * own sub-region on emission (no re-render of the field).
@@ -157,7 +157,7 @@ final case class AutoComplete[A] private (
     def showClear(v: Boolean): AutoComplete[A] = copy(showClearFlag = v)
 
     /** Renders Prime's dropdown trigger (`button.p-autocomplete-dropdown`) fused
-      * to the field's end — clicking it toggles the panel with the FULL,
+      * to the field's end; clicking it toggles the panel with the FULL,
       * unfiltered option list (Prime's `dropdown` prop).
       */
     def dropdown(v: Boolean): AutoComplete[A] = copy(dropdownFlag = v)
@@ -178,7 +178,7 @@ final case class AutoComplete[A] private (
     /** Size of the field: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
     def size(v: Size): AutoComplete[A] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): AutoComplete[A] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
@@ -194,7 +194,7 @@ final case class AutoComplete[A] private (
     /** Fired on every keystroke with the current text. */
     def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onInputF = Present(Callback.of(f)))
 
-    /** Fired when the field commits (blur/Enter) or an option is picked — with the
+    /** Fired when the field commits (blur/Enter) or an option is picked, with the
       * committed text (a pick commits the option's label).
       */
     def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onChangeF = Present(Callback.of(f)))
@@ -202,7 +202,7 @@ final case class AutoComplete[A] private (
     /** Fired with the picked option after its label is written into the ref. */
     def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = copy(onSelectF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current text — unlike
+    /** Fires on focus loss (native `blur`) with the field's current text. Unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -283,7 +283,7 @@ final case class AutoComplete[A] private (
     private[uic] def render(using Frame): UI =
         // The interaction state (open/highlight/show-all) lives in signals allocated
         // by this effectful mount. Static projections (SSG, the SSR page GET,
-        // initial render) show the placeholder — the same closed anatomy, inert —
+        // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val stat: UI = withText(cur => body(cur, Absent))
         if !interactive then stat
@@ -300,7 +300,7 @@ final case class AutoComplete[A] private (
         end if
     end render
 
-    /** The subscription tree the mount publishes — the seam golden tests render
+    /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as placeholders,
       * so the wired anatomy is only reachable here).
       */
@@ -344,7 +344,7 @@ final case class AutoComplete[A] private (
     end matchesFilter
 
     private def body(query: String, st: Maybe[State])(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription — never around the
+        // Reactive-invalid gate (INSIDE the mount subscription, never around the
         // UI.mounted node). `State` is a path-dependent inner type, so the reactive
         // re-render threads the resolved (red, message) into `bodyStatic` directly
         // rather than through `copy(...)` (a copied instance's `State` would not match).
@@ -531,7 +531,7 @@ final case class AutoComplete[A] private (
     end bodyStatic
 
     /** The floating suggestion panel: Prime's `.p-autocomplete-overlay` skin on
-      * the [[Overlay]] primitive — `seedFocus(false)`, focus stays in the input;
+      * the [[Overlay]] primitive with `seedFocus(false)`, so focus stays in the input;
       * Escape is handled by the field, outside clicks by the backdrop.
       */
     private def overlayPanel(visibleGroups: List[OptionItem[A]], s: State, pick: A => State => UI.Action)(using Frame): UI =

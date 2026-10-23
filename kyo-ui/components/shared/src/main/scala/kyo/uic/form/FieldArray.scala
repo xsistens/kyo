@@ -3,25 +3,25 @@ package kyo.uic.form
 import kyo.*
 import kyo.UI.*
 
-/** A dynamic array of repeated form rows — the analogue of RHF's `useFieldArray`.
+/** A dynamic array of repeated form rows: the analogue of RHF's `useFieldArray`.
   * Each row is its own sub-form [[Form]] scope (so a row can hold any number of fields),
   * tracked in a reactive [[kyo.Signal]] list rather than the parent's static children.
   * That reactivity is the whole point: the parent's aggregations ([[Form.allErrors]],
   * [[Form.isDirty]], the submit gate) fold in each array's row signals through
   * [[kyo.Signal.switchMap]], so adding/removing a row updates them live.
   *
-  * The type parameter `R` is the per-row MODEL the builder returns alongside the UI —
+  * The type parameter `R` is the per-row MODEL the builder returns alongside the UI,
   * typically a case class of the row's field handles. It gives the array typed, live,
   * removal-correct access to every row ([[rows]] / [[currentRows]]), which is what
   * cross-row validation ([[satisfy]]) reads. Rows built without a model use `R = Unit`
   * (see [[Form.fieldArray]]); a typed model comes from [[Form.fieldArrayOf]].
   *
   * The set of arrays a form declares is fixed at build time; only the ROWS change at
-  * runtime — which is why the aggregation stays correct even for nested arrays: every
+  * runtime, which is why the aggregation stays correct even for nested arrays: every
   * array exposes a signal reactive over its own rows, and a row's pre-computed signals
   * (captured in a `RowEntry` when the row is added) already fold in that row's own arrays.
   *
-  * Constructed by [[Form.fieldArray]] / [[Form.fieldArrayOf]] — never directly.
+  * Constructed by [[Form.fieldArray]] / [[Form.fieldArrayOf]], never directly.
   */
 final class FieldArray[R] private[form] (
     private val rowsRef: SignalRef[Chunk[FieldArray.RowEntry[R]]],
@@ -32,28 +32,28 @@ final class FieldArray[R] private[form] (
 
     /** This array's cross-row checks, declared via [[satisfy]]. A plain `var` (not an
       * `AtomicRef`): registration runs single-threaded during `build`, exactly like
-      * `Form.checks` / `Form.invariants` — which is what lets [[satisfy]] stay pure + chainable.
+      * `Form.checks` / `Form.invariants`, which is what lets [[satisfy]] stay pure + chainable.
       */
     private var crossChecks: Chunk[(String, Chunk[R] => Boolean < Async, Reveal)] = Chunk.empty
 
-    /** The live, keyed list of row UIs — drop this into the layout where the rows render.
+    /** The live, keyed list of row UIs; drop this into the layout where the rows render.
       * Keyed on each row's stable id, so add/remove/move preserve the DOM (and focus/caret)
       * of the rows that stayed.
       */
     def render(using Frame): UI = rowsRef.foreachKeyed(_.key)(_.ui)
 
-    /** The live list of row models — reactive and removal-correct (derived from the row
+    /** The live list of row models, reactive and removal-correct (derived from the row
       * list, so a removed row drops out). Build a cross-row indicator or an ungated
       * validity signal off it.
       */
     def rows(using Frame): Signal[Chunk[R]] = rowsRef.map(_.map(_.model))
 
-    /** A snapshot of the current row models — the imperative counterpart of [[rows]], for
+    /** A snapshot of the current row models: the imperative counterpart of [[rows]], for
       * reading inside a [[satisfy]] check or submit handler.
       */
     def currentRows(using Frame): Chunk[R] < Sync = rowsRef.get.map(_.map(_.model))
 
-    /** Attach a cross-row validation, evaluated over ALL current rows at submit — the array
+    /** Attach a cross-row validation, evaluated over ALL current rows at submit: the array
       * analogue of [[Form.satisfy]] (same `satisfy(code)(predicate)` shape), with typed access to
       * every row. A CROSS-ROW check has no signal to push from (the row set itself changes),
       * so the predicate is the submit-pull form `Chunk[R] => Boolean < Async`; `true` = valid.
@@ -70,7 +70,7 @@ final class FieldArray[R] private[form] (
         crossChecks = crossChecks :+ (code, pred, reveal)
         this
 
-    /** Cross-row validation with the default [[Reveal.OnSubmit]] — see the `(code, reveal)` overload. */
+    /** Cross-row validation with the default [[Reveal.OnSubmit]]; see the `(code, reveal)` overload. */
     def satisfy(code: String)(pred: Chunk[R] => Boolean < Async): FieldArray[R] =
         satisfy(code, Reveal.OnSubmit)(pred)
 
@@ -119,14 +119,14 @@ final class FieldArray[R] private[form] (
                         .andThen(rowsRef.updateAndGet(_.patch(i, Nil, 1)).unit)
         yield ()
 
-    /** Start the `Activation.Change` observers of every CURRENT row — the recursion step for
+    /** Start the `Activation.Change` observers of every CURRENT row: the recursion step for
       * an array nested inside another array's row (its rows exist before the outer row is
       * wired).
       */
     private[form] def wireRowActivations(using Frame): Unit < Async =
         rowsRef.get.map(rows => Kyo.foreach(rows)(_.form.wireRowChangeActivations).unit)
 
-    /** Cancel the `Activation.Change` observers of every current row — on unmount, and as
+    /** Cancel the `Activation.Change` observers of every current row, on unmount, and as
       * the recursion step when an enclosing row is removed.
       */
     private[form] def cancelRowActivations(using Frame): Unit < Async =
@@ -152,7 +152,7 @@ final class FieldArray[R] private[form] (
             else Signal.combineLatestAll(rows.map(_.dirtySig)).map(_.exists(identity))
         }
 
-    /** Union of the rows' error entries (field-id-tagged) over the current rows — folded into
+    /** Union of the rows' error entries (field-id-tagged) over the current rows, folded into
       * `Form.errorEntries`.
       */
     private[form] def entriesSignal(using Frame): Signal[Chunk[Form.ErrorEntry]] =
@@ -231,9 +231,9 @@ object FieldArray:
         ui: UI,
         model: R,
         dirtySig: Signal[Boolean],
-        entriesSig: Signal[Chunk[Form.ErrorEntry]], // field-id-tagged errors — errorEntries/summary view
-        fErrsSig: Signal[Chunk[FieldError]],        // gated (touched/submit) — submitDisabled view
-        rawFErrsSig: Signal[Chunk[FieldError]]      // ungated — isValid(onlyVisible = false) view
+        entriesSig: Signal[Chunk[Form.ErrorEntry]], // field-id-tagged errors: errorEntries/summary view
+        fErrsSig: Signal[Chunk[FieldError]],        // gated (touched/submit): submitDisabled view
+        rawFErrsSig: Signal[Chunk[FieldError]]      // ungated: isValid(onlyVisible = false) view
     ) derives CanEqual
 
     /** The per-row control handed to a build function: it addresses THIS row by its stable

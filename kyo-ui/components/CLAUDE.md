@@ -55,7 +55,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   types (`String` always shown vs `Signal[Maybe[String]]` that can clear the row), so
   `String | Signal[Maybe[String]]` would be a heterogeneous union, not this pattern.
 - **The DISPLAY slots follow this; the SELECTION slots do not yet.** `Tabs.selected` was the
-  first converted, `DataTable.selected` the second — and the second is the warning about how this
+  first converted, `DataTable.selected` the second, and the second is the warning about how this
   list was drawn up: it was not on it. The family was enumerated from the pickers, and a table's
   row selection is the same slot wearing different clothes. Assume the list is short, not complete.
   Still outstanding: `Select`/`MultiSelect`/`Listbox`/`TreeSelect`/
@@ -65,7 +65,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `Input.Value`) that duplicate `ReactiveValue` without its one-way case.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
-  none — `Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike — so check which
+  none (`Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike), so check which
   half of the slot actually needs the ref before writing the signature. In `Tabs` only the
   click path did; the union made the ask strictly weaker without changing the two-way case.
 - **Widening one of these is not a rename.** In `DataTable` the field went to
@@ -78,7 +78,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   bound-at-all before touching it; the compiler checks none of this.
 - **Say what a one-way binding cannot do, in a card.** A slot that paints but never writes looks
   exactly like a working one until someone clicks it. `DataTable` reports the two shapes that have
-  no outlet — a `Checkbox` column, whose boxes are not row clicks and so cannot fall back to
+  no outlet: a `Checkbox` column, whose boxes are not row clicks and so cannot fall back to
   `onRowClick`, and a `Single`/`Multiple` selection with no `onRowClick` bound at all.
 
 ## Shared slots live in traits, not in every component
@@ -100,13 +100,13 @@ field names differ (`accNameV` in the field-shaped controls, `accessibleNameV` i
 - **The split above is not an argument for widening any given `disabled`.** Ask what the flag
   DESCRIBES. Almost every one describes the state of the page, and a plain `Boolean` is right.
   `MenuItem.disabled` is the exception because it describes the item's TARGET, which changes with
-  each open — and rebuilding the list per target is not the alternative, since the host allocates
+  each open, and rebuilding the list per target is not the alternative, since the host allocates
   its open state in its own unkeyed `UI.mounted`.
 
 ## A slot on a shared MODEL type is not a per-component decision
 
-`MenuItem` is one type rendered by six hosts (Menu — which SplitButton delegates to — Menubar,
-MegaMenu, TieredMenu, ContextMenu, SpeedDial). Widening a slot there means every host has to
+`MenuItem` is one type rendered by six hosts: Menu (which SplitButton delegates to), Menubar,
+MegaMenu, TieredMenu, ContextMenu, SpeedDial. Widening a slot there means every host has to
 honour it, or the same call means different things in different places with nothing in the type
 to say so. Contrast `HasElementId`, where each component genuinely was its own decision.
 
@@ -118,7 +118,7 @@ to say so. Contrast `HasElementId`, where each component genuinely was its own d
 - **Resolve INSIDE the mount, never around it.** These hosts keep their open state in their own
   `UI.mounted`; a reactive region placed around `render` rebuilds the mount on every emission and
   takes that state with it. The seam is `wired`, which is already below the mount boundary.
-- **A forgotten host fails silently** — `constTrue` on an unresolved `Dyn` reads `false`. The
+- **A forgotten host fails silently**: `constTrue` on an unresolved `Dyn` reads `false`. The
   sweep in `GoldenRenderTest` ("every host of MenuItem resolves a reactive disabled") is what
   makes that impossible to ship; a host added later belongs in that list.
 - **A slot only some implementors have gets its own trait** (`HasAccessibleNameRef` extends

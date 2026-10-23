@@ -15,23 +15,23 @@ enum TooltipPosition derives CanEqual:
         case TooltipPosition.Right  => "right"
 end TooltipPosition
 
-/** Tooltip — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Tooltip: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Tooltip anatomy: `div.p-tooltip.p-component.p-tooltip-top|-bottom|-left|-right`
   * > `div.p-tooltip-arrow` + `div.p-tooltip-text`), so the extracted `@primeuix`
   * tooltip CSS applies verbatim.
   *
   * Deliberate deviation from Prime: Prime's tooltip is a JS directive that
   * mounts/positions the box on pointer events with timers. This one is
-  * server-honest and CSS-driven — the box is always in the DOM (the sheet ships
+  * server-honest and CSS-driven: the box is always in the DOM (the sheet ships
   * `display: none`) and the `.p-uic-tooltip` wrapper's `:hover`/`:focus-within`
   * shows it, with zero state and zero round-trips. Consequences: no
   * showDelay/hideDelay/autoHide (those need JS timers), the box is not
   * interactive (`pointer-events: none`, Prime's autoHide default), and it
-  * positions against the wrapped target (no viewport flip — pick the position
+  * positions against the wrapped target (no viewport flip; pick the position
   * that fits).
   *
-  * Usage: `uic.Tooltip("Saved!").position(TooltipPosition.Bottom)(uic.Button("Save"))`
-  * — the target children render inside the relative wrapper; keyboard users get
+  * Usage: `uic.Tooltip("Saved!").position(TooltipPosition.Bottom)(uic.Button("Save"))`.
+  * The target children render inside the relative wrapper; keyboard users get
   * the same box via `:focus-within` when the target is focusable.
   */
 final case class Tooltip private (

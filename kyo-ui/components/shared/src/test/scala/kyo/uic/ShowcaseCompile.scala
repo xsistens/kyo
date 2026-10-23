@@ -10,7 +10,7 @@ import kyo.uic
 import scala.language.implicitConversions
 
 /** Compile-time showcase: exercises every integration seam the library promises.
-  * This object typechecking IS the test — it proves the downstream API shape:
+  * This object typechecking IS the test. It proves the downstream API shape:
   * qualified `uic.X` access, chained setters, auto-lift into kyo containers,
   * two-way signal binding, and mixing uic components with raw kyo elements.
   */
@@ -422,7 +422,7 @@ object ShowcaseCompile:
                 .startTemplate(span("used"))
                 .endTemplate(span("of 100 GB"))
                 .meterTemplate((m, pc) => span.cssClass("seg")(m.labelText))
-                .labelTemplate((m, pc) => span(s"${m.label} — ${math.round(pc)}%"))
+                .labelTemplate((m, pc) => span(s"${m.label}: ${math.round(pc)}%"))
         )
 
     def featureGapPage(
@@ -645,7 +645,7 @@ object ShowcaseCompile:
                 .onClose(notify)(p("Drawer content"))
         )
 
-    /** A right-click menu on a table row — the composition [[uic.ContextMenu]] cannot wrap.
+    /** A right-click menu on a table row, the composition [[uic.ContextMenu]] cannot wrap.
       *
       * Everything the menu keeps is allocated in the CALLER's mount and handed back as a
       * `ContextMenu.State`: the menu itself mounts nothing, so it has no instance for a

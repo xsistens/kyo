@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 
 /** Button form types: plain button, form submit, or form reset. Maps onto the
-  * native `type` attribute (default `Button` — non-submitting, unlike bare HTML).
+  * native `type` attribute (default `Button`: non-submitting, unlike bare HTML).
   */
 enum ButtonType derives CanEqual:
     case Button, Submit, Reset
@@ -19,7 +19,7 @@ enum ButtonAccessibleRole derives CanEqual:
     private[uic] def token: String = this.toString
 end ButtonAccessibleRole
 
-/** Button — native kyo-ui, PrimeOne design. Renders a real `<button>` with
+/** Button: native kyo-ui, PrimeOne design. Renders a real `<button>` with
   * Prime's own anatomy (`.p-button` > `.p-button-icon`/`.p-button-label`), so
   * the extracted `@primeuix` component CSS applies verbatim.
   *
@@ -125,7 +125,7 @@ final case class Button private (
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
-      * sequence, marking it `aria-disabled="true"` for assistive tech plus a greyed style — and
+      * sequence, marking it `aria-disabled="true"` for assistive tech plus a greyed style, and
       * keeps the click wired. Route that click through `form.submit`, which validates and moves
       * focus to the first invalid field. This is the fix for the focus trap where a natively
       * `disabled` submit button is skipped by Tab: the reactive re-enable lands a tick after the
@@ -154,7 +154,7 @@ final case class Button private (
       */
     def buttonType(v: ButtonType): Button = copy(buttonTypeV = v)
 
-    /** ARIA role override — `Link` renders `role="link"` on the native button. */
+    /** ARIA role override: `Link` renders `role="link"` on the native button. */
     def accessibleRole(v: ButtonAccessibleRole): Button = copy(accessibleRoleV = v)
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Button = copy(accessibleNameV = v)
@@ -163,7 +163,7 @@ final case class Button private (
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = copy(accessibleDescriptionV = v)
 
     /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's
-      * SPA `Href.Path`) that keeps the full button skin — Prime's Button link mode.
+      * SPA `Href.Path`) that keeps the full button skin (Prime's Button link mode).
       * Link semantics (native anchor role, focus) with button styling; form `type`
       * does not apply.
       */
@@ -173,7 +173,7 @@ final case class Button private (
 
     /** ID of the `<form>` to associate with. kyo-ui 1.0.0-RC5 exposes no `form`
       * attribute setter and the DOM `form` property is read-only, so this is
-      * surfaced as `data-uic-form` — an association hint, not a native browser
+      * surfaced as `data-uic-form`: an association hint, not a native browser
       * form association.
       */
     def form(v: String): Button = copy(formV = Present(v))
@@ -188,15 +188,15 @@ final case class Button private (
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = copy(extraChildren = extraChildren ++ cs)
 
-    // Resolve any reactive (Dyn) disabled / aria-disabled slots to their current boolean first —
-    // each re-renders its own boundary on emission (like TextValue.Dyn) — then build the element.
+    // Resolve any reactive (Dyn) disabled / aria-disabled slots to their current boolean first
+    // (each re-renders its own boundary on emission, like TextValue.Dyn), then build the element.
     private[uic] def render(using Frame): UI =
         BoolValue.reactive(disabledV): d =>
             BoolValue.reactive(ariaDisabledV): ad =>
                 BoolValue.reactive(loadingV): l =>
                     copy(disabledV = d, ariaDisabledV = ad, loadingV = l).renderResolved
 
-    /** The resolved busy state — read after the reactive slots are pinned to their current constants. */
+    /** The resolved busy state, read after the reactive slots are pinned to their current constants. */
     private def loadingNow: Boolean = loadingV.constTrue
 
     private def renderResolved(using Frame): UI =
@@ -348,6 +348,6 @@ object Button:
       */
     def apply(label: String | Signal[String]): Button = new Button(label = Present(ReactiveValue(label)))
 
-    /** An empty button — add an icon and/or children via the setters. */
+    /** An empty button; add an icon and/or children via the setters. */
     def apply(): Button = new Button()
 end Button

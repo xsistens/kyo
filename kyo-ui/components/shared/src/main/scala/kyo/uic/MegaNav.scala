@@ -5,7 +5,7 @@ import kyo.UI.Keyboard
 import kyo.uic.MenuNav.OpenOp
 import kyo.uic.MenuNav.Step
 
-/** Pure keyboard-navigation state machine for [[MegaMenu]] — a 2D grid, not the
+/** Pure keyboard-navigation state machine for [[MegaMenu]]: a 2D grid, not the
   * nested tree [[MenuNav]] models, so it gets its own rules. Focus is a path:
   * `Nil` = none, `List(r)` = root `r` on the bar, `List(r, c, i)` = the `i`-th
   * navigable item of column `c` in root `r`'s panel. Returns a [[MenuNav.Step]]

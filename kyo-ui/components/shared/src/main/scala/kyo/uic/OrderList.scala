@@ -3,14 +3,14 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** OrderList — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** OrderList: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * OrderList anatomy: `div.p-orderlist.p-component` > `div.p-orderlist-controls`
-  * with the four secondary move Buttons (up / top / down / bottom — Prime's
+  * with the four secondary move Buttons (up / top / down / bottom, with Prime's
   * angle glyphs, in Prime's order) beside an embedded multiple-selection
   * [[Listbox]]), so the extracted `@primeuix` orderlist + listbox CSS applies
   * verbatim.
   *
-  * The ITEM ORDER is the model: `items` binds a `SignalRef[Seq[A]]` two-way —
+  * The ITEM ORDER is the model: `items` binds a `SignalRef[Seq[A]]` two-way:
   * the move buttons write the reordered Seq back (Prime's exact move-up/-top/
   * -down/-bottom semantics), and external ref writes re-render the list. The
   * `selection` ref (a `Set[A]` of the items themselves, matched by `itemKey`,
@@ -35,13 +35,13 @@ final case class OrderList[A] private (
 
     /** Binds the ordered items two-way: the move buttons write the reordered Seq
       * back; `label` is the row text (and the default selection key). One column,
-      * so one binding — [[PickList]] is the two-column member of the pair and
+      * so one binding. [[PickList]] is the two-column member of the pair and
       * spells the same thing `sourceItems` / `targetItems`.
       */
     def items(ref: SignalRef[Seq[A]])(label: A => String): OrderList[A] =
         copy(itemsRef = Present(ref), labelF = Present(label))
 
-    /** Stable item identity — the selection key (defaults to the label). */
+    /** Stable item identity: the selection key (defaults to the label). */
     def itemKey(f: A => String): OrderList[A] = copy(keyF = Present(f))
 
     /** Custom row content (Prime's option slot), replacing the plain label text. */
@@ -109,7 +109,7 @@ final case class OrderList[A] private (
             yield wired(Present(ListReorder.Cursor(hi, id)))
         }.placeholder(wired(Absent))
 
-    /** The tree the mount publishes — the seam the tests drive, since a golden render shows a mount
+    /** The tree the mount publishes: the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.
       */
     private[uic] def wired(cursor: Maybe[ListReorder.Cursor])(using Frame): UI =
@@ -156,7 +156,7 @@ final case class OrderList[A] private (
             toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", ListReorder.moveBottom))
         )
 
-        // The embedded Listbox renders through `resolved` — this render already
+        // The embedded Listbox renders through `resolved`: this render already
         // subscribes to the selection ref, so a second nested subscription would
         // race (the Overlay renderOpen lesson); clicks still write the bound ref.
         var lb = Listbox[String]()

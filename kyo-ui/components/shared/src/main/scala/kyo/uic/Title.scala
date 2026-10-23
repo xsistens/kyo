@@ -3,8 +3,8 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Title — native kyo-ui typographic primitive (Prime ships no title component;
-  * the `p-uic-title` remainder CSS provides the rem scale — h1 2rem/600 down to
+/** Title: native kyo-ui typographic primitive (Prime ships no title component;
+  * the `p-uic-title` remainder CSS provides the rem scale, h1 2rem/600 down to
   * h6 0.875rem/600, Inter inherited). Renders a heading-role `div.p-uic-title`
   * with `p-uic-title--h<n>` for the visual size.
   *

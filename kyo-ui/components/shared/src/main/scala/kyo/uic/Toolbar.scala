@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Toolbar — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Toolbar: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Toolbar anatomy: `div.p-toolbar[role=toolbar]` > `div.p-toolbar-start` +
   * `div.p-toolbar-center` + `div.p-toolbar-end`), so the extracted `@primeuix`
   * toolbar CSS applies verbatim. The three sections replace the previous flow/spacer

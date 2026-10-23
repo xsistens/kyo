@@ -7,7 +7,7 @@ import kyo.*
   * A table body is not one element per row: an expanded row is two, a group contributes rows that
   * belong to no record, and a windowed body pads with spacers and draws slots. `RowSpec` is that
   * stream, one entry per `<tr>`, and both properties below are conditions of reuse rather than of
-  * correctness — which is exactly why they need their own tests. Break either one and the markup is
+  * correctness, which is exactly why they need their own tests. Break either one and the markup is
   * still right; the body simply renders everything again, silently, the way it does today.
   *
   *   - **One entry, one element.** A keyed region reuses a child only if it paints as a single
@@ -25,7 +25,7 @@ class RowSpecTest extends UicTest:
     /** Every entry a body could emit, over one table that has every feature turned on at once.
       *
       * Built by hand rather than taken off a render: the point is to cover combinations a single
-      * configuration cannot show — a table is either windowed or grouped, never both — and the
+      * configuration cannot show (a table is either windowed or grouped, never both), and the
       * properties hold per entry, so the table around them only has to be able to render one.
       */
     private def specs(t: uic.DataTable[Item]): List[RowSpec[Item]] =

@@ -2,9 +2,9 @@ package kyo
 
 import kyo.UI.Ast.HtmlChildVal
 
-/** kyo-ui-components — native PrimeOne component library for kyo-ui.
+/** kyo-ui-components: native PrimeOne component library for kyo-ui.
   *
-  * Downstream usage (no name prefix — the namespace carries the origin):
+  * Downstream usage (no name prefix; the namespace carries the origin):
   * {{{
   *   import kyo.*
   *   import kyo.UI.*
@@ -19,7 +19,7 @@ package object uic:
 
     /** Wrap a fully-rendered `UI` as a kyo `HtmlChildVal`, so a `List[UI]` produced
       * inside a component's `render` can be splatted into a kyo container's
-      * `apply(cs: HtmlChildVal*)`. Uses the `private[kyo]` constructor — available
+      * `apply(cs: HtmlChildVal*)`. Uses the `private[kyo]` constructor, available
       * because this lives in package `kyo`. Splatting is needed because an implicit
       * `UI => HtmlChildVal` conversion is NOT applied element-wise to a `xs*` splat.
       */
@@ -32,7 +32,7 @@ package object uic:
       *
       * kyo-ui's engine sets the precedent: `foreachKeyed` warns on duplicate keys and
       * a duplicate mounted key paints an inline error card. A component `render` here
-      * is pure (`UI`, no `Sync`), so a log is not reachable — the card is.
+      * is pure (`UI`, no `Sync`), so a log is not reachable; the card is.
       */
     private[uic] object KeyDiagnostics:
         import kyo.UI.*
@@ -67,7 +67,7 @@ package object uic:
     end KeyDiagnostics
 
     /** Package-internal parsers from CSS value strings into kyo's typed `Style`
-      * vocabulary — the Prime APIs mirrored by Skeleton/ScrollPanel/MeterGroup
+      * vocabulary: the Prime APIs mirrored by Skeleton/ScrollPanel/MeterGroup
       * take plain CSS strings (`width="10rem"`, `color="var(--p-cyan-500)"`), and
       * kyo has no raw style-attribute escape hatch.
       */
@@ -76,7 +76,7 @@ package object uic:
         /** Parses a CSS length: `px`/`%`/`em` and bare numbers (as px) map onto the
           * typed `Length` cases; `auto` maps to `Length.Auto`; anything else (`rem`,
           * `vh`, expressions) passes through as `Length.Calc`, which renders as
-          * `calc(<raw>)` — CSS-equivalent to the raw value.
+          * `calc(<raw>)`, CSS-equivalent to the raw value.
           */
         def length(v: String): Length =
             val t                                   = v.trim
