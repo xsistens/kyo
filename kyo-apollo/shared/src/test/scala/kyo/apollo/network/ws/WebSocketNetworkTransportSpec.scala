@@ -625,10 +625,42 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     _         <- consumer.get
                     seen      <- received.get
                 yield
-                    // At most the consumer's chunk (the buffer plus one waiting put), the refilled
-                    // buffer, the owner's frame and the drain's frame.
-                    assert(readAhead - 1 <= 2 * bufferSize + 3, s"${readAhead - 1} data frames read ahead of the consumer")
+                    // At most the consumer's chunk (no larger than the buffer), the refilled buffer,
+                    // the owner's frame and the drain's frame.
+                    assert(readAhead - 1 <= 2 * bufferSize + 2, s"${readAhead - 1} data frames read ahead of the consumer")
                     assert(seen == Chunk.from(1 to frames))
+                end for
+            }
+        }
+
+        "a subscriber takes at most its buffer size of responses in one chunk, also when more are waiting" in Clock.withTimeControl { _ =>
+            // A buffer of 3 is a channel of 4 (a channel's capacity rounds up to a power of two), so the full
+            // channel alone holds more responses than one chunk may carry, and the owner waits with one more.
+            val bufferSize = 3
+            fixture(bufferSize = bufferSize).map { f =>
+                val subscription = f.transport.subscribe(request())
+                for
+                    holding  <- Channel.init[Unit](1)
+                    gate     <- Latch.init(1)
+                    chunks   <- AtomicRef.init(Chunk.empty[Chunk[Int]])
+                    consumer <- Fiber.init(Scope.run(subscription.foreachChunk { chunk =>
+                        chunks.getAndUpdate(_.append(chunk.map(_.data.getOrElse(-1)))).map { before =>
+                            if before.isEmpty then holding.put(()).andThen(gate.await) else Kyo.unit
+                        }
+                    }))
+                    _ <- established(f.conn, "0")
+                    _ <- Sync.defer(f.conn.server(next("0", 1)))
+                    _ <- holding.take // the consumer holds a chunk of 1
+                    // 2 to 5 fill the channel, the owner holds 6, the drain holds 7.
+                    _    <- Sync.defer((2 to 7).foreach(i => f.conn.server(next("0", i))))
+                    _    <- f.conn.awaitFramesRead(1 + 7) // the ack, then 1 to 7
+                    _    <- Sync.defer(f.conn.server(complete("0")))
+                    _    <- gate.release
+                    _    <- consumer.get
+                    seen <- chunks.get
+                yield
+                    assert(seen.forall(_.size <= bufferSize), s"chunks $seen")
+                    assert(seen.foldLeft(Chunk.empty[Int])(_.concat(_)) == Chunk.from(1 to 7), s"chunks $seen")
                 end for
             }
         }
