@@ -58,7 +58,8 @@ import scala.collection.immutable.VectorMap
   * timer and are ignored once that timer is no longer part of the phase.
   *
   * '''Backpressure.''' Each subscription has a channel of
-  * [[subscriptionBufferSize]] responses. The owner delivers into it and waits
+  * [[subscriptionBufferSize]] responses, and its stream hands the consumer at
+  * most that many responses per chunk. The owner delivers into it and waits
   * while it is full; the socket drain holds one credit per frame and hands over
   * the next frame only once the owner has processed the previous one, so a
   * consumer that does not keep up stops the socket read instead of growing a
@@ -212,7 +213,10 @@ final class WebSocketNetworkTransport private[apollo] (
             )
             registered <- Abort.run[Closed](mailbox.offer(Msg.Register(subscriber)))
         yield registered match
-            case Result.Success(_) => channel.streamUntilClosed()
+            // A drain without a bound keeps taking the responses the owner delivers while the chunk is
+            // assembled, so a consumer's chunk, and with it the read ahead of the consumer, could grow without limit.
+            // At least one, so a channel without a buffer still streams.
+            case Result.Success(_) => channel.streamUntilClosed(maxChunkSize = math.max(subscriptionBufferSize, 1))
             case _                 => closedStream(request)
     end register
 
