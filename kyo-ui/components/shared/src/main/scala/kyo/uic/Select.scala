@@ -80,6 +80,7 @@ final case class Select[A] private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onPickF: Maybe[A => UI.Action] = Absent,
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
     currentV: Maybe[Maybe[A]] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
@@ -167,16 +168,22 @@ final case class Select[A] private (
       */
     def itemTemplate(f: A => UI): Select[A] = copy(itemTemplateF = Present(f))
 
-    /** Binds the selection two-way to the option itself: a pick writes the option, a write to `ref` selects the row whose
-      * [[optionKey]] it carries. The ref always holds an option, so there is no clear (`showClear` draws nothing).
+    /** Binds the selection to the option itself: the field shows the row whose [[optionKey]] the value carries, and a pick
+      * writes the option. The value always holds an option, so there is no clear (`showClear` draws nothing).
+      * A `SignalRef` binds two-way. Any other `Signal`, or a
+      * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
+      * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       */
-    def selection(ref: SignalRef[A]): Select[A] = copy(choice = Present(SingleChoice.Value(ref)))
+    def selection(v: A | Signal[A]): Select[A] = copy(choice = Present(SingleChoice.Value(ReactiveValue(v))))
 
-    /** Binds the selection two-way to the option or none: `Absent` shows the placeholder, a pick writes `Present(option)`,
-      * the clear writes `Absent`. `@targetName` because both `selection` bindings erase to one signature.
+    /** Binds the selection to the option or none: `Absent` shows the placeholder, a pick writes `Present(option)`, the clear
+      * writes `Absent`. Two-way and one-way as for the option binding above.Any other `Signal`, or a
+      * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
+      * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
+      * `@targetName` because both `selection` bindings erase to one signature.
       */
     @targetName("selectionMaybe")
-    def selection(ref: SignalRef[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ref)))
+    def selection(v: Maybe[A] | Signal[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ReactiveValue(v))))
 
     /** Binds the panel visibility two-way to `ref` (optional; the panel is
       * self-managed otherwise): writes open and close it, trigger/outside-click/
@@ -268,9 +275,15 @@ final case class Select[A] private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = copy(accNameRefV = v)
 
     /** Fired with the option now chosen, after the write (`Absent` on clear). A pick of the option already chosen changes
-      * nothing and fires nothing.
+      * nothing and fires nothing. Fires before [[onPick]].
       */
     def onChange(f: Maybe[A] => UI.Action)(using Frame): Select[A] = copy(onChangeF = Present(Callback.of(f)))
+
+    /** Fired with the option picked, after a pick that changed what the field holds: the same moments as [[onChange]]
+      * except a clear, which picks nothing. A field whose value is never empty reads its picks here without unwrapping a
+      * `Maybe`, and a one-way [[selection]] writes its own state here. Fires after [[onChange]] when both are set.
+      */
+    def onPick(f: A => UI.Action)(using Frame): Select[A] = copy(onPickF = Present(Callback.of(f)))
 
     /** Fires when the trigger loses focus, with the option held (`Absent` for none): the form-validation layer's Blur
       * trigger.
@@ -562,21 +575,16 @@ final case class Select[A] private (
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 
-    /** Writes `next` through the binding, then fires `onChange` with what the field now holds, where the write changed it.
-      * An unbound field (a host supplying `current`) has nothing to write and reports the pick as it is.
+    /** Writes `next` through the binding, then fires `onChange` and `onPick` where the write changed what the field holds
+      * ([[SingleChoice.report]]). An unbound field (a host supplying `current`) has nothing to write and reports the pick as
+      * it is.
       */
     private def write(next: Maybe[A])(using Frame): UI.Action =
         val changed: Maybe[Maybe[A]] < Sync =
             choice match
                 case Present(c) => c.write(next, key)
                 case Absent     => Present(next)
-        changed.map {
-            case Present(now) =>
-                onChangeF match
-                    case Present(g) => g(now)
-                    case Absent     => (): UI.Action
-            case Absent => (): UI.Action
-        }
+        changed.map(SingleChoice.report(_, onChangeF, onPickF))
     end write
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"

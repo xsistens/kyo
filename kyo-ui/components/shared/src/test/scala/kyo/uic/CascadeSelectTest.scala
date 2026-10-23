@@ -132,4 +132,38 @@ class CascadeSelectTest extends UicTest:
             assert(got == Present("Sydney"))
     }
 
+    "onPick fires with the leaf picked, after onChange, and not for the leaf already held" in {
+        for
+            ref  <- Signal.initRef("Bern")
+            seen <- Signal.initRef(List.empty[String])
+            base = cascade.selection(ref)
+                .onChange(m => seen.updateAndGet(_ :+ s"change ${m.getOrElse("-")}").unit)
+                .onPick(l => seen.updateAndGet(_ :+ s"pick $l").unit)
+            ui   <- allOpen(base)
+            same <- leaf(ui, "Bern")
+            _    <- click(same)
+            // A pick closes the chain, so the second one opens it again.
+            ui2    <- allOpen(base)
+            target <- leaf(ui2, "Sydney")
+            _      <- click(target)
+            got    <- seen.get
+        yield assert(got == List("change Sydney", "pick Sydney"))
+    }
+
+    "a one-way selection shows the signal, and a pick reports through onPick without writing" in {
+        for
+            route  <- Signal.initRef("Bern")
+            picks  <- Signal.initRef(List.empty[String])
+            ui     <- allOpen(cascade.selection(route.readOnly).onPick(l => picks.updateAndGet(_ :+ l).unit))
+            chosen <- elementsWithClass(ui, "p-cascadeselect-option-selected")
+            target <- leaf(ui, "Hamburg")
+            _      <- click(target)
+            held   <- route.get
+            got    <- picks.get
+        yield
+            assert(chosen.size == 1, "the leaf the signal holds is the chosen one")
+            assert(got == List("Hamburg"))
+            assert(held == "Bern")
+    }
+
 end CascadeSelectTest

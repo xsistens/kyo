@@ -47,6 +47,7 @@ final case class SelectButton[A] private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onPickF: Maybe[A => UI.Action] = Absent,
     onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
     onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
@@ -92,22 +93,25 @@ final case class SelectButton[A] private (
         copy(items = items ++ all.map(ev).toList, labelF = a => ev.flip(a).fold(none)(label))
     end optionsWithNone
 
-    /** Binds the SINGLE selection two-way to the option itself, matched by [[optionKey]]. The ref always holds an
-      * option, so a click on the chosen one keeps it whatever [[allowEmpty]] says.
+    /** Binds the SINGLE selection to the option itself, matched by [[optionKey]]. The value always holds an option, so a
+      * click on the chosen one keeps it whatever [[allowEmpty]] says. A `SignalRef` binds two-way. Any other `Signal`, or a
+      * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
+      * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       */
-    def selection(ref: SignalRef[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ref)))
+    def selection(v: A | Signal[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ReactiveValue(v))))
 
-    /** Binds the SINGLE selection two-way to the option or none: a click on the chosen option writes `Absent` where
-      * [[allowEmpty]] allows it.
+    /** Binds the SINGLE selection to the option or none: a click on the chosen option clears it where [[allowEmpty]]
+      * allows it. Two-way and one-way as for the option binding above.
       */
     @targetName("selectionMaybe")
-    def selection(ref: SignalRef[Maybe[A]]): SelectButton[A] = copy(single = Present(SingleChoice.Optional(ref)))
+    def selection(v: Maybe[A] | Signal[Maybe[A]]): SelectButton[A] =
+        copy(single = Present(SingleChoice.Optional(ReactiveValue(v))))
 
     /** The same group with several options on at once: a [[MultiSelectButton]], which binds a `Set[A]`. What is set so far
       * (options, templates, state) carries over; a single-choice binding and its events do not, since they hold one option.
       */
     def multiple: MultiSelectButton[A] =
-        MultiSelectButton(copy(multipleFlag = true, single = Absent, onChangeF = Absent, onBlurF = Absent))
+        MultiSelectButton(copy(multipleFlag = true, single = Absent, onChangeF = Absent, onPickF = Absent, onBlurF = Absent))
 
     /** Package-internal: the multi-choice half [[MultiSelectButton]] drives. */
     private[uic] def withMulti(ref: SignalRef[Set[A]]): SelectButton[A]                  = copy(multi = Present(MultiChoice(ref)))
@@ -141,6 +145,12 @@ final case class SelectButton[A] private (
       * A click that changes nothing fires nothing.
       */
     def onChange(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeF = Present(Callback.of(f)))
+
+    /** Fired with the option picked, after a click or an arrow that changed the selection to it: [[onChange]] without the
+      * `Maybe` and without the clear, for a group that is never empty or a one-way [[selection]] that writes its own state
+      * here. Fires after [[onChange]] when both are set.
+      */
+    def onPick(f: A => UI.Action)(using Frame): SelectButton[A] = copy(onPickF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the selection held (`Absent` for none): the validation layer's Blur trigger. */
     def onBlur(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onBlurF = Present(Callback.of(f)))
@@ -199,21 +209,15 @@ final case class SelectButton[A] private (
     private def selectOnly(a: A)(using Frame): UI.Action =
         stepSingle(_ => Present(a))
 
-    /** Applies `f` to the single selection through the binding, then fires `onChange` with what it now holds, where that
-      * changed. Unbound, there is nothing held, and `f` of none is reported as it is.
+    /** Applies `f` to the single selection through the binding, then fires `onChange` and `onPick` where that changed
+      * what it holds ([[SingleChoice.report]]). Unbound, there is nothing held, and `f` of none is reported as it is.
       */
     private def stepSingle(f: Maybe[A] => Maybe[A])(using Frame): UI.Action =
         val changed: Maybe[Maybe[A]] < Sync =
             single match
                 case Present(c) => c.update(key)(f)
                 case Absent     => Present(f(Absent))
-        changed.map {
-            case Present(now) =>
-                onChangeF match
-                    case Present(g) => g(now)
-                    case Absent     => (): UI.Action
-            case Absent => (): UI.Action
-        }
+        changed.map(SingleChoice.report(_, onChangeF, onPickF))
     end stepSingle
 
     /** One key on a single-select option: the arrows move focus to the next option a highlight may

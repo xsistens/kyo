@@ -68,18 +68,21 @@ trait TextFormControl extends FormControl:
     def value(ref: SignalRef[String]): Self
     def onBlur(f: String => UI.Action)(using Frame): Self
 
-/** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself bound
-  * two-way, over `A` where the field always holds one or over `Maybe[A]` where it may stay empty, plus a focus-loss trigger
-  * that reports the held option (`Absent` for none).
+/** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself, over
+  * `A` where the field always holds one or over `Maybe[A]` where it may stay empty, plus a focus-loss trigger that reports
+  * the held option (`Absent` for none).
+  *
+  * `selection` takes the module's union: a `SignalRef` binds two-way, any other `Signal` or a constant one-way. `bind`
+  * passes the field's own ref, so a form always binds two-way.
   *
   * The field's value type is the option type, so `bind` takes a `FormField[A]` or a `FormField[Maybe[A]]` and a rule judges
   * the option rather than a key standing in for it. The `@targetName` is there because both bindings erase to one signature;
   * the call site reads `selection(...)` either way.
   */
 trait ChoiceFormControl[A] extends FormControl:
-    def selection(ref: SignalRef[A]): Self
+    def selection(v: A | Signal[A]): Self
     @targetName("selectionMaybe")
-    def selection(ref: SignalRef[Maybe[A]]): Self
+    def selection(v: Maybe[A] | Signal[Maybe[A]]): Self
     def onBlur(f: Maybe[A] => UI.Action)(using Frame): Self
 end ChoiceFormControl
 

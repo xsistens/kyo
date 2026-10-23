@@ -432,4 +432,97 @@ class SelectTest extends UicTest:
         yield assert(textOf(lbl) == "Pick one")
     }
 
+    "onPick fires with the option picked, after onChange, and only when the pick changed the value" in {
+        for
+            ref  <- Signal.initRef(fruit(0))
+            seen <- Signal.initRef(List.empty[String])
+            ui   <- opened(
+                select.selection(ref)
+                    .onChange(m => seen.updateAndGet(_ :+ s"change ${m.fold("-")(_.id)}").unit)
+                    .onPick(f => seen.updateAndGet(_ :+ s"pick ${f.id}").unit)
+            )
+            rs  <- rows(ui)
+            _   <- click(rs(0))
+            _   <- click(rs(2))
+            got <- seen.get
+        yield assert(got == List("change c", "pick c"), "the option already held fires neither")
+    }
+
+    "a clear fires onChange with Absent and no onPick, since nothing was picked" in {
+        for
+            ref   <- Signal.initRef(Maybe(fruit(0)))
+            picks <- Signal.initRef(List.empty[String])
+            seen  <- Signal.initRef(List.empty[Maybe[String]])
+            ui    <- opened(
+                select.showClear(true).selection(ref)
+                    .onChange(m => seen.updateAndGet(_ :+ m.map(_.id)).unit)
+                    .onPick(f => picks.updateAndGet(_ :+ f.id).unit)
+            )
+            x   <- elementWithClass(ui, "p-select-clear-icon")
+            _   <- click(x)
+            ps  <- picks.get
+            cs  <- seen.get
+            now <- ref.get
+        yield
+            assert(now == Absent)
+            assert(cs == List(Absent))
+            assert(ps.isEmpty)
+    }
+
+    "a one-way selection shows the signal, and a pick reports through onPick without writing" in {
+        for
+            route <- Signal.initRef(fruit(2))
+            picks <- Signal.initRef(List.empty[String])
+            ui    <- opened(select.selection(route.readOnly).onPick(f => picks.updateAndGet(_ :+ f.id).unit))
+            rs    <- rows(ui)
+            lbl   <- elementWithClass(ui, "p-select-label")
+            _     <- click(rs(3))
+            held  <- route.get
+            got   <- picks.get
+            _     <- route.set(fruit(3))
+            ui2   <- opened(select.selection(route.readOnly))
+            lbl2  <- elementWithClass(ui2, "p-select-label")
+        yield
+            assert(textOf(lbl) == "Cherry", "the field shows what the signal holds")
+            assert(got == List("d"), "the pick is reported")
+            assert(held == fruit(2), "and nothing was written: the app owns the state")
+            assert(textOf(lbl2) == "Date", "an app write moves the field")
+        end for
+    }
+
+    "a one-way selection reports no change for the option it already shows" in {
+        for
+            route <- Signal.initRef(Maybe(fruit(2)))
+            seen  <- Signal.initRef(0)
+            ui    <- opened(select.selection(route.readOnly).onChange(_ => seen.updateAndGet(_ + 1).unit).onPick(_ =>
+                seen.updateAndGet(_ + 1).unit
+            ))
+            rs <- rows(ui)
+            _  <- click(rs(2))
+            n  <- seen.get
+        yield assert(n == 0)
+    }
+
+    "a constant selection shows its option and only reports a pick" in {
+        for
+            picks <- Signal.initRef(List.empty[String])
+            ui    <- opened(select.selection(fruit(3)).onPick(f => picks.updateAndGet(_ :+ f.id).unit))
+            lbl   <- elementWithClass(ui, "p-select-label")
+            rs    <- rows(ui)
+            _     <- click(rs(0))
+            got   <- picks.get
+        yield
+            assert(textOf(lbl) == "Date")
+            assert(got == List("a"))
+    }
+
+    "selection takes a ref, a read-only signal, or a signal over Maybe through one name" in {
+        typeCheck("""
+            import kyo.*
+            import kyo.uic
+            def x(r: SignalRef[String], s: Signal[String], m: Signal[Maybe[String]]) =
+                (uic.Select[String]().selection(r), uic.Select[String]().selection(s), uic.Select[String]().selection(m))
+        """)
+    }
+
 end SelectTest

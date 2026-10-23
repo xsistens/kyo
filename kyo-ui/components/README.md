@@ -681,7 +681,7 @@ val handRolled: UI < Async =
 
 ## Choosing from options
 
-Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the option itself, never as a key standing in for it: `selection(ref)` takes a `SignalRef[Maybe[A]]` for a choice that may stay empty under its placeholder, or a `SignalRef[A]` for one that always holds an option. Keys stay inside the component, where the panel, the keyboard and a hidden `<input name>` compare them. `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
+Every picker shares one typed shape: a `Seq[A]` of options, a label projection `A => String`, an optional key projection `A => String`, and a bound selection. The selection binds as the option itself, never as a key standing in for it: `selection(ref)` takes a `SignalRef[Maybe[A]]` for a choice that may stay empty under its placeholder, or a `SignalRef[A]` for one that always holds an option (a single-choice picker also takes a read-only `Signal`, below). Keys stay inside the component, where the panel, the keyboard and a hidden `<input name>` compare them. `TreeSelect` takes the same shape plus one projection more, `children: A => Seq[A]`, which is the whole difference between a tree-shaped picker and a flat one.
 
 ```scala
 val categoryPicker: UI < Async =
@@ -698,7 +698,7 @@ val categoryPicker: UI < Async =
 
 ### The option, none, or several
 
-`Select`, `CascadeSelect` and a single `SelectButton` bind a `SignalRef[A]` or a `SignalRef[Maybe[A]]`; `MultiSelect` and a `MultiSelectButton` (what `SelectButton.multiple` makes) bind a `SignalRef[Set[A]]`. The option is matched by its key, so a copy of an option the app holds picks that option's row, and the instance the app wrote survives a pick of the row already chosen. `onChange` reports what is now held (`Maybe[A]`, or the `Set[A]` of the multi-choice ones) and fires only when a gesture changed it. Single and multiple are two types rather than a flag on one, so each has exactly one binding and one `onChange` of its own value type, and a `Set` bound to a single-choice group does not compile.
+`Select`, `CascadeSelect` and a single `SelectButton` bind an `A` or a `Maybe[A]`, as a `SignalRef` (two way) or any other `Signal` (one way); `MultiSelect` and a `MultiSelectButton` (what `SelectButton.multiple` makes) bind a `SignalRef[Set[A]]`. The option is matched by its key, so a copy of an option the app holds picks that option's row, and the instance the app wrote survives a pick of the row already chosen. `onChange` reports what is now held (`Maybe[A]`, or the `Set[A]` of the multi-choice ones) and fires only when a gesture changed it. Single and multiple are two types rather than a flag on one, so each has exactly one binding and one `onChange` of its own value type, and a `Set` bound to a single-choice group does not compile.
 
 A filter's "all" is a real choice rather than an empty field, so `optionsWithNone` gives a select (or a button group) over `Maybe[B]` a labelled `Absent` row ahead of the values, and the app keeps a `Maybe[B]` with no string in between:
 
@@ -720,6 +720,28 @@ val viewControls: UI < Async =
 ```
 
 A ref over `A` has no none to clear to, so `showClear` draws nothing on it, and a `SelectButton` bound that way keeps its option when the chosen one is clicked again.
+
+`onPick(A => UI.Action)` is `onChange` without the `Maybe`: it fires at the same moments with the option picked, except on a clear, which picks nothing. When both are set, `onChange` fires first. A field that is never empty reads its picks there without unwrapping anything.
+
+`selection` takes what every slot takes, so a `SignalRef` binds two way and any other `Signal` binds one way: the field shows the signal's value, and a pick writes nothing, it only reports through `onPick` and `onChange`. That is the shape for state the app owns and changes by its own path, a route above all, where the field must follow the URL and a pick must go through the router rather than around it:
+
+```scala
+enum Page derives CanEqual:
+    case Overview, Reports, Settings
+
+/** Stands in for a router: the current page is its signal, and only `navigate` changes it. */
+final class Router(current: SignalRef[Page]):
+    val page: Signal[Page]              = current.readOnly
+    def navigate(p: Page): Unit < Async = current.set(p)
+
+def pageSwitcher(router: Router): UI =
+    uic.Select[Page]()
+        .options(Page.values.toSeq)(_.toString)
+        .selection(router.page)
+        .onPick(p => router.navigate(p))
+```
+
+A form always binds two way, since `bind` hands the field's own ref to `selection`.
 
 A typed value that matches no option means the data and the binding disagree, so the field names it in a `.p-uic-key-error` card, the way it names colliding keys, and keeps it in the ref until the app changes it. The trigger still shows it, from the value itself. While options are still arriving that would be a false alarm, so `loading(Boolean | Signal[Boolean])` says so: the dropdown icon turns into Prime's spinner, the field reports `aria-busy`, and the card waits until the load ends. Options loaded inside a `UI.mounted` with a placeholder never get there, since the picker renders only once the data is in.
 

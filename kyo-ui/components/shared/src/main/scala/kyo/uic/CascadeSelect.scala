@@ -99,6 +99,7 @@ final case class CascadeSelect[A] private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onPickF: Maybe[A => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
     loadingV: Maybe[BoolValue] = Absent
@@ -120,16 +121,19 @@ final case class CascadeSelect[A] private (
       */
     def optionKey(f: A => String): CascadeSelect[A] = copy(keyF = Present(f))
 
-    /** Binds the selection two-way to the leaf itself: a pick writes the leaf, a write to `ref` selects the leaf whose
-      * [[optionKey]] it carries.
+    /** Binds the selection to the leaf itself: the field shows the leaf whose [[optionKey]] the value carries, and a pick
+      * writes the leaf. A `SignalRef` binds two-way. Any other `Signal`, or a
+      * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
+      * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       */
-    def selection(ref: SignalRef[A]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Value(ref)))
+    def selection(v: A | Signal[A]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Value(ReactiveValue(v))))
 
-    /** Binds the selection two-way to the leaf or none: `Absent` shows the placeholder, a pick writes `Present(leaf)`.
-      * `@targetName` because both `selection` bindings erase to one signature.
+    /** Binds the selection to the leaf or none: `Absent` shows the placeholder, a pick writes `Present(leaf)`. Two-way and
+      * one-way as for the leaf binding above. `@targetName` because both `selection` bindings erase to one signature.
       */
     @targetName("selectionMaybe")
-    def selection(ref: SignalRef[Maybe[A]]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Optional(ref)))
+    def selection(v: Maybe[A] | Signal[Maybe[A]]): CascadeSelect[A] =
+        copy(choice = Present(SingleChoice.Optional(ReactiveValue(v))))
 
     /** Binds the ROOT panel visibility two-way to `ref` (optional, self-managed
       * otherwise); the nested group panels stay component-internal.
@@ -163,8 +167,15 @@ final case class CascadeSelect[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CascadeSelect[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = copy(accNameRefV = v)
 
-    /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing. */
+    /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing.
+      * Fires before [[onPick]].
+      */
     def onChange(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = copy(onChangeF = Present(Callback.of(f)))
+
+    /** Fired with the leaf picked, after a pick that changed what the field holds: [[onChange]] without the `Maybe`, for a
+      * field that is never empty or a one-way [[selection]] that writes its own state here. Fires after [[onChange]].
+      */
+    def onPick(f: A => UI.Action)(using Frame): CascadeSelect[A] = copy(onPickF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the leaf held (`Absent` for none). Unlike `onChange` it fires even when
       * nothing was changed. The form-validation layer wires its `Blur` trigger here.
@@ -305,19 +316,13 @@ final case class CascadeSelect[A] private (
         def toggleRoot: UI.Action =
             if isOpen then closeAll else openPanel
 
-        // Writes the picked leaf, fires onChange where that changed it, closes the whole chain.
+        // Writes the picked leaf, fires onChange and onPick where that changed it, closes the whole chain.
         def pick(a: A): UI.Action =
             val changed: Maybe[Maybe[A]] < Sync =
                 choice match
                     case Present(c) => c.write(Present(a), key)
                     case Absent     => Present(Present(a))
-            val fire: UI.Action = changed.map {
-                case Present(now) =>
-                    onChangeF match
-                        case Present(g) => g(now)
-                        case Absent     => (): UI.Action
-                case Absent => (): UI.Action
-            }
+            val fire: UI.Action = changed.map(SingleChoice.report(_, onChangeF, onPickF))
             fire.andThen(closeAll)
         end pick
 
