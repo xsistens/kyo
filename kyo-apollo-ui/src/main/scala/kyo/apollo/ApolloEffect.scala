@@ -14,7 +14,7 @@ import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.Uuid
 
-/** The **effect / one-shot** half of the `kyo-ui` binding (Phase 09, Task 4).
+/** The **effect / one-shot** half of the `kyo-ui` binding.
   *
   * Provides the extension methods a single `import kyo.apollo.*` brings onto
   * every [[kyo.apollo.ApolloCall]] so app code turns a prepared operation into a Kyo
@@ -105,7 +105,7 @@ extension [D](call: ApolloCall[D])
 end extension
 
 /** Helpers backing the effect-form extension methods, kept off the extension
-  * itself so they are unit-testable and reused by the reactive form (Task 5).
+  * itself so they are unit-testable and reused by the reactive form ([[ApolloSignal]]).
   */
 object ApolloEffect:
 
