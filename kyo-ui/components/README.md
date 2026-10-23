@@ -350,23 +350,40 @@ For a client-side mount, put the same string in the host page's `<style>` block.
 
 ### Presets and the dark scheme
 
-Four presets ship: Aura (the default, declared on `:root`), Material, Lara, and Nora. You select one with a `data-theme` attribute on any ancestor, and the dark scheme with `data-scheme="dark"`. The two compose, because the preset diffs and the dark set are separate token blocks.
+Four presets ship: Aura (the default, declared on `:root`), Material, Lara, and Nora. You select a preset and a scheme for a subtree with `themed` on any ancestor element. The two compose, because the preset diffs and the dark set are separate token blocks.
 
 ```scala
-val themed: UI =
-    div.data("theme", "material").data("scheme", "dark")(
-        uic.Card().title("Bamboo Watch")(p("65.00 EUR"))
-    )
+import kyo.uic.Theme.themed
+
+val card: UI =
+    div(uic.Card().title("Bamboo Watch")(p("65.00 EUR")))
+        .themed(uic.Theme.Preset.Material, uic.Theme.Scheme.Dark)
 ```
+
+`themed` stamps the two attributes the sheet selects by, `data-theme` and `data-scheme`, so the palette is named by a value rather than by the string the sheet keys on. Each argument also takes a `Signal`, which is how a theme or dark-mode switch is built: the attribute is patched in place on each emission, nothing below the element re-renders, and a static render writes the signal's current value.
+
+```scala
+import kyo.uic.Theme.themed
+
+val shell: UI < Async =
+    for dark <- Signal.initRef(false)
+    yield main(
+        uic.ToggleSwitch().checked(dark).accessibleName("Dark mode")
+    ).themed(uic.Theme.Preset.Aura, dark.map(if _ then uic.Theme.Scheme.Dark else uic.Theme.Scheme.Light))
+```
+
+`Scheme.Light` is written rather than left out, so a light subtree inside a dark one resets to the light tokens.
 
 The Aura base token set is re-declared on every theme and scheme scope, not only on `:root`. Component tokens are `var()` chains, and CSS substitutes a `var()` at the element that declares the property, so a `data-scheme="dark"` scope below `<html>` only re-derives those chains if the base set is declared on the scope element too.
 
-### Your own preset
+### Your own palette
 
-A shipped preset is a block of token values keyed by `data-theme`, and a fifth one is the same thing with your palette in it. `Theme.preset` emits it in that shape:
+A shipped preset is a block of token values keyed by `data-theme`, and a fifth one is the same thing with your palette in it. `Theme.brand` makes it in that shape:
 
 ```scala
-val spotify: Stylesheet = uic.Theme.preset(
+import kyo.uic.Theme.themed
+
+val spotify: uic.Theme.Brand = uic.Theme.brand(
     "spotify",
     Seq(
         "p-primary-400" -> "#1ed760",
@@ -376,19 +393,21 @@ val spotify: Stylesheet = uic.Theme.preset(
     )
 )
 
-val sheet: String = uic.Theme.css + "\n" + spotify.render
+val sheet: String = uic.Theme.css + "\n" + spotify.sheet.render
+
+val app: UI = div(p("Now playing")).themed(spotify, uic.Theme.Scheme.Dark)
 ```
 
-Token names carry no leading `--`, the way `uic.Tokens` stores them and `Stylesheet.scopedVars` renders them. The result is a `Stylesheet`, so it composes with `++` and can be injected live with `UI.runStylesheet` instead of rendered into a `<style>`. Emit it **after** `Theme.css`: at equal specificity the later declaration wins.
+A `Brand` is the name and the sheet together, so the element is themed with exactly the name a sheet was made for. Token names carry no leading `--`, the way `uic.Tokens` stores them and `Stylesheet.scopedVars` renders them. `spotify.sheet` is a `Stylesheet`, so it composes with `++` and can be injected live with `UI.runStylesheet` instead of rendered into a `<style>`. Emit it **after** `Theme.css`: at equal specificity the later declaration wins.
 
 Two mechanics decide whether your values actually land, and both are about *where*:
 
 - **Re-pointing the ramps is enough, because everything else is a `var()` chain.** `--p-content-background` is `var(--p-surface-900)`, the primary button reads from the primary ramp, and so on down the graph, so you do not have to name the semantic tokens. But that only works because your block matches the same element the library's own blocks do, since CSS substitutes a `var()` at the element that *declares* the property. The ramps meant as a brand surface are `p-primary-*` (50…950) and `p-surface-*` (0…950).
-- **The `data-theme` and `data-scheme` attributes must sit on the element your tokens are declared against.** Stamping them on a shell `div` works. Declaring your own tokens on `:root` while theming a `div` does not: the base set is re-declared on that `div`, and a `:root` declaration never reaches it.
+- **`themed` must sit on the element your tokens are declared against.** Theming a shell `div` works. Declaring your own tokens on `:root` while theming a `div` does not: the base set is re-declared on that `div`, and a `:root` declaration never reaches it.
 
-`preset` always emits a second, paired block on `[data-theme="spotify"][data-scheme="dark"]` carrying your light tokens plus whatever you pass as `dark`. `dark` is a delta, so name only what actually differs in the dark scheme.
+`brand` always emits a second, paired block on `[data-theme="spotify"][data-scheme="dark"]` carrying your light tokens plus whatever you pass as `dark`. `dark` is a delta, so name only what actually differs in the dark scheme.
 
-Two things that block buys. It is the only place a preset can hold values that differ by scheme at all. And at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block (0,1,0), so your preset lands whatever order the sheets end up in. That matters because the library's dark set really does declare tokens a brand re-points (the whole `p-surface-*` ramp, `--p-content-background`, `--p-text-color`; the `p-primary-*` ramp it leaves alone). Emitted after `Theme.css` as above, your plain block already wins on source order at equal specificity; the paired block is what makes the order stop mattering.
+Two things that block buys. It is the only place a brand can hold values that differ by scheme at all. And at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block (0,1,0), so your brand lands whatever order the sheets end up in. That matters because the library's dark set really does declare tokens a brand re-points (the whole `p-surface-*` ramp, `--p-content-background`, `--p-text-color`; the `p-primary-*` ramp it leaves alone). Emitted after `Theme.css` as above, your plain block already wins on source order at equal specificity; the paired block is what makes the order stop mattering.
 
 To start from a shipped palette rather than from nothing, `Theme.tokens` hands you the set as it EFFECTIVELY resolves for a preset and scheme: the same blocks the sheet emits, folded in the same order:
 
@@ -411,7 +430,7 @@ The difference is only that `Tokens.auraDark` is the dark OVERRIDES rather than 
 
 `Theme.cssFor` is how you pay for less, and there are two rungs. **Take the first one; it is almost all of the win and it costs you nothing.**
 
-**Rung one: one preset instead of four.** Name every sheet, but only the token sets you actually select with `data-theme`/`data-scheme`:
+**Rung one: one preset instead of four.** Name every sheet, but only the token sets you actually select with `themed`:
 
 ```scala
 val css: String = uic.Theme.cssFor(uic.Tokens.auraLight, uic.Tokens.auraDark, uic.ComponentCss.all)
@@ -431,7 +450,7 @@ val css: String = uic.Theme.cssFor(
 )
 ```
 
-Either way the token sets land on the same two selectors the full sheet uses, `ComponentCss.base` and the kyo remainder are always included, and a preset built with `Theme.preset` composes on top exactly as it does with `Theme.css`.
+Either way the token sets land on the same two selectors the full sheet uses, `ComponentCss.base` and the kyo remainder are always included, and a brand built with `Theme.brand` composes on top exactly as it does with `Theme.css`.
 
 **What each rung is worth**, measured on a real app (Scala.js dev bundle, optimizer off, bytes of the esbuild output; one library version, one line of app source different):
 
