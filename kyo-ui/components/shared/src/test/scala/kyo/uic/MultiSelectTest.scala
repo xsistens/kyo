@@ -25,14 +25,14 @@ class MultiSelectTest extends UicTest:
 
     private def panelOf(hiAt: Int, filter: Boolean = false)(using
         Frame
-    ): (SignalRef[Int], SignalRef[Set[String]], SignalRef[Boolean], UI) < Async =
+    ): (SignalRef[Int], SignalRef[Set[Fruit]], SignalRef[Boolean], UI) < Async =
         for
             open  <- Signal.initRef(true)
             hi    <- Signal.initRef(hiAt)
             query <- Signal.initRef("")
-            value <- Signal.initRef(Set.empty[String])
+            value <- Signal.initRef(Set.empty[Fruit])
             base = if filter then multi.filterable(true) else multi
-        yield (hi, value, open, base.value(value).wired(open, hi, query, Present("ms")))
+        yield (hi, value, open, base.selection(value).wired(open, hi, query, Present("ms")))
 
     /** The element the panel's keyboard lives on: the filter header's input where there is one,
       * the trigger otherwise.
@@ -56,8 +56,8 @@ class MultiSelectTest extends UicTest:
             open  <- Signal.initRef(false)
             hi    <- Signal.initRef(-1)
             query <- Signal.initRef("")
-            value <- Signal.initRef(selected)
-            ui = multi.value(value).wired(open, hi, query, Present("ms"))
+            value <- Signal.initRef(fruit.filter(f => selected.contains(f.id)).toSet)
+            ui = multi.selection(value).wired(open, hi, query, Present("ms"))
             trigger <- elementWithClass(ui, "p-multiselect")
             _       <- press(trigger, key)
             isOpen  <- open.get
@@ -103,12 +103,12 @@ class MultiSelectTest extends UicTest:
             (_, value, _, ui)   <- panelOf(0)
             host                <- keyboardHost(ui, filter = false)
             _                   <- press(host, UI.Keyboard.Char('a'), ctrl)
-            all                 <- value.get
+            all                 <- value.get.map(_.map(_.id))
             (_, value2, _, ui2) <- panelOf(0)
-            _                   <- value2.set(Set("a", "c", "d"))
+            _                   <- value2.set(fruit.filter(f => Set("a", "c", "d").contains(f.id)).toSet)
             host2               <- keyboardHost(ui2, filter = false)
             _                   <- press(host2, UI.Keyboard.Char('a'), cmd)
-            cleared             <- value2.get
+            cleared             <- value2.get.map(_.map(_.id))
         yield assert(
             all == Set("a", "c", "d") && cleared.isEmpty,
             "every enabled option, and the second press clears them; the sold-out one is never selected"
@@ -133,7 +133,7 @@ class MultiSelectTest extends UicTest:
                 case Present(f) => handled(f(UI.KeyboardEvent(UI.Keyboard.Space, UI.Modifiers.none, Present("ms-all"))))
                 case Absent     => ()
             _      <- bubbled
-            picked <- value.get
+            picked <- value.get.map(_.map(_.id))
             still  <- open.get
         yield assert(picked.isEmpty && still, "the box toggles them all; the highlighted option is not a second answer")
     }
@@ -156,7 +156,7 @@ class MultiSelectTest extends UicTest:
             (_, value, open, ui) <- panelOf(2)
             host                 <- keyboardHost(ui, filter = false)
             _                    <- press(host, UI.Keyboard.Enter)
-            picked               <- value.get
+            picked               <- value.get.map(_.map(_.id))
             still                <- open.get
         yield assert(picked == Set("c") && still, "a reader picking several things keeps the list")
     }
@@ -166,7 +166,7 @@ class MultiSelectTest extends UicTest:
             (_, value, _, ui) <- panelOf(2)
             host              <- keyboardHost(ui, filter = false)
             _                 <- press(host, UI.Keyboard.Space)
-            picked            <- value.get
+            picked            <- value.get.map(_.map(_.id))
         yield assert(picked == Set("c"))
     }
 
@@ -175,7 +175,7 @@ class MultiSelectTest extends UicTest:
             (_, value, _, ui) <- panelOf(2, filter = true)
             host              <- keyboardHost(ui, filter = true)
             _                 <- press(host, UI.Keyboard.Space)
-            picked            <- value.get
+            picked            <- value.get.map(_.map(_.id))
         yield assert(picked.isEmpty)
     }
 

@@ -72,5 +72,5 @@ end NodeTest
 
 object NodeTest:
     /** The count asserted above — the one number prose may quote. */
-    val ComponentCount = 83
+    val ComponentCount = 84
 end NodeTest

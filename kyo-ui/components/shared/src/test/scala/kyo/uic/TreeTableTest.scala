@@ -15,7 +15,9 @@ class TreeTableTest extends UicTest:
 
     // Two roots rather than a parent and a child: a collapsed subtree draws no row, and the
     // second row is what shows that a key acts on the row it was pressed on.
-    private val roots = List(uic.TreeTableNode(Row("r1", "Ada")), uic.TreeTableNode(Row("r2", "Grace")))
+    private val r1    = Row("r1", "Ada")
+    private val r2    = Row("r2", "Grace")
+    private val roots = List(uic.TreeTableNode(r1), uic.TreeTableNode(r2))
 
     private def table(using Frame) =
         uic.TreeTable[Row]().nodes(roots*).rowKey(_.id).columns(uic.column("Name")(_.name).sortBy(_.name))
@@ -40,8 +42,8 @@ class TreeTableTest extends UicTest:
                 case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, mods)))
                 case Absent     => throw new AssertionError("the row declares no typed click handler")
         for
-            sel <- Signal.initRef(Set.empty[String])
-            ui = table.selectionMode(uic.SelectionMode.Multiple).selected(sel)
+            sel <- Signal.initRef(Set.empty[Row])
+            ui = table.selectionMode(uic.SelectionMode.Multiple).selection(sel)
                 .metaKeySelection(true).render
             rows    <- elementsWithClass(ui, "p-treetable-selectable-row")
             _       <- clickWith(rows(0), UI.Modifiers.none)
@@ -52,30 +54,30 @@ class TreeTableTest extends UicTest:
             _       <- clickWith(rows(0), UI.Modifiers(meta = true))
             removed <- sel.get
         yield
-            assert(plain == Set("r2"), "a plain click replaces rather than adds")
-            assert(added == Set("r1", "r2"), "Ctrl adds")
-            assert(removed == Set("r2"), "and Cmd takes it back out — meta OR ctrl, never one")
+            assert(plain == Set(r2), "a plain click replaces rather than adds")
+            assert(added == Set(r1, r2), "Ctrl adds")
+            assert(removed == Set(r2), "and Cmd takes it back out: meta OR ctrl, never one")
         end for
     }
 
     "a selectable row selects on Enter and on Space" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
-            ui = table.selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+            sel <- Signal.initRef(Set.empty[Row])
+            ui = table.selectionMode(uic.SelectionMode.Multiple).selection(sel).render
             rows       <- elementsWithClass(ui, "p-treetable-selectable-row")
             _          <- press(rows(0), UI.Keyboard.Enter)
             afterEnter <- sel.get
             _          <- press(rows(1), UI.Keyboard.Space)
             afterSpace <- sel.get
         yield
-            assert(afterEnter == Set("r1"), "Enter picks the row it was pressed on")
-            assert(afterSpace == Set("r1", "r2"), "and Space picks the next one")
+            assert(afterEnter == Set(r1), "Enter picks the row it was pressed on")
+            assert(afterSpace == Set(r1, r2), "and Space picks the next one")
     }
 
     "a key that is not an activation leaves the selection alone" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
-            ui = table.selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+            sel <- Signal.initRef(Set.empty[Row])
+            ui = table.selectionMode(uic.SelectionMode.Multiple).selection(sel).render
             rows  <- elementsWithClass(ui, "p-treetable-selectable-row")
             _     <- press(rows(0), UI.Keyboard.ArrowDown)
             after <- sel.get
@@ -89,12 +91,14 @@ class TreeTableTest extends UicTest:
     // it has no cell-level operation to move a cursor to. The semantics are TreeNav's, unchanged
     // from Tree, so only the wiring is asserted here.
 
+    private val ada     = Row("ada", "Ada")
+    private val grace   = Row("grace", "Grace")
+    private val alan    = Row("alan", "Alan")
+    private val barbara = Row("barbara", "Barbara")
+
     private val family = List(
-        uic.TreeTableNode(
-            Row("ada", "Ada"),
-            children = List(uic.TreeTableNode(Row("grace", "Grace")), uic.TreeTableNode(Row("alan", "Alan")))
-        ),
-        uic.TreeTableNode(Row("barbara", "Barbara"))
+        uic.TreeTableNode(ada, children = List(uic.TreeTableNode(grace), uic.TreeTableNode(alan))),
+        uic.TreeTableNode(barbara)
     )
 
     private def tree(using Frame) =
@@ -107,9 +111,9 @@ class TreeTableTest extends UicTest:
         elements(ui).map(_.filter(_.attrs.identifier.exists(_.startsWith("tt-r"))))
 
     /** Presses `key` on the row at `at`, returning where focus went and what is open afterwards. */
-    private def drive(at: Int, key: UI.Keyboard, open: Set[String] = Set.empty)(using
+    private def drive(at: Int, key: UI.Keyboard, open: Set[Row] = Set.empty)(using
         Frame
-    ): (Maybe[String], Set[String]) < Async =
+    ): (Maybe[String], Set[Row]) < Async =
         for
             expanded <- Signal.initRef(open)
             moved    <- Signal.initRef(Absent: Maybe[String])
@@ -122,10 +126,10 @@ class TreeTableTest extends UicTest:
 
     "a collapsed subtree contributes no rows, so the cursor walks what is on the screen" in {
         for
-            expanded <- Signal.initRef(Set.empty[String])
+            expanded <- Signal.initRef(Set.empty[Row])
             shut = tree.expanded(expanded).wired("tt", Absent, _ => ())
             closedRows <- navRows(shut)
-            _          <- expanded.set(Set("ada"))
+            _          <- expanded.set(Set(ada))
             openRows   <- navRows(tree.expanded(expanded).wired("tt", Absent, _ => ()))
         yield
             assert(closedRows.size == 2, "two roots while everything is shut")
@@ -140,44 +144,44 @@ class TreeTableTest extends UicTest:
 
     "ArrowRight opens a closed parent without moving off it" in
         drive(0, UI.Keyboard.ArrowRight).map { (to, open) =>
-            assert(open == Set("ada"), "the parent opens")
+            assert(open == Set(ada), "the parent opens")
             assert(to == Absent, "and the cursor stays on it, so the second press can step in")
         }
 
     "ArrowRight again steps into the children it just showed" in
-        drive(0, UI.Keyboard.ArrowRight, open = Set("ada")).map((to, _) => assert(to == Present("tt-r1")))
+        drive(0, UI.Keyboard.ArrowRight, open = Set(ada)).map((to, _) => assert(to == Present("tt-r1")))
 
     "ArrowLeft closes an open parent" in
-        drive(0, UI.Keyboard.ArrowLeft, open = Set("ada")).map((_, open) => assert(open.isEmpty))
+        drive(0, UI.Keyboard.ArrowLeft, open = Set(ada)).map((_, open) => assert(open.isEmpty))
 
     "ArrowLeft from a child climbs to its parent" in
-        drive(1, UI.Keyboard.ArrowLeft, open = Set("ada")).map((to, open) =>
-            assert(to == Present("tt-r0") && open == Set("ada"), "it climbs rather than closing anything")
+        drive(1, UI.Keyboard.ArrowLeft, open = Set(ada)).map((to, open) =>
+            assert(to == Present("tt-r0") && open == Set(ada), "it climbs rather than closing anything")
         )
 
     "Home and End reach the ends of what is visible" in {
         for
-            (home, _) <- drive(3, UI.Keyboard.Home, open = Set("ada"))
-            (end, _)  <- drive(0, UI.Keyboard.End, open = Set("ada"))
+            (home, _) <- drive(3, UI.Keyboard.Home, open = Set(ada))
+            (end, _)  <- drive(0, UI.Keyboard.End, open = Set(ada))
         yield assert(home == Present("tt-r0") && end == Present("tt-r3"))
     }
 
     "Enter selects the row and opens a parent with it" in {
         for
-            expanded <- Signal.initRef(Set.empty[String])
-            sel      <- Signal.initRef(Set.empty[String])
-            ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Multiple).selected(sel)
+            expanded <- Signal.initRef(Set.empty[Row])
+            sel      <- Signal.initRef(Set.empty[Row])
+            ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Multiple).selection(sel)
                 .wired("tt", Absent, _ => ())
             rows   <- navRows(ui)
             _      <- press(rows(0), UI.Keyboard.Enter)
             picked <- sel.get
             open   <- expanded.get
-        yield assert(picked == Set("ada") && open == Set("ada"))
+        yield assert(picked == Set(ada) && open == Set(ada))
     }
 
     "the treegrid is one tab stop, and the arrows are what reach the rest" in {
         for
-            expanded <- Signal.initRef(Set("ada"))
+            expanded <- Signal.initRef(Set(ada))
             ui       <- Kyo.lift(tree.expanded(expanded).wired("tt", Absent, _ => ()))
             rows     <- navRows(ui)
         yield
@@ -188,7 +192,7 @@ class TreeTableTest extends UicTest:
 
     "the tab stop follows the cursor, so a Tab away and back returns where the reader stood" in {
         for
-            expanded <- Signal.initRef(Set("ada"))
+            expanded <- Signal.initRef(Set(ada))
             cursor   <- Signal.initRef(Absent: Maybe[String])
             ui = tree.expanded(expanded).wired("tt", Present(cursor), _ => ())
             rows  <- navRows(ui)
@@ -203,10 +207,10 @@ class TreeTableTest extends UicTest:
 
     "the tab stop starts on the chosen row, so a table opens where the choice is" in {
         for
-            expanded <- Signal.initRef(Set("ada"))
-            chosen   <- Signal.initRef(Set("alan"))
+            expanded <- Signal.initRef(Set(ada))
+            chosen   <- Signal.initRef(Set(alan))
             cursor   <- Signal.initRef(Absent: Maybe[String])
-            ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Single).selected(chosen)
+            ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Single).selection(chosen)
                 .wired("tt", Present(cursor), _ => ())
             rows <- navRows(ui)
         yield
@@ -216,7 +220,7 @@ class TreeTableTest extends UicTest:
 
     "a click seeds the cursor, so the keyboard carries on from the row the pointer chose" in {
         for
-            expanded <- Signal.initRef(Set("ada"))
+            expanded <- Signal.initRef(Set(ada))
             cursor   <- Signal.initRef(Absent: Maybe[String])
             ui = tree.expanded(expanded).wired("tt", Present(cursor), _ => ())
             rows <- navRows(ui)
@@ -227,9 +231,9 @@ class TreeTableTest extends UicTest:
 
     "a treegrid that takes several rows says so" in {
         for
-            chosen <- Signal.initRef(Set.empty[String])
-            multi  = tree.selectionMode(uic.SelectionMode.Multiple).selected(chosen).wired("tt", Absent, _ => ())
-            single = tree.selectionMode(uic.SelectionMode.Single).selected(chosen).wired("tt", Absent, _ => ())
+            chosen <- Signal.initRef(Set.empty[Row])
+            multi  = tree.selectionMode(uic.SelectionMode.Multiple).selection(chosen).wired("tt", Absent, _ => ())
+            single = tree.selectionMode(uic.SelectionMode.Single).selection(chosen).wired("tt", Absent, _ => ())
             m <- elementWithClass(multi, "p-treetable-table")
             s <- elementWithClass(single, "p-treetable-table")
         yield

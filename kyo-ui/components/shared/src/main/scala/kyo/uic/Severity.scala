@@ -82,17 +82,17 @@ enum SelectionMode derives CanEqual:
   * set is additive, and asking for a modifier on top of it would be asking twice.
   */
 private[uic] object SelectionPick:
-    def next(
+    def next[K](
         mode: SelectionMode,
         metaKeySelection: Boolean,
         meta: Boolean,
-        id: String,
-        current: Set[String]
-    ): Set[String] =
-        def plain: Set[String] = mode match
+        id: K,
+        current: Set[K]
+    ): Set[K] =
+        def plain: Set[K] = mode match
             case SelectionMode.None                         => current
             case SelectionMode.Single | SelectionMode.Radio =>
-                if current == Set(id) then Set.empty else Set(id)
+                if current.sizeIs == 1 && current.contains(id) then Set.empty else Set(id)
             case SelectionMode.Multiple | SelectionMode.Checkbox =>
                 if current.contains(id) then current - id else current + id
         mode match

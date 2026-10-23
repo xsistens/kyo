@@ -47,10 +47,10 @@ end TreeTableNodeScope
   *
   * Rows are TYPED ([[TreeTableNode]] over `A`) and reuse the DataTable
   * [[Column]] carrier; every behavior is pure `(nodes, ui-state refs) → markup`:
-  *   - `expanded(ref)` — a `Set[String]` of open row keys; the toggler flips
-  *     membership before firing `onNodeToggle`; children render only while
+  *   - `expanded(ref)`: a `Set[A]` of open rows, matched by `rowKey`; the toggler
+  *     flips membership before firing `onNodeToggle`; children render only while
   *     their parent is expanded.
-  *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
+  *   - `selectionMode` + `selection(ref)`: `Single`/`Multiple` select on row
   *     click (Prime's checkbox cascade with partial states is deferred).
   *   - `sort(ref)`: DataTable's ordered [[SortKey]] spec, applied PER SIBLING LEVEL
   *     (children sort within their parent). Clicks follow the DataTable contract: a
@@ -64,8 +64,8 @@ final case class TreeTable[A] private (
     nodeList: List[TreeTableNode[A]] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[Column[A, AnyTable]] = Nil,
-    expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    expandedTyped: Maybe[SignalRef[Set[A]]] = Absent,
+    selectedTyped: Maybe[SignalRef[Set[A]]] = Absent,
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
@@ -73,8 +73,8 @@ final case class TreeTable[A] private (
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
-    onNodeToggleF: Maybe[String => UI.Action] = Absent,
-    onRowClickF: Maybe[String => UI.Action] = Absent,
+    onNodeToggleF: Maybe[A => UI.Action] = Absent,
+    onRowClickF: Maybe[A => UI.Action] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     hiddenCols: List[Column[A, AnyTable]] = Nil
 ) extends Node, HasEmptyContent, HasAccessibleName:
@@ -86,7 +86,8 @@ final case class TreeTable[A] private (
 
     /** Stable row identity — the expansion/selection key and the event payloads.
       * Required for reliable expansion/selection (the fallback is the row's
-      * depth-first position, which does not survive data changes).
+      * position in the tree as authored, which does not survive data changes, and
+      * matches a bound row by its own equality).
       */
     def rowKey(f: A => String): TreeTable[A] = copy(rowKeyF = Present(f))
 
@@ -104,11 +105,11 @@ final case class TreeTable[A] private (
         copy(cols = cols ++ cs.map(c => shared.widen((c: Column[A, K]))).toList)
     end columns
 
-    /** Binds expansion two-way to `ref` (a set of [[rowKey]] ids). */
-    def expanded(ref: SignalRef[Set[String]]): TreeTable[A] = copy(expandedRef = Present(ref))
+    /** Binds expansion two-way to `ref`, the set of expanded rows matched by [[rowKey]]. */
+    def expanded(ref: SignalRef[Set[A]]): TreeTable[A] = copy(expandedTyped = Present(ref))
 
-    /** Binds selection two-way to `ref` (a set of [[rowKey]] ids). */
-    def selected(ref: SignalRef[Set[String]]): TreeTable[A] = copy(selectedRef = Present(ref))
+    /** Binds the selection two-way to `ref`, the set of chosen rows matched by [[rowKey]]. */
+    def selection(ref: SignalRef[Set[A]]): TreeTable[A] = copy(selectedTyped = Present(ref))
 
     /** Binds the ordered sort spec two-way (applied per sibling level): [[SortKey]]
       * entries, the first sorting one being the primary key. Clicks follow the DataTable
@@ -147,11 +148,11 @@ final case class TreeTable[A] private (
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = copy(emptyContentV = v)
 
-    /** Fired with the row key after a toggler press (after the expansion write). */
-    def onNodeToggle(f: String => UI.Action)(using Frame): TreeTable[A] = copy(onNodeToggleF = Present(Callback.of(f)))
+    /** Fired with the row after a toggler press (after the expansion write). */
+    def onNodeToggle(f: A => UI.Action)(using Frame): TreeTable[A] = copy(onNodeToggleF = Present(Callback.of(f)))
 
-    /** Fired with the row key after a row click (after the selection write). */
-    def onRowClick(f: String => UI.Action)(using Frame): TreeTable[A] = copy(onRowClickF = Present(Callback.of(f)))
+    /** Fired with the row after a row click (after the selection write). */
+    def onRowClick(f: A => UI.Action)(using Frame): TreeTable[A] = copy(onRowClickF = Present(Callback.of(f)))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeTable[A] = copy(accNameV = v)
 
@@ -162,10 +163,42 @@ final case class TreeTable[A] private (
             case Present(f) => f(a)
             case Absent     => fallback
 
+    /** Every row of the tree as authored, with the key it is matched by, in tree order. The key falls back
+      * to the row's authored path, so it does not move when a sort reorders the siblings.
+      */
+    private def keyedRows: List[(String, A)] =
+        def loop(ns: List[TreeTableNode[A]], prefix: String): List[(String, A)] =
+            ns.zipWithIndex.flatMap { (n, i) =>
+                val path = if prefix.isEmpty then i.toString else s"$prefix.$i"
+                (keyOf(n.data, path), n.data) :: loop(n.children, path)
+            }
+        loop(nodeList, "")
+    end keyedRows
+
+    /** The key a bound row is matched by: its [[rowKey]], else the authored path of the row equal to it. */
+    private def keyFor(a: A): String =
+        rowKeyF match
+            case Present(f) => f(a)
+            case Absent     => keyedRows.find(_._2.equals(a)).map(_._1).getOrElse("")
+
+    /** The row a key names. */
+    private def rowFor(key: String): Maybe[A] = Maybe.fromOption(keyedRows.find(_._1 == key).map(_._2))
+
+    /** Applies `f` to a bound row set's keys and writes back the rows they name, the rows already held kept as
+      * the caller wrote them.
+      */
+    private def updateRows(ref: SignalRef[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
+        ref.getAndUpdate { prev =>
+            val now   = f(prev.map(keyFor))
+            val kept  = prev.filter(a => now.contains(keyFor(a)))
+            val known = kept.map(keyFor)
+            kept ++ now.filterNot(known.contains).flatMap(k => rowFor(k).toList)
+        }.unit
+
     private def rowInteractive: Boolean =
         selectionModeV != SelectionMode.None || onRowClickF.isDefined
 
-    private def withRef[T](ref: Maybe[SignalRef[T]], fallback: T)(k: T => UI)(using Frame): UI =
+    private def withRef[T](ref: Maybe[Signal[T]], fallback: T)(k: T => UI)(using Frame): UI =
         ref match
             case Present(r) => r.render(k)
             case Absent     => k(fallback)
@@ -200,8 +233,8 @@ final case class TreeTable[A] private (
             case Present(r) => (k: String) => r.set(Present(k))
             case Absent     => (_: String) => ()
         withSortableFlags { flags =>
-            withRef(expandedRef, Set.empty[String]) { exp =>
-                withRef(selectedRef, Set.empty[String]) { sel =>
+            withRef(expandedTyped.map(_.map(_.map(keyFor))), Set.empty[String]) { exp =>
+                withRef(selectedTyped.map(_.map(_.map(keyFor))), Set.empty[String]) { sel =>
                     withRef(sortRef, List.empty[SortKey]) { sort =>
                         withRef(cursorRef, Absent: Maybe[String]) { cursor =>
                             body(exp, sel, sort, cursor, seed, flags, base, focus)
@@ -342,12 +375,12 @@ final case class TreeTable[A] private (
     /** Applies the sort spec to one sibling list (stable, back-to-front — the
       * DataTable technique, per level).
       */
-    private def sortSiblings(ns: List[TreeTableNode[A]], sort: List[SortKey]): List[TreeTableNode[A]] =
+    private def sortSiblings(ns: List[(TreeTableNode[A], Int)], sort: List[SortKey]): List[(TreeTableNode[A], Int)] =
         SortKey.sorting(sort).reverse.foldLeft(ns) { (rs, k) =>
             (cols ++ hiddenCols).find(c => k.path == List(c.headerV)).flatMap(_.orderingV.toOption) match
                 case Some(ord) =>
                     val dir     = if k.direction == SortDirection.Ascending then ord else ord.reverse
-                    val nodeOrd = Ordering.by[TreeTableNode[A], A](_.data)(using dir)
+                    val nodeOrd = Ordering.by[(TreeTableNode[A], Int), A](_._1.data)(using dir)
                     rs.sorted(using nodeOrd)
                 case None => rs
         }
@@ -447,7 +480,8 @@ final case class TreeTable[A] private (
         exp: Set[String],
         sort: List[SortKey]
     ): List[(TreeTableNode[A], Int, String)] =
-        sortSiblings(nodes, sort).zipWithIndex.flatMap { (n, i) =>
+        // The path counts the row's place as authored, not as sorted, so a sort leaves its key where it was.
+        sortSiblings(nodes.zipWithIndex, sort).flatMap { (n, i) =>
             val path = if prefix.isEmpty then i.toString else s"$prefix.$i"
             val kids =
                 if n.children.nonEmpty && exp.contains(keyOf(n.data, path)) then
@@ -464,7 +498,7 @@ final case class TreeTable[A] private (
       * already made. The cursor outranks the selection because it is the more recent of the two,
       * and a cursor on a row that a collapse has taken off the screen falls back the same way.
       */
-    private def tabStop(navRows: List[TreeNav.Row], sel: Set[String], cursor: Maybe[String]): Int =
+    private def tabStop(navRows: List[TreeNav.Row[String]], sel: Set[String], cursor: Maybe[String]): Int =
         val at = cursor.map(k => navRows.indexWhere(_.key == k)).getOrElse(-1)
         if at >= 0 then at
         else
@@ -479,7 +513,7 @@ final case class TreeTable[A] private (
         depth: Int,
         path: String,
         index: Int,
-        navRows: List[TreeNav.Row],
+        navRows: List[TreeNav.Row[String]],
         tabStop: Int,
         exp: Set[String],
         sel: Set[String],
@@ -579,7 +613,7 @@ final case class TreeTable[A] private (
       */
     private def rowKey(
         base: String,
-        navRows: List[TreeNav.Row],
+        navRows: List[TreeNav.Row[String]],
         index: Int,
         seed: String => UI.Action,
         focus: String => UI.Action
@@ -608,46 +642,35 @@ final case class TreeTable[A] private (
       * "open" cannot close a row that a re-render opened underneath it.
       */
     private def setExpanded(id: String, open: Boolean)(using Frame): UI.Action =
-        val write: UI.Action = expandedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if open then cur + id else cur - id)
+        val write: UI.Action = expandedTyped match
+            case Present(ref) => updateRows(ref)(cur => if open then cur + id else cur - id)
             case Absent       => ()
-        val fire: UI.Action = onNodeToggleF match
-            case Present(f) => f(id)
-            case Absent     => ()
-        write.andThen(fire)
+        write.andThen(fireRow(onNodeToggleF, id))
     end setExpanded
 
     /** A toggler press flips the row in the bound `expanded` set, then fires
       * `onNodeToggle`.
       */
     private def toggleNode(id: String)(using Frame): UI.Action =
-        val write: UI.Action = expandedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+        val write: UI.Action = expandedTyped match
+            case Present(ref) => updateRows(ref)(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
-        val fire: UI.Action = onNodeToggleF match
-            case Present(f) => f(id)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
+        write.andThen(fireRow(onNodeToggleF, id))
     end toggleNode
+
+    /** Fires a row callback with the row `id` names, where there is one. */
+    private def fireRow(f: Maybe[A => UI.Action], id: String)(using Frame): UI.Action =
+        (f, rowFor(id)) match
+            case (Present(g), Present(row)) => g(row)
+            case _                          => ()
 
     /** A row click updates the bound selection per the mode, then fires `onRowClick`. */
     private def activate(id: String, meta: Boolean = false)(using Frame): UI.Action =
-        val write: UI.Action = (selectedRef, selectionModeV) match
+        val write: UI.Action = (selectedTyped, selectionModeV) match
             case (Present(ref), m) if m != SelectionMode.None =>
-                ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
+                updateRows(ref)(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
             case _ => ()
-        val fire: UI.Action = onRowClickF match
-            case Present(f) => f(id)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
+        write.andThen(fireRow(onRowClickF, id))
     end activate
 end TreeTable
 

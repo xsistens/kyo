@@ -62,7 +62,7 @@ object ShowcaseCompile:
         choice: SignalRef[Boolean],
         live: SignalRef[Boolean],
         notes: SignalRef[String],
-        country: SignalRef[String],
+        country: SignalRef[Maybe[(String, String)]],
         city: SignalRef[String],
         date: SignalRef[String],
         calendarOpen: SignalRef[Boolean],
@@ -84,7 +84,7 @@ object ShowcaseCompile:
             uic.Select[(String, String)]()
                 .options(Seq("de" -> "Germany", "us" -> "USA"))(_._2)
                 .optionKey(_._1)
-                .value(country),
+                .selection(country),
             uic.AutoComplete[String]()
                 .options(Seq("Berlin", "Munich"))
                 .value(city)
@@ -147,7 +147,7 @@ object ShowcaseCompile:
     def structuralPage(
         listSel: SignalRef[Set[String]],
         listQuery: SignalRef[String],
-        tableSel: SignalRef[Set[String]],
+        tableSel: SignalRef[Set[(String, String)]],
         activeTab: SignalRef[String],
         treeExpanded: SignalRef[Set[String]],
         treeSel: SignalRef[Set[String]],
@@ -155,7 +155,7 @@ object ShowcaseCompile:
     )(using Frame): UI =
         UI.main.cssClass("structural-demo")(
             // grouped listbox: OptionItem rows carrying the untyped ListItem
-            uic.Listbox()
+            uic.Listbox[String]()
                 .selectionMode(uic.SelectionMode.Single)
                 .optionGroups(
                     uic.OptionItem.group("Mail")(uic.ListItem.of("Inbox", "g-inbox"), uic.ListItem.of("Sent", "g-sent")),
@@ -163,7 +163,7 @@ object ShowcaseCompile:
                 ),
 
             // listbox with multi-select bound two-way, checkmarks, a filter, and an item handler
-            uic.Listbox()
+            uic.Listbox[String]()
                 .selectionMode(uic.SelectionMode.Multiple)
                 .checkmark(true)
                 .filterQuery(listQuery)
@@ -171,7 +171,7 @@ object ShowcaseCompile:
                 .item("Inbox", "inbox", icon = Present(uic.Icons.inbox))
                 .item("Drafts", "drafts")
                 .items(uic.ListItem(uic.TextValue.Const("Sent"), id = "sent", additionalText = Present("12")))
-                .value(listSel)
+                .selection(listSel)
                 .onItemClick(onPick),
 
             // typed data table: text + template columns, single-select bound two-way
@@ -183,18 +183,18 @@ object ShowcaseCompile:
                     uic.Column[(String, String)]("Status").body(r => uic.Tag(r._2).severity(uic.Severity.Success))
                 )
                 .selectionMode(uic.SelectionMode.Single)
-                .selected(tableSel)
-                .onRowClick(onPick),
+                .selection(tableSel)
+                .onRowClick(r => onPick(r._1)),
 
             // tabs with the active tab bound to a String ref, panels nesting uic + kyo
-            uic.Tabs()
+            uic.Tabs[String]()
                 .tab("Overview", "ov")(p("Overview content"), (uic.Button("Refresh"): UI))
                 .tab("Details", "dt")(uic.Card().title("Info")(p("Details")))
                 .selected(activeTab)
                 .onTabSelect(onPick),
 
             // recursive tree with two-way expansion + selection Set refs and node icons
-            uic.Tree()
+            uic.Tree[String]()
                 .selectionMode(uic.SelectionMode.Multiple)
                 .nodes(
                     uic.TreeNode(
@@ -208,11 +208,11 @@ object ShowcaseCompile:
                     )
                 )
                 .expanded(treeExpanded)
-                .selected(treeSel)
+                .selection(treeSel)
                 .onNodeToggle(onPick),
 
             // reactive subtree containing a structural component (auto-lift under a signal)
-            activeTab.render(id => div(uic.Tabs().tab("Solo", id)(span(id)).selected(activeTab): UI))
+            activeTab.render(id => div(uic.Tabs[String]().tab("Solo", id)(span(id)).selected(activeTab): UI))
         )
 
     def typographyPage(using Frame): UI =
@@ -293,7 +293,7 @@ object ShowcaseCompile:
     def optionControlPage(
         score: SignalRef[Int],
         muted: SignalRef[Boolean],
-        unit: SignalRef[String],
+        unit: SignalRef[(String, String)],
         toppings: SignalRef[Set[String]],
         username: SignalRef[String],
         pageIdx: SignalRef[Int],
@@ -312,9 +312,9 @@ object ShowcaseCompile:
             uic.SelectButton[(String, String)]()
                 .options(Seq("kg" -> "Kilogram", "lb" -> "Pound"))(_._2)
                 .optionKey(_._1)
-                .value(unit)
+                .selection(unit)
                 .allowEmpty(false),
-            uic.SelectButton[String]().options(Seq("Cheese", "Ham", "Olives")).multiple(true).value(toppings),
+            uic.SelectButton[String]().options(Seq("Cheese", "Ham", "Olives")).multiple.selection(toppings),
 
             // input group composing addons with existing fields
             uic.InputGroup()(
@@ -401,7 +401,7 @@ object ShowcaseCompile:
                 .onPage(notify),
 
             // vertical, value-keyed stepper with a hard-disabled step
-            uic.Stepper()
+            uic.Stepper[String]()
                 .vertical(true)
                 .value(wizardValue)
                 .step("Personal", value = Present("personal"))(p("Step 1"))
@@ -424,7 +424,8 @@ object ShowcaseCompile:
     def featureGapPage(
         score: SignalRef[Int],
         muted: SignalRef[Boolean],
-        unit: SignalRef[String],
+        unit: SignalRef[Maybe[(String, String)]],
+        unitName: SignalRef[Maybe[String]],
         query: SignalRef[String],
         city: SignalRef[String],
         editing: SignalRef[Boolean],
@@ -443,15 +444,15 @@ object ShowcaseCompile:
                 .options(Seq("kg" -> "Kilogram", "lb" -> "Pound"))(_._2)
                 .optionKey(_._1)
                 .itemTemplate(o => span(o._2.toUpperCase))
-                .value(unit),
+                .selection(unit),
 
             // icon fields around TextArea and Select hosts
             uic.IconField(uic.TextArea().placeholder("Notes").value(query)).iconStart(uic.Icons.search),
-            uic.IconField(uic.Select[String]().options(Seq("A", "B")).value(unit)).iconStart(uic.Icons.user),
+            uic.IconField(uic.Select[String]().options(Seq("A", "B")).selection(unitName)).iconStart(uic.Icons.user),
 
             // float labels on the three new hosts
             uic.FloatLabel(uic.TextArea().id("fl-msg").value(query), "Message").forId("fl-msg"),
-            uic.FloatLabel(uic.Select[String]().options(Seq("kg", "lb")).id("fl-unit").value(unit), "Unit").forId("fl-unit"),
+            uic.FloatLabel(uic.Select[String]().options(Seq("kg", "lb")).id("fl-unit").selection(unitName), "Unit").forId("fl-unit"),
             uic.FloatLabel(uic.AutoComplete[String]().options(Seq("Berlin", "Bern")).id("fl-city").value(city), "City").forId("fl-city"),
 
             // toggle switch with per-state handle glyphs
@@ -478,7 +479,8 @@ object ShowcaseCompile:
         )
 
     def overlayPage(
-        unit: SignalRef[String],
+        unit: SignalRef[Maybe[(String, String)]],
+        unitName: SignalRef[Maybe[String]],
         panelOpen: SignalRef[Boolean]
     )(using Frame): UI =
         UI.main.cssClass("overlay-demo")(
@@ -486,14 +488,14 @@ object ShowcaseCompile:
             uic.Select[(String, String)]()
                 .options(Seq("kg" -> "Kilogram", "lb" -> "Pound"))(_._2)
                 .optionKey(_._1)
-                .value(unit)
+                .selection(unit)
                 .filterable(true)
                 .showClear(true)
                 .checkmark(true)
                 .placeholder("Unit"),
 
             // panel visibility exposed two-way (self-managed without it)
-            uic.Select[String]().options(Seq("A", "B")).value(unit).open(panelOpen),
+            uic.Select[String]().options(Seq("A", "B")).selection(unitName).open(panelOpen),
 
             // grouped options: the same OptionItem rows across the flat pickers,
             // composing with the filter and the key projection as plain options do
@@ -504,7 +506,7 @@ object ShowcaseCompile:
                     uic.OptionItem.item("ct"              -> "Carat")
                 ))(_._2)
                 .optionKey(_._1)
-                .value(unit)
+                .selection(unit)
                 .filterable(true)
                 .placeholder("Unit"),
 
@@ -594,8 +596,8 @@ object ShowcaseCompile:
 
     // ---- MultiSelect / CascadeSelect / TreeSelect / Drawer ----
     def advancedPickerPage(
-        fruits: SignalRef[Set[String]],
-        city: SignalRef[String],
+        fruits: SignalRef[Set[(String, String)]],
+        city: SignalRef[Maybe[String]],
         files: SignalRef[Set[String]],
         drawerOpen: SignalRef[Boolean],
         notify: Any < Async
@@ -605,7 +607,7 @@ object ShowcaseCompile:
             uic.MultiSelect[(String, String)]()
                 .options(Seq("ap" -> "Apple", "ba" -> "Banana"))(_._2)
                 .optionKey(_._1)
-                .value(fruits)
+                .selection(fruits)
                 .display(uic.MultiSelectDisplay.Chip)
                 .maxSelectedLabels(3)
                 .selectedItemsLabel("{0} fruits")
@@ -619,13 +621,13 @@ object ShowcaseCompile:
                 .options(
                     Seq(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin"), uic.CascadeItem.leaf("Munich")))
                 )(identity)
-                .value(city)
+                .selection(city)
                 .placeholder("City"),
 
             // Select-style trigger hosting the real Tree in the panel
-            uic.TreeSelect()
+            uic.TreeSelect[String]()
                 .nodes(uic.TreeNode("src", "src", children = List(uic.TreeNode("App.scala", "app"))))
-                .value(files)
+                .selection(files)
                 .selectionMode(uic.SelectionMode.Checkbox)
                 .placeholder("Files"),
 
@@ -754,21 +756,21 @@ object ShowcaseCompile:
       * the effect-handled terminal.
       */
     def containerDataPage(
-        openPanel: SignalRef[String],
+        openPanel: SignalRef[Maybe[String]],
         products: SignalRef[Seq[String]],
         productSel: SignalRef[Set[String]],
         targetList: SignalRef[Seq[String]],
         targetSel: SignalRef[Set[String]],
         pageIx: SignalRef[Int],
         activeImage: SignalRef[Int],
-        expandedRows: SignalRef[Set[String]],
+        expandedRows: SignalRef[Set[(String, String)]],
         expandedNodes: SignalRef[Set[String]],
         history: SignalRef[Seq[uic.TerminalCommand]],
         notify: Any < Async
     )(using Frame): UI =
         div(
-            // accordion: ref type picks the mode (String ref = one open panel)
-            uic.Accordion()
+            // accordion: ref type picks the mode (Maybe ref = one open panel)
+            uic.Accordion[String]()
                 .panel("Header I", "h1")(p("Content I"))
                 .panel("Header II", "h2")(p("Content II"))
                 .value(openPanel)
@@ -777,15 +779,15 @@ object ShowcaseCompile:
             // orderlist: the Seq ref IS the model; the selection drives the moves
             uic.OrderList[String]()
                 .items(products)(identity)
-                .selected(productSel)
+                .selection(productSel)
                 .itemTemplate(s => span(s)),
 
             // picklist: two columns + transfers, sharing the item vocabulary
             uic.PickList[String]()
                 .sourceItems(products)(identity)
                 .targetItems(targetList)
-                .sourceSelected(productSel)
-                .targetSelected(targetSel),
+                .sourceSelection(productSel)
+                .targetSelection(targetSel),
 
             // carousel: server-honest visible window over a typed page ref
             uic.Carousel[String]()
@@ -815,7 +817,7 @@ object ShowcaseCompile:
                 .selectionMode(uic.SelectionMode.Single),
 
             // orgchart: expanded-keys ref (Tree's polarity), toggle buttons, selectable boxes
-            uic.OrganizationChart()
+            uic.OrganizationChart[String]()
                 .node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
                 .expanded(expandedNodes),
 

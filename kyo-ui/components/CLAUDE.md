@@ -141,6 +141,33 @@ Rules a new one follows:
   tree reads one way.
 - Not for enum-valued lists (`Paginator.template`, `FileUpload.accept`): there is nothing to build.
 
+## A choice binds the option, never a key
+
+What a reader chooses binds as the app's own type: `selection(SignalRef[A])` where the field always holds an
+option, `selection(SignalRef[Maybe[A]])` where it may stay empty, `selection(SignalRef[Set[A]])` for several.
+There is no public setter that takes the key a component compares by. Rules:
+
+- **Keys stay inside.** `optionKey` is how options are matched (panel, keyboard, hidden `<input name>`), and
+  `SingleChoice` / `MultiChoice` are the one place a typed ref is read as a key and written back as the
+  option it names. Matching never uses `A`'s own equality.
+- **Events carry the value**, not the key: `onChange(Maybe[A] => ...)` / `onChange(Set[A] => ...)`, fired only
+  when the write changed what is held (a pick of the row already chosen fires nothing). `onBlur` the same.
+- **A value no option carries is a data error**, named in a `.p-uic-key-error` card
+  (`KeyDiagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
+  options are still arriving.
+- **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
+  `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]`.
+- **An internal host** that renders inside its own subscription (`Paginator`, `CellEditor`, the DataTable
+  filter menu) passes the held option with `current(Maybe[A])` and reads `onChange`; it never reaches for keys.
+- **A model carrying its own id takes the id's type**: `Listbox[K]` / `ListItem[K]`, `Tree[K]` / `TreeNode[K]`,
+  `TreeSelect[K]`, `OrganizationChart[K]`, `Accordion[K]`, `Tabs[K]`, `Stepper[K]`. There `K` IS the identity,
+  so sets compare by `K`'s `equals`, and a `private given CanEqual[K, K] = CanEqual.derived` says so where a
+  signal needs it. Ids reach the DOM only through `toString` (derived header ids, a hidden input).
+- **Tables hold rows**: `DataTable[A]` / `TreeTable[A]` bind `Set[A]` / `Maybe[A]` / `CellPath[A]` and match them
+  by `rowKey`; internals stay on keys (`CellKey`), and one block of helpers (`rowsFor`, `cellsFor`, `rowFor`,
+  `updateRows`) is the crossing. `TableState` alone keeps keys, because it is what gets serialized;
+  `restore(s, byKey)` resolves them back.
+
 ## Typed builders: where inference dies
 
 A setter that takes a projection of the component's own element type (`Column`'s

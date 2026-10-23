@@ -5,14 +5,14 @@ import kyo.UI.*
 import scala.annotation.targetName
 
 /** One panel of an [[Accordion]] — a hand-authored carrier: a `header` label, the
-  * panel `content`, a stable `id` (the value key carried by the bound ref and the
-  * `onToggle` payload), a `disabled` flag, and an optional `headerUI` slot that
+  * panel `content`, a stable `id` of the app's own type `K` (what the bound ref holds
+  * and `onToggle` reports), a `disabled` flag, and an optional `headerUI` slot that
   * wins over the plain header text.
   */
-final case class AccordionPanel private[uic] (
+final case class AccordionPanel[K] private[uic] (
     header: TextValue,
     content: UI,
-    id: String,
+    id: K,
     disabled: Boolean,
     headerUI: Maybe[UI]
 )
@@ -21,37 +21,38 @@ object AccordionPanel:
     /** Construct a panel with a constant `header` title. The `Accordion.panel` builder takes
       * the same slot as a `String | Signal[String]` union, for a reactive title.
       */
-    def apply(
+    def apply[K](
         header: String,
         content: UI,
-        id: String,
+        id: K,
         disabled: Boolean = false,
         headerUI: Maybe[UI] = Absent
-    ): AccordionPanel = new AccordionPanel(TextValue.Const(header), content, id, disabled, headerUI)
+    ): AccordionPanel[K] = new AccordionPanel(TextValue.Const(header), content, id, disabled, headerUI)
 end AccordionPanel
 
 /** An Accordion panel, built directly or as `_.panel(...)` (see [[AccordionPanelScope]]). */
-type AccordionPanelEntry = Entry[AccordionPanel, AccordionPanelScope]
+type AccordionPanelEntry[K] = Entry[AccordionPanel[K], AccordionPanelScope[K]]
 
 /** What `_` stands for in [[Accordion.panels]]: `_.panel("Shipping", shippingForm, "shipping")`. The header takes a `Signal[String]`
   * too, as [[Accordion.panel]] does.
   */
-final class AccordionPanelScope private ():
+final class AccordionPanelScope[K] private ():
     /** A panel keyed by `id`, as [[AccordionPanel.apply]], with a constant or reactive header. */
     def panel(
         header: String | Signal[String],
         content: UI,
-        id: String,
+        id: K,
         disabled: Boolean = false,
         headerUI: Maybe[UI] = Absent
-    ): AccordionPanel = new AccordionPanel(ReactiveValue(header), content, id, disabled, headerUI)
+    ): AccordionPanel[K] = new AccordionPanel(ReactiveValue(header), content, id, disabled, headerUI)
 end AccordionPanelScope
 
 object AccordionPanelScope:
-    private val scope = new AccordionPanelScope
+    // The scope holds nothing of its own type, so one instance serves every `K`.
+    private val scope = new AccordionPanelScope[Any]
 
-    private[uic] def resolve(entries: Seq[AccordionPanelEntry]): List[AccordionPanel] =
-        Entry.resolve(scope, entries)
+    private[uic] def resolve[K](entries: Seq[AccordionPanelEntry[K]]): List[AccordionPanel[K]] =
+        Entry.resolve(scope.asInstanceOf[AccordionPanelScope[K]], entries)
 end AccordionPanelScope
 
 /** Accordion — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -63,10 +64,10 @@ end AccordionPanelScope
   * `div.p-accordioncontent-wrapper` > `div.p-accordioncontent-content`), so the
   * extracted `@primeuix` accordion CSS applies verbatim.
   *
-  * The open state binds two-way through `value`: a `SignalRef[String]` keeps at
-  * most ONE panel open (Prime's default; `""` = all closed), a
-  * `SignalRef[Set[String]]` is Prime's `multiple` mode — the ref TYPE selects the
-  * mode, no separate flag. Header clicks write the ref before firing `onToggle`.
+  * The open state binds two-way through `value`, as panel ids of the app's own
+  * type `K`: a `SignalRef[Maybe[K]]` keeps at most ONE panel open (Prime's default;
+  * `Absent` = all closed), a `SignalRef[Set[K]]` is Prime's `multiple` mode. The
+  * ref TYPE selects the mode, no separate flag. Header clicks write the ref before firing `onToggle`.
   * Without a bound ref the accordion renders fully collapsed and inert
   * (server-honest: no internal state).
   *
@@ -95,44 +96,47 @@ end AccordionPanelScope
   * `.placeholder` is today's un-animated whole-body `ref.render` (content
   * only-when-active) — the byte-identical SSR/golden fallback.
   */
-final case class Accordion private (
-    panelList: List[AccordionPanel] = Nil,
-    singleRef: Maybe[SignalRef[String]] = Absent,
-    multiRef: Maybe[SignalRef[Set[String]]] = Absent,
-    onToggleF: Maybe[String => UI.Action] = Absent
+final case class Accordion[K] private (
+    panelList: List[AccordionPanel[K]] = Nil,
+    singleRef: Maybe[SignalRef[Maybe[K]]] = Absent,
+    multiRef: Maybe[SignalRef[Set[K]]] = Absent,
+    onToggleF: Maybe[K => UI.Action] = Absent
 ) extends Node:
-    type Self = Accordion
+    type Self = Accordion[K]
+
+    // Panel ids compare the way the sets that hold them already compare them, by `equals`.
+    private given CanEqual[K, K] = CanEqual.derived
 
     /** Appends the given panels, each built directly or from `_` (see [[AccordionPanelScope]]). */
-    def panels(ps: AccordionPanelEntry*): Accordion =
+    def panels(ps: AccordionPanelEntry[K]*): Accordion[K] =
         copy(panelList = panelList ++ AccordionPanelScope.resolve(ps))
 
     /** Appends a single panel (ergonomic builder — no need to construct
       * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def panel(header: String | Signal[String], id: String)(content: UI): Accordion =
+    def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
         copy(panelList = panelList :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
 
     /** Binds the open panel two-way — SINGLE mode (Prime's default): at most one
-      * panel open, the ref holds its id (`""` = all closed); clicking the open
+      * panel open, the ref holds its id (`Absent` = all closed); clicking the open
       * header closes it.
       */
-    def value(ref: SignalRef[String]): Accordion = copy(singleRef = Present(ref))
+    def value(ref: SignalRef[Maybe[K]]): Accordion[K] = copy(singleRef = Present(ref))
 
     /** Binds the open panels two-way — MULTIPLE mode (Prime's `multiple`): the ref
       * holds the set of open ids; header clicks toggle membership.
       */
     @targetName("valueMultiple")
-    def value(ref: SignalRef[Set[String]]): Accordion = copy(multiRef = Present(ref))
+    def value(ref: SignalRef[Set[K]]): Accordion[K] = copy(multiRef = Present(ref))
 
     /** Fired with the panel id after a header click (after the value write). */
-    def onToggle(f: String => UI.Action)(using Frame): Accordion = copy(onToggleF = Present(Callback.of(f)))
+    def onToggle(f: K => UI.Action)(using Frame): Accordion[K] = copy(onToggleF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (singleRef, multiRef) match
             case (Present(r), _) =>
-                animated(id => r.map(_ == id), r.render(v => body(if v.isEmpty then Set.empty else Set(v))))
+                animated(id => r.map(_.contains(id)), r.render(v => body(v.toList.toSet)))
             case (Absent, Present(r)) =>
                 animated(id => r.map(_.contains(id)), r.render(body))
             case _ => body(Set.empty)
@@ -143,7 +147,7 @@ final case class Accordion private (
       * `activeOf` maps a panel id to its open `Signal`; `placeholder` is today's
       * un-animated whole-body render.
       */
-    private def animated(activeOf: String => Signal[Boolean], placeholder: => UI)(using Frame): UI =
+    private def animated(activeOf: K => Signal[Boolean], placeholder: => UI)(using Frame): UI =
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -180,13 +184,13 @@ final case class Accordion private (
         }.placeholder(placeholder)
 
     /** The currently-open panel ids, read from whichever ref is bound (single mode
-      * lifts the one id into a set; `""` = none).
+      * lifts the one id into a set; `Absent` = none).
       */
-    private def currentOpen(using Frame): Set[String] < Sync =
+    private def currentOpen(using Frame): Set[K] < Sync =
         (singleRef, multiRef) match
-            case (Present(r), _)      => r.get.map(v => if v.isEmpty then Set.empty else Set(v))
+            case (Present(r), _)      => r.get.map(_.toList.toSet)
             case (Absent, Present(r)) => r.get
-            case _                    => Set.empty[String]
+            case _                    => Set.empty[K]
 
     /** Nested mount (runs after the body is published) that installs, per panel, the
       * in-place binds — all WITHOUT replacing the shell or header, so Prime's
@@ -197,8 +201,8 @@ final case class Accordion private (
       */
     private def activeBinder(
         cmds: UI.Commands,
-        pairs: List[(AccordionPanel, (String, String, String))],
-        activeOf: String => Signal[Boolean]
+        pairs: List[(AccordionPanel[K], (String, String, String))],
+        activeOf: K => Signal[Boolean]
     )(using Frame): UI =
         UI.mounted {
             Kyo.foreach(pairs) { case (p, (shellId, contentId, headerId)) =>
@@ -229,7 +233,7 @@ final case class Accordion private (
             case _ => ()
 
     private def renderAnimatedPanel(
-        p: AccordionPanel,
+        p: AccordionPanel[K],
         shellId: String,
         contentId: String,
         headerId: String,
@@ -285,12 +289,12 @@ final case class Accordion private (
         shell(toChild(headerEl), toChild(contentEl))
     end renderAnimatedPanel
 
-    private def body(open: Set[String])(using Frame): UI =
+    private def body(open: Set[K])(using Frame): UI =
         div.cssClass("p-accordion").cssClass("p-component")(
             panelList.map(p => toChild(renderPanel(p, open.contains(p.id))))*
         )
 
-    private def renderPanel(p: AccordionPanel, active: Boolean)(using Frame): UI =
+    private def renderPanel(p: AccordionPanel[K], active: Boolean)(using Frame): UI =
         var shell = div.cssClass("p-accordionpanel")
         if active then shell = shell.cssClass("p-accordionpanel-active")
         if p.disabled then shell = shell.cssClass("p-disabled")
@@ -332,9 +336,9 @@ final case class Accordion private (
     /** A header click writes the bound value ref (per the mode the ref type
       * selected), then fires `onToggle`.
       */
-    private def toggle(id: String)(using Frame): UI.Action =
+    private def toggle(id: K)(using Frame): UI.Action =
         val write: UI.Action = (singleRef, multiRef) match
-            case (Present(ref), _)      => ref.getAndUpdate(cur => if cur == id then "" else id)
+            case (Present(ref), _)      => ref.getAndUpdate(cur => if cur.contains(id) then Absent else Present(id))
             case (Absent, Present(ref)) =>
                 ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case _ => ()
@@ -350,4 +354,4 @@ final case class Accordion private (
 end Accordion
 
 object Accordion:
-    def apply(): Accordion = new Accordion()
+    def apply[K](): Accordion[K] = new Accordion[K]()

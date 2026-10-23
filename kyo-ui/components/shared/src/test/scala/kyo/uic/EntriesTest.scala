@@ -64,11 +64,11 @@ class EntriesTest extends UicTest:
     }
 
     "listbox options, and options with groups whose entries take the same spellings" in {
-        val items = uic.Listbox().items(_.item("Paris", "par"), _.item("Rome", "rom", additionalText = Present("IT")))
-        assert(items.optionsV == uic.Listbox().item("Paris", "par").items(
+        val items = uic.Listbox[String]().items(_.item("Paris", "par"), _.item("Rome", "rom", additionalText = Present("IT")))
+        assert(items.optionsV == uic.Listbox[String]().item("Paris", "par").items(
             uic.ListItem.of("Rome", "rom", additionalText = Present("IT"))
         ).optionsV)
-        val groups = uic.Listbox().optionGroups(
+        val groups = uic.Listbox[String]().optionGroups(
             _.item("Anywhere", "any"),
             _.group("Europe")(_.item("Paris", "par"), uic.ListItem.of("Rome", "rom"))
         )
@@ -80,8 +80,8 @@ class EntriesTest extends UicTest:
 
     "tree nodes, nested through their children" in {
         val direct = List(uic.TreeNode("Documents", "docs", children = List(uic.TreeNode("CV", "cv"))))
-        assert(uic.Tree().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
-        assert(uic.TreeSelect().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+        assert(uic.Tree[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+        assert(uic.TreeSelect[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
     }
 
     "tree table nodes" in {
@@ -95,25 +95,26 @@ class EntriesTest extends UicTest:
     }
 
     "accordion panels and tabs, with a constant label" in {
-        val panels = uic.Accordion().panels(_.panel("Shipping", content, "ship", disabled = true))
+        val panels = uic.Accordion[String]().panels(_.panel("Shipping", content, "ship", disabled = true))
         assert(panels.panelList == List(uic.AccordionPanel("Shipping", content, "ship", disabled = true)))
-        val tabs = uic.Tabs().tabs(_.tab("Profile", content, "profile", disabled = true))
+        val tabs = uic.Tabs[String]().tabs(_.tab("Profile", content, "profile", disabled = true))
         assert(tabs.tabList == List(uic.Tab("Profile", content, "profile", disabled = true)))
     }
 
     "accordion panels and tabs take a reactive label too, as their single-entry builders do" in {
         val label = Signal.initConst("Live")
-        assert(uic.Accordion().panels(_.panel(label, content, "a")).panelList == uic.Accordion().panel(label, "a")(content).panelList)
+        assert(uic.Accordion[String]().panels(_.panel(label, content, "a")).panelList ==
+            uic.Accordion[String]().panel(label, "a")(content).panelList)
         // Tabs.tab wraps its content in a fragment; the label is what is compared here.
-        assert(uic.Tabs().tabs(_.tab(label, content, "t")).tabList.map(t => (t.text, t.id)) ==
-            uic.Tabs().tab(label, "t")(content).tabList.map(t => (t.text, t.id)))
+        assert(uic.Tabs[String]().tabs(_.tab(label, content, "t")).tabList.map(t => (t.text, t.id)) ==
+            uic.Tabs[String]().tab(label, "t")(content).tabList.map(t => (t.text, t.id)))
     }
 
     "`_` offers only what that setter takes" in {
         typeCheckFailure(preamble + """def x = uic.SplitButton("Save").items(_.group("A"))""")
         typeCheckFailure(preamble + """def x = uic.Breadcrumb().items(_.item.separator)""")
-        typeCheckFailure(preamble + """def x = uic.Tree().nodes(_.item("a", "a"))""")
-        typeCheckFailure(preamble + """def x = uic.Tabs().tabs(_.panel("a", span("x"), "a"))""")
+        typeCheckFailure(preamble + """def x = uic.Tree[String]().nodes(_.item("a", "a"))""")
+        typeCheckFailure(preamble + """def x = uic.Tabs[String]().tabs(_.panel("a", span("x"), "a"))""")
         typeCheckFailure(preamble + """def x = uic.MegaMenuItem("P").column(_.item("A"))""")
         typeCheck(preamble + """def x = uic.SplitButton("Save").items(_.item("A"), _.item.separator)""")
     }

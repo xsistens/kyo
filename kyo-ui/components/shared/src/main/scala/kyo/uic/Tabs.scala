@@ -10,10 +10,10 @@ import kyo.UI.*
   * extension — `span.p-uic-tab-count`), an optional `url` (renders the header as
   * a real anchor), and a `disabled` flag (non-clickable).
   */
-final case class Tab private[uic] (
+final case class Tab[K] private[uic] (
     text: TextValue,
     content: UI,
-    id: String,
+    id: K,
     icon: Maybe[IconGlyph],
     additionalText: Maybe[String],
     disabled: Boolean,
@@ -46,45 +46,47 @@ final case class Tab private[uic] (
       * one. (Measured in a browser: a url tab without `onTabSelect` leaves a
       * Ctrl-click unprevented; with one, it is prevented.)
       */
-    def url(v: String): Tab = copy(urlV = Present(v))
+    def url(v: String): Tab[K] = copy(urlV = Present(v))
 end Tab
 
 object Tab:
     /** Construct a tab with a constant `text` label. The `Tabs.tab` builder takes the same
       * slot as a `String | Signal[String]` union, for a reactive label.
       */
-    def apply(
+    def apply[K](
         text: String,
         content: UI,
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         disabled: Boolean = false
-    ): Tab = new Tab(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent)
+    ): Tab[K] = new Tab(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent)
 end Tab
 
 /** A tab, built directly or as `_.tab(...)` (see [[TabScope]]). */
-type TabEntry = Entry[Tab, TabScope]
+type TabEntry[K] = Entry[Tab[K], TabScope[K]]
 
 /** What `_` stands for in [[Tabs.tabs]]: `_.tab("Profile", profileForm, "profile")`. The label takes a `Signal[String]` too, as
   * [[Tabs.tab]] does.
   */
-final class TabScope private ():
+final class TabScope[K] private ():
     /** A tab keyed by `id`, as [[Tab.apply]], with a constant or reactive label. */
     def tab(
         text: String | Signal[String],
         content: UI,
-        id: String,
+        id: K,
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         disabled: Boolean = false
-    ): Tab = new Tab(ReactiveValue(text), content, id, icon, additionalText, disabled, Absent)
+    ): Tab[K] = new Tab(ReactiveValue(text), content, id, icon, additionalText, disabled, Absent)
 end TabScope
 
 object TabScope:
-    private val scope = new TabScope
+    // The scope holds nothing of its own type, so one instance serves every `K`.
+    private val scope = new TabScope[Any]
 
-    private[uic] def resolve(entries: Seq[TabEntry]): List[Tab] = Entry.resolve(scope, entries)
+    private[uic] def resolve[K](entries: Seq[TabEntry[K]]): List[Tab[K]] =
+        Entry.resolve(scope.asInstanceOf[TabScope[K]], entries)
 end TabScope
 
 /** Tabs — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
@@ -99,7 +101,8 @@ end TabScope
   * with JS measuring; here it sits inside the active tab and spans it via a
   * remainder rule, which is visually identical without a measuring runtime.
   *
-  * The active tab is one `selected` slot taking `String | Signal[String]`, so the
+  * The active tab is one `selected` slot taking `K | Signal[K]`, `K` being the
+  * app's own tab id type, so the
   * selection may live anywhere: a constant, a signal DERIVED from something else
   * (a route, a normalized cache record, a parent), or a writable `SignalRef` for
   * the two-way case. Only the last writes back — see [[Tabs.selected]]. With
@@ -121,20 +124,23 @@ end TabScope
   * ids arbitrary — and absent entirely from a golden render or an SSG page,
   * since minting needs a mount. With a base they are the same in all three.
   */
-final case class Tabs private (
-    tabList: List[Tab] = Nil,
-    selectedBinding: Maybe[ReactiveValue[String]] = Absent,
-    onTabSelectF: Maybe[String => UI.Action] = Absent,
+final case class Tabs[K] private (
+    tabList: List[Tab[K]] = Nil,
+    selectedBinding: Maybe[ReactiveValue[K]] = Absent,
+    onTabSelectF: Maybe[K => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     lazyPanelsFlag: Boolean = false
 ) extends Node, HasElementId:
-    type Self = Tabs
+    type Self = Tabs[K]
+
+    // Tab ids compare by `equals`, the identity an app's id type already has.
+    private given CanEqual[K, K] = CanEqual.derived
 
     /** Appends the given tabs, each built directly or from `_` (see [[TabScope]]). */
-    def tabs(ts: TabEntry*): Tabs = copy(tabList = tabList ++ TabScope.resolve(ts))
+    def tabs(ts: TabEntry[K]*): Tabs[K] = copy(tabList = tabList ++ TabScope.resolve(ts))
 
     /** Appends a single tab from bare content children (ergonomic builder). */
-    def tab(text: String | Signal[String], id: String)(content: UI*)(using Frame): Tabs =
+    def tab(text: String | Signal[String], id: K)(content: UI*)(using Frame): Tabs[K] =
         copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
 
     /** The active tab's id. A `SignalRef` binds two way — clicking a tab writes its
@@ -150,11 +156,12 @@ final case class Tabs private (
       * no longer does.
       *
       * The two-way choice is made on the RUNTIME class, so ascribing a ref as
-      * `Signal[String]` does not opt out; pass `ref.readOnly` for that.
+      * `Signal[K]` does not opt out; pass `ref.readOnly` for that.
       */
-    def selected(v: String | Signal[String]): Tabs = copy(selectedBinding = Present(ReactiveValue(v)))
+    def selected(v: K | Signal[K]): Tabs[K] = copy(selectedBinding = Present(ReactiveValue(v)))
 
-    def onTabSelect(f: String => UI.Action)(using Frame): Tabs = copy(onTabSelectF = Present(Callback.of(f)))
+    /** Fired with the chosen tab's id after the write. */
+    def onTabSelect(f: K => UI.Action)(using Frame): Tabs[K] = copy(onTabSelectF = Present(Callback.of(f)))
 
     /** Renders the active panel alone, and builds a panel again each time its tab is chosen
       * (PrimeVue's `lazy`). Off by default: every panel is rendered once and a switch only
@@ -162,10 +169,10 @@ final case class Tabs private (
       * an editor, an open row) is still there when they come back to it. Turn it on where the
       * panels are expensive to build and nothing in them needs to survive a switch.
       */
-    def lazyPanels(v: Boolean): Tabs = copy(lazyPanelsFlag = v)
+    def lazyPanels(v: Boolean): Tabs[K] = copy(lazyPanelsFlag = v)
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Tabs = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Tabs[K] = copy(idV = v)
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -210,8 +217,8 @@ final case class Tabs private (
         body(ids, focus)
 
     /** The tab a selection shows: the one it names, or the first when it names none. */
-    private def resolve(selected: String): String =
-        if tabList.exists(_.id == selected) then selected else tabList.headOption.map(_.id).getOrElse("")
+    private def resolve(selected: Maybe[K]): Maybe[K] =
+        selected.filter(s => tabList.exists(_.id == s)).orElse(Maybe.fromOption(tabList.headOption.map(_.id)))
 
     /** Builds `f` against the active tab id, however the selection is bound.
       *
@@ -219,23 +226,23 @@ final case class Tabs private (
       * `Dyn`, and reading it is identical to reading a one-way signal. The ref is
       * only needed to WRITE, which happens in [[select]].
       */
-    private def withActive(f: String => UI)(using Frame): UI =
+    private def withActive(f: Maybe[K] => UI)(using Frame): UI =
         selectedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(a => f(resolve(a)))
-            case Present(ReactiveValue.Const(v)) => f(resolve(v))
-            case Absent                          => f(resolve(""))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(a => f(resolve(Present(a))))
+            case Present(ReactiveValue.Const(v)) => f(resolve(Present(v)))
+            case Absent                          => f(resolve(Absent))
 
     /** Hides the panel of tab `id` while another tab is active. A bound signal toggles the
       * attribute in place, which is what keeps the panel's subtree alive across a switch.
       */
-    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: String)(using Frame): E =
+    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: K)(using Frame): E =
         selectedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => el.hidden(sig.map(a => resolve(a) != id))
-            case Present(ReactiveValue.Const(v)) => if resolve(v) == id then el else el.hidden(true)
-            case Absent                          => if resolve("") == id then el else el.hidden(true)
+            case Present(ReactiveValue.Dyn(sig)) => el.hidden(sig.map(a => !resolve(Present(a)).contains(id)))
+            case Present(ReactiveValue.Const(v)) => if resolve(Present(v)).contains(id) then el else el.hidden(true)
+            case Absent                          => if resolve(Absent).contains(id) then el else el.hidden(true)
 
     /** The ref to write back to — `Absent` unless the binding is two-way. */
-    private def selectedRef: Maybe[SignalRef[String]] = selectedBinding match
+    private def selectedRef: Maybe[SignalRef[K]] = selectedBinding match
         case Present(ReactiveVariable(ref)) => Present(ref)
         case _                              => Absent
 
@@ -260,7 +267,7 @@ final case class Tabs private (
       */
     private def interactive[E <: UI.Ast.Interactive { type Self = E }](
         el: E,
-        t: Tab,
+        t: Tab[K],
         isActive: Boolean,
         i: Int,
         ids: List[String],
@@ -306,7 +313,7 @@ final case class Tabs private (
       * panels in a region of their own instead, since it builds the active one on each switch.
       */
     private def body(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        def panel(t: Tab, i: Int): UI.Ast.Div =
+        def panel(t: Tab[K], i: Int): UI.Ast.Div =
             var el = div.cssClass("p-tabpanel").role("tabpanel")
             if ids.isDefinedAt(i) then el = el.id(panelId(ids(i))).aria("labelledby", ids(i))
             el
@@ -316,7 +323,7 @@ final case class Tabs private (
             if lazyPanelsFlag then
                 withActive { active =>
                     div.cssClass("p-tabpanels")(
-                        indexed.filter(_._1.id == active).map((t, i) => toChild(panel(t, i)(toChild(t.content))))*
+                        indexed.filter(ti => active.contains(ti._1.id)).map((t, i) => toChild(panel(t, i)(toChild(t.content))))*
                     )
                 }
             else
@@ -331,12 +338,12 @@ final case class Tabs private (
         root(toChild(withActive(active => tablistWith(active, ids, focus))), toChild(panels))
     end body
 
-    private def tablistWith(active: String, ids: List[String], focus: String => UI.Action)(using Frame): UI =
+    private def tablistWith(active: Maybe[K], ids: List[String], focus: String => UI.Action)(using Frame): UI =
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
         val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
         val headers: List[UI] = tabList.zipWithIndex.map { (t, i) =>
-            val isActive            = t.id == active
+            val isActive            = active.contains(t.id)
             val iconSlot: List[UI]  = t.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
             val countSlot: List[UI] = t.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
             val barSlot: List[UI]   =
@@ -388,7 +395,7 @@ final case class Tabs private (
       * write would race it — the ref would hold the new id while the location, and
       * so anything derived from it, still held the old one.
       */
-    private def select(id: String, write: Boolean)(using Frame): UI.Action =
+    private def select(id: K, write: Boolean)(using Frame): UI.Action =
         val setActive: UI.Action = selectedRef match
             case Present(ref) if write => ref.set(id)
             case _                     => ()
@@ -404,4 +411,4 @@ final case class Tabs private (
 end Tabs
 
 object Tabs:
-    def apply(): Tabs = new Tabs()
+    def apply[K](): Tabs[K] = new Tabs[K]()

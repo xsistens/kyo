@@ -55,11 +55,13 @@ end CascadeItem
   *
   * Options are a TYPED tree of [[CascadeItem]]s: `options(items)(label)`
   * projects leaf values to text, groups carry their own label; `optionKey`
-  * (default: the label projection) supplies the stable key written into the
-  * bound ref; `selection(ref)` binds the leaf itself (over `A`, or over `Maybe[A]`)
-  * instead. Clicking a group row opens exactly its chain (the Menubar
+  * (default: the label projection) supplies the stable key leaves are matched
+  * by; `selection(ref)` binds the chosen leaf itself (over `A`, or over
+  * `Maybe[A]`). Clicking a group row opens exactly its chain (the Menubar
   * `openExactly` machinery — sibling branches close); clicking a LEAF writes
-  * the key, fires `onChange`, and closes the whole chain. Every panel is a real
+  * it, fires `onChange`, and closes the whole chain. `loading` says the tree is
+  * still arriving; without it a held leaf the tree does not carry is named in a
+  * `.p-uic-key-error` card. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
   * it), Escape closes ONE level too (each panel consumes its own keydown —
   * the Overlay per-level story), and no panel seeds focus: it stays on the trigger, which is the
@@ -73,9 +75,7 @@ end CascadeItem
   * panel) — the panel div carries the `.p-cascadeselect-overlay` skin, the
   * inner `ul` Prime's list padding, so the visible box computes identically.
   *
-  * Honest deferrals: arrow-key row navigation (rows open/pick by click; the
-  * panels seed focus so Escape works without a prior click), the mobile query
-  * mode, option templates, showClear, and loading state.
+  * Honest deferrals: the mobile query mode, option templates, and showClear.
   */
 final case class CascadeSelect[A] private (
     items: List[CascadeItem[A]],
@@ -95,10 +95,11 @@ final case class CascadeSelect[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
+    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent
-) extends Node, TextFormControl, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+    loadingV: Maybe[BoolValue] = Absent
+) extends Node, ChoiceFormControl[A], HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = CascadeSelect[A]
 
     /** Stores the element id. */
@@ -116,13 +117,8 @@ final case class CascadeSelect[A] private (
       */
     def optionKey(f: A => String): CascadeSelect[A] = copy(keyF = Present(f))
 
-    /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: leaf picks
-      * write the key back, ref changes reselect the matching leaf.
-      */
-    def value(ref: SignalRef[String]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Keys(ref)))
-
     /** Binds the selection two-way to the leaf itself: a pick writes the leaf, a write to `ref` selects the leaf whose
-      * [[optionKey]] it carries. Replaces a [[value]] binding, as [[value]] replaces this one.
+      * [[optionKey]] it carries.
       */
     def selection(ref: SignalRef[A]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Value(ref)))
 
@@ -164,14 +160,18 @@ final case class CascadeSelect[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CascadeSelect[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = copy(accNameRefV = v)
 
-    /** Fired with the newly picked leaf key. */
-    def onChange(f: String => UI.Action)(using Frame): CascadeSelect[A] = copy(onChangeF = Present(Callback.of(f)))
+    /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing. */
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the current selection key — unlike
-      * `onChange` it fires even when nothing was changed. The form-validation layer
-      * wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the leaf held (`Absent` for none). Unlike `onChange` it fires even when
+      * nothing was changed. The form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): CascadeSelect[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = copy(onBlurF = Present(Callback.of(f)))
+
+    /** Says the option tree is still arriving: the dropdown icon turns into Prime's spinner, and a held leaf no leaf of the
+      * tree carries yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
+      */
+    def loading(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** The stable leaf key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -199,17 +199,6 @@ final case class CascadeSelect[A] private (
             }
         loop(items)
     end leaves
-
-    /** The label of the leaf whose key is `k` (searched over the whole tree). */
-    private def labelForKey(k: String): Maybe[String] =
-        def loop(is: List[CascadeItem[A]]): Maybe[String] =
-            is.foldLeft(Absent: Maybe[String]) {
-                case (found @ Present(_), _)             => found
-                case (_, CascadeItem.Leaf(a))            => if key(a) == k then Present(labelF(a)) else Absent
-                case (_, CascadeItem.Group(_, children)) => loop(children)
-            }
-        loop(items)
-    end labelForKey
 
     private[uic] def render(using Frame): UI =
         // One open/closed signal for the root panel plus one per group, allocated
@@ -247,13 +236,13 @@ final case class CascadeSelect[A] private (
             }
         }
 
-    private def withValue(f: String => UI)(using Frame): UI =
+    private def withValue(f: Maybe[A] => UI)(using Frame): UI =
         choice match
-            case Present(c) => c.render(key)(f)
-            case Absent     => f("")
+            case Present(c) => c.render(f)
+            case Absent     => f(Absent)
 
     private def body(
-        current: String,
+        held: Maybe[A],
         isOpen: Boolean,
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State]
@@ -261,21 +250,31 @@ final case class CascadeSelect[A] private (
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
         // helper; otherwise the untouched static form. The resolved placeholder text threads through.
-        TextValue.reactive(placeholderV): ph =>
-            (invalidV.dynSig, invalidMsgDynV) match
-                case (Absent, Absent) => bodyStatic(current, isOpen, openMap, st, ph)
-                case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                        copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
-                            .bodyStatic(current, isOpen, openMap, st, ph)
-                    )
+        BoolValue.reactive(loadingV): ld =>
+            val loading = ld.constTrue
+            TextValue.reactive(placeholderV): ph =>
+                (invalidV.dynSig, invalidMsgDynV) match
+                    case (Absent, Absent) => bodyStatic(held, isOpen, openMap, st, ph, loading)
+                    case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                            copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
+                                .bodyStatic(held, isOpen, openMap, st, ph, loading)
+                        )
 
     private def bodyStatic(
-        current: String,
+        held: Maybe[A],
         isOpen: Boolean,
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State],
-        placeholder: Maybe[String]
+        placeholder: Maybe[String],
+        loading: Boolean
     )(using Frame): UI =
+        val current = held.fold("")(key)
+        // A held leaf no leaf of the tree carries, once the tree is said to be complete.
+        val unknownCard: List[UI] =
+            held match
+                case Present(a) if !leaves.exists(l => key(l) == current) && !loading =>
+                    List(KeyDiagnostics.unknown("CascadeSelect", Seq(labelF(a))))
+                case _ => Nil
 
         def closeAll: UI.Action =
             st match
@@ -303,24 +302,26 @@ final case class CascadeSelect[A] private (
         def toggleRoot: UI.Action =
             if isOpen then closeAll else openPanel
 
-        // Writes the picked leaf key, fires onChange, closes the whole chain.
+        // Writes the picked leaf, fires onChange where that changed it, closes the whole chain.
         def pick(a: A): UI.Action =
-            val k = key(a)
-            for
-                _ <- choice match
-                    case Present(c) => c.update(leaves, key)(_ => k)
-                    case Absent     => (): UI.Action
-                _ <- onChangeF match
-                    case Present(g) => g(k)
-                    case Absent     => (): UI.Action
-                _ <- closeAll
-            yield ()
-            end for
+            val changed: Maybe[Maybe[A]] < Sync =
+                choice match
+                    case Present(c) => c.write(Present(a), key)
+                    case Absent     => Present(Present(a))
+            val fire: UI.Action = changed.map {
+                case Present(now) =>
+                    onChangeF match
+                        case Present(g) => g(now)
+                        case Absent     => (): UI.Action
+                case Absent => (): UI.Action
+            }
+            fire.andThen(closeAll)
         end pick
 
         // === closed trigger ======================================================
-        val selText         = if current.isEmpty then "" else labelForKey(current).getOrElse(current)
-        val showPlaceholder = current.isEmpty && placeholder.isDefined
+        // The trigger shows the leaf the held value matches, and the value itself where the tree does not carry it yet.
+        val selText         = Maybe.fromOption(leaves.find(l => key(l) == current)).orElse(held).fold("")(labelF)
+        val showPlaceholder = held.isEmpty && placeholder.isDefined
         val labelText       = if showPlaceholder then placeholder.getOrElse("") else selText
 
         var lbl = span.cssClass("p-cascadeselect-label")
@@ -332,7 +333,9 @@ final case class CascadeSelect[A] private (
 
         var dd = div.cssClass("p-cascadeselect-dropdown")
         if !disabledFlag && st.isDefined then dd = dd.onClick(toggleRoot)
-        val dropdownUI: UI = dd(toChild(GlyphSvg(Icons.chevronDown, "p-cascadeselect-dropdown-icon", "p-icon")))
+        val dropdownUI: UI =
+            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-cascadeselect-loading-icon", "p-icon", "p-icon-spin")))
+            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-cascadeselect-dropdown-icon", "p-icon")))
 
         val hiddenCarrier: List[UI] =
             nameV.toList.map(n => hiddenInput.jsProp("name", n).value(current))
@@ -386,7 +389,8 @@ final case class CascadeSelect[A] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-cascadeselect").cssClass("p-component").cssClass("p-inputwrapper")
-        if current.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
+        if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -430,20 +434,20 @@ final case class CascadeSelect[A] private (
                             case _                                                    => ()
                 }
             }
-            // Focus-loss on the trigger reports the currently bound key (or the resolved
-            // current value when unbound) — the validation layer's Blur trigger.
+            // Focus-loss on the trigger reports the held leaf, the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
-                    case Present(c) => c.read(key)(f)
-                    case Absent     => f(current))
+                    case Present(c) => c.read(f)
+                    case Absent     => f(held))
             }
         end if
 
-        FieldInvalid.withMessage(
+        val field = FieldInvalid.withMessage(
             el(((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
             invalidV.constTrue,
             invalidMsgV
         )
+        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 
     private def activeId(base: String): String = s"$base-active"

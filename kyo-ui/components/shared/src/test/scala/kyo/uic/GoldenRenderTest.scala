@@ -513,19 +513,19 @@ class GoldenRenderTest extends UicTest:
         for
             html <-
                 for
-                    ref <- Signal.initRef("b")
+                    ref <- Signal.initRef(Maybe("b" -> "Banana"))
                     out <- UI.runRender(
                         uic.Select[(String, String)]()
                             .options(Seq("a" -> "Apple", "b" -> "Banana"))(_._2)
                             .optionKey(_._1)
-                            .value(ref)
+                            .selection(ref)
                     ).take(1).run
                 yield out.mkString
             placeholder <-
                 for
-                    ref <- Signal.initRef("")
+                    ref <- Signal.initRef(Maybe.empty[String])
                     out <- UI.runRender(
-                        uic.Select[String]().options(Seq("Small", "Large")).placeholder("Pick one").value(ref)
+                        uic.Select[String]().options(Seq("Small", "Large")).placeholder("Pick one").selection(ref)
                     ).take(1).run
                 yield out.mkString
             invalid <- renderHtml(
@@ -557,11 +557,11 @@ class GoldenRenderTest extends UicTest:
     "Select (open, wired) renders the floating panel: overlay skin, options, filter, checkmark, clear" in {
         def openHtml(sel: uic.Select[(String, String)], current: String, hi: Int = -1): String < Async =
             for
-                vref <- Signal.initRef(current)
+                vref <- Signal.initRef(Maybe.fromOption(Seq("a" -> "Apple", "b" -> "Banana").find(_._1 == current)))
                 oref <- Signal.initRef(true)
                 href <- Signal.initRef(hi)
                 qref <- Signal.initRef("")
-                out  <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                out  <- UI.runRender(sel.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
             yield out.mkString
         val base = uic.Select[(String, String)]()
             .options(Seq("a" -> "Apple", "b" -> "Banana"))(_._2)
@@ -573,11 +573,11 @@ class GoldenRenderTest extends UicTest:
         // the assertions below see only the panel rows.
         def appQueryHtml(query: String): String < Async =
             for
-                vref <- Signal.initRef("")
+                vref <- Signal.initRef(Maybe.empty[(String, String)])
                 oref <- Signal.initRef(true)
                 href <- Signal.initRef(-1)
                 qref <- Signal.initRef(query)
-                out  <- UI.runRender(base.filterQuery(qref).value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                out  <- UI.runRender(base.filterQuery(qref).selection(vref).open(oref).wired(oref, href, qref)).take(1).run
             yield out.mkString
         for
 
@@ -631,11 +631,11 @@ class GoldenRenderTest extends UicTest:
     "Select optionGroups renders the ARIA group anatomy; the highlight index stays flat across headers" in {
         def openHtml(sel: uic.Select[String], hi: Int = -1, query: String = ""): String < Async =
             for
-                vref <- Signal.initRef("")
+                vref <- Signal.initRef(Maybe.empty[String])
                 oref <- Signal.initRef(true)
                 href <- Signal.initRef(hi)
                 qref <- Signal.initRef(query)
-                out  <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                out  <- UI.runRender(sel.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
             yield out.mkString
         // Two groups and one loose option, so the flat option order is Apple 0,
         // Banana 1, Carrot 2, Date 3 while four headers and rows render between them.
@@ -1211,15 +1211,15 @@ class GoldenRenderTest extends UicTest:
             html <-
                 for
                     ref <- Signal.initRef(Set("b"))
-                    ui = uic.Listbox()
+                    ui = uic.Listbox[String]()
                         .selectionMode(uic.SelectionMode.Multiple)
                         .item("Apple", "a")
                         .item("Banana", "b", icon = Present(uic.Icons.check))
-                        .value(ref)
+                        .selection(ref)
                     out <- UI.runRender(ui).take(1).run
                 yield out.mkString
-            checked <- renderHtml(uic.Listbox().checkmark(true).item("Solo", "s"))
-            empty   <- renderHtml(uic.Listbox().emptyContent("Nothing here"))
+            checked <- renderHtml(uic.Listbox[String]().checkmark(true).item("Solo", "s"))
+            empty   <- renderHtml(uic.Listbox[String]().emptyContent("Nothing here"))
         yield
             assert(html.contains("p-listbox"), "base class hook")
             assert(html.contains("p-component"), "p-component class")
@@ -1246,7 +1246,7 @@ class GoldenRenderTest extends UicTest:
             html <-
                 for
                     query <- Signal.initRef("ap")
-                    ui = uic.Listbox()
+                    ui = uic.Listbox[String]()
                         .filterQuery(query)
                         .item("Apple", "a")
                         .item("Banana", "b")
@@ -1263,13 +1263,16 @@ class GoldenRenderTest extends UicTest:
 
     "Listbox filterable(true) renders the same header over a query it allocates itself" in {
         for
-            self  <- renderHtml(uic.Listbox().filterable(true).item("Apple", "a").item("Banana", "b"))
-            plain <- renderHtml(uic.Listbox().item("Apple", "a").item("Banana", "b"))
+            self  <- renderHtml(uic.Listbox[String]().filterable(true).item("Apple", "a").item("Banana", "b"))
+            plain <- renderHtml(uic.Listbox[String]().item("Apple", "a").item("Banana", "b"))
 
             wired <-
                 for
                     q   <- Signal.initRef("ap")
-                    out <- UI.runRender(uic.Listbox().filterQuery(q).filterable(true).item("Apple", "a").item("Banana", "b")).take(1).run
+                    out <- UI.runRender(uic.Listbox[String]().filterQuery(q).filterable(true).item(
+                        "Apple",
+                        "a"
+                    ).item("Banana", "b")).take(1).run
                 yield out.mkString
         yield
             // The static projection is the header, inert: the query ref only exists once the
@@ -1284,7 +1287,7 @@ class GoldenRenderTest extends UicTest:
     "Listbox optionGroups renders grouped options; the filter drops a group it empties" in {
         for
             html <- renderHtml(
-                uic.Listbox().optionGroups(
+                uic.Listbox[String]().optionGroups(
                     uic.OptionItem.group("Fruit")(uic.ListItem.of("Apple", "a"), uic.ListItem.of("Banana", "b")),
                     uic.OptionItem.item(uic.ListItem.of("Date", "d"))
                 )
@@ -1292,7 +1295,7 @@ class GoldenRenderTest extends UicTest:
             filtered <-
                 for
                     qref <- Signal.initRef("app")
-                    ui = uic.Listbox().optionGroups(
+                    ui = uic.Listbox[String]().optionGroups(
                         uic.OptionItem.group("Fruit")(uic.ListItem.of("Apple", "a")),
                         uic.OptionItem.group("Vegetable")(uic.ListItem.of("Carrot", "c"))
                     ).filterQuery(qref)
@@ -1313,7 +1316,7 @@ class GoldenRenderTest extends UicTest:
 
     "Listbox roving: the list is the only tab stop and the only focus target" in {
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
-        def listbox(using Frame)                           = uic.Listbox()
+        def listbox(using Frame)                           = uic.Listbox[String]()
             .selectionMode(uic.SelectionMode.Single)
             .item("Apple", "a")
             .item("Banana", "b")
@@ -1334,7 +1337,7 @@ class GoldenRenderTest extends UicTest:
     }
 
     "Tree roving: the list owns focus alone, and hands it to a host that says so" in {
-        def tree(using Frame) = uic.Tree()
+        def tree(using Frame) = uic.Tree[String]()
             .nodes(uic.TreeNode("src", "src", children = List(uic.TreeNode("main", "main"))))
             .selectionMode(uic.SelectionMode.Single)
         for
@@ -1355,7 +1358,7 @@ class GoldenRenderTest extends UicTest:
     }
 
     "DataTable computes sort + filter + pagination + selection server-side into Prime anatomy" in {
-        final case class Product(id: String, name: String, price: Int)
+        final case class Product(id: String, name: String, price: Int) derives CanEqual
         val products = List(
             Product("p1", "Bamboo Watch", 65),
             Product("p2", "Black Watch", 72),
@@ -1366,8 +1369,8 @@ class GoldenRenderTest extends UicTest:
             sort: SignalRef[List[uic.SortKey]],
             query: SignalRef[String],
             page: SignalRef[Int],
-            sel: SignalRef[Set[String]],
-            exp: SignalRef[Set[String]]
+            sel: SignalRef[Set[Product]],
+            exp: SignalRef[Set[Product]]
         )(using Frame): UI =
             uic.DataTable[Product]()
                 .rows(products)
@@ -1380,7 +1383,7 @@ class GoldenRenderTest extends UicTest:
                 .globalFilter(query)
                 .paginate(2)(page)
                 .selectionMode(uic.SelectionMode.Checkbox)
-                .selected(sel)
+                .selection(sel)
                 .expanded(exp)
                 .rowExpansionTemplate(prod => p(s"Details for ${prod.name}"))
                 .stripedRows(true)
@@ -1398,8 +1401,8 @@ class GoldenRenderTest extends UicTest:
                 sort  <- Signal.initRef(sortV)
                 query <- Signal.initRef(queryV)
                 page  <- Signal.initRef(pageV)
-                sel   <- Signal.initRef(selV)
-                exp   <- Signal.initRef(expV)
+                sel   <- Signal.initRef(products.filter(p => selV.contains(p.id)).toSet)
+                exp   <- Signal.initRef(products.filter(p => expV.contains(p.id)).toSet)
                 out   <- UI.runRender(tableOf(sort, query, page, sel, exp)).take(1).run
             yield out.mkString
         for
@@ -1451,28 +1454,28 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
-    // The three bindings `selected` accepts differ only in who may WRITE the set. What the reader
+    // The three bindings `selection` accepts differ only in who may WRITE the set. What the reader
     // sees must not be able to tell them apart, or a caller owning the selection elsewhere would be
     // shipping a second-class table.
     "a one-way and a constant row selection render byte-identically to a two-way one" in {
         final case class Row(id: String, name: String) derives CanEqual
-        val rows = List(Row("1", "Alice"), Row("2", "Bob"), Row("3", "Carol"))
-        def tableOf(selected: Set[String] | Signal[Set[String]])(using Frame): UI =
+        val rows                                                            = List(Row("1", "Alice"), Row("2", "Bob"), Row("3", "Carol"))
+        def tableOf(selected: Set[Row] | Signal[Set[Row]])(using Frame): UI =
             uic.DataTable[Row]()
                 .rows(rows)
                 .rowKey(_.id)
                 .columns(uic.Column[Row]("Name")(_.name))
                 .selectionMode(uic.SelectionMode.Multiple)
-                .selected(selected)
+                .selection(selected)
                 // Keeps the one-way forms off the "cannot move" card, which would itself be a
                 // difference in the output.
                 .onRowClick(_ => ())
         for
-            ref      <- Signal.initRef(Set("2"))
-            src      <- Signal.initRef(Set("2"))
+            ref      <- Signal.initRef(Set(rows(1)))
+            src      <- Signal.initRef(Set(rows(1)))
             twoWay   <- UI.runRender(tableOf(ref)).take(1).run
             oneWay   <- UI.runRender(tableOf(src.map(identity))).take(1).run
-            constant <- UI.runRender(tableOf(Set("2"))).take(1).run
+            constant <- UI.runRender(tableOf(Set(rows(1)))).take(1).run
         yield
             assert(twoWay.mkString.contains("p-datatable-row-selected"), "the mark is there to compare")
             assert(oneWay.mkString == twoWay.mkString, "a one-way selection is not a lesser table")
@@ -1536,7 +1539,7 @@ class GoldenRenderTest extends UicTest:
     "DataTable pins frozen rows in a second row group that holds under the header" in {
         final case class Row(id: String, name: String) derives CanEqual
         for
-            err <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+            err <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
             top <- Signal.initRef(Present(41): Maybe[Int])
             table = uic.DataTable[Row]()
                 .rows(List(Row("1", "Alice"), Row("2", "Bob")))
@@ -1562,7 +1565,7 @@ class GoldenRenderTest extends UicTest:
         final case class Row(id: String, name: String) derives CanEqual
         val rows = (1 to 40).toList.map(i => Row(i.toString, s"R$i"))
         for
-            err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
             scroll <- Signal.initRef(0.0)
             table = uic.DataTable[Row]()
                 .rows(rows)
@@ -1597,12 +1600,12 @@ class GoldenRenderTest extends UicTest:
     }
 
     "DataTable ranks multi-sort columns with a badge and gives the checkbox column a select-all header" in {
-        final case class Row(id: String, a: String, b: String)
+        final case class Row(id: String, a: String, b: String) derives CanEqual
         val rows = List(Row("r1", "x", "p"), Row("r2", "y", "q"))
         def render(sortV: List[uic.SortKey], selV: Set[String])(using Frame): String < Async =
             for
                 sort <- Signal.initRef(sortV)
-                sel  <- Signal.initRef(selV)
+                sel  <- Signal.initRef(rows.filter(r => selV.contains(r.id)).toSet)
                 out  <- UI.runRender(
                     uic.DataTable[Row]()
                         .rows(rows)
@@ -1613,7 +1616,7 @@ class GoldenRenderTest extends UicTest:
                         )
                         .sort(sort)
                         .selectionMode(uic.SelectionMode.Checkbox)
-                        .selected(sel)
+                        .selection(sel)
                 ).take(1).run
             yield out.mkString
         for
@@ -1682,8 +1685,8 @@ class GoldenRenderTest extends UicTest:
             tableText <- renderHtml(uic.DataTable[String]().columns(uic.column("Name")(identity)).emptyContent("Nothing"))
             tableUi   <- renderHtml(uic.DataTable[String]().columns(uic.column("Name")(identity)).emptyContent(emptyState))
             viewUi    <- renderHtml(uic.DataView[String]().emptyContent(emptyState))
-            listUi    <- renderHtml(uic.Listbox().emptyContent(emptyState))
-            treeUi    <- renderHtml(uic.Tree().emptyContent(emptyState))
+            listUi    <- renderHtml(uic.Listbox[String]().emptyContent(emptyState))
+            treeUi    <- renderHtml(uic.Tree[String]().emptyContent(emptyState))
         yield
             assert(tableText.contains("Nothing"), "the String form still renders text")
             // The UI form must land INSIDE the same wrapper, not beside the table: that
@@ -1863,7 +1866,7 @@ class GoldenRenderTest extends UicTest:
     }
 
     "a rowSpan column merges its runs, clipped by the merged columns left of it and by the group" in {
-        final case class Item(id: String, category: String, brand: String, name: String)
+        final case class Item(id: String, category: String, brand: String, name: String) derives CanEqual
         val items = List(
             Item("1", "Watches", "Rolex", "Sub"),
             Item("2", "Watches", "Rolex", "GMT"),
@@ -1903,7 +1906,7 @@ class GoldenRenderTest extends UicTest:
             )
             expanded <-
                 for
-                    ref <- Signal.initRef(Set("1"))
+                    ref <- Signal.initRef(Set(items.head))
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                             uic.column("Category")(_.category).rowSpan,
@@ -1931,7 +1934,7 @@ class GoldenRenderTest extends UicTest:
     }
 
     "a headerGroup gives the table a multi-row header whose spans are read off the tree" in {
-        final case class Sale(id: String, code: String, q1: String, q2: String, total: String)
+        final case class Sale(id: String, code: String, q1: String, q2: String, total: String) derives CanEqual
         val sales                                          = List(Sale("1", "A-1", "10", "20", "30"), Sale("2", "A-2", "5", "6", "11"))
         def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
         def twoYears(using Frame)                          = uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
@@ -1954,11 +1957,11 @@ class GoldenRenderTest extends UicTest:
             )
             checked <-
                 for
-                    ref <- Signal.initRef(Set.empty[String])
+                    ref <- Signal.initRef(Set.empty[Sale])
                     out <- UI.runRender(
                         uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
                             uic.headerGroup("Revenue")(uic.column("Q1")(_.q1), uic.column("Q2")(_.q2))
-                        ).selectionMode(uic.SelectionMode.Checkbox).selected(ref).render
+                        ).selectionMode(uic.SelectionMode.Checkbox).selection(ref).render
                     ).take(1).run
                 yield out.mkString
             empty <- renderHtml(
@@ -2214,7 +2217,7 @@ class GoldenRenderTest extends UicTest:
             live    <-
                 for
                     specs <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     menu  <- Signal.initRef(false)
                     out   <- UI.runRender(
                         table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
@@ -2226,7 +2229,7 @@ class GoldenRenderTest extends UicTest:
                         List("Name")  -> uic.ColumnFilter("Bam", uic.MatchMode.StartsWith),
                         List("Price") -> uic.ColumnFilter("nope", uic.MatchMode.Equals)
                     ))
-                    err  <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err  <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     menu <- Signal.initRef(false)
                     out  <- UI.runRender(
                         table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
@@ -2235,7 +2238,7 @@ class GoldenRenderTest extends UicTest:
             opened <-
                 for
                     specs <- Signal.initRef(Map(List("Name") -> uic.ColumnFilter("Bam", uic.MatchMode.StartsWith)))
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     menu  <- Signal.initRef(true)
                     out   <- UI.runRender(
                         table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
@@ -2291,7 +2294,7 @@ class GoldenRenderTest extends UicTest:
             live     <-
                 for
                     widths <- Signal.initRef(Map.empty[List[String], Double])
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out    <- UI.runRender(
                         table.columnWidths(widths).wired("t", Map.empty, err, _ => ())
                     ).take(1).run
@@ -2299,7 +2302,7 @@ class GoldenRenderTest extends UicTest:
             dragged <-
                 for
                     widths <- Signal.initRef(Map(List("Name") -> 300.0, List("Note") -> 90.0))
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out    <- UI.runRender(
                         table.columnWidths(widths).wired("t", Map.empty, err, _ => ())
                     ).take(1).run
@@ -2307,7 +2310,7 @@ class GoldenRenderTest extends UicTest:
             pinned <-
                 for
                     widths <- Signal.initRef(Map.empty[List[String], Double])
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out    <- UI.runRender(
                         uic.DataTable[Row]().rows(rows).rowKey(_.id).selectionMode(uic.SelectionMode.Checkbox).columns(
                             uic.column("Name")(_.name),
@@ -2365,7 +2368,7 @@ class GoldenRenderTest extends UicTest:
         def wire(t: uic.DataTable[Row], drag: Maybe[uic.ColumnDrag] = Absent)(using Frame) =
             for
                 order <- Signal.initRef(List.empty[List[String]])
-                err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                 move  <- Signal.initRef(drag)
                 out   <- UI.runRender(
                     t.columnOrder(order).wired(
@@ -2481,14 +2484,14 @@ class GoldenRenderTest extends UicTest:
         val rows                                           = List(Row("1", "Bamboo"), Row("2", "Black"))
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
-            ref  <- Signal.initRef(Set.empty[String])
+            ref  <- Signal.initRef(Set.empty[Row])
             open <- UI.runRender(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .selectionMode(uic.SelectionMode.Checkbox).selected(ref).render
+                    .selectionMode(uic.SelectionMode.Checkbox).selection(ref).render
             ).take(1).run.map(_.mkString)
             limited <- UI.runRender(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .selectionMode(uic.SelectionMode.Checkbox).selected(ref)
+                    .selectionMode(uic.SelectionMode.Checkbox).selection(ref)
                     .selectableWhen(_.id != "2").render
             ).take(1).run.map(_.mkString)
         yield
@@ -2509,14 +2512,14 @@ class GoldenRenderTest extends UicTest:
         val rows                                           = List(Row("1", "Bamboo"), Row("2", "Black"))
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
-            ref <- Signal.initRef(Set.empty[String])
+            ref <- Signal.initRef(Set.empty[Row])
             all <- UI.runRender(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .selectionMode(uic.SelectionMode.Multiple).selected(ref).render
+                    .selectionMode(uic.SelectionMode.Multiple).selection(ref).render
             ).take(1).run.map(_.mkString)
             some <- UI.runRender(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .selectionMode(uic.SelectionMode.Multiple).selected(ref)
+                    .selectionMode(uic.SelectionMode.Multiple).selection(ref)
                     .selectableWhen(_.id != "2").render
             ).take(1).run.map(_.mkString)
         yield
@@ -2553,7 +2556,7 @@ class GoldenRenderTest extends UicTest:
             expand <-
                 for
                     widths <- Signal.initRef(Map.empty[List[String], Double])
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out    <- UI.runRender(
                         table.columnWidths(widths).columnResizeMode(uic.ColumnResizeMode.Expand)
                             .wired("t", Map.empty, err, _ => ())
@@ -2562,7 +2565,7 @@ class GoldenRenderTest extends UicTest:
             fit <-
                 for
                     widths <- Signal.initRef(Map.empty[List[String], Double])
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out    <- UI.runRender(table.columnWidths(widths).wired("t", Map.empty, err, _ => ())).take(1).run
                 yield out.mkString
         yield
@@ -2591,7 +2594,7 @@ class GoldenRenderTest extends UicTest:
             grips <-
                 for
                     bound <- Signal.initRef[Seq[Row]](rows)
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out   <- UI.runRender(
                         uic.DataTable[Row]().rows(bound).rowKey(_.id)
                             .columns(uic.column("Name")(_.name).width(200))
@@ -2617,7 +2620,7 @@ class GoldenRenderTest extends UicTest:
         val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
-            cells <- Signal.initRef(Set(uic.CellPath("2", List("Price"))))
+            cells <- Signal.initRef(Set(uic.CellPath(rows(1), List("Price"))))
             out   <- UI.runRender(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                     uic.column("Name")(_.name),
@@ -2647,7 +2650,7 @@ class GoldenRenderTest extends UicTest:
             closed <-
                 for
                     filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
-                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     open    <- Signal.initRef(false)
                     draft   <- Signal.initRef(uic.ColumnFilter("", uic.MatchMode.Contains))
                     out     <- UI.runRender(
@@ -2665,7 +2668,7 @@ class GoldenRenderTest extends UicTest:
             opened <-
                 for
                     filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
-                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     open    <- Signal.initRef(true)
                     draft   <- Signal.initRef(uic.ColumnFilter(
                         List(uic.FilterRule("a", uic.MatchMode.Contains), uic.FilterRule("b", uic.MatchMode.EndsWith)),
@@ -2686,7 +2689,7 @@ class GoldenRenderTest extends UicTest:
             row <-
                 for
                     filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
-                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellKey, uic.form.FieldError)])
                     out     <- UI.runRender(table.columnFilters(filters).wired("t", Map.empty, err, _ => ())).take(1).run
                 yield out.mkString
         yield
@@ -2723,11 +2726,11 @@ class GoldenRenderTest extends UicTest:
         /** The editing anatomy lives behind a mount, so a top-down render shows the
           * placeholder. `wired` is the seam that publishes it.
           */
-        def wired(t: uic.DataTable[Item], cell: Maybe[uic.CellPath] = Absent, rows: Set[String] = Set.empty)(using Frame) =
+        def wired(t: uic.DataTable[Item], cell: Maybe[uic.CellPath[Item]] = Absent, rows: Set[Item] = Set.empty)(using Frame) =
             for
                 drafts <- Signal.initRef("name-draft")
                 price  <- Signal.initRef("99")
-                err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
                 cellR  <- Signal.initRef(cell)
                 rowsR  <- Signal.initRef(rows)
                 out    <- UI.runRender(
@@ -2738,18 +2741,18 @@ class GoldenRenderTest extends UicTest:
         for
             placeholder <-
                 for
-                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out <- UI.runRender(table.editingCell(ref).render).take(1).run
                 yield out.mkString
             idle    <- wired(table)
-            open    <- wired(table, cell = Present(uic.CellPath("2", List("Name"))))
-            numeric <- wired(table, cell = Present(uic.CellPath("1", List("Price"))))
+            open    <- wired(table, cell = Present(uic.CellPath(items(1), List("Name"))))
+            numeric <- wired(table, cell = Present(uic.CellPath(items(0), List("Price"))))
             rowOpen <-
                 for
                     drafts <- Signal.initRef("name-draft")
                     price  <- Signal.initRef("99")
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
-                    rowsR  <- Signal.initRef(Set("1"))
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
+                    rowsR  <- Signal.initRef(Set(items(0)))
                     out    <- UI.runRender(
                         table.editingRows(rowsR).wired("t", Map(List("Name") -> drafts, List("Price") -> price), err, _ => ())
                     ).take(1).run
@@ -2760,7 +2763,7 @@ class GoldenRenderTest extends UicTest:
                     price  <- Signal.initRef("nope")
                     err    <- Signal.initRef(
                         Maybe((
-                            uic.CellPath("1", List("Price")),
+                            uic.CellKey("1", List("Price")),
                             kyo.uic.form.FieldError(
                                 "integer",
                                 Map.empty,
@@ -2768,7 +2771,7 @@ class GoldenRenderTest extends UicTest:
                             )
                         ))
                     )
-                    cellR <- Signal.initRef(Present(uic.CellPath("1", List("Price"))): Maybe[uic.CellPath])
+                    cellR <- Signal.initRef(Present(uic.CellPath(items(0), List("Price"))): Maybe[uic.CellPath[Item]])
                     out   <- UI.runRender(
                         table.editingCell(cellR).wired("t", Map(List("Name") -> drafts, List("Price") -> price), err, _ => ())
                     ).take(1).run
@@ -2776,8 +2779,8 @@ class GoldenRenderTest extends UicTest:
             perRow <-
                 for
                     drafts <- Signal.initRef("d")
-                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
-                    cellR  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
+                    cellR  <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out    <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)).editableWhen(_.id == "1")
@@ -2786,7 +2789,7 @@ class GoldenRenderTest extends UicTest:
                 yield out.mkString
             noEditable <-
                 for
-                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id)
                             .columns(uic.column("Name")(_.name)).editingCell(ref).render
@@ -2794,7 +2797,7 @@ class GoldenRenderTest extends UicTest:
                 yield out.mkString
             nowhereToSave <-
                 for
-                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
@@ -2804,18 +2807,18 @@ class GoldenRenderTest extends UicTest:
             twoSources <-
                 for
                     rowsR <- Signal.initRef[Seq[Item]](items)
-                    ref   <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    ref   <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out   <- UI.runRender(table.rows(rowsR).editingCell(ref).render).take(1).run
                 yield out.mkString
             bothModes <-
                 for
-                    rows <- Signal.initRef(Set.empty[String])
-                    cell <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    rows <- Signal.initRef(Set.empty[Item])
+                    cell <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out  <- UI.runRender(table.editingRows(rows).editingCell(cell).render).take(1).run
                 yield out.mkString
             noKey <-
                 for
-                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
@@ -2870,8 +2873,8 @@ class GoldenRenderTest extends UicTest:
             nav <-
                 for
                     draft <- Signal.initRef("d")
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
-                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out   <- UI.runRender(
                         navTable.editingCell(cell).wired("t", Map(List("Name") -> draft), err, _ => ())
                     ).take(1).run
@@ -2880,8 +2883,8 @@ class GoldenRenderTest extends UicTest:
             locked <-
                 for
                     draft <- Signal.initRef("d")
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
-                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out   <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
@@ -2897,8 +2900,8 @@ class GoldenRenderTest extends UicTest:
             optedOut <-
                 for
                     draft <- Signal.initRef("d")
-                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
-                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellKey, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
                     out   <- UI.runRender(
                         navTable.cellNavigation(false).editingCell(cell)
                             .wired("t", Map(List("Name") -> draft), err, _ => ())
@@ -2929,7 +2932,7 @@ class GoldenRenderTest extends UicTest:
             html.substring(start, html.indexOf(">", start))
         end panelTagOf
         def strip(ref: SignalRef[String])(using Frame) =
-            uic.Tabs()
+            uic.Tabs[String]()
                 .tab("First", "t1")(p("first-content"))
                 .tab("Second", "t2")(p("second-content"))
                 .selected(ref)
@@ -2944,7 +2947,7 @@ class GoldenRenderTest extends UicTest:
                     ref <- Signal.initRef("t2")
                     out <- UI.runRender(strip(ref).lazyPanels(true)).take(1).run
                 yield out.mkString
-            counted <- renderHtml(uic.Tabs().tabs(uic.Tab("Inbox", UI.empty, "in", additionalText = Present("12"))))
+            counted <- renderHtml(uic.Tabs[String]().tabs(uic.Tab("Inbox", UI.empty, "in", additionalText = Present("12"))))
         yield
             assert(html.contains("p-tabs"), "base class hook")
             assert(html.contains("p-component"), "p-component class")
@@ -2979,7 +2982,7 @@ class GoldenRenderTest extends UicTest:
                 for
                     exp <- Signal.initRef(Set("root"))
                     sel <- Signal.initRef(Set("a"))
-                    ui = uic.Tree()
+                    ui = uic.Tree[String]()
                         .selectionMode(uic.SelectionMode.Multiple)
                         .nodes(
                             uic.TreeNode(
@@ -2992,10 +2995,10 @@ class GoldenRenderTest extends UicTest:
                             )
                         )
                         .expanded(exp)
-                        .selected(sel)
+                        .selection(sel)
                     out <- UI.runRender(ui).take(1).run
                 yield out.mkString
-            empty <- renderHtml(uic.Tree().emptyContent("No nodes"))
+            empty <- renderHtml(uic.Tree[String]().emptyContent("No nodes"))
         yield
             assert(html.contains("p-tree"), "base class hook")
             assert(html.contains("p-component"), "p-component class")
@@ -3025,7 +3028,7 @@ class GoldenRenderTest extends UicTest:
         val leafA = uic.TreeNode("Child A", "a")
         val leafB = uic.TreeNode("Child B", "b")
         val root  = uic.TreeNode("Root", "root", children = List(leafA, leafB))
-        val tree  = uic.Tree().selectionMode(uic.SelectionMode.Checkbox).nodes(root)
+        val tree  = uic.Tree[String]().selectionMode(uic.SelectionMode.Checkbox).nodes(root)
 
         // Cascade: check the parent, then uncheck one leaf, then re-check it.
         val checkedAll = tree.cascadeToggle("root", Set.empty)
@@ -3036,7 +3039,7 @@ class GoldenRenderTest extends UicTest:
             for
                 exp <- Signal.initRef(Set("root"))
                 s   <- Signal.initRef(sel)
-                out <- UI.runRender(tree.expanded(exp).selected(s)).take(1).run
+                out <- UI.runRender(tree.expanded(exp).selection(s)).take(1).run
             yield out.mkString
         for
             partialHtml <- html(oneOff)
@@ -3368,19 +3371,19 @@ class GoldenRenderTest extends UicTest:
         for
             single <-
                 for
-                    ref <- Signal.initRef("b")
+                    ref <- Signal.initRef(Maybe("b" -> "Banana"))
                     out <- UI.runRender(
                         uic.SelectButton[(String, String)]()
                             .options(Seq("a" -> "Apple", "b" -> "Banana"))(_._2)
                             .optionKey(_._1)
-                            .value(ref)
+                            .selection(ref)
                     ).take(1).run
                 yield out.mkString
             multi <-
                 for
                     ref <- Signal.initRef(Set("S", "L"))
                     out <- UI.runRender(
-                        uic.SelectButton[String]().options(Seq("S", "M", "L")).multiple(true).value(ref)
+                        uic.SelectButton[String]().options(Seq("S", "M", "L")).multiple.selection(ref)
                     ).take(1).run
                 yield out.mkString
             invalid <- renderHtml(uic.SelectButton[String]().options(Seq("x")).invalid(true))
@@ -3429,7 +3432,7 @@ class GoldenRenderTest extends UicTest:
             colorPicker  <- renderHtml(uic.ColorPicker().inline(true).invalid(true).invalidMessage("Required"))
             fileUpload   <- renderHtml(uic.FileUpload().invalid(true).invalidMessage("Required"))
             selectButton <- renderHtml(uic.SelectButton[String]().options(Seq("A", "B")).invalid(true).invalidMessage("Required"))
-            listbox      <- renderHtml(uic.Listbox().item("A", "a").invalid(true).invalidMessage("Required"))
+            listbox      <- renderHtml(uic.Listbox[String]().item("A", "a").invalid(true).invalidMessage("Required"))
             clean        <- renderHtml(uic.Slider())
             sliderId     <- renderHtml(uic.Slider().id("vol"))
             knobId       <- renderHtml(uic.Knob().id("gain"))
@@ -3492,8 +3495,8 @@ class GoldenRenderTest extends UicTest:
 
     "a colliding option key is reported loudly instead of silently picking the wrong option" in {
 
-        // The tree-shaped picker defaults its key to the label the same way, so it reports
-        // the same collision — from the node ids, which is where it lands there.
+        // The tree-shaped picker keyed by the label reports the same collision, from the node
+        // ids, which is where it lands there.
         final case class Dept(name: String, subs: List[Dept])
         def treeHtml(depts: Seq[Dept]): String < Async =
             for
@@ -3501,7 +3504,7 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(true)
                 eref <- Signal.initRef(Set.empty[String])
                 href <- Signal.initRef(-1)
-                ts = uic.TreeSelect().options(depts)(_.name)(_.subs).value(vref)
+                ts = uic.TreeSelect[String]().options(depts)(_.name, _.name)(_.subs).selection(vref)
                 out <- UI.runRender(ts.open(oref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
         for
@@ -3510,31 +3513,31 @@ class GoldenRenderTest extends UicTest:
             // shows up with the data that triggers it.
             dupSelect <-
                 for
-                    vref <- Signal.initRef("")
+                    vref <- Signal.initRef(Maybe.empty[(String, String)])
                     oref <- Signal.initRef(true)
                     href <- Signal.initRef(-1)
                     qref <- Signal.initRef("")
                     sel = uic.Select[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2)
-                    out <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                    out <- UI.runRender(sel.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
                 yield out.mkString
             keyedSelect <-
                 for
-                    vref <- Signal.initRef("")
+                    vref <- Signal.initRef(Maybe.empty[(String, String)])
                     oref <- Signal.initRef(true)
                     href <- Signal.initRef(-1)
                     qref <- Signal.initRef("")
                     sel = uic.Select[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2).optionKey(_._1)
-                    out <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                    out <- UI.runRender(sel.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
                 yield out.mkString
 
             dupMulti <-
                 for
-                    vref <- Signal.initRef(Set.empty[String])
+                    vref <- Signal.initRef(Set.empty[(String, String)])
                     oref <- Signal.initRef(true)
                     href <- Signal.initRef(-1)
                     qref <- Signal.initRef("")
                     ms = uic.MultiSelect[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2)
-                    out <- UI.runRender(ms.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                    out <- UI.runRender(ms.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
                 yield out.mkString
 
             dupButtons <- renderHtml(uic.SelectButton[String]().options(Seq("S", "S", "L")))
@@ -3556,13 +3559,13 @@ class GoldenRenderTest extends UicTest:
     }
 
     "a DataTable that binds identity without a rowKey says so instead of keying by position" in {
-        final case class Row(id: String, name: String)
+        final case class Row(id: String, name: String) derives CanEqual
         val rows                                                               = Seq(Row("r1", "Ada"), Row("r2", "Bob"))
         def table(f: uic.DataTable[Row] => uic.DataTable[Row]): String < Async =
             for
-                sel <- Signal.initRef(Set.empty[String])
+                sel <- Signal.initRef(Set.empty[Row])
                 base = uic.DataTable[Row]().rows(rows).columns(uic.Column[Row]("Name")(_.name))
-                out <- UI.runRender(f(base).selected(sel).selectionMode(uic.SelectionMode.Single)).take(1).run
+                out <- UI.runRender(f(base).selection(sel).selectionMode(uic.SelectionMode.Single)).take(1).run
             yield out.mkString
         for
             unkeyed <- table(identity)
@@ -3785,7 +3788,7 @@ class GoldenRenderTest extends UicTest:
             for
                 ref <- Signal.initRef(active)
                 out <- UI.runRender(
-                    uic.Stepper()
+                    uic.Stepper[String]()
                         .active(ref)
                         .linear(linear)
                         .step("Personal")(p("personal-content"))
@@ -4085,7 +4088,7 @@ class GoldenRenderTest extends UicTest:
             for
                 ref <- Signal.initRef(active)
                 out <- UI.runRender(
-                    uic.Stepper()
+                    uic.Stepper[String]()
                         .vertical(true)
                         .active(ref)
                         .step("Personal")(p("personal-content"))
@@ -4119,7 +4122,7 @@ class GoldenRenderTest extends UicTest:
                 for
                     ref <- Signal.initRef("payment")
                     out <- UI.runRender(
-                        uic.Stepper()
+                        uic.Stepper[String]()
                             .value(ref)
                             .step("Personal", value = Present("personal"))(p("personal-content"))
                             .step("Payment", value = Present("payment"))(p("payment-content"))
@@ -4130,7 +4133,7 @@ class GoldenRenderTest extends UicTest:
                 for
                     ref <- Signal.initRef(0)
                     out <- UI.runRender(
-                        uic.Stepper()
+                        uic.Stepper[String]()
                             .active(ref)
                             .step("One")(p("c1"))
                             .step("Two", disabled = true)(p("c2"))
@@ -4328,13 +4331,13 @@ class GoldenRenderTest extends UicTest:
         for
             html <-
                 for
-                    ref <- Signal.initRef("kg")
+                    ref <- Signal.initRef(Maybe("kg" -> "Kilogram"))
                     out <- UI.runRender(
                         uic.SelectButton[(String, String)]()
                             .options(Seq("kg" -> "Kilogram", "lb" -> "Pound"))(_._2)
                             .optionKey(_._1)
                             .itemTemplate(o => span.cssClass("opt-tpl")(o._2.toUpperCase))
-                            .value(ref)
+                            .selection(ref)
                     ).take(1).run
                 yield out.mkString
         yield
@@ -4343,7 +4346,7 @@ class GoldenRenderTest extends UicTest:
             assert(!html.contains("p-togglebutton-label"), "template replaces the default label span")
             assert(html.contains("p-togglebutton-content"), "template renders inside the content span")
             assert(html.contains("""aria-label="Kilogram""""), "label projection stays the accessible name")
-            assert(html.contains("p-togglebutton-checked"), "selection still binds through the key")
+            assert(html.contains("p-togglebutton-checked"), "the selection still matches through the key")
     }
 
     "IconField hosts TextArea and Select via the stamped padding classes" in {
@@ -4372,9 +4375,9 @@ class GoldenRenderTest extends UicTest:
             yield out.mkString
         def selWrapped(v: String): String < Async =
             for
-                ref <- Signal.initRef(v)
+                ref <- Signal.initRef(if v.isEmpty then Maybe.empty[String] else Maybe(v))
                 out <- UI.runRender(
-                    uic.FloatLabel(uic.Select[String]().options(Seq("kg", "lb")).id("unit").value(ref), "Unit").forId("unit")
+                    uic.FloatLabel(uic.Select[String]().options(Seq("kg", "lb")).id("unit").selection(ref), "Unit").forId("unit")
                 ).take(1).run
             yield out.mkString
         for
@@ -4903,7 +4906,7 @@ class GoldenRenderTest extends UicTest:
         def closedHtml(ms: uic.MultiSelect[String], sel: Set[String]): String < Async =
             for
                 ref <- Signal.initRef(sel)
-                out <- UI.runRender(ms.value(ref)).take(1).run
+                out <- UI.runRender(ms.selection(ref)).take(1).run
             yield out.mkString
         val base = uic.MultiSelect[String]().options(Seq("Apple", "Banana", "Cherry"))
 
@@ -4956,7 +4959,7 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(true)
                 href <- Signal.initRef(hi)
                 qref <- Signal.initRef("")
-                out  <- UI.runRender(ms.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                out  <- UI.runRender(ms.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
             yield out.mkString
         val base = uic.MultiSelect[String]().options(Seq("Apple", "Banana"))
 
@@ -5018,7 +5021,7 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(true)
                 href <- Signal.initRef(-1)
                 qref <- Signal.initRef("")
-                out  <- UI.runRender(ms.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+                out  <- UI.runRender(ms.selection(vref).open(oref).wired(oref, href, qref)).take(1).run
             yield out.mkString
         val base = uic.MultiSelect[String]().optionGroups(Seq(
             uic.OptionItem.group("Fruit")("Apple", "Banana"),
@@ -5060,11 +5063,11 @@ class GoldenRenderTest extends UicTest:
                 )(identity)
                 .id("cs")
             for
-                vref <- Signal.initRef("")
+                vref <- Signal.initRef(Maybe.empty[String])
                 oref <- Signal.initRef(true)
-                refs <- Kyo.foreach(cs.value(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Kyo.foreach(cs.selection(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
                 fref <- Signal.initRef(focusAt)
-                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList, fref, Present("cs"))).take(1).run
+                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs.toList, fref, Present("cs"))).take(1).run
             yield out.mkString
             end for
         end html
@@ -5093,11 +5096,11 @@ class GoldenRenderTest extends UicTest:
     "CascadeSelect (wired) renders the trigger + nested group panel chain" in {
         def html(cs: uic.CascadeSelect[String], current: String, rootOpen: Boolean, openPaths: List[List[Int]]): String < Async =
             for
-                vref <- Signal.initRef(current)
+                vref <- Signal.initRef(if current.isEmpty then Maybe.empty[String] else Maybe(current))
                 oref <- Signal.initRef(rootOpen)
-                refs <- Kyo.foreach(cs.value(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Kyo.foreach(cs.selection(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
                 fref <- Signal.initRef(List.empty[Int])
-                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList, fref)).take(1).run
+                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs.toList, fref)).take(1).run
             yield out.mkString
         val base = uic.CascadeSelect[String]()
             .options(
@@ -5146,15 +5149,15 @@ class GoldenRenderTest extends UicTest:
     }
 
     "TreeSelect (wired) hosts the REAL Tree in the floating panel" in {
-        def html(ts: uic.TreeSelect, sel: Set[String], exp: Set[String], open: Boolean): String < Async =
+        def html(ts: uic.TreeSelect[String], sel: Set[String], exp: Set[String], open: Boolean): String < Async =
             for
                 vref <- Signal.initRef(sel)
                 oref <- Signal.initRef(open)
                 eref <- Signal.initRef(exp)
                 href <- Signal.initRef(-1)
-                out  <- UI.runRender(ts.value(vref).open(oref).expanded(eref).wired(oref, eref, href, "ts")).take(1).run
+                out  <- UI.runRender(ts.selection(vref).open(oref).expanded(eref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
-        val base = uic.TreeSelect().nodes(
+        val base = uic.TreeSelect[String]().nodes(
             uic.TreeNode(
                 "src",
                 "src",
@@ -5606,7 +5609,7 @@ class GoldenRenderTest extends UicTest:
     // ---- the container/data block ----
 
     "Accordion renders Prime's panel anatomy; the ref TYPE picks single vs multiple mode" in {
-        def panels(acc: uic.Accordion): uic.Accordion =
+        def panels(acc: uic.Accordion[String]): uic.Accordion[String] =
             acc.panels(
                 uic.AccordionPanel("Header I", p("Content I"), "p1"),
                 uic.AccordionPanel("Header II", p("Content II"), "p2", disabled = true)
@@ -5614,15 +5617,15 @@ class GoldenRenderTest extends UicTest:
         for
             single <-
                 for
-                    ref <- Signal.initRef("p1")
-                    out <- UI.runRender(panels(uic.Accordion().value(ref))).take(1).run
+                    ref <- Signal.initRef[Maybe[String]](Present("p1"))
+                    out <- UI.runRender(panels(uic.Accordion[String]().value(ref))).take(1).run
                 yield out.mkString
             multi <-
                 for
                     ref <- Signal.initRef(Set("p1", "p2"))
-                    out <- UI.runRender(panels(uic.Accordion().value(ref))).take(1).run
+                    out <- UI.runRender(panels(uic.Accordion[String]().value(ref))).take(1).run
                 yield out.mkString
-            static <- renderHtml(panels(uic.Accordion()))
+            static <- renderHtml(panels(uic.Accordion[String]()))
         yield
             assert(single.contains("p-accordion"), "root class")
             assert(single.contains("p-accordionpanel"), "panel class")
@@ -5653,10 +5656,10 @@ class GoldenRenderTest extends UicTest:
                     sel   <- Signal.initRef(Set("Black Watch"))
                     empty <- Signal.initRef(Set.empty[String])
                     hi    <- Signal.initRef(1)
-                    a     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selected(sel)).take(1).run
-                    b     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selected(empty)).take(1).run
+                    a     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selection(sel)).take(1).run
+                    b     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selection(empty)).take(1).run
                     c     <- UI.runRender(
-                        uic.OrderList[String]().items(items)(identity).selected(sel)
+                        uic.OrderList[String]().items(items)(identity).selection(sel)
                             .wired(Present(uic.ListReorder.Cursor(hi, "ol")))
                     ).take(1).run
                 yield (a.mkString, b.mkString, c.mkString)
@@ -5691,7 +5694,7 @@ class GoldenRenderTest extends UicTest:
                     srcSel <- Signal.initRef(Set("London"))
                     tgtSel <- Signal.initRef(Set.empty[String])
                     out    <- UI.runRender(
-                        uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel).targetSelected(tgtSel)
+                        uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelection(srcSel).targetSelection(tgtSel)
                     ).take(1).run
                 yield out.mkString
             noRails <-
@@ -5713,8 +5716,8 @@ class GoldenRenderTest extends UicTest:
                     srcHi  <- Signal.initRef(1)
                     tgtHi  <- Signal.initRef(-1)
                     out    <- UI.runRender(
-                        uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel)
-                            .targetSelected(tgtSel)
+                        uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelection(srcSel)
+                            .targetSelection(tgtSel)
                             .wired(
                                 Present(uic.ListReorder.Cursor(srcHi, "pl-src")),
                                 Present(uic.ListReorder.Cursor(tgtHi, "pl-tgt"))
@@ -5862,7 +5865,7 @@ class GoldenRenderTest extends UicTest:
     }
 
     "TreeTable renders grouped header/body rows, depth-indented togglers, selection + sort" in {
-        final case class F(name: String, size: String)
+        final case class F(name: String, size: String) derives CanEqual
         def nodes = Seq(
             uic.TreeTableNode(F("Applications", "200mb"), List(uic.TreeTableNode(F("Scala", "25mb")))),
             uic.TreeTableNode(F("Cloud", "20mb"))
@@ -5874,8 +5877,8 @@ class GoldenRenderTest extends UicTest:
         for
             expanded <-
                 for
-                    exp  <- Signal.initRef(Set("Applications"))
-                    sel  <- Signal.initRef(Set("Scala"))
+                    exp  <- Signal.initRef(Set(F("Applications", "200mb")))
+                    sel  <- Signal.initRef(Set(F("Scala", "25mb")))
                     sort <- Signal.initRef(List.empty[uic.SortKey])
                     out  <- UI.runRender(
                         uic.TreeTable[F]()
@@ -5883,14 +5886,14 @@ class GoldenRenderTest extends UicTest:
                             .columns(cols*)
                             .rowKey(_.name)
                             .expanded(exp)
-                            .selected(sel)
+                            .selection(sel)
                             .sort(sort)
                             .selectionMode(uic.SelectionMode.Single)
                     ).take(1).run
                 yield out.mkString
             collapsed <-
                 for
-                    exp <- Signal.initRef(Set.empty[String])
+                    exp <- Signal.initRef(Set.empty[F])
                     out <- UI.runRender(uic.TreeTable[F]().nodes(nodes*).columns(cols*).rowKey(_.name).expanded(exp)).take(1).run
                 yield out.mkString
         yield
@@ -5938,21 +5941,21 @@ class GoldenRenderTest extends UicTest:
                     exp <- Signal.initRef(Set("ceo", "cto"))
                     sel <- Signal.initRef(Set("cto"))
                     out <- UI.runRender(
-                        uic.OrganizationChart()
+                        uic.OrganizationChart[String]()
                             .node(chart)
                             .selectionMode(uic.SelectionMode.Single)
                             .expanded(exp)
-                            .selected(sel)
+                            .selection(sel)
                     ).take(1).run
                 yield out.mkString
             collapsed <-
                 for
                     exp <- Signal.initRef(Set.empty[String])
-                    out <- UI.runRender(uic.OrganizationChart().node(chart).expanded(exp)).take(1).run
+                    out <- UI.runRender(uic.OrganizationChart[String]().node(chart).expanded(exp)).take(1).run
                 yield out.mkString
             // No bound ref means no toggles at all — Prime's collapsible=false, without a
             // separate flag to discover.
-            static <- renderHtml(uic.OrganizationChart().node(chart))
+            static <- renderHtml(uic.OrganizationChart[String]().node(chart))
         yield
             assert(expanded.contains("p-organizationchart"), "root class")
             assert(expanded.contains("p-organizationchart-table"), "table-based layout")
@@ -6477,7 +6480,7 @@ class GoldenRenderTest extends UicTest:
             icon    <- renderHtml(uic.Icon(uic.Icons.check).accessibleName("Save").onClick(()))
             inplace <- renderHtml(uic.Inplace().display(span("View")).content(p("Full")).closable(true))
             org     <- Signal.initRef(Set("ceo")).map { expanded =>
-                uic.OrganizationChart()
+                uic.OrganizationChart[String]()
                     .node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
                     .expanded(expanded)
             }.flatMap(o => renderHtml(o.render))
@@ -6500,7 +6503,7 @@ class GoldenRenderTest extends UicTest:
             // The roving-tabindex family, rendered through the `wired` seam: their key handlers
             // live in a mount, and a golden render shows a mount only as its placeholder.
             tabs <- renderHtml(
-                uic.Tabs().tabs(uic.Tab("One", p("1"), "one"), uic.Tab("Two", p("2"), "two"))
+                uic.Tabs[String]().tabs(uic.Tab("One", p("1"), "one"), uic.Tab("Two", p("2"), "two"))
                     .wired(List("k0", "k1"), _ => ())
             )
             carPage  <- Signal.initRef(0)
@@ -6515,13 +6518,13 @@ class GoldenRenderTest extends UicTest:
             )
             stepAt  <- Signal.initRef(0)
             stepper <- renderHtml(
-                uic.Stepper().step("One")(p("1")).step("Two")(p("2")).active(stepAt).wired(List("s0", "s1"), _ => ())
+                uic.Stepper[String]().step("One")(p("1")).step("Two")(p("2")).active(stepAt).wired(List("s0", "s1"), _ => ())
             )
             // A `role="group"` of toggle buttons is NOT a composite widget: it asks for no roving
             // and no arrows, and Prime leaves every button its own tab stop. Rendered here so the
             // invariant proves that shape stays reachable rather than being roved by mistake.
-            pick      <- Signal.initRef("a")
-            segmented <- renderHtml(uic.SelectButton[String]().options(Seq("a", "b")).value(pick).render)
+            pick      <- Signal.initRef(Maybe("a"))
+            segmented <- renderHtml(uic.SelectButton[String]().options(Seq("a", "b")).selection(pick).render)
             fanOpen   <- Signal.initRef(true)
             speedDial <- renderHtml(
                 uic.SpeedDial().items(
@@ -6710,7 +6713,7 @@ class GoldenRenderTest extends UicTest:
             tsExp       <- Signal.initRef(Set.empty[String])
             tsHi        <- Signal.initRef(0)
             treeSel     <- renderHtml(
-                uic.TreeSelect().nodes(uic.TreeNode("Root", "r")).wired(tsOpen, tsExp, tsHi, "ts")
+                uic.TreeSelect[String]().nodes(uic.TreeNode("Root", "r")).wired(tsOpen, tsExp, tsHi, "ts")
             )
             dpOpen     <- Signal.initRef(true)
             dpMonth    <- Signal.initRef("2026-07")
@@ -6725,10 +6728,10 @@ class GoldenRenderTest extends UicTest:
             selOpen  <- Signal.initRef(true)
             selHi    <- Signal.initRef(1)
             selQuery <- Signal.initRef("")
-            selValue <- Signal.initRef("")
+            selValue <- Signal.initRef(Maybe.empty[String])
             select   <- renderHtml(
                 uic.Select[String]().id("sel").options(Seq("a", "b"))(identity).optionKey(identity)
-                    .value(selValue).wired(selOpen, selHi, selQuery, Present("sel"))
+                    .selection(selValue).wired(selOpen, selHi, selQuery, Present("sel"))
             )
             msOpen  <- Signal.initRef(true)
             msHi    <- Signal.initRef(1)
@@ -6736,7 +6739,7 @@ class GoldenRenderTest extends UicTest:
             msValue <- Signal.initRef(Set.empty[String])
             multi   <- renderHtml(
                 uic.MultiSelect[String]().id("ms").options(Seq("a", "b"))(identity).optionKey(identity)
-                    .value(msValue).wired(msOpen, msHi, msQuery, Present("ms"))
+                    .selection(msValue).wired(msOpen, msHi, msQuery, Present("ms"))
             )
             acOpen <- Signal.initRef(true)
             acHi   <- Signal.initRef(1)
@@ -6746,11 +6749,11 @@ class GoldenRenderTest extends UicTest:
                 uic.AutoComplete[String]().id("ac").options(List("a", "b"))(identity).optionKey(identity)
                     .value(acText).wired(acOpen, acHi, acAll, Present("ac"))
             )
-            csValue <- Signal.initRef("")
+            csValue <- Signal.initRef(Maybe.empty[String])
             csOpen  <- Signal.initRef(true)
-            csRefs  <- paths(cascade.value(csValue).groupPaths, Nil)
+            csRefs  <- paths(cascade.selection(csValue).groupPaths, Nil)
             csHi    <- Signal.initRef(List(0))
-            csHtml  <- renderHtml(cascade.value(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
+            csHtml  <- renderHtml(cascade.selection(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
         yield
             val named = List(
                 "Menu"               -> menu,

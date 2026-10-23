@@ -50,9 +50,9 @@ class DataTableReuseTest extends UicTest:
             val counted = new Renders
             for
                 rows <- Signal.initRef[Seq[Item]](items)
-                sel  <- Signal.initRef(Set.empty[String])
-                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
-                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                sel  <- Signal.initRef(Set.empty[Item])
+                err  <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selection(sel)
                     .columns(uic.column("Name") { i =>
                         counted.bump(); i.name
                     })
@@ -62,7 +62,7 @@ class DataTableReuseTest extends UicTest:
                 _    <- Async.sleep(100.millis)
                 first = counted.get
                 _     = counted.reset()
-                _ <- sel.set(Set("k5"))
+                _ <- sel.set(Set(items(5)))
                 _ <- Async.sleep(300.millis)
                 after = counted.get
             yield
@@ -82,7 +82,7 @@ class DataTableReuseTest extends UicTest:
             for
                 rows   <- Signal.initRef[Seq[Item]](hundred)
                 scroll <- Signal.initRef(0.0)
-                err    <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                err    <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
                 // Five rows fit the viewport (200 / 40), with no overscan.
                 ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
                     .scrollHeight("200px").scrollRows(40, overscan = 0)
@@ -108,8 +108,8 @@ class DataTableReuseTest extends UicTest:
 
     "one changed row in a rows emission costs one rendered row" in {
         // The case that matters most and was the last to be fixed. A caller whose selection lives
-        // in the DATA rather than in a selection ref — a `@client` field on the row, with
-        // `selected` derived from the same signal — never emits a selection, only rows. While the
+        // in the DATA rather than in a selection ref (a `@client` field on the row, with
+        // `selection` derived from the same signal) never emits a selection, only rows. While the
         // rows were resolved above the body like sort, filter and page, an emission rebuilt the
         // body and the keyed list inside it, whose row registry was then new and empty, and that
         // caller saw none of the reuse the tests above measure. It was 40 here.
@@ -117,7 +117,7 @@ class DataTableReuseTest extends UicTest:
             val counted = new Renders
             for
                 rows <- Signal.initRef[Seq[Item]](items)
-                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                err  <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
                 ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
                     .columns(uic.column("Name") { i =>
                         counted.bump(); i.name
@@ -144,15 +144,15 @@ class DataTableReuseTest extends UicTest:
         // derived from the SAME signal as the rows, because it lives in the row's own data, and the
         // table also carries a sort ref, a context row, a shift anchor and modifier selection.
         Scope.run {
-            val counted                                = new Renders
-            def selectedOf(rs: Seq[Item]): Set[String] =
-                rs.collect { case r if r.name.endsWith("*") => r.id }.toSet
+            val counted                              = new Renders
+            def selectedOf(rs: Seq[Item]): Set[Item] =
+                rs.filter(_.name.endsWith("*")).toSet
             for
                 rows   <- Signal.initRef[Seq[Item]](items)
                 sort   <- Signal.initRef(List.empty[uic.SortKey])
-                ctx    <- Signal.initRef(Absent: Maybe[String])
-                anchor <- Signal.initRef(Absent: Maybe[String])
-                err    <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ctx    <- Signal.initRef(Absent: Maybe[Item])
+                anchor <- Signal.initRef(Absent: Maybe[Item])
+                err    <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
                 ui = uic.DataTable[Item]().id("t").rows(rows).rowKey(_.id).sort(sort)
                     .stripedRows(true).size(uic.Size.Small).contextMenuRow(ctx)
                     .emptyContent("Nothing to play here.")
@@ -162,7 +162,7 @@ class DataTableReuseTest extends UicTest:
                     .selectionMode(uic.SelectionMode.Multiple)
                     .metaKeySelection(true)
                     .selectionAnchor(anchor)
-                    .selected(rows.map(selectedOf))
+                    .selection(rows.map(selectedOf))
                     .onSelectionChange(_ => ())
                     .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -187,9 +187,9 @@ class DataTableReuseTest extends UicTest:
             val counted = new Renders
             for
                 rows <- Signal.initRef[Seq[Item]](items)
-                sel  <- Signal.initRef(Set.empty[String])
-                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
-                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                sel  <- Signal.initRef(Set.empty[Item])
+                err  <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selection(sel)
                     .columns(uic.column("Name") { i =>
                         counted.bump(); i.name
                     })
@@ -214,9 +214,9 @@ class DataTableReuseTest extends UicTest:
             val counted = new Renders
             for
                 rows <- Signal.initRef[Seq[Item]](items)
-                sel  <- Signal.initRef(Set.empty[String])
-                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
-                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                sel  <- Signal.initRef(Set.empty[Item])
+                err  <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selection(sel)
                     .frozenRows(items.take(3))
                     .columns(uic.column("Name") { i =>
                         counted.bump(); i.name
@@ -228,7 +228,7 @@ class DataTableReuseTest extends UicTest:
                 first = counted.get
                 _     = counted.reset()
                 // The row is in BOTH bodies, so both have one row to draw again and no more.
-                _ <- sel.set(Set("k1"))
+                _ <- sel.set(Set(items(1)))
                 _ <- Async.sleep(300.millis)
                 after = counted.get
             yield

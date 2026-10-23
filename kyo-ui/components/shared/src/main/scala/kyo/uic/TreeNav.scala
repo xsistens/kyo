@@ -30,16 +30,16 @@ private[uic] object TreeNav:
     /** One row of the tree as the reader sees it: how deep it sits, the key its host
       * addresses it by, and whether it can open and is open.
       */
-    final case class Row(depth: Int, key: String, expandable: Boolean, expanded: Boolean) derives CanEqual
+    final case class Row[K](depth: Int, key: K, expandable: Boolean, expanded: Boolean) derives CanEqual
 
     /** What a key does to the expansion state, which the host owns and this does not read
       * back: `Expand` and `Collapse` name the row's own key, so a host holding a set of open
       * ids adds or removes exactly that one.
       */
-    enum Op derives CanEqual:
+    enum Op[+K] derives CanEqual:
         case Keep
-        case Expand(key: String)
-        case Collapse(key: String)
+        case Expand(key: K)
+        case Collapse(key: K)
     end Op
 
     /** The outcome of one key press. `focus` is the new highlighted row (`-1` for none),
@@ -47,23 +47,23 @@ private[uic] object TreeNav:
       * panel it lives in, which is what [[TreeSelect]] does with Escape and a bare [[Tree]]
       * ignores.
       */
-    final case class Step(
+    final case class Step[K](
         focus: Int,
-        op: Op = Op.Keep,
+        op: Op[K] = Op.Keep,
         activate: Boolean = false,
         dismiss: Boolean = false
     ) derives CanEqual
 
     /** The nearest earlier row that sits shallower, which is the parent of `focus`. */
-    private def parentOf(rows: List[Row], focus: Int): Int =
+    private def parentOf[K](rows: List[Row[K]], focus: Int): Int =
         val depth = rows(focus).depth
         rows.take(focus).lastIndexWhere(_.depth < depth)
 
     /** Whether the row after `focus` is its first child rather than its next sibling. */
-    private def hasVisibleChild(rows: List[Row], focus: Int): Boolean =
+    private def hasVisibleChild[K](rows: List[Row[K]], focus: Int): Boolean =
         focus + 1 < rows.size && rows(focus + 1).depth > rows(focus).depth
 
-    def onKey(rows: List[Row], focus: Int, key: Keyboard): Maybe[Step] =
+    def onKey[K](rows: List[Row[K]], focus: Int, key: Keyboard): Maybe[Step[K]] =
         import Keyboard.*
         val on = focus >= 0 && focus < rows.size
         key match

@@ -53,6 +53,17 @@ package object uic:
                 .cssClass("p-uic-key-error")
                 .role("alert")(s"$component: $advice$listed")
         end card
+
+        /** The card for a typed binding that holds a value no option carries: the data and the binding disagree, and the
+          * value stays where it is until the app changes it. `loading` is the way to say the options are not all there yet.
+          */
+        def unknown(component: String, labels: Seq[String])(using Frame): UI =
+            card(
+                component,
+                "the bound value is not among the options, so no row shows it chosen; set loading while the options arrive",
+                labels
+            )
+        end unknown
     end KeyDiagnostics
 
     /** Package-internal parsers from CSS value strings into kyo's typed `Style`

@@ -23,10 +23,10 @@ class DataTableTest extends UicTest:
     private def wire(using Frame) =
         for
             rows    <- Signal.initRef[Seq[Item]](items)
-            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
             name    <- Signal.initRef("")
             price   <- Signal.initRef("")
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             focused <- Signal.initRef(List.empty[String])
         yield
             val table = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
@@ -112,7 +112,8 @@ class DataTableTest extends UicTest:
             refused                           <- err.get
         yield
             assert(stored.head.price == 42, "the typed value reached the row")
-            assert(stillOpen == Present(CellPath("1", List("Price"))), "the refused cell stayed open")
+            // The cell reopened on the row the first commit wrote, so that is the row it holds.
+            assert(stillOpen == Present(CellPath(Item("1", "A", 42), List("Price"))), "the refused cell stayed open")
             assert(refused.exists((_, e) => e.code == "min"), "with the rule's own error on it")
     }
 
@@ -132,7 +133,7 @@ class DataTableTest extends UicTest:
             now                             <- editing.get
         yield
             assert(stored.head.name == "Ada", "what was typed reached the row")
-            assert(now == Present(CellPath("2", List("Name"))), "and the editor moved on")
+            assert(now == Present(CellPath(items(1), List("Name"))), "and the editor moved on")
     }
 
     "clicking another cell while the open one refuses leaves the editor where it is" in {
@@ -149,7 +150,7 @@ class DataTableTest extends UicTest:
             refused                           <- err.get
         yield
             assert(stored.head.price == 10, "nothing was written")
-            assert(now == Present(CellPath("1", List("Price"))), "the refusing cell kept the editor")
+            assert(now == Present(CellPath(items(0), List("Price"))), "the refusing cell kept the editor")
             assert(refused.exists((_, e) => e.code == "min"), "and shows why")
     }
 
@@ -171,7 +172,7 @@ class DataTableTest extends UicTest:
             seen                                    <- focused.get
         yield
             assert(stored.head.price == 10, "nothing was written")
-            assert(now == Present(CellPath("1", List("Price"))), "the editor stayed on the value being fixed")
+            assert(now == Present(CellPath(items(0), List("Price"))), "the editor stayed on the value being fixed")
             assert(refused.exists((_, e) => e.code == "min"), "and the error survived")
             // The cell would be the editor's container, so landing there is landing outside
             // the field: the reader would have to tab back IN to fix what they were told
@@ -187,7 +188,7 @@ class DataTableTest extends UicTest:
             open                            <- editing.get
             draft                           <- name.get
         yield
-            assert(open == Present(CellPath("1", List("Name"))))
+            assert(open == Present(CellPath(items(0), List("Name"))))
             assert(draft == "A", "the draft opens on what the cell showed")
     }
 
@@ -199,7 +200,7 @@ class DataTableTest extends UicTest:
             open                            <- editing.get
             draft                           <- name.get
         yield
-            assert(open == Present(CellPath("2", List("Name"))))
+            assert(open == Present(CellPath(items(1), List("Name"))))
             assert(draft == "z", "and not on the row's value, which typing replaces")
     }
 
@@ -255,8 +256,8 @@ class DataTableTest extends UicTest:
             stored                                      <- rows.get
             seen                                        <- focused.get
         yield
-            assert(open == Present(CellPath("1", List("Price"))), "the cell stayed open")
-            assert(standing.exists((c, e) => c == CellPath("1", List("Price")) && e.code == "min"))
+            assert(open == Present(CellPath(items(0), List("Price"))), "the cell stayed open")
+            assert(standing.exists((c, e) => c == CellKey("1", List("Price")) && e.code == "min"))
             assert(stored.head.price == 10, "and nothing was written")
             assert(seen.isEmpty, "focus stayed in the editor")
     }
@@ -288,7 +289,7 @@ class DataTableTest extends UicTest:
             seen                                         <- focused.get
         yield
             assert(stored.head.name == "Ada", "what Tab left is committed")
-            assert(open == Present(CellPath("1", List("Price"))), "and what it lands on is open")
+            assert(open == Present(CellPath(Item("1", "Ada", 10), List("Price"))), "and what it lands on is open")
             assert(draft == "10", "seeded from that cell's own row")
             assert(seen.isEmpty, "no focus command: the browser's tab order already moved it")
     }
@@ -309,7 +310,7 @@ class DataTableTest extends UicTest:
         for
             rows    <- Signal.initRef[Seq[Item]](items)
             filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             menus   <- Kyo.foreach(List(List("Name"), List("Price")))(p => Signal.initRef(false).map(p -> _))
         yield
             val table = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
@@ -437,10 +438,10 @@ class DataTableTest extends UicTest:
     "hiding a column renumbers the grid the keyboard moves over" in {
         for
             rows    <- Signal.initRef[Seq[Item]](items)
-            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
             name    <- Signal.initRef("")
             price   <- Signal.initRef("")
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             shown   <- Signal.initRef(true)
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
@@ -460,7 +461,7 @@ class DataTableTest extends UicTest:
             assert(third, "three columns are three cells")
             assert(overNote == Absent, "and the second one carries no pipeline, so Enter does nothing")
             assert(!gone, "hiding one leaves two")
-            assert(overPrice == Present(CellPath("1", List("Price"))), "and the second one is now the price")
+            assert(overPrice == Present(CellPath(items(0), List("Price"))), "and the second one is now the price")
     }
 
     // The same defect on the mouse path. Focus cannot go to the button that replaces the
@@ -469,10 +470,10 @@ class DataTableTest extends UicTest:
     "the row editor's save button hands focus back to the row" in {
         for
             rows    <- Signal.initRef[Seq[Item]](items)
-            editing <- Signal.initRef(Set("1"))
+            editing <- Signal.initRef(Set(items(0)))
             name    <- Signal.initRef("Ada")
             price   <- Signal.initRef("10")
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             focused <- Signal.initRef(List.empty[String])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
@@ -489,7 +490,7 @@ class DataTableTest extends UicTest:
             store <- rows.get
             seen  <- focused.get
         yield
-            assert(open == Set.empty[String], "pressing it closes the row")
+            assert(open == Set.empty[Item], "pressing it closes the row")
             assert(store.head.name == "Ada", "writing the drafts through the columns")
             assert(seen == List("t-c0-0"), "and focus lands on the row's first editable cell")
     }
@@ -502,7 +503,7 @@ class DataTableTest extends UicTest:
         for
             rows <- Signal.initRef[Seq[Item]](items)
             cols <- Signal.initRef(Map.empty[List[String], Double])
-            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err  <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
         yield
             val base  = uic.DataTable[Item]().rows(rows).rowKey(_.id)
@@ -798,7 +799,7 @@ class DataTableTest extends UicTest:
             order <- Signal.initRef(List.empty[List[String]])
             sort  <- Signal.initRef(List.empty[SortKey])
             shown <- Signal.initRef(!hide)
-            err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             move  <- Signal.initRef(Absent: Maybe[ColumnDrag])
         yield
             val base  = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort)
@@ -1033,7 +1034,7 @@ class DataTableTest extends UicTest:
         for
             rows    <- Signal.initRef[Seq[Item]](unsorted)
             filters <- Signal.initRef(Map(List("Price") -> ColumnFilter("abc", MatchMode.Equals)))
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             base = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name),
                 uic.column("Price")(_.price.toString).filterBy(_.price)
@@ -1318,7 +1319,7 @@ class DataTableTest extends UicTest:
     "a windowed table draws the rows in view and holds the rest of the list in a spacer" in {
         for
             rows   <- Signal.initRef[Seq[Item]](hundred)
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             scroll <- Signal.initRef(0.0)
             ui = windowed.rows(rows).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             names   <- bodyNames(ui)
@@ -1342,7 +1343,7 @@ class DataTableTest extends UicTest:
     "a scroll moves the window, and the rows keep the stripe their own index gives them" in {
         for
             rows   <- Signal.initRef[Seq[Item]](hundred)
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             scroll <- Signal.initRef(0.0)
             ui = windowed.rows(rows).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             _     <- scroll.set(400.0)
@@ -1363,7 +1364,7 @@ class DataTableTest extends UicTest:
         for
             query  <- Signal.initRef("a")
             src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             scroll <- Signal.initRef(0.0)
             ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             vs <- elementWithClass(ui, "p-virtualscroller")
@@ -1386,7 +1387,7 @@ class DataTableTest extends UicTest:
             seen   <- Channel.init[Seq[Item]](16)
             _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _      <- served(seen)
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             scroll <- Signal.initRef(0.0)
             ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             here  <- bodyNames(ui)
@@ -1414,7 +1415,7 @@ class DataTableTest extends UicTest:
             seen   <- Channel.init[Seq[Item]](16)
             _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _      <- served(seen)
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             scroll <- Signal.initRef(0.0)
             ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             pad <- spacers(ui)
@@ -1487,7 +1488,7 @@ class DataTableTest extends UicTest:
     "frozen rows render in their own group above the body, and hold at the header's height" in {
         for
             rows <- Signal.initRef[Seq[Item]](items)
-            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err  <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             top  <- Signal.initRef(Absent: Maybe[Int])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .scrollHeight("200px").frozenRows(pinned)
@@ -1514,7 +1515,7 @@ class DataTableTest extends UicTest:
     "the body rows keep their own group, and the cursor does not step into the frozen one" in {
         for
             rows <- Signal.initRef[Seq[Item]](items)
-            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err  <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             top  <- Signal.initRef(Absent: Maybe[Int])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
@@ -1561,9 +1562,9 @@ class DataTableTest extends UicTest:
         // nobody asked. The control cannot decline the click for the row — one that navigates natively
         // declares no kyo handler, so it has no `stopPropagation` to set.
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).render
+                .selectionMode(SelectionMode.Multiple).selection(sel).render
             trs        <- bodyTrs(ui)
             _          <- clickViaControl(trs.head)
             viaControl <- sel.get
@@ -1571,27 +1572,27 @@ class DataTableTest extends UicTest:
             plain      <- sel.get
         yield
             assert(viaControl.isEmpty, "the control's click does not also select")
-            assert(plain == Set("1"), "and a click on the row itself still does")
+            assert(plain == rowsWith("1"), "and a click on the row itself still does")
     }
 
     "the keyboard path is the row's, whatever the row contains" in {
         // `onControl` answers where a POINTER went; Enter on the row is the row's, and the row is
         // what holds the tab stop.
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).render
+                .selectionMode(SelectionMode.Multiple).selection(sel).render
             trs    <- bodyTrs(ui)
             _      <- press(trs.head, UI.Keyboard.Enter)
             picked <- sel.get
-        yield assert(picked == Set("1"))
+        yield assert(picked == rowsWith("1"))
     }
 
     "a row the predicate rejects stays out of the selection when it is clicked" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .selectionMode(SelectionMode.Multiple).selection(sel)
                 .selectableWhen(_.id != "2").render
             trs <- bodyTrs(ui)
             _   <- click(trs(1))
@@ -1600,7 +1601,7 @@ class DataTableTest extends UicTest:
             yes <- sel.get
         yield
             assert(no == Set.empty, "the rejected row writes nothing")
-            assert(yes == Set("1"), "and the accepted one still selects")
+            assert(yes == rowsWith("1"), "and the accepted one still selects")
             assert(
                 !trs(1).attrs.cssClasses.contains("p-datatable-selectable-row"),
                 "a row that cannot be picked does not offer the pointer that says it can"
@@ -1610,23 +1611,23 @@ class DataTableTest extends UicTest:
 
     "select-all passes over the rows the predicate rejects" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Checkbox).selected(sel)
+                .selectionMode(SelectionMode.Checkbox).selection(sel)
                 .selectableWhen(_.id != "2").render
             box <- elements(ui).map(_.collect { case c: UI.Ast.Checkbox => c }.head)
             _   <- box.onChange match
                 case Present(f) => f(true)
                 case Absent     => throw new AssertionError("the header box declares no change handler")
             all <- sel.get
-        yield assert(all == Set("1"), "the header box selects what may be selected and nothing else")
+        yield assert(all == rowsWith("1"), "the header box selects what may be selected and nothing else")
     }
 
     "the checkbox of a rejected row is disabled and inert" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Checkbox).selected(sel)
+                .selectionMode(SelectionMode.Checkbox).selection(sel)
                 .selectableWhen(_.id != "2").render
             trs <- bodyTrs(ui)
             ok  <- checkboxIn(trs.head)
@@ -1637,12 +1638,12 @@ class DataTableTest extends UicTest:
             assert(no.attrs.cssClasses.contains("p-disabled"), "and it says so")
     }
 
-    // ---- selected: the three bindings the union carries ----
+    // ---- selection: the three bindings the union carries ----
 
     "a constant selection paints, and nothing can move it" in {
         for
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(Set("2")).onRowClick(_ => ()).render
+                .selectionMode(SelectionMode.Multiple).selection(rowsWith("2")).onRowClick(_ => ()).render
             trs <- bodyTrs(ui)
             _   <- click(trs.head)
             // Re-rendered from the same constant: a click had nowhere to go, so nothing changed.
@@ -1658,21 +1659,21 @@ class DataTableTest extends UicTest:
         // says, the click goes out through onRowClick, and the new value comes back in through the
         // signal. One circle, one direction.
         for
-            src    <- Signal.initRef(Set("1"))
-            clicks <- Signal.initRef(List.empty[String])
+            src    <- Signal.initRef(rowsWith("1"))
+            clicks <- Signal.initRef(List.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple)
-                .selected(src.map(identity))
+                .selection(src.map(identity))
                 .onRowClick(k => clicks.getAndUpdate(_ :+ k).unit).render
             trs   <- bodyTrs(ui)
             _     <- click(trs(1))
             after <- src.get
             heard <- clicks.get
-            _     <- src.set(Set("2"))
+            _     <- src.set(rowsWith("2"))
             moved <- bodyTrs(ui)
         yield
-            assert(after == Set("1"), "the table did not write to a signal it was only given to read")
-            assert(heard == List("2"), "and the click still reached the caller")
+            assert(after == rowsWith("1"), "the table did not write to a signal it was only given to read")
+            assert(heard == List(items(1)), "and the click still reached the caller")
             assert(moved(1).attrs.cssClasses.contains("p-datatable-row-selected"))
             assert(!moved.head.attrs.cssClasses.contains("p-datatable-row-selected"))
     }
@@ -1681,34 +1682,34 @@ class DataTableTest extends UicTest:
         // The regression nail: the union dispatches on the RUNTIME class, and ReactiveVariable
         // IS-A Dyn, so the wrong match order would silently downgrade every existing caller.
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).render
+                .selectionMode(SelectionMode.Multiple).selection(sel).render
             trs    <- bodyTrs(ui)
             _      <- click(trs(1))
             picked <- sel.get
-        yield assert(picked == Set("2"))
+        yield assert(picked == rowsWith("2"))
     }
 
     "a one-way selection still reports what it holds, and restore leaves it alone" in {
         for
-            src <- Signal.initRef(Set("1", "2"))
+            src <- Signal.initRef(rowsWith("1", "2"))
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity)).onRowClick(_ => ())
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity)).onRowClick(_ => ())
             st           <- table.state
             _            <- table.restore(uic.TableState(selected = Set("9")))
             afterRestore <- src.get
         yield
             assert(st.selected == Set("1", "2"), "reading needs no write access")
-            assert(afterRestore == Set("1", "2"), "and restoring has nowhere to write")
+            assert(afterRestore == rowsWith("1", "2"), "and restoring has nowhere to write")
     }
 
     "a right-click over a one-way selection is still told what is selected" in {
         for
-            src  <- Signal.initRef(Set("1"))
+            src  <- Signal.initRef(rowsWith("1"))
             seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity))
                 .onRowClick(_ => ())
                 .onRowContextMenu(t => seen.set(Present(t))).render
             trs <- bodyTrs(ui)
@@ -1721,26 +1722,26 @@ class DataTableTest extends UicTest:
 
     "a checkbox column over a one-way selection has nothing to write, and says so" in {
         for
-            src  <- Signal.initRef(Set.empty[String])
+            src  <- Signal.initRef(Set.empty[Item])
             text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Checkbox).selected(src.map(identity)).render)
+                .selectionMode(SelectionMode.Checkbox).selection(src.map(identity)).render)
         yield assert(text.contains("checkbox column has nothing to write"))
     }
 
     "a one-way selection with no onRowClick cannot move at all, and says so" in {
         for
-            src   <- Signal.initRef(Set.empty[String])
+            src   <- Signal.initRef(Set.empty[Item])
             inert <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity)).render)
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity)).render)
             wired <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity))
                 .onRowClick(_ => ()).render)
             twoWay <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src).render)
+                .selectionMode(SelectionMode.Multiple).selection(src).render)
         yield
             assert(inert.contains("a row click has nowhere to go"))
             assert(!wired.contains("a row click has nowhere to go"), "an onRowClick is the outlet")
@@ -1753,14 +1754,19 @@ class DataTableTest extends UicTest:
     private val four =
         List(Item("1", "A", 10), Item("2", "B", 20), Item("3", "C", 30), Item("4", "D", 40))
 
+    /** The rows with these ids, which is what a selection holds. Every fixture here numbers its
+      * rows the same way, so [[four]] answers for all of them.
+      */
+    private def rowsWith(ids: String*): Set[Item] = ids.map(id => four.find(_.id == id).get).toSet
+
     /** A table with modifier selection, through the mount seam it needs for its anchor. */
-    private def modifierTable(sel: SignalRef[Set[String]], rows: Seq[Item] = four)(using Frame) =
+    private def modifierTable(sel: SignalRef[Set[Item]], rows: Seq[Item] = four)(using Frame) =
         for
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
-            anchor <- Signal.initRef(Absent: Maybe[String])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
         yield
             val t = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+                .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
             (t.wired("t", Map.empty, err, _ => (), anchor = Present(anchor)), anchor)
 
     private def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
@@ -1770,7 +1776,7 @@ class DataTableTest extends UicTest:
 
     "with metaKeySelection a plain click replaces the selection instead of adding to it" in {
         for
-            sel     <- Signal.initRef(Set.empty[String])
+            sel     <- Signal.initRef(Set.empty[Item])
             (ui, _) <- modifierTable(sel)
             trs     <- bodyTrs(ui)
             _       <- click(trs.head)
@@ -1782,14 +1788,14 @@ class DataTableTest extends UicTest:
             _     <- click(trs(1))
             again <- sel.get
         yield
-            assert(first == Set("1"))
-            assert(second == Set("2"), "the second click replaced rather than added")
-            assert(again == Set("2"), "and a plain click never clears the row it lands on")
+            assert(first == rowsWith("1"))
+            assert(second == rowsWith("2"), "the second click replaced rather than added")
+            assert(again == rowsWith("2"), "and a plain click never clears the row it lands on")
     }
 
     "Ctrl or Cmd toggles the row into and out of the selection" in {
         for
-            sel      <- Signal.initRef(Set.empty[String])
+            sel      <- Signal.initRef(Set.empty[Item])
             (ui, _)  <- modifierTable(sel)
             trs      <- bodyTrs(ui)
             _        <- click(trs.head)
@@ -1800,14 +1806,14 @@ class DataTableTest extends UicTest:
             _        <- clickWith(trs(1), UI.Modifiers(meta = true))
             removed  <- sel.get
         yield
-            assert(withCtrl == Set("1", "2"), "Ctrl adds")
-            assert(withMeta == Set("1", "2", "3"), "and so does Cmd — it is meta OR ctrl, never one")
-            assert(removed == Set("1", "3"), "a modified click on a picked row takes it out")
+            assert(withCtrl == rowsWith("1", "2"), "Ctrl adds")
+            assert(withMeta == rowsWith("1", "2", "3"), "and so does Cmd: it is meta OR ctrl, never one")
+            assert(removed == rowsWith("1", "3"), "a modified click on a picked row takes it out")
     }
 
     "Shift selects the range from the last row picked without it" in {
         for
-            sel     <- Signal.initRef(Set.empty[String])
+            sel     <- Signal.initRef(Set.empty[Item])
             (ui, _) <- modifierTable(sel)
             trs     <- bodyTrs(ui)
             _       <- click(trs.head)
@@ -1818,13 +1824,13 @@ class DataTableTest extends UicTest:
             _      <- clickWith(trs(1), UI.Modifiers(shift = true))
             narrow <- sel.get
         yield
-            assert(down == Set("1", "2", "3"), "inclusive, in the reader's order")
-            assert(narrow == Set("1", "2"), "and re-measured from the same anchor")
+            assert(down == rowsWith("1", "2", "3"), "inclusive, in the reader's order")
+            assert(narrow == rowsWith("1", "2"), "and re-measured from the same anchor")
     }
 
     "a range runs upwards as readily as down, and an anchorless shift picks one row" in {
         for
-            sel      <- Signal.initRef(Set.empty[String])
+            sel      <- Signal.initRef(Set.empty[Item])
             (ui, _)  <- modifierTable(sel)
             trs      <- bodyTrs(ui)
             _        <- clickWith(trs(1), UI.Modifiers(shift = true))
@@ -1833,31 +1839,31 @@ class DataTableTest extends UicTest:
             _        <- clickWith(trs.head, UI.Modifiers(shift = true))
             up       <- sel.get
         yield
-            assert(noAnchor == Set("2"), "the first shift-click is just a pick, and sets the anchor")
-            assert(up == Set("1", "2", "3"))
+            assert(noAnchor == rowsWith("2"), "the first shift-click is just a pick, and sets the anchor")
+            assert(up == rowsWith("1", "2", "3"))
     }
 
     "a range steps over the rows the predicate rejects" in {
         for
-            sel    <- Signal.initRef(Set.empty[String])
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
-            anchor <- Signal.initRef(Absent: Maybe[String])
+            sel    <- Signal.initRef(Set.empty[Item])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
             ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+                .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
                 .selectableWhen(_.id != "2")
                 .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
             trs    <- bodyTrs(ui)
             _      <- click(trs.head)
             _      <- clickWith(trs(2), UI.Modifiers(shift = true))
             picked <- sel.get
-        yield assert(picked == Set("1", "3"), "a rejected row is not dragged in by a range")
+        yield assert(picked == rowsWith("1", "3"), "a rejected row is not dragged in by a range")
     }
 
     "without metaKeySelection the modifiers mean nothing, and no anchor is owned" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).render
+                .selectionMode(SelectionMode.Multiple).selection(sel).render
             trs   <- bodyTrs(ui)
             _     <- click(trs.head)
             _     <- clickWith(trs(1), UI.Modifiers(shift = true))
@@ -1865,20 +1871,20 @@ class DataTableTest extends UicTest:
         yield
             // The default table is not mounted at all, which is the whole reason the anchor is
             // tied to the opt-in: `bodyTrs` reaching real rows here proves there is no mount.
-            assert(after == Set("1", "2"), "shift is just another click while the flag is off")
+            assert(after == rowsWith("1", "2"), "shift is just another click while the flag is off")
     }
 
     "onSelectionChange carries what the table worked out, which a row key cannot" in {
         for
-            src    <- Signal.initRef(Set.empty[String])
-            heard  <- Signal.initRef(List.empty[Set[String]])
-            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
-            anchor <- Signal.initRef(Absent: Maybe[String])
+            src    <- Signal.initRef(Set.empty[Item])
+            heard  <- Signal.initRef(List.empty[Set[Item]])
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
             ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple)
                 // One way in, and the callback is the only way out — the shape a selection whose
                 // truth lives in a cache has.
-                .selected(src.map(identity))
+                .selection(src.map(identity))
                 .metaKeySelection(true)
                 .onSelectionChange(s => heard.getAndUpdate(_ :+ s).unit)
                 .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
@@ -1889,7 +1895,7 @@ class DataTableTest extends UicTest:
             got <- heard.get
             end <- src.get
         yield
-            assert(got == List(Set("1"), Set("1", "2", "3")))
+            assert(got == List(rowsWith("1"), rowsWith("1", "2", "3")))
             assert(end.isEmpty, "and it wrote to nothing, because nothing writable was bound")
     }
 
@@ -1897,10 +1903,10 @@ class DataTableTest extends UicTest:
         // `applySelection` writes then tells, so a caller may bind either or both and the two can
         // never disagree about what the selection became. Every selection path goes through it.
         for
-            sel   <- Signal.initRef(Set.empty[String])
-            heard <- Signal.initRef(List.empty[Set[String]])
+            sel   <- Signal.initRef(Set.empty[Item])
+            heard <- Signal.initRef(List.empty[Set[Item]])
             ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .selectionMode(SelectionMode.Multiple).selection(sel)
                 .onSelectionChange(s => heard.getAndUpdate(_ :+ s).unit).render
             trs   <- bodyTrs(ui)
             _     <- click(trs.head)
@@ -1908,20 +1914,20 @@ class DataTableTest extends UicTest:
             got   <- heard.get
             inRef <- sel.get
         yield
-            assert(got == List(Set("1"), Set("1", "2")))
+            assert(got == List(rowsWith("1"), rowsWith("1", "2")))
             assert(inRef == got.last, "the ref and the callback ended on the same value")
     }
 
     "a one-way selection with modifiers and only a row key to report with is reported" in {
         for
-            src  <- Signal.initRef(Set.empty[String])
+            src  <- Signal.initRef(Set.empty[Item])
             text <- cards(uic.DataTable[Item]().rows(four).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity))
                 .metaKeySelection(true).onRowClick(_ => ()).render)
             quiet <- cards(uic.DataTable[Item]().rows(four).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .selectionMode(SelectionMode.Multiple).selection(src.map(identity))
                 .metaKeySelection(true).onSelectionChange(_ => ()).render)
         yield
             assert(text.contains("cannot express a range or a replacement"))
@@ -1939,9 +1945,9 @@ class DataTableTest extends UicTest:
 
     "a row carries the caller's classes beside the ones the table gives it" in {
         for
-            sel <- Signal.initRef(Set("1"))
+            sel <- Signal.initRef(rowsWith("1"))
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(uic.SelectionMode.Multiple).selected(sel).stripedRows(true)
+                .selectionMode(uic.SelectionMode.Multiple).selection(sel).stripedRows(true)
                 .rowClasses(i => if i.price > 15 then Seq("dear", "flag") else Nil).render
             trs <- bodyTrs(ui)
         yield
@@ -1999,7 +2005,7 @@ class DataTableTest extends UicTest:
     private def expanding(mode: uic.ColumnResizeMode, lastWidth: Maybe[Double] = Present(100.0))(using Frame) =
         for
             cols <- Signal.initRef(Map.empty[List[String], Double])
-            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err  <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
         yield
             val base     = uic.DataTable[Item]().rows(items).rowKey(_.id)
@@ -2088,7 +2094,7 @@ class DataTableTest extends UicTest:
     private def draggableRows(build: uic.DataTable[Item] => uic.DataTable[Item] = identity)(using Frame) =
         for
             rows  <- Signal.initRef[Seq[Item]](trio)
-            err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             drag  <- Signal.initRef(Absent: Maybe[uic.RowDrag])
             moves <- Signal.initRef(List.empty[(Int, Int, List[String])])
             table = build(
@@ -2203,11 +2209,11 @@ class DataTableTest extends UicTest:
 
     "a right-click marks the row it landed on and tells the caller, without selecting it" in {
         for
-            sel  <- Signal.initRef(Set.empty[String])
-            ctx  <- Signal.initRef(Absent: Maybe[String])
+            sel  <- Signal.initRef(Set.empty[Item])
+            ctx  <- Signal.initRef(Absent: Maybe[Item])
             seen <- Signal.initRef(List.empty[Item])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .selectionMode(SelectionMode.Multiple).selection(sel)
                 .contextMenuRow(ctx).onRowContextMenu(t => seen.getAndUpdate(_ :+ t.row))
             trs <- bodyTrs(table.render)
             _   <- trs(1).attrs.onContextMenu match
@@ -2218,7 +2224,7 @@ class DataTableTest extends UicTest:
             told   <- seen.get
             after  <- bodyTrs(table.render)
         yield
-            assert(on == Present("2") && told == List(items(1)))
+            assert(on == Present(items(1)) && told == List(items(1)))
             assert(picked.isEmpty, "acting on a row is not selecting it")
             assert(after(1).attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
             assert(!after.head.attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
@@ -2226,10 +2232,10 @@ class DataTableTest extends UicTest:
 
     "the right-click hands over the selected ROWS beside the one it landed on" in {
         for
-            sel  <- Signal.initRef(Set("1"))
+            sel  <- Signal.initRef(rowsWith("1"))
             seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .selectionMode(SelectionMode.Multiple).selection(sel)
                 .onRowContextMenu(t => seen.set(Present(t)))
             trs <- bodyTrs(table.render)
             // Row 2 is NOT in the selection: the pair is what lets a menu tell the two cases apart.
@@ -2237,7 +2243,7 @@ class DataTableTest extends UicTest:
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
             outside <- seen.get
-            _       <- sel.set(Set("1", "2"))
+            _       <- sel.set(rowsWith("1", "2"))
             _       <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
@@ -2251,11 +2257,11 @@ class DataTableTest extends UicTest:
 
     "the selection handed over is the rows, in the table's own order, filtering aside" in {
         for
-            sel  <- Signal.initRef(Set("2", "1"))
+            sel  <- Signal.initRef(rowsWith("2", "1"))
             qry  <- Signal.initRef("B")
             seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).globalFilter(qry)
+                .selectionMode(SelectionMode.Multiple).selection(sel).globalFilter(qry)
                 .onRowContextMenu(t => seen.set(Present(t)))
             trs <- bodyTrs(table.render)
             _   <- trs.head.attrs.onContextMenu match
@@ -2350,18 +2356,18 @@ class DataTableTest extends UicTest:
             sort   <- Signal.initRef(List.empty[uic.SortKey])
             query  <- Signal.initRef("")
             page   <- Signal.initRef(0)
-            sel    <- Signal.initRef(Set.empty[String])
+            sel    <- Signal.initRef(Set.empty[Item])
             widths <- Signal.initRef(Map.empty[List[String], Double])
             table = uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(
                 uic.column("Name")(_.name).sortBy(_.name),
                 uic.column("Price")(_.price.toString)
             ).sort(sort).globalFilter(query).paginate(2)(page)
-                .selectionMode(SelectionMode.Multiple).selected(sel).columnWidths(widths)
+                .selectionMode(SelectionMode.Multiple).selection(sel).columnWidths(widths)
             fresh <- table.state
             _     <- sort.set(List(uic.SortKey.ascending("Name")))
             _     <- query.set("b")
             _     <- page.set(1)
-            _     <- sel.set(Set("2"))
+            _     <- sel.set(rowsWith("2"))
             _     <- widths.set(Map(List("Name") -> 240.0))
             saved <- table.state
             _     <- table.restore(fresh)
@@ -2395,7 +2401,7 @@ class DataTableTest extends UicTest:
 
     "a click picks the cell it landed on, and Multiple keeps the ones before it" in {
         for
-            picked <- Signal.initRef(Set.empty[CellPath])
+            picked <- Signal.initRef(Set.empty[CellPath[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                 uic.column("Name")(_.name),
                 uic.column("Price")(_.price.toString)
@@ -2408,8 +2414,8 @@ class DataTableTest extends UicTest:
             one   <- picked.get
             after <- cellsIn(table.render)
         yield
-            assert(both == Set(CellPath("1", List("Name")), CellPath("2", List("Price"))))
-            assert(one == Set(CellPath("2", List("Price"))), "a second click on a picked cell takes it back")
+            assert(both == Set(CellPath(items(0), List("Name")), CellPath(items(1), List("Price"))))
+            assert(one == Set(CellPath(items(1), List("Price"))), "a second click on a picked cell takes it back")
             assert(after(3).attrs.cssClasses.contains("p-uic-dt-cell-selected"))
             assert(!after.head.attrs.cssClasses.contains("p-uic-dt-cell-selected"))
             assert(after.head.attrs.ariaAttrs.get("selected").contains("false"))
@@ -2417,7 +2423,7 @@ class DataTableTest extends UicTest:
 
     "Single replaces the set rather than adding to it" in {
         for
-            picked <- Signal.initRef(Set.empty[CellPath])
+            picked <- Signal.initRef(Set.empty[CellPath[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                 uic.column("Name")(_.name),
                 uic.column("Price")(_.price.toString)
@@ -2426,12 +2432,12 @@ class DataTableTest extends UicTest:
             _    <- click(tds.head)
             _    <- click(tds(3))
             only <- picked.get
-        yield assert(only == Set(CellPath("2", List("Price"))))
+        yield assert(only == Set(CellPath(items(1), List("Price"))))
     }
 
     "a cell of a row the predicate rejects cannot be picked" in {
         for
-            picked <- Signal.initRef(Set.empty[CellPath])
+            picked <- Signal.initRef(Set.empty[CellPath[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selectedCells(picked).selectableWhen(_.id != "2")
             tds <- cellsIn(table.render)
@@ -2442,20 +2448,20 @@ class DataTableTest extends UicTest:
 
     "a click that two bindings both claim is reported, and editing keeps it" in {
         for
-            picked  <- Signal.initRef(Set.empty[CellPath])
-            editing <- Signal.initRef(Absent: Maybe[CellPath])
-            rows    <- Signal.initRef(Set.empty[String])
+            picked  <- Signal.initRef(Set.empty[CellPath[Item]])
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            rows    <- Signal.initRef(Set.empty[Item])
             clash   <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))
                 .selectionMode(SelectionMode.Multiple).selectedCells(picked).editingCell(editing)
                 .onCellValueChanged(_ => ()).render)
             withRows <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selectedCells(picked).selected(rows).render)
+                .selectionMode(SelectionMode.Multiple).selectedCells(picked).selection(rows).render)
             modeless <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Checkbox).selectedCells(picked).render)
         yield
             assert(clash.contains("editingCell") && clash.contains("selectedCells"))
-            assert(withRows.contains("selected, which picks rows"))
+            assert(withRows.contains("selection, which picks rows"))
             assert(modeless.contains("Single or Multiple") && modeless.contains("Checkbox"))
     }
 
@@ -2467,7 +2473,7 @@ class DataTableTest extends UicTest:
     private def filterMenu(using Frame) =
         for
             filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             open    <- Signal.initRef(false)
             draft   <- Signal.initRef(ColumnFilter.empty(MatchMode.Contains))
         yield
@@ -2606,7 +2612,7 @@ class DataTableTest extends UicTest:
             filters <- Signal.initRef(Map(List("Name") -> ColumnFilter(
                 List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains))
             )))
-            err <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             ui = uic.DataTable[Item]().rows(trio).rowKey(_.id)
                 .columns(uic.column("Name")(_.name).filterBy).columnFilters(filters)
                 .wired("t", Map.empty, err, _ => ())
@@ -2641,26 +2647,26 @@ class DataTableTest extends UicTest:
 
     "a selectable row selects on Enter and on Space" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+                .selectionMode(uic.SelectionMode.Multiple).selection(sel).render
             rows       <- elementsWithClass(ui, "p-datatable-selectable-row")
             _          <- press(rows(0), UI.Keyboard.Enter)
             afterEnter <- sel.get
             _          <- press(rows(1), UI.Keyboard.Space)
             afterSpace <- sel.get
         yield
-            assert(afterEnter == Set("1"), "Enter picks the row it was pressed on")
-            assert(afterSpace == Set("1", "2"), "and Space picks the next one")
+            assert(afterEnter == rowsWith("1"), "Enter picks the row it was pressed on")
+            assert(afterSpace == rowsWith("1", "2"), "and Space picks the next one")
     }
 
     "a key that is not an activation leaves the selection alone" in {
         for
-            sel <- Signal.initRef(Set.empty[String])
+            sel <- Signal.initRef(Set.empty[Item])
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
-                .selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+                .selectionMode(uic.SelectionMode.Multiple).selection(sel).render
             rows  <- elementsWithClass(ui, "p-datatable-selectable-row")
             _     <- press(rows(0), UI.Keyboard.ArrowDown)
             after <- sel.get
@@ -2672,9 +2678,9 @@ class DataTableTest extends UicTest:
     /** The app shape that found this: modifier selection, a bound anchor, rendered through
       * `render` rather than the `wired` seam, so the anchor takes the route a live table takes.
       */
-    private def rangingTable(sel: SignalRef[Set[String]], anchor: SignalRef[Maybe[String]])(using Frame): UI =
+    private def rangingTable(sel: SignalRef[Set[Item]], anchor: SignalRef[Maybe[Item]])(using Frame): UI =
         uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
-            .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+            .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
             .selectionAnchor(anchor).render
 
     "an anchor the caller bound survives the table being rendered again — a minted one cannot" in {
@@ -2682,8 +2688,8 @@ class DataTableTest extends UicTest:
         // where a minted anchor is lost: it lives in the table's mount, whose state ends with the
         // region enclosing it. Bound, the range is measured across the gap.
         for
-            sel    <- Signal.initRef(Set.empty[String])
-            anchor <- Signal.initRef(Absent: Maybe[String])
+            sel    <- Signal.initRef(Set.empty[Item])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
             trs1   <- bodyTrs(rangingTable(sel, anchor))
             _      <- click(trs1.head)
             held   <- anchor.get
@@ -2691,24 +2697,24 @@ class DataTableTest extends UicTest:
             _      <- clickWith(trs2(2), UI.Modifiers(shift = true))
             got    <- sel.get
         yield
-            assert(held.contains("1"), "the plain click moved the anchor the caller holds")
-            assert(got == Set("1", "2", "3"), "and the next render measured its range from there")
+            assert(held.contains(four.head), "the plain click moved the anchor the caller holds")
+            assert(got == rowsWith("1", "2", "3"), "and the next render measured its range from there")
     }
 
     "a bound anchor is the only state a ranging table needed, so it stays a pure render" in {
         for
-            sel    <- Signal.initRef(Set.empty[String])
-            anchor <- Signal.initRef(Absent: Maybe[String])
+            sel    <- Signal.initRef(Set.empty[Item])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
         yield rangingTable(sel, anchor) match
             case m: Ast.Mounted => fail("a bound anchor should not force a mount")
             case _              => succeed
     }
 
     "an unbound ranging table still mints its anchor in a mount, as it always did" in {
-        for sel <- Signal.initRef(Set.empty[String])
+        for sel <- Signal.initRef(Set.empty[Item])
         yield
             val ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true).render
+                .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true).render
             ui match
                 case _: Ast.Mounted => succeed
                 case other          => fail(s"a table that mints its anchor renders as a mount; got: $other")
@@ -2727,7 +2733,7 @@ class DataTableTest extends UicTest:
     private def stateful(id: Maybe[String])(using Frame): UI =
         val t = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
             .selectionMode(SelectionMode.Multiple).metaKeySelection(true)
-            .onSelectionChange(_ => ()).selected(Set.empty[String])
+            .onSelectionChange(_ => ()).selection(Set.empty[Item])
         (id match
             case Present(v) => t.id(v)
             case Absent     => t
@@ -2767,9 +2773,9 @@ class DataTableTest extends UicTest:
     "a commit whose onCellValueChanged fails still writes the row and closes the editor" in {
         for
             rows    <- Signal.initRef[Seq[Item]](items)
-            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
             name    <- Signal.initRef("")
-            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
             ).editingCell(editing).onCellValueChanged(_ => Abort.fail("rejected"))
