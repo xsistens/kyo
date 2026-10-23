@@ -544,11 +544,17 @@ another control, Shift+Tab back, and land at the top with every arrow press to m
   handler is still worth its markup.
 - **Fall back in the order the reader would expect**: the cursor, else the row they chose, else the
   first. A cursor pointing at a row that a collapse took off the screen falls back the same way.
-- **The page as first rendered keeps the tab stop where the id is.** Before the client attaches the
-  mount has published nothing, so there is no cursor yet, but a field-shaped control's id is already
-  on the page, and `Label.forId` or a focus-by-id must find a tab stop there. `Listbox` once left its
-  rows as the tab stops in that projection while the id sat on the list; now the list is the one tab
-  stop from the first render (`ElementIdTest` checks the static projection of every field-shaped control).
+- **The page as first rendered is already one tab stop, where the id is.** Before the client attaches
+  the mount has published nothing, so there is no cursor and no key handler yet, but Tab works and a
+  field-shaped control's id is already on the page for `Label.forId` or a focus-by-id. So the static
+  projection puts the single stop where the attached render will (the list, the chosen option, the
+  checked star, the chosen row, the active header) and only the keys wait for the mount. Every roving
+  widget once got this wrong one way or the other: `Listbox`, a single `SelectButton`, `Rating` (no
+  radio `name` yet, so the other stars take `tabIndex(-1)`), `TreeTable` and a horizontal `Stepper` made
+  every row a stop; the four menus and `Tree` made none, since the list only took its stop with the
+  mount's focus ref. `ElementIdTest` and `GoldenRenderTest` ("every roving widget is one tab stop ...")
+  hold them; a new roving widget belongs in that sweep. Groups whose members are each their own stop by
+  design (`MultiSelectButton`, `Accordion`, a vertical `Stepper`, `InputOtp`'s cells) are not roving.
 
 ## An opening key has to land on a row
 

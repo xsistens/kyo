@@ -207,6 +207,9 @@ final case class Tree[K] private (
         // the only thing that says the keyboard is in the tree (the list itself draws none,
         // which is Prime's look), so a tree with focus and no focused node would look
         // untouched, and a highlighted node with the focus gone elsewhere would lie.
+        // The page as first rendered has no highlight yet, but it is already the one tab stop the attached
+        // tree is. A hosted tree always arrives with its roving state, so this is the standalone tree alone.
+        if roving.isEmpty then list = list.tabIndex(0)
         roving.foreach { r =>
             val seedFocus: UI.Action =
                 if focus < 0 && rows.nonEmpty then
