@@ -64,9 +64,12 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
         Loop.foreach {
             batching.queued.map { q =>
                 if q == n then Loop.done
-                else Fiber.use(())(_.get).andThen(Loop.continue)
+                else yieldOnce.andThen(Loop.continue)
             }
         }
+
+    /** Park behind every runnable fiber once: forking and joining an empty fiber. */
+    private def yieldOnce(using Frame): Unit < Async = Fiber.use[Nothing, Unit, Any, Async](())(_.get)
 
     private val interval = 10.millis
 
@@ -93,7 +96,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
             else
                 for
                     _ <- control.advance(interval, Duration.Zero)
-                    _ <- Fiber.use(())(_.get)
+                    _ <- yieldOnce
                     _ <- advanceUntilDone(control, fiber)
                 yield ()
         }
@@ -224,6 +227,43 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
             Async.foreach(0 until rounds, 8)(i => interruptWhileCut((i % 50) * 4)).map { responses =>
                 assert(responses.map(_.fields.body).distinct == Chunk("""{"data":{"echo":"b"}}"""))
             }
+        }
+
+        "a caller interrupted while it waits for the window does not strand the rest of its batch" in Clock.withTimeControl {
+            control =>
+                // x and y wait in an open window; one fiber interrupts x and then queues z, which reaches the size cap
+                // and cuts [x, y, z] at once. Whether x leaves before the cut, after it, or while the lead is being
+                // handed out is up to the scheduler; y and z must be answered either way. A stranded caller waits on
+                // nothing, so each round gives the batch a bounded number of windows and scheduler passes to finish;
+                // a round that ends unanswered failed.
+                val rounds   = 200
+                val patience = 1000
+
+                def round: Boolean < (Async & Scope) =
+                    for
+                        batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 3)
+                        chain = chainOf(batching, batchAwareEngine)
+                        fx       <- Fiber.init(chain.proceed(post("""{"query":"x"}""")))
+                        _        <- untilQueued(batching, 1)
+                        fy       <- Fiber.init(chain.proceed(post("""{"query":"y"}""")))
+                        _        <- untilQueued(batching, 2)
+                        fz       <- Fiber.init(fx.interrupt.andThen(chain.proceed(post("""{"query":"z"}"""))))
+                        _        <- fx.getResult
+                        answered <- Loop.indexed { i =>
+                            fy.done.map { y =>
+                                fz.done.map { z =>
+                                    if y && z then Loop.done[Unit, Boolean](true)
+                                    else if i == patience then Loop.done[Unit, Boolean](false)
+                                    else control.advance(interval, Duration.Zero).andThen(yieldOnce).andThen(Loop.continue)
+                                }
+                            }
+                        }
+                    yield answered
+
+                Kyo.foreach(Chunk.from(1 to rounds))(_ => Scope.run(round)).map { answered =>
+                    val stranded = answered.count(!_)
+                    assert(stranded == 0, s"$stranded of $rounds rounds left y or z waiting forever")
+                }
         }
 
         "ending the owning Scope stops the window and answers waiting callers with Closed" in Clock.withTimeControl {
