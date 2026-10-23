@@ -368,6 +368,15 @@ class FormValidationTest extends UicTest:
         end for
     }
 
+    "touched and validating are the same kind of member on FormField and NumberField" in {
+        // A def is not a stable path, so its singleton type does not exist; a val's does. Both fields answer the same way,
+        // which is what a tool reading the two classes side by side sees.
+        typeCheckFailure("import kyo.*\nimport kyo.uic.form.*\ndef x(f: FormField[Int]): f.touched.type = f.touched")("singleton")
+        typeCheckFailure("import kyo.*\nimport kyo.uic.form.*\ndef x(f: FormField[Int]): f.validating.type = f.validating")("singleton")
+        typeCheckFailure("import kyo.*\nimport kyo.uic.form.*\ndef x(f: NumberField[Int]): f.touched.type = f.touched")("singleton")
+        typeCheckFailure("import kyo.*\nimport kyo.uic.form.*\ndef x(f: NumberField[Int]): f.validating.type = f.validating")("singleton")
+    }
+
     "an invalid Select is focused through its id: the id bind stamps is on the combobox, not on its label" in {
         import kyo.uic
         for

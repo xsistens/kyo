@@ -94,11 +94,11 @@ final case class TreeSelect[K] private (
       * an icon, a tooltip and an accessible name that no `A => String` supplies;
       * reach for [[nodes]] with the hand-authored model when you need those.
       */
-    def options(roots: Seq[K])(label: K => String)(children: K => Seq[K]): TreeSelect[K] =
+    def options(roots: Iterable[K])(label: K => String)(children: K => Iterable[K]): TreeSelect[K] =
         copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, (k: K) => k, children)))
 
     /** [[options]] over any `A`, with `id` projecting each to the node id the selection holds. */
-    def options[A](roots: Seq[A])(label: A => String, id: A => K)(children: A => Seq[A]): TreeSelect[K] =
+    def options[A](roots: Iterable[A])(label: A => String, id: A => K)(children: A => Iterable[A]): TreeSelect[K] =
         copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, id, children)))
 
     /** Appends root nodes of the hand-authored [[TreeNode]] model, the escape hatch
@@ -482,6 +482,6 @@ object TreeSelect:
       * `children` projection: a cyclic one does not terminate, exactly as a cyclic
       * hand-authored `TreeNode` structure would not.
       */
-    private def project[A, K](a: A, label: A => String, id: A => K, children: A => Seq[A]): TreeNode[K] =
+    private def project[A, K](a: A, label: A => String, id: A => K, children: A => Iterable[A]): TreeNode[K] =
         TreeNode(label(a), id(a), children = children(a).toList.map(project(_, label, id, children)))
 end TreeSelect

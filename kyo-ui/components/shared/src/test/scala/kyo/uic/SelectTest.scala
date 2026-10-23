@@ -525,4 +525,50 @@ class SelectTest extends UicTest:
         """)
     }
 
+    "options take any Iterable: an enum's values array and a set pass as they are" in {
+        for
+            fromArray <- opened(uic.Select[SelectTest.Tone]().options(SelectTest.Tone.values)(_.toString))
+            arrayRows <- rows(fromArray)
+            fromSet   <- opened(uic.Select[String]().options(scala.collection.immutable.ListSet("x", "y")))
+            setRows   <- rows(fromSet)
+            none      <- opened(uic.Select[Maybe[SelectTest.Tone]]().optionsWithNone("Any", SelectTest.Tone.values)(_.toString))
+            noneRows  <- rows(none)
+        yield
+            assert(arrayRows.map(textOf) == Chunk("Warm", "Cool"))
+            assert(setRows.map(textOf) == Chunk("x", "y"))
+            assert(noneRows.map(textOf) == Chunk("Any", "Warm", "Cool"))
+        end for
+    }
+
+    "every picker's options take an Iterable" in {
+        typeCheck("""
+            import kyo.*
+            import kyo.uic
+            enum T derives CanEqual:
+                case A, B
+            def x =
+                (
+                    uic.Select[T]().options(T.values)(_.toString).optionGroups(Set(uic.OptionItem.item(T.A)))(_.toString),
+                    uic.Select[String]().options(Array("a", "b")),
+                    uic.MultiSelect[T]().options(T.values)(_.toString).optionGroups(Vector(uic.OptionItem.item(T.A)))(_.toString),
+                    uic.MultiSelect[String]().options(Set("a")),
+                    uic.SelectButton[T]().options(T.values)(_.toString),
+                    uic.SelectButton[String]().options(Set("a")),
+                    uic.SelectButton[Maybe[T]]().optionsWithNone("Any", T.values)(_.toString),
+                    uic.SelectButton[T]().multiple.options(T.values)(_.toString),
+                    uic.SelectButton[String]().multiple.options(Set("a")),
+                    uic.AutoComplete[T]().options(T.values)(_.toString).optionGroups(Set(uic.OptionItem.item(T.A)))(_.toString),
+                    uic.AutoComplete[String]().options(Set("a")),
+                    uic.CascadeSelect[T]().options(Set(uic.CascadeItem.leaf(T.A)))(_.toString),
+                    uic.TreeSelect[T]().options(T.values)(_.toString)(_ => Set.empty[T]),
+                    uic.TreeSelect[String]().options(T.values)(_.toString, _.toString)(_ => Vector.empty[T])
+                )
+        """)
+    }
+
+end SelectTest
+
+object SelectTest:
+    enum Tone derives CanEqual:
+        case Warm, Cool
 end SelectTest

@@ -280,6 +280,16 @@ final case class Stepper[K] private (
 end Stepper
 
 object Stepper:
+
+    /** An empty stepper whose steps may carry values of type `K`.
+      *
+      * `K` is the type of the step VALUES, so it never needs spelling out: in a chain, `uic.Stepper()` takes it from the
+      * first setter that mentions it (`value(ref)`, or a step's `value`), and a stepper driven by position alone
+      * ([[Stepper.active]]) ends up a `Stepper[Nothing]`, the exact statement that no step carries a value. Nothing has
+      * no values, so a step value or a `value` binding added to such a stepper later does not compile, rather than being
+      * accepted at some placeholder type the stepper would never read. Spelling a placeholder (`Stepper[String]()`
+      * beside `active`) is what to avoid: it admits values nothing binds.
+      */
     def apply[K](): Stepper[K] = new Stepper[K]()
 
     /** One step definition: header `title`, optional stable `value`, unconditional `disabled`, and the panel content.
