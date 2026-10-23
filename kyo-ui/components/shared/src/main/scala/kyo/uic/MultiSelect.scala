@@ -25,9 +25,8 @@ enum MultiSelectDisplay derives CanEqual:
   *
   * [[Select]]'s multi-value sibling: the same [[Overlay]]-based floating panel
   * (outside click / Escape close it, and the panel takes no focus: the trigger
-  * keeps it, or a filter header's input does), but the
-  * value binds to a `SignalRef[Set[String]]` of option keys (or, through
-  * `selection`, a `SignalRef[Set[A]]` of the options themselves) and PICKING DOES NOT
+  * keeps it, or a filter header's input does), but `selection` binds a
+  * `SignalRef[Set[A]]` of the chosen options and PICKING DOES NOT
   * CLOSE — clicking a row (or Enter on the `.p-focus` highlight) toggles the key
   * and the panel stays open, exactly Prime's multiselect semantics.
   *
@@ -78,10 +77,11 @@ final case class MultiSelect[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Set[String] => UI.Action] = Absent,
+    onChangeF: Maybe[Set[A] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => UI.Action] = Absent
-) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+    onBlurF: Maybe[Set[A] => UI.Action] = Absent,
+    loadingV: Maybe[BoolValue] = Absent
+) extends Node, MultiChoiceFormControl[A], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = MultiSelect[A]
 
     /** Stores the element id. */
@@ -120,18 +120,17 @@ final case class MultiSelect[A] private (
       */
     def optionDisabled(f: A => Boolean): MultiSelect[A] = copy(optionDisabledF = Present(f))
 
-    /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: toggles write
-      * the updated key set back, ref changes reselect the matching options.
-      */
-    @targetName("valueKeys")
-    def value(ref: SignalRef[Set[String]]): MultiSelect[A] = copy(choice = Present(MultiChoice.Keys(ref)))
-
     /** Binds the selection two-way to the set of chosen options: toggles write the options that carry the chosen
       * [[optionKey]]s, ref changes reselect the rows whose keys its members carry. A member no option carries stays in
-      * the set while the others toggle. Replaces a [[value]] binding, as [[value]] replaces this one.
+      * the set while the others toggle, and the trigger shows it from the value itself.
       */
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice.Values(ref)))
+    def selection(ref: SignalRef[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice(ref)))
+
+    /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no row carries
+      * yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
+      */
+    def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Binds the panel visibility two-way to `ref` (optional — the panel is
       * self-managed otherwise).
@@ -213,17 +212,18 @@ final case class MultiSelect[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelect[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelect[A] = copy(accNameRefV = v)
 
-    /** Fired with the FULL updated key set after every selection change (toggle,
-      * select-all, chip remove, clear).
+    /** Fired with the FULL set of options now held after every selection change (toggle,
+      * select-all, chip remove, clear). A gesture that changes nothing fires nothing.
       */
-    def onChange(f: Set[String] => UI.Action)(using Frame): MultiSelect[A] = copy(onChangeF = Present(Callback.of(f)))
+    @targetName("onChangeSet")
+    def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the current selection — unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
-    @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => UI.Action)(using Frame): MultiSelect[A] = copy(onBlurF = Present(Callback.of(f)))
+    @targetName("onBlurSet")
+    def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Every selectable option in render order, groups flattened away. The value
       * binding, the key-collision check, select-all and the keyboard all work on
@@ -289,42 +289,58 @@ final case class MultiSelect[A] private (
             }
         }
 
-    private def withValue(f: Set[String] => UI)(using Frame): UI =
+    private def withValue(f: Set[A] => UI)(using Frame): UI =
         choice match
-            case Present(c) => c.render(key)(f)
+            case Present(c) => c.render(f)
             case Absent     => f(Set.empty)
 
-    /** Writes `next` into the bound set and fires `onChange` with it. */
+    /** Writes the options that carry the keys `next` into the bound set, and fires `onChange` with the set now held where
+      * that changed it. Unbound, there is no set to keep, and the options `next` names are reported as they are.
+      */
     private def write(next: Set[String])(using Frame): UI.Action =
-        for
-            _ <- choice match
+        val changed: Maybe[Set[A]] < Sync =
+            choice match
                 case Present(c) => c.update(items, key)(_ => next)
-                case Absent     => (): UI.Action
-            _ <- onChangeF match
-                case Present(g) => g(next)
-                case Absent     => (): UI.Action
-        yield ()
+                case Absent     => Present(items.filter(a => next.contains(key(a))).toSet)
+        changed.map {
+            case Present(now) =>
+                onChangeF match
+                    case Present(g) => g(now)
+                    case Absent     => (): UI.Action
+            case Absent => (): UI.Action
+        }
+    end write
 
-    private def body(current: Set[String], st: Maybe[State])(using Frame): UI =
+    private def body(held: Set[A], st: Maybe[State])(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
         // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
         // than through `copy(...)` (a copied instance's `State` would not match).
-        TextValue.reactive(placeholderV): ph =>
-            (invalidV.dynSig, invalidMsgDynV) match
-                case (Absent, Absent) => bodyStatic(current, st, ph, invalidV.constTrue, invalidMsgV)
-                case _                =>
-                    FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(current, st, ph, red, msg))
+        BoolValue.reactive(loadingV): ld =>
+            val loading = ld.constTrue
+            TextValue.reactive(placeholderV): ph =>
+                (invalidV.dynSig, invalidMsgDynV) match
+                    case (Absent, Absent) => bodyStatic(held, st, ph, invalidV.constTrue, invalidMsgV, loading)
+                    case _                =>
+                        FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                            bodyStatic(held, st, ph, red, msg, loading)
+                        )
 
     private def bodyStatic(
-        current: Set[String],
+        held: Set[A],
         st: Maybe[State],
         placeholder: Maybe[String],
         redFlag: Boolean,
-        redMsg: Maybe[String]
+        redMsg: Maybe[String],
+        loading: Boolean
     )(using Frame): UI =
-        val isOpen   = st.exists(_.isOpen)
-        val selected = items.filter(a => current.contains(key(a)))
+        val isOpen  = st.exists(_.isOpen)
+        val current = held.map(key)
+        // Held options no row carries: the trigger still shows them from the value itself, after the known ones.
+        val strays                = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
+        val selected              = items.filter(a => current.contains(key(a))) ++ strays
+        val unknownCard: List[UI] =
+            if strays.isEmpty || loading then Nil else List(KeyDiagnostics.unknown("MultiSelect", strays.map(labelF)))
 
         // Toggles one option key — the panel STAYS OPEN (Prime's multiselect pick).
         def toggleOption(a: A): UI.Action =
@@ -423,7 +439,9 @@ final case class MultiSelect[A] private (
 
         var dd = div.cssClass("p-multiselect-dropdown")
         st.foreach(s => if !disabledFlag then dd = dd.onClick(toggle(s)))
-        val dropdownUI: UI = dd(toChild(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon")))
+        val dropdownUI: UI =
+            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin")))
+            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon")))
 
         // Hidden form carrier: comma-joined selected keys in options order.
         val hiddenCarrier: List[UI] =
@@ -438,6 +456,7 @@ final case class MultiSelect[A] private (
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-multiselect-open").cssClass("p-uic-overlay-anchor")
         if redFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
         if disabledFlag then el = el.cssClass("p-disabled")
@@ -493,16 +512,17 @@ final case class MultiSelect[A] private (
             // Focus-loss on the trigger reports the current selection — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
-                    case Present(c) => c.read(key)(f)
-                    case Absent     => f(current))
+                    case Present(c) => c.read(f)
+                    case Absent     => f(held))
             }
         end if
 
-        FieldInvalid.withMessage(
+        val field = FieldInvalid.withMessage(
             el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*),
             redFlag,
             redMsg
         )
+        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 
     /** The floating option panel: Prime's `.p-multiselect-overlay` skin on the

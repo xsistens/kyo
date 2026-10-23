@@ -7,11 +7,15 @@ import kyo.internal.NumberFormat
 import kyo.uic.form.ErrorTranslator
 import kyo.uic.form.FieldError
 
-/** The address of one cell: the row's [[DataTable.rowKey]] and the column's path, the
-  * same path the sort spec names a column by. It is what [[DataTable.editingCell]] holds,
-  * and a pair rather than a single key because a cell is the crossing of the two.
+/** The address of one cell: the row itself and the column's path, the same path the sort spec
+  * names a column by. It is what [[DataTable.editingCell]] and [[DataTable.selectedCells]] hold,
+  * and a pair rather than a single value because a cell is the crossing of the two. The row is
+  * matched by the table's [[DataTable.rowKey]], as a selected row is.
   */
-final case class CellPath(row: String, column: List[String]) derives CanEqual
+final case class CellPath[A](row: A, column: List[String]) derives CanEqual
+
+/** A cell as the table compares it inside: the row's key and the column's path. */
+final private[uic] case class CellKey(row: String, column: List[String]) derives CanEqual
 
 /** What a right-click over a data row was aimed at: the row under the pointer, and the rows
   * selected at that moment.
@@ -42,10 +46,10 @@ final case class RowContext[A](row: A, selected: Seq[A]) derives CanEqual
   */
 final private[uic] case class EditState(
     rows: Set[String],
-    cell: Maybe[CellPath],
+    cell: Maybe[CellKey],
     drafts: Map[List[String], SignalRef[String]] = Map.empty,
-    errorRef: Maybe[SignalRef[Maybe[(CellPath, FieldError)]]] = Absent,
-    error: Maybe[(CellPath, FieldError)] = Absent,
+    errorRef: Maybe[SignalRef[Maybe[(CellKey, FieldError)]]] = Absent,
+    error: Maybe[(CellKey, FieldError)] = Absent,
     // False in the static projection, where the mount has not run and there are no drafts
     // to write into. The anatomy still renders; what it does not do is offer an
     // affordance that could not work, which is the same trade Select's placeholder makes.
@@ -53,7 +57,7 @@ final private[uic] case class EditState(
 ):
     private[uic] def draftOf(path: List[String]): Maybe[SignalRef[String]] = Maybe.fromOption(drafts.get(path))
 
-    private[uic] def errorAt(cell: CellPath): Maybe[FieldError] =
+    private[uic] def errorAt(cell: CellKey): Maybe[FieldError] =
         error.flatMap((c, e) => if c == cell then Present(e) else Absent)
 end EditState
 
@@ -95,9 +99,9 @@ end NavState
 // moment of the click now, and carrying it as well was not merely redundant: this value goes
 // into every row's spec, so a list that grew by one made all of them unequal and the body
 // rendered every row again for an append.
-final private[uic] case class SelectState(
+final private[uic] case class SelectState[A](
     metaKey: Boolean = false,
-    anchor: Maybe[SignalRef[Maybe[String]]] = Absent
+    anchor: Maybe[SignalRef[Maybe[A]]] = Absent
 )
 
 /** What the filter row needs to know: the filters that are bound, which of them this
@@ -288,7 +292,7 @@ final private[uic] case class RowInputs[A](
     offset: Int = 0,
     sel: Set[String] = Set.empty,
     ctx: Maybe[String] = Absent,
-    cells: Set[CellPath] = Set.empty,
+    cells: Set[CellKey] = Set.empty,
     exp: Set[String] = Set.empty,
     groups: Set[GroupPath] = Set.empty
 )
@@ -369,7 +373,7 @@ private[uic] object RowSpec:
         nav: NavState[A],
         frozen: FrozenPlan,
         move: MoveState[A],
-        select: SelectState,
+        select: SelectState[A],
         height: Maybe[Int] = Absent
     ) extends RowSpec[A]
 
@@ -416,10 +420,10 @@ private[uic] object RowSpec:
 end RowSpec
 
 /** The row before and after a committed cell edit, plus the column that wrote it. */
-final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
+final case class CellChange[A](column: List[String], before: A, after: A)
 
 /** The row before and after a committed row edit. */
-final case class RowChange[A](rowKey: String, before: A, after: A)
+final case class RowChange[A](before: A, after: A)
 
 /** Everything a reader changed about how a [[DataTable]] shows its rows, as one value.
   *
@@ -562,16 +566,16 @@ final case class DataTable[A] private (
     pageRef: Maybe[SignalRef[Int]] = Absent,
     paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
-    selectedBinding: Maybe[ReactiveValue[Set[String]]] = Absent,
+    selectedTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
     metaKeyFlag: Boolean = false,
-    onSelectionF: Maybe[Set[String] => UI.Action] = Absent,
+    onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
-    selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
-    contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
+    cellsTyped: Maybe[SignalRef[Set[CellPath[A]]]] = Absent,
+    contextTyped: Maybe[SignalRef[Maybe[A]]] = Absent,
     onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
     csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
-    expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    expandedTyped: Maybe[SignalRef[Set[A]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
     groupsV: List[RowGroup[A]] = Nil,
     expandedGroupsRef: Maybe[SignalRef[Set[GroupPath]]] = Absent,
@@ -580,7 +584,7 @@ final case class DataTable[A] private (
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
-    onRowClickF: Maybe[String => UI.Action] = Absent,
+    onRowClickF: Maybe[A => UI.Action] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     headerV: Maybe[UI] = Absent,
@@ -594,8 +598,8 @@ final case class DataTable[A] private (
     frozenRowsV: Maybe[ReactiveValue[Seq[A]]] = Absent,
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
     rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
-    editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
-    editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
+    editingRowsTyped: Maybe[SignalRef[Set[A]]] = Absent,
+    editingCellTyped: Maybe[SignalRef[Maybe[CellPath[A]]]] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
     cellNavV: Maybe[Boolean] = Absent,
     onCellChangedF: Maybe[CellChange[A] => UI.Action] = Absent,
@@ -611,7 +615,7 @@ final case class DataTable[A] private (
     onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
     orderedPaths: List[List[String]] = Nil,
     idV: Maybe[String] = Absent,
-    anchorRef: Maybe[SignalRef[Maybe[String]]] = Absent
+    anchorRef: Maybe[SignalRef[Maybe[A]]] = Absent
 ) extends Node, HasElementId, HasEmptyContent, HasAccessibleNameRef:
     type Self = DataTable[A]
 
@@ -844,7 +848,7 @@ final case class DataTable[A] private (
       */
     def selectionMode(v: SelectionMode): DataTable[A] = copy(selectionModeV = v)
 
-    /** The selected rows, as a set of [[rowKey]] ids.
+    /** The selected rows, matched by [[rowKey]].
       *
       * A `SignalRef` binds two way — the table writes the reader's clicks back into it. A plain
       * `Signal` binds ONE way: the table paints what the signal says and never writes to it, which
@@ -860,8 +864,8 @@ final case class DataTable[A] private (
       * this signal. `Checkbox` mode has no such outlet, and a one-way binding without an
       * `onRowClick` cannot move at all; both are reported as cards rather than left silent.
       */
-    def selected(v: Set[String] | Signal[Set[String]]): DataTable[A] =
-        copy(selectedBinding = Present(ReactiveValue(v)))
+    def selection(v: Set[A] | Signal[Set[A]]): DataTable[A] =
+        copy(selectedTyped = Present(ReactiveValue(v)))
 
     /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -910,19 +914,19 @@ final case class DataTable[A] private (
       * A shift-click READS this and leaves it where it is; a click without shift moves it.
       * Written, never read for display, so nothing re-renders when it changes.
       */
-    def selectionAnchor(ref: SignalRef[Maybe[String]]): DataTable[A] = copy(anchorRef = Present(ref))
+    def selectionAnchor(ref: SignalRef[Maybe[A]]): DataTable[A] = copy(anchorRef = Present(ref))
 
     /** The selection's write-back ref, where the caller bound one that can be written.
       *
       * `ReactiveVariable` is matched before `Dyn` on purpose: it IS-A `Dyn`, so the wrong order
       * silently swallows the two-way case (`kyo-ui/components/CLAUDE.md`).
       */
-    private def selectedRef: Maybe[SignalRef[Set[String]]] = selectedBinding match
+    private def selectedRef: Maybe[SignalRef[Set[A]]] = selectedTyped match
         case Present(ReactiveVariable(ref)) => Present(ref)
         case _                              => Absent
 
     /** Selects CELLS rather than rows (Prime's `cellSelection`), bound as a set of
-      * [[CellPath]], which pairs a [[rowKey]] id with a column path.
+      * [[CellPath]], which pairs a row with a column path.
       *
       * Binding it is the switch, and [[selectionMode]] says what a click means:
       * `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no
@@ -935,7 +939,7 @@ final case class DataTable[A] private (
       * EDITING claims the same click, so the two are a card as well, and editing keeps
       * the click.
       */
-    def selectedCells(ref: SignalRef[Set[CellPath]]): DataTable[A] = copy(selectedCellsRef = Present(ref))
+    def selectedCells(ref: SignalRef[Set[CellPath[A]]]): DataTable[A] = copy(cellsTyped = Present(ref))
 
     /** Restricts selection to the rows `p` accepts (Prime's `isDataSelectable`).
       *
@@ -947,7 +951,7 @@ final case class DataTable[A] private (
       */
     def selectableWhen(p: A => Boolean): DataTable[A] = copy(selectableF = Present(p))
 
-    /** Binds the row a context menu was opened on, as a [[rowKey]] id (Prime's
+    /** Binds the row a context menu was opened on, as the row itself (Prime's
       * `contextMenuSelection`).
       *
       * A right-click on a row writes the ref and marks that row with Prime's
@@ -960,7 +964,7 @@ final case class DataTable[A] private (
       * row it was opened on, and the ref is the caller's to clear when the menu closes,
       * since the table cannot see a panel it does not render.
       */
-    def contextMenuRow(ref: SignalRef[Maybe[String]]): DataTable[A] = copy(contextRowRef = Present(ref))
+    def contextMenuRow(ref: SignalRef[Maybe[A]]): DataTable[A] = copy(contextTyped = Present(ref))
 
     /** Runs on a right-click over a row with what that click was aimed at (the row under the
       * pointer and the rows selected at that moment, as a [[RowContext]]), after [[contextMenuRow]]
@@ -1046,21 +1050,30 @@ final case class DataTable[A] private (
     /** Puts a reader back where they were: writes each field of `s` into the ref it came
       * from, and skips the ones that are not bound, since they have nowhere to go.
       *
-      * A one-way [[selected]] is skipped for the same reason a slot nobody bound is: the table does
+      * The selection and the expansion are stored as [[rowKey]]s, which is what keeps a
+      * `TableState` something a URL or a profile row can hold. Restoring turns each key back
+      * into its row: the rows the table holds now first, then `byKey` for the ones it does not
+      * (a lazily loaded table holds only the window it fetched). A key neither of them can
+      * answer is left out.
+      *
+      * A one-way [[selection]] is skipped for the same reason a slot nobody bound is: the table does
       * not own that set, so restoring it is the caller's to do wherever they do own it.
       *
       * Nothing is validated here, because nothing has to be: a restored spec naming a
       * column this table no longer has, a width for one it never had, or a page past the
       * end are each already something the table reports or clamps at render.
       */
-    def restore(s: TableState)(using Frame): Unit < Async =
+    def restore(s: TableState, byKey: String => Maybe[A] = (_: String) => Absent)(using Frame): Unit < Async =
         for
+            all <- currentRows
+            rows = (keys: Set[String]) =>
+                keys.flatMap(k => Maybe.fromOption(all.find(r => keyOf(r) == k)).orElse(byKey(k)).toList)
             _ <- writeIf(sortRef, s.sort)
             _ <- writeIf(filterRef, s.globalFilter)
             _ <- writeIf(columnFiltersRef, s.columnFilters)
             _ <- writeIf(pageRef, s.page)
-            _ <- writeIf(selectedRef, s.selected)
-            _ <- writeIf(expandedRef, s.expanded)
+            _ <- writeIf(selectedRef, rows(s.selected))
+            _ <- writeIf(expandedTyped, rows(s.expanded))
             _ <- writeIf(expandedGroupsRef, s.expandedGroups)
             _ <- writeIf(columnWidthsRef, s.columnWidths)
             _ <- writeIf(columnOrderRef, s.columnOrder)
@@ -1072,9 +1085,9 @@ final case class DataTable[A] private (
             case Absent     => ()
 
     /** One bound ref's current value, or the fallback where nothing is bound. */
-    private def currentOf[T](ref: Maybe[SignalRef[T]], fallback: T)(using Frame): T < Async =
+    private def currentOf[T](ref: Maybe[Signal[T]], fallback: T)(using Frame): T < Async =
         ref match
-            case Present(r) => r.get
+            case Present(r) => r.current
             case Absent     => fallback
 
     /** The same for a slot bound as a [[ReactiveValue]], which may be one-way or constant.
@@ -1114,17 +1127,17 @@ final case class DataTable[A] private (
       */
     def rowClasses(f: A => Seq[String]): DataTable[A] = copy(rowClassF = Present(f))
 
-    /** Binds row expansion two-way to `ref` (a set of [[rowKey]] ids); pair with
+    /** Binds row expansion two-way to `ref`, the set of expanded rows matched by [[rowKey]]; pair with
       * [[rowExpansionTemplate]].
       */
-    def expanded(ref: SignalRef[Set[String]]): DataTable[A] = copy(expandedRef = Present(ref))
+    def expanded(ref: SignalRef[Set[A]]): DataTable[A] = copy(expandedTyped = Present(ref))
 
     /** Content of the full-colspan expansion row below an expanded data row; setting
       * it auto-adds the expander-button column.
       */
     def rowExpansionTemplate(f: A => UI): DataTable[A] = copy(expansionF = Present(f))
 
-    /** Binds row editing two-way to `ref` (a set of [[rowKey]] ids): every column carrying
+    /** Binds row editing two-way to `ref` (the set of rows being edited, matched by [[rowKey]]): every column carrying
       * a [[Column.editable]] pipeline shows its editor for those rows, and an
       * editor-button column appears at the trailing edge with Prime's init, save and
       * cancel buttons.
@@ -1135,15 +1148,15 @@ final case class DataTable[A] private (
       * after; a value that will not parse, or a rule that refuses it, leaves the row open
       * on the screen it failed on.
       */
-    def editingRows(ref: SignalRef[Set[String]]): DataTable[A] = copy(editingRowsRef = Present(ref))
+    def editingRows(ref: SignalRef[Set[A]]): DataTable[A] = copy(editingRowsTyped = Present(ref))
 
     /** Binds cell editing two-way to `ref`: at most one cell shows its column's editor,
       * and clicking a cell of an editable column moves the editor there. Enter commits,
       * Escape discards, and both clear the ref.
       *
-      * A [[CellPath]] rather than a key, since a cell is a row crossed with a column.
+      * A [[CellPath]], since a cell is a row crossed with a column.
       */
-    def editingCell(ref: SignalRef[Maybe[CellPath]]): DataTable[A] = copy(editingCellRef = Present(ref))
+    def editingCell(ref: SignalRef[Maybe[CellPath[A]]]): DataTable[A] = copy(editingCellTyped = Present(ref))
 
     /** Whether the reader may move a cursor over the cells: arrows move it, Home and End
       * take it to the ends of a row (of the grid under ctrl or cmd), Page keys move it a
@@ -1275,23 +1288,23 @@ final case class DataTable[A] private (
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = copy(emptyContentV = v)
 
-    /** Fired with the row key after any selection write from a row click. */
-    def onRowClick(f: String => UI.Action)(using Frame): DataTable[A] = copy(onRowClickF = Present(Callback.of(f)))
+    /** Fired with the row after any selection write from a row click. */
+    def onRowClick(f: A => UI.Action)(using Frame): DataTable[A] = copy(onRowClickF = Present(Callback.of(f)))
 
     /** Runs with the selection the table WORKED OUT, whenever a click changes it.
       *
-      * The write-side counterpart of a one-way [[selected]], and the only outlet that can carry
+      * The write-side counterpart of a one-way [[selection]], and the only outlet that can carry
       * [[metaKeySelection]]: the table resolves the mode, the modifier and the range into a new
       * set, and hands that set over instead of writing it, so a caller whose selection lives
       * somewhere else — a URL, a parent, a record in a normalized cache — applies it there.
-      * [[onRowClick]] cannot do this job once modifiers are on, because a row key says which row
-      * was clicked and not what the selection became.
+      * [[onRowClick]] cannot do this job once modifiers are on, because a row says which one was
+      * clicked and not what the selection became.
       *
       * Every path that changes a selection goes through it: a row click, a row checkbox, and the
       * select-all header. With a two-way binding the ref is written first and this fires after,
       * so both forms see the same value and a caller may bind either or both.
       */
-    def onSelectionChange(f: Set[String] => UI.Action)(using Frame): DataTable[A] = copy(onSelectionF = Present(Callback.of(f)))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = copy(onSelectionF = Present(Callback.of(f)))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): DataTable[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): DataTable[A] = copy(accNameRefV = v)
@@ -1385,6 +1398,55 @@ final case class DataTable[A] private (
             case Present(f) => f(a)
             case Absent     => rowsV.indexOf(a).toString
 
+    // ---- the caller's rows, as the keys the table compares them by ----
+    //
+    // Every binding the caller hands over holds rows (or cells of rows); everything inside the table
+    // works on their keys. These are the one crossing: a binding is read as keys, and keys the table
+    // writes go back as the rows that carry them, the rows a binding already holds kept as the caller
+    // wrote them. A key no current row carries cannot become a row, so a write drops it.
+
+    private def keysOf(rows: Set[A]): Set[String] = rows.map(keyOf)
+
+    private def cellKey(c: CellPath[A]): CellKey = CellKey(keyOf(c.row), c.column)
+
+    /** The rows `keys` name: those `held` already holds, then those of `all` not held yet. */
+    private def rowsFor(keys: Set[String], held: Set[A], all: Seq[A]): Set[A] =
+        val kept  = held.filter(a => keys.contains(keyOf(a)))
+        val known = keysOf(kept)
+        kept ++ all.filter(a => keys.contains(keyOf(a)) && !known.contains(keyOf(a)))
+    end rowsFor
+
+    /** The cells `keys` name, by the same rule. */
+    private def cellsFor(keys: Set[CellKey], held: Set[CellPath[A]], all: Seq[A]): Set[CellPath[A]] =
+        val kept  = held.filter(c => keys.contains(cellKey(c)))
+        val known = kept.map(cellKey)
+        kept ++ keys.filterNot(known.contains).flatMap(k => all.find(r => keyOf(r) == k.row).map(CellPath(_, k.column)))
+    end cellsFor
+
+    /** The row the key names, keeping `held` where it is that row already. */
+    private def rowFor(key: Maybe[String], held: Maybe[A], all: Seq[A]): Maybe[A] =
+        key match
+            case Absent                                   => Absent
+            case Present(k) if held.exists(keyOf(_) == k) => held
+            case Present(k)                               => Maybe.fromOption(all.find(r => keyOf(r) == k))
+
+    /** The selection as keys, whichever way it was bound. */
+    private def selectedBinding(using Frame): Maybe[ReactiveValue[Set[String]]] =
+        selectedTyped.map {
+            case ReactiveValue.Const(rows) => ReactiveValue.Const(keysOf(rows))
+            case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(keysOf))
+        }
+
+    private def contextRowRef(using Frame): Maybe[Signal[Maybe[String]]]   = contextTyped.map(_.map(_.map(keyOf)))
+    private def selectedCellsRef(using Frame): Maybe[Signal[Set[CellKey]]] = cellsTyped.map(_.map(_.map(cellKey)))
+    private def expandedRef(using Frame): Maybe[Signal[Set[String]]]       = expandedTyped.map(_.map(keysOf))
+    private def editingRowsRef(using Frame): Maybe[Signal[Set[String]]]    = editingRowsTyped.map(_.map(keysOf))
+    private def editingCellRef(using Frame): Maybe[Signal[Maybe[CellKey]]] = editingCellTyped.map(_.map(_.map(cellKey)))
+
+    /** Applies `f` to a bound row set's keys and writes back the rows they name. */
+    private def updateRows(ref: SignalRef[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
+        currentRows.map(all => ref.getAndUpdate(prev => rowsFor(f(keysOf(prev)), prev, all)).unit)
+
     private def rowClickSelects: Boolean =
         selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple ||
             selectionModeV == SelectionMode.Radio
@@ -1395,11 +1457,11 @@ final case class DataTable[A] private (
       * a mode that is about a checkbox column says nothing about a cell.
       */
     private def cellSelectOn: Boolean =
-        selectedCellsRef.isDefined && editingCellRef.isEmpty && selectedBinding.isEmpty &&
+        cellsTyped.isDefined && editingCellTyped.isEmpty && selectedTyped.isEmpty &&
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
     /** Whether a right-click over a row means anything here. */
-    private def contextRowOn: Boolean = contextRowRef.isDefined || onRowContextF.isDefined
+    private def contextRowOn: Boolean = contextTyped.isDefined || onRowContextF.isDefined
 
     /** Whether this row may enter the selection at all ([[selectableWhen]]). */
     private def selectableAt(a: A): Boolean = selectableF.forall(_(a))
@@ -1433,7 +1495,7 @@ final case class DataTable[A] private (
       * state IS the switch, the way `expanded(ref)` is for the expander column: a second
       * flag would only be a way to bind one without the other.
       */
-    private def editorColumn: Boolean = editingRowsRef.isDefined
+    private def editorColumn: Boolean = editingRowsTyped.isDefined
 
     private def rowInteractive: Boolean = rowClickSelects || onRowClickF.isDefined
 
@@ -1443,7 +1505,7 @@ final case class DataTable[A] private (
     /** Renders through whichever ui-state refs are bound (nested reactive nodes
       * render through in SSR).
       */
-    private def withRef[T](ref: Maybe[SignalRef[T]], fallback: T)(k: T => UI)(using Frame): UI =
+    private def withRef[T](ref: Maybe[Signal[T]], fallback: T)(k: T => UI)(using Frame): UI =
         ref match
             case Present(r) => r.render(k)
             case Absent     => k(fallback)
@@ -1508,7 +1570,7 @@ final case class DataTable[A] private (
         val r = fold[Seq[A]](Absent, rowsSig, (i, v) => i.copy(rows = v))
         val a = fold[Set[String]](r, selSig, (i, v) => i.copy(sel = v))
         val b = fold[Maybe[String]](a, contextRowRef.map(x => x), (i, v) => i.copy(ctx = v))
-        val c = fold[Set[CellPath]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
+        val c = fold[Set[CellKey]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
         val d = fold[Set[String]](c, expandedRef.map(x => x), (i, v) => i.copy(exp = v))
         fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
     end rowInputsSignal
@@ -1533,7 +1595,7 @@ final case class DataTable[A] private (
                 withRows { (rows, offset) =>
                     withValue(selectedBinding, Set.empty[String]) { sel =>
                         withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
-                            withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
+                            withRef(selectedCellsRef, Set.empty[CellKey]) { cells =>
                                 withRef(expandedRef, Set.empty[String]) { exp =>
                                     withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
                                         withTotal { total =>
@@ -1552,7 +1614,7 @@ final case class DataTable[A] private (
     /** Whether anything can be edited at all, which is what decides whether the table
       * needs state of its own.
       */
-    private def editingBound: Boolean = editingCellRef.isDefined || editingRowsRef.isDefined
+    private def editingBound: Boolean = editingCellTyped.isDefined || editingRowsTyped.isDefined
 
     /** Navigation follows editing unless the caller says otherwise, and never runs over a
       * windowed body: the cursor addresses cells by their position among the RENDERED
@@ -1616,7 +1678,7 @@ final case class DataTable[A] private (
       * placeholder in a pure render. Every selectable table paying that for a gesture it never
       * offered is the wrong trade; asking for modifier selection is the caller saying they want it.
       */
-    private def rangeOn: Boolean = metaKeyFlag && rowClickSelects && selectedBinding.isDefined
+    private def rangeOn: Boolean = metaKeyFlag && rowClickSelects && selectedTyped.isDefined
 
     /** Whether the table has to MINT the anchor, which is the only reason ranging forces a mount.
       * A caller who bound one has already supplied it, and supplied it somewhere that outlives
@@ -2131,7 +2193,7 @@ final case class DataTable[A] private (
                     minted <- cmds.freshId
                     prefix = idV.getOrElse(minted)
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
-                    err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+                    err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
                     // One draft per filterable column, seeded when the menu opens. A row
                     // display never reads them, since one input is the whole filter.
@@ -2158,7 +2220,7 @@ final case class DataTable[A] private (
                     // The row a shift-click measures its range from. Allocated whether or not
                     // this table ranges, because a mount allocates a fixed set; only `rangeOn`
                     // decides whether it is handed on.
-                    anchorRow <- Signal.initRef(Absent: Maybe[String])
+                    anchorRow <- Signal.initRef(Absent: Maybe[A])(using summon[Frame], CanEqual.derived)
                 yield
                     val tree = wired(
                         prefix,
@@ -2239,7 +2301,7 @@ final case class DataTable[A] private (
     private[uic] def wired(
         idPrefix: String,
         drafts: Map[List[String], SignalRef[String]],
-        errRef: SignalRef[Maybe[(CellPath, FieldError)]],
+        errRef: SignalRef[Maybe[(CellKey, FieldError)]],
         focus: String => UI.Action,
         menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
         measure: Seq[String] => Chunk[Rect] < Async = (_: Seq[String]) => Chunk.empty,
@@ -2249,11 +2311,11 @@ final case class DataTable[A] private (
         headTop: Maybe[Signal[Maybe[Int]]] = Absent,
         rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
         filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
-        anchor: Maybe[SignalRef[Maybe[String]]] = Absent
+        anchor: Maybe[SignalRef[Maybe[A]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
-                withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
+                withRef(editingCellRef, Absent: Maybe[CellKey]) { editCell =>
                     withRef(moving, Absent: Maybe[ColumnDrag]) { drag =>
                         withRef(rowDrag, Absent: Maybe[RowDrag]) { rowHeld =>
                             renderWith(
@@ -2286,7 +2348,7 @@ final case class DataTable[A] private (
         order: OrderState,
         scroll: ScrollState,
         move: MoveState[A],
-        select: SelectState = SelectState()
+        select: SelectState[A] = SelectState[A]()
     )(using Frame): UI =
         withColumnOrder(order)((t, o) =>
             t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll, move, select))
@@ -2353,7 +2415,7 @@ final case class DataTable[A] private (
         order: OrderState,
         scroll: ScrollState,
         move: MoveState[A],
-        select: SelectState
+        select: SelectState[A]
     )(using Frame): UI =
         withSortableFlags { flags =>
             withFrozenRows { held =>
@@ -2471,9 +2533,9 @@ final case class DataTable[A] private (
             case Absent       => Kyo.lift(move.held)
 
     /** Which cell is open NOW, for the same reason. */
-    private def openCellNow(edit: EditState)(using Frame): Maybe[CellPath] < Async =
-        editingCellRef match
-            case Present(ref) => ref.get
+    private def openCellNow(edit: EditState)(using Frame): Maybe[CellKey] < Async =
+        editingCellTyped match
+            case Present(ref) => ref.get.map(_.map(cellKey))
             case Absent       => Kyo.lift(edit.cell)
 
     /** The rows a query, a filter spec and a sort leave, in the order they leave them in:
@@ -2632,7 +2694,7 @@ final case class DataTable[A] private (
         order: OrderState,
         scroll: ScrollState,
         moveIn: MoveState[A],
-        selectIn: SelectState
+        selectIn: SelectState[A]
     )(using Frame): UI =
         // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
         // three passes below would filter a page, sort a page and slice a slice. It skips
@@ -2786,9 +2848,9 @@ final case class DataTable[A] private (
         // on the static path: the windowed one and the frozen row group.
         lazy val staticView: BodyView[A] =
             bodyViewOf(here.rows, here.sorted, here.pg, staticInputs.groups)
-        lazy val staticNav: NavState[A]    = navFor(staticInputs, here)
-        lazy val staticMove: MoveState[A]  = moveFor(staticView)
-        lazy val staticSelect: SelectState = selectIn
+        lazy val staticNav: NavState[A]       = navFor(staticInputs, here)
+        lazy val staticMove: MoveState[A]     = moveFor(staticView)
+        lazy val staticSelect: SelectState[A] = selectIn
 
         /** The `<tr>` stream for one value of the row bindings.
           *
@@ -3169,8 +3231,8 @@ final case class DataTable[A] private (
       */
     private def rowKeyCard(shown: Seq[A])(using Frame): List[UI] =
         val usesIdentity =
-            selectedBinding.isDefined || expandedRef.isDefined || onRowClickF.isDefined ||
-                editingRowsRef.isDefined || editingCellRef.isDefined
+            selectedTyped.isDefined || expandedTyped.isDefined || onRowClickF.isDefined ||
+                editingRowsTyped.isDefined || editingCellTyped.isDefined
         val unset =
             if rowKeyF.isDefined || !usesIdentity then Nil
             else
@@ -3473,12 +3535,12 @@ final case class DataTable[A] private (
         // more than one is bound. Cell editing keeps the click, since it is the one that
         // does something a second click cannot undo.
         val claimed = List(
-            if selectedBinding.isEmpty then Nil else List("selected, which picks rows"),
-            if selectedCellsRef.isEmpty then Nil else List("selectedCells, which picks cells"),
-            if editingCellRef.isEmpty then Nil else List("editingCell, which opens an editor")
+            if selectedTyped.isEmpty then Nil else List("selection, which picks rows"),
+            if cellsTyped.isEmpty then Nil else List("selectedCells, which picks cells"),
+            if editingCellTyped.isEmpty then Nil else List("editingCell, which opens an editor")
         ).flatten
         val clash =
-            if selectedCellsRef.isEmpty || claimed.sizeIs < 2 then Nil
+            if cellsTyped.isEmpty || claimed.sizeIs < 2 then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3487,7 +3549,7 @@ final case class DataTable[A] private (
                     claimed
                 ))
         val modeless =
-            if selectedCellsRef.isEmpty || selectionModeV == SelectionMode.Single ||
+            if cellsTyped.isEmpty || selectionModeV == SelectionMode.Single ||
                 selectionModeV == SelectionMode.Multiple
             then Nil
             else
@@ -3504,14 +3566,14 @@ final case class DataTable[A] private (
         // the set and applies the change themselves. `onSelectionChange` is the outlet that
         // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
         // a range or a replacement became.
-        val oneWay     = selectedBinding.isDefined && selectedRef.isEmpty
+        val oneWay     = selectedTyped.isDefined && selectedRef.isEmpty
         val noOutlet   = onSelectionF.isEmpty
         val unwritable =
             if !oneWay || !noOutlet || selectionModeV != SelectionMode.Checkbox then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "selected is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
+                    "selection is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
                         "click, so onRowClick is no outlet for it — bind onSelectionChange, or a SignalRef",
                     List(selectionModeV.toString)
                 ))
@@ -3520,7 +3582,7 @@ final case class DataTable[A] private (
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "selected is bound one way with no onSelectionChange and no onRowClick, so a row click has " +
+                    "selection is bound one way with no onSelectionChange and no onRowClick, so a row click has " +
                         "nowhere to go; the rows offer the pointer that says they can be picked and then do nothing",
                     List(selectionModeV.toString)
                 ))
@@ -3531,8 +3593,8 @@ final case class DataTable[A] private (
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "metaKeySelection resolves a click into a new selection, and onRowClick reports a row key, which " +
-                        "cannot express a range or a replacement; a one-way selected needs onSelectionChange",
+                    "metaKeySelection resolves a click into a new selection, and onRowClick reports the row clicked, which " +
+                        "cannot express a range or a replacement; a one-way selection needs onSelectionChange",
                     List(selectionModeV.toString)
                 ))
         limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly
@@ -3723,7 +3785,7 @@ final case class DataTable[A] private (
     end frozenCards
 
     private def editCards(using Frame): List[UI] =
-        val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
+        val bound    = editingRowsTyped.isDefined || editingCellTyped.isDefined
         val editable = allPaths.exists(_._2.isEditable)
         val nothing  =
             if !bound || editable then Nil
@@ -3758,7 +3820,7 @@ final case class DataTable[A] private (
                     Nil
                 ))
         val both =
-            if !(editingRowsRef.isDefined && editingCellRef.isDefined) then Nil
+            if !(editingRowsTyped.isDefined && editingCellTyped.isDefined) then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3998,15 +4060,10 @@ final case class DataTable[A] private (
                 List(
                     Select[FilterOperator]()
                         .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
-                        .current(d.operator.label)
+                        .current(Present(d.operator))
                         .accessibleName(s"Match mode for ${c.headerV}")
                         .extraClass("p-datatable-filter-operator-dropdown")
-                        .onChange(v =>
-                            draft.set(d.copy(operator =
-                                if v == FilterOperator.Or.label then FilterOperator.Or
-                                else FilterOperator.And
-                            ))
-                        )
+                        .onChange(_.fold(())(op => draft.set(d.copy(operator = op))))
                         .render
                 )
 
@@ -4014,9 +4071,9 @@ final case class DataTable[A] private (
             val modes =
                 Select[MatchMode]()
                     .options(cf.modes)(_.label)
-                    .current(rule.mode.label)
+                    .current(Present(rule.mode))
                     .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
-                    .onChange(v => draft.set(setRule(d, i, r => r.copy(mode = cf.modes.find(_.label == v).getOrElse(r.mode)))))
+                    .onChange(_.fold(())(mode => draft.set(setRule(d, i, _.copy(mode = mode)))))
                     .render
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
@@ -4360,7 +4417,7 @@ final case class DataTable[A] private (
         path: List[String],
         sel: Set[String],
         ctx: Maybe[String],
-        cells: Set[CellPath],
+        cells: Set[CellKey],
         exp: Set[String],
         openGroups: Set[GroupPath],
         colCount: Int,
@@ -4368,7 +4425,7 @@ final case class DataTable[A] private (
         nav: NavState[A],
         frozen: FrozenPlan,
         move: MoveState[A],
-        select: SelectState
+        select: SelectState[A]
     )(using Frame): List[RowSpec[A]] =
         levels match
             case Nil           => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
@@ -4418,14 +4475,14 @@ final case class DataTable[A] private (
         rows: List[(A, Int)],
         sel: Set[String],
         ctx: Maybe[String],
-        cells: Set[CellPath],
+        cells: Set[CellKey],
         exp: Set[String],
         colCount: Int,
         edit: EditState,
         nav: NavState[A],
         frozen: FrozenPlan,
         move: MoveState[A],
-        select: SelectState
+        select: SelectState[A]
     )(using Frame): List[RowSpec[A]] =
         val spans = spanCells(rows.map(_._1), exp)
         rows.zip(spans).flatMap { (row, spanned) =>
@@ -4591,11 +4648,11 @@ final case class DataTable[A] private (
                     case ColumnAlign.Start  => ()
                 end match
                 // Cell editing addresses one cell, row editing every editable cell of a row.
-                val here     = CellPath(id, path)
+                val here     = CellKey(id, path)
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = editingCellRef.isDefined && openable && edit.live
+                val cellMode = editingCellTyped.isDefined && openable && edit.live
                 if cellMode then
                     cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
                     // The click picks a cell, it does not also pick the row; and while the
@@ -4673,7 +4730,7 @@ final case class DataTable[A] private (
                 // and it is where the keyboard would want to continue anyway.
                 val backToRow: UI.Action =
                     editableLeaves.headOption match
-                        case Some((path, _)) => focusCell(nav, CellPath(id, path))
+                        case Some((path, _)) => focusCell(nav, CellKey(id, path))
                         case None            => ()
                 val buttons: List[UI] =
                     if rowEdit then
@@ -4713,7 +4770,7 @@ final case class DataTable[A] private (
                 // The drag's own ref, not the paint's copy of it: after a drop the browser still
                 // owes a click, and whether it is owed is a fact about now.
                 heldNow(move).map(h =>
-                    if h.exists(_.done) then clearRowMove(move) else activate(id, canSelect, e, select)
+                    if h.exists(_.done) then clearRowMove(move) else activate(a, id, canSelect, e, select)
                 )
             // Enter and Space are a click with no pointer behind them, so they carry no
             // modifiers: a keyboard activation is always the plain kind.
@@ -4850,17 +4907,21 @@ final case class DataTable[A] private (
     end renderTr
 
     private def toggleExpand(id: String)(using Frame): UI.Action =
-        expandedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+        expandedTyped match
+            case Present(ref) => updateRows(ref)(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
 
     /** A click on a cell: replace the set with it, or toggle it in, by the mode. */
-    private def toggleCell(cell: CellPath)(using Frame): UI.Action =
-        selectedCellsRef match
-            case Present(ref) if selectionModeV == SelectionMode.Single =>
-                ref.getAndUpdate(cur => if cur == Set(cell) then Set.empty else Set(cell))
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(cell) then cur - cell else cur + cell)
-            case Absent       => ()
+    private def toggleCell(cell: CellKey)(using Frame): UI.Action =
+        val step: Set[CellKey] => Set[CellKey] =
+            if selectionModeV == SelectionMode.Single then cur => if cur == Set(cell) then Set.empty else Set(cell)
+            else cur => if cur.contains(cell) then cur - cell else cur + cell
+        cellsTyped match
+            case Present(ref) =>
+                currentRows.map(all => ref.getAndUpdate(prev => cellsFor(step(prev.map(cellKey)), prev, all)).unit)
+            case Absent => ()
+        end match
+    end toggleCell
 
     /** A right-click over a row: remember which one, then tell the caller what it was aimed at.
       *
@@ -4871,8 +4932,8 @@ final case class DataTable[A] private (
       * is being asked about.
       */
     private def openRowContext(a: A, id: String)(using Frame): UI.Action =
-        val write: UI.Action = contextRowRef match
-            case Present(ref) => ref.set(Present(id))
+        val write: UI.Action = contextTyped match
+            case Present(ref) => ref.set(Present(a))
             case Absent       => ()
         val fire: UI.Action = onRowContextF match
             case Present(f) =>
@@ -4895,13 +4956,17 @@ final case class DataTable[A] private (
       * written first so the two see the same value in the same order.
       */
     private def applySelection(next: Set[String])(using Frame): UI.Action =
-        val write: UI.Action = selectedRef match
-            case Present(ref) => ref.set(next)
-            case Absent       => ()
-        val tell: UI.Action = onSelectionF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        write.andThen(tell)
+        for
+            all  <- currentRows
+            held <- currentValue(selectedTyped, Set.empty[A])
+            rows = rowsFor(next, held, all)
+            _ <- selectedRef match
+                case Present(ref) => ref.set(rows)
+                case Absent       => (): UI.Action
+            _ <- onSelectionF match
+                case Present(f) => f(rows)
+                case Absent     => (): UI.Action
+        yield ()
     end applySelection
 
     private def toggleSelect(id: String)(using Frame): UI.Action =
@@ -4917,7 +4982,7 @@ final case class DataTable[A] private (
       * the bound row list, a sort) finds the text still in the ref rather than resetting
       * the field to the row's stored value.
       */
-    private def editorCell(cell: CellPath, row: A, c: Column[A, FlatOnly], nav: NavState[A], edit: EditState)(
+    private def editorCell(cell: CellKey, row: A, c: Column[A, FlatOnly], nav: NavState[A], edit: EditState)(
         using Frame
     ): UI =
         (c.editV, edit.draftOf(cell.column)) match
@@ -4967,7 +5032,7 @@ final case class DataTable[A] private (
             rows = nav.rows.size,
             cols = leafPaths.size,
             editable = pos =>
-                editingCellRef.isDefined && ((rowAt(nav, pos), colAt(pos)) match
+                editingCellTyped.isDefined && ((rowAt(nav, pos), colAt(pos)) match
                     case (Present(r), Present((_, c))) => c.isNavigable && c.isEditableAt(r)
                     case _                             => false),
             page = math.max(nav.page, 1),
@@ -4977,7 +5042,7 @@ final case class DataTable[A] private (
     /** Opens a cell on a seed: a printable key that started the edit, or the row's own
       * value when the reader pressed Enter or F2.
       */
-    private def openCell(cell: CellPath, row: A, c: Column[A, FlatOnly], seed: Maybe[String], edit: EditState)(
+    private def openCell(cell: CellKey, row: A, c: Column[A, FlatOnly], seed: Maybe[String], edit: EditState)(
         using Frame
     ): UI.Action =
         val fill: UI.Action = (seed, edit.draftOf(cell.column)) match
@@ -4994,7 +5059,7 @@ final case class DataTable[A] private (
     /** Carries an open edit into the cell Tab is taking focus to. */
     private def openAt(pos: GridNav.Pos, nav: NavState[A], edit: EditState)(using Frame): UI.Action =
         (rowAt(nav, pos), colAt(pos)) match
-            case (Present(r), Present((path, c))) => openCell(CellPath(keyOf(r), path), r, c, Absent, edit)
+            case (Present(r), Present((path, c))) => openCell(CellKey(keyOf(r), path), r, c, Absent, edit)
             case _                                => ()
 
     /** Puts DOM focus back on a cell, by the id it was rendered with.
@@ -5011,7 +5076,7 @@ final case class DataTable[A] private (
       * screen, so it stays put while the value in it changes. Absent for a cell that is not
       * among the rendered rows, which is a table that changed under an open editor.
       */
-    private def editorId(nav: NavState[A], cell: CellPath): Maybe[String] =
+    private def editorId(nav: NavState[A], cell: CellKey): Maybe[String] =
         val col = leafPaths.indexWhere(_._1 == cell.column)
         (nav.indexOf(cell.row, keyOf), col) match
             case (Present(row), c) if c >= 0 => Present(s"${nav.idPrefix}-e$row-$c")
@@ -5019,12 +5084,12 @@ final case class DataTable[A] private (
     end editorId
 
     /** Puts focus back INTO an open editor, which is where a refused commit leaves it. */
-    private def focusEditor(nav: NavState[A], cell: CellPath)(using Frame): UI.Action =
+    private def focusEditor(nav: NavState[A], cell: CellKey)(using Frame): UI.Action =
         editorId(nav, cell) match
             case Present(id) => nav.focus(id)
             case Absent      => ()
 
-    private def focusCell(nav: NavState[A], cell: CellPath)(using Frame): UI.Action =
+    private def focusCell(nav: NavState[A], cell: CellKey)(using Frame): UI.Action =
         if !nav.on then ()
         else
             val col = leafPaths.indexWhere(_._1 == cell.column)
@@ -5039,7 +5104,7 @@ final case class DataTable[A] private (
       */
     private def onCellKey(
         pos: GridNav.Pos,
-        cell: CellPath,
+        cell: CellKey,
         row: A,
         c: Column[A, FlatOnly],
         cellEdit: Boolean,
@@ -5053,7 +5118,7 @@ final case class DataTable[A] private (
 
     private def onCellKeyAt(
         pos: GridNav.Pos,
-        cell: CellPath,
+        cell: CellKey,
         row: A,
         c: Column[A, FlatOnly],
         cellEdit: Boolean,
@@ -5103,7 +5168,7 @@ final case class DataTable[A] private (
                     // The grid's own key step, which is a selection with no pointer and no
                     // anchor behind it: the plain kind, whatever the modifier setting is.
                     if step.selectRow && rowInteractive then
-                        activate(cell.row, selectableAt(row), MouseEvent(Absent, Modifiers.none), SelectState())
+                        activate(row, cell.row, selectableAt(row), MouseEvent(Absent, Modifiers.none), SelectState[A]())
                     else ()
                 for
                     // A refused commit stops the step that would move on: opening the next
@@ -5118,15 +5183,18 @@ final case class DataTable[A] private (
 
     /** Puts a row into the editing set, or takes it out. */
     private def setRowEditing(id: String, on: Boolean)(using Frame): UI.Action =
-        editingRowsRef match
-            case Present(ref) => ref.getAndUpdate(cur => if on then cur + id else cur - id)
+        editingRowsTyped match
+            case Present(ref) => updateRows(ref)(cur => if on then cur + id else cur - id)
             case Absent       => ()
 
     /** Moves the cell editor, or clears it. */
-    private def setEditingCell(cell: Maybe[CellPath])(using Frame): UI.Action =
-        editingCellRef match
-            case Present(ref) => ref.set(cell)
-            case Absent       => ()
+    private def setEditingCell(cell: Maybe[CellKey])(using Frame): UI.Action =
+        editingCellTyped match
+            case Present(ref) =>
+                currentRows.map(all =>
+                    ref.getAndUpdate(prev => Maybe.fromOption(cellsFor(cell.toList.toSet, prev.toList.toSet, all).headOption)).unit
+                )
+            case Absent => ()
 
     /** Fills a column's draft with what the row currently shows there, which is what an
       * editor opens on. The seed is the table's job precisely because the editor renders
@@ -5146,7 +5214,7 @@ final case class DataTable[A] private (
             case Present(ref) => ref.set(Absent)
             case Absent       => ()
 
-    private def setError(cell: CellPath, e: FieldError, edit: EditState)(using Frame): UI.Action =
+    private def setError(cell: CellKey, e: FieldError, edit: EditState)(using Frame): UI.Action =
         edit.errorRef match
             case Present(ref) => ref.set(Present((cell, e)))
             case Absent       => ()
@@ -5155,7 +5223,7 @@ final case class DataTable[A] private (
       * editor. Seeding first is what makes the editor's first paint the row's own value.
       */
     private def beginCellEditing(
-        cell: CellPath,
+        cell: CellKey,
         row: A,
         c: Column[A, FlatOnly],
         nav: NavState[A],
@@ -5187,7 +5255,7 @@ final case class DataTable[A] private (
       * column among the leaves. A path naming neither is a table that has changed under an
       * open editor, and there is nothing left to commit.
       */
-    private def commitOpen(open: CellPath, nav: NavState[A], edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
+    private def commitOpen(open: CellKey, nav: NavState[A], edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
         // Read live, because failing to find the row here does not report anything — it answers
         // "committed" and DROPS what the reader typed. A handler holding the rows as they were
         // would do that to any row that moved under an open editor.
@@ -5211,7 +5279,7 @@ final case class DataTable[A] private (
       * leaves through the callbacks and storing it is the caller's. Both run, so a bound
       * table can still observe.
       */
-    private def applyCell(cell: CellPath, before: A, after: A, ed: CellEdit[A])(using Frame): UI.Action =
+    private def applyCell(cell: CellKey, before: A, after: A, ed: CellEdit[A])(using Frame): UI.Action =
         val store: UI.Action = rowsRefV match
             case Present(ref) => ref.getAndUpdate(_.map(r => if keyOf(r) == cell.row then after else r))
             case Absent       => ()
@@ -5219,7 +5287,7 @@ final case class DataTable[A] private (
             case Present(f) => f(before, after)
             case Absent     => ()
         val table: UI.Action = onCellChangedF match
-            case Present(f) => f(CellChange(cell.row, cell.column, before, after))
+            case Present(f) => f(CellChange(cell.column, before, after))
             case Absent     => ()
         for
             _ <- store
@@ -5241,7 +5309,7 @@ final case class DataTable[A] private (
       * Answers whether the cell CLOSED, which is what the caller needs to decide where
       * focus goes: a cell that stayed open still has the reader in it.
       */
-    private def commitCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using
+    private def commitCell(cell: CellKey, row: A, c: Column[A, FlatOnly], edit: EditState)(using
         Frame
     ): Boolean < (Async & Abort[Any]) =
         (c.editV, edit.draftOf(cell.column)) match
@@ -5279,11 +5347,11 @@ final case class DataTable[A] private (
       * order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
       */
     private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
-        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < (Async & Abort[Any]) =
+        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellKey, FieldError), A] < (Async & Abort[Any]) =
             rest match
                 case Nil               => Kyo.lift(Result.succeed(acc))
                 case (path, c) :: tail =>
-                    val cell = CellPath(id, path)
+                    val cell = CellKey(id, path)
                     (c.editV, edit.draftOf(path)) match
                         case (Present(ed), Present(ref)) =>
                             for
@@ -5305,7 +5373,7 @@ final case class DataTable[A] private (
             out <- res match
                 case Result.Success(after) =>
                     val fire: UI.Action = onRowChangedF match
-                        case Present(f) => f(RowChange(id, row, after))
+                        case Present(f) => f(RowChange(row, after))
                         case Absent     => ()
                     for
                         _ <- fire
@@ -5335,10 +5403,10 @@ final case class DataTable[A] private (
       * this row and Ctrl/Cmd decides between toggling and replacing.
       *
       * `onRowClick` fires either way and regardless of whether anything was written, which is
-      * what lets a caller who owns the selection elsewhere (a one-way [[selected]]) close the
+      * what lets a caller who owns the selection elsewhere (a one-way [[selection]]) close the
       * loop themselves.
       */
-    private def activate(id: String, canSelect: Boolean, e: MouseEvent, select: SelectState)(using
+    private def activate(row: A, id: String, canSelect: Boolean, e: MouseEvent, select: SelectState[A])(using
         Frame
     ): UI.Action =
         // Ctrl OR Cmd. Prime tests `metaKey || ctrlKey` and so does every desktop convention;
@@ -5348,7 +5416,7 @@ final case class DataTable[A] private (
         def pick: UI.Action =
             def anchorTo(v: Set[String]): UI.Action =
                 select.anchor match
-                    case Present(a) => a.set(Present(id)).andThen(applySelection(v))
+                    case Present(a) => a.set(Present(row)).andThen(applySelection(v))
                     case Absent     => applySelection(v)
             (select.anchor, e.modifiers.shift, selectionModeV) match
                 // A range needs somewhere to start. Without an anchor the shift-click is just the
@@ -5359,7 +5427,7 @@ final case class DataTable[A] private (
                         // an emission keeps its handler, and a range spanned over the list as it was
                         // would silently degrade to a single pick the moment anything was appended.
                         case Present(from) =>
-                            bodyViewNow.map(v => applySelection(DataTable.between(v.selectKeys, from, id)))
+                            bodyViewNow.map(v => applySelection(DataTable.between(v.selectKeys, keyOf(from), id)))
                         case Absent => anchorTo(Set(id))
                     }
                 case _ =>
@@ -5369,9 +5437,9 @@ final case class DataTable[A] private (
         end pick
 
         val setSelection: UI.Action =
-            if !canSelect || !rowClickSelects || selectedBinding.isEmpty then () else pick
+            if !canSelect || !rowClickSelects || selectedTyped.isEmpty then () else pick
         val fireClick: UI.Action = onRowClickF match
-            case Present(f) => f(id)
+            case Present(f) => f(row)
             case Absent     => ()
         for
             _ <- setSelection

@@ -18,7 +18,7 @@ class TreeSelectTest extends UicTest:
         TreeNode("build.sbt", "build")
     )
 
-    private def treeSelect(using Frame) = uic.TreeSelect().nodes(nodes*).id("ts")
+    private def treeSelect(using Frame) = uic.TreeSelect[String]().nodes(nodes*).id("ts")
 
     /** Presses `key` on the CLOSED trigger and reports whether the panel opened and which visible
       * row the highlight landed on.
@@ -31,7 +31,7 @@ class TreeSelectTest extends UicTest:
             exp   <- Signal.initRef(expanded)
             hi    <- Signal.initRef(-1)
             value <- Signal.initRef(selected)
-            ui = treeSelect.value(value).expanded(exp).wired(open, exp, hi, "ts")
+            ui = treeSelect.selection(value).expanded(exp).wired(open, exp, hi, "ts")
             trigger <- elementWithClass(ui, "p-treeselect")
             _       <- press(trigger, key)
             isOpen  <- open.get
@@ -45,7 +45,7 @@ class TreeSelectTest extends UicTest:
             exp   <- Signal.initRef(Set.empty[String])
             hi    <- Signal.initRef(1)
             value <- Signal.initRef(Set.empty[String])
-            ui = treeSelect.value(value).expanded(exp).wired(open, exp, hi, "ts")
+            ui = treeSelect.selection(value).expanded(exp).wired(open, exp, hi, "ts")
             trigger <- elementWithClass(ui, "p-treeselect")
             _       <- press(trigger, key)
             still   <- open.get
@@ -85,7 +85,7 @@ class TreeSelectTest extends UicTest:
             exp   <- Signal.initRef(Set.empty[String])
             hi    <- Signal.initRef(0)
             value <- Signal.initRef(Set.empty[String])
-            ui = treeSelect.value(value).expanded(exp).wired(open, exp, hi, "ts")
+            ui = treeSelect.selection(value).expanded(exp).wired(open, exp, hi, "ts")
             trigger <- elementWithClass(ui, "p-treeselect")
             _       <- press(trigger, UI.Keyboard.ArrowDown)
             at      <- hi.get
@@ -98,7 +98,7 @@ class TreeSelectTest extends UicTest:
             exp   <- Signal.initRef(Set.empty[String])
             hi    <- Signal.initRef(1)
             value <- Signal.initRef(Set.empty[String])
-            ui = treeSelect.value(value).expanded(exp).wired(open, exp, hi, "ts")
+            ui = treeSelect.selection(value).expanded(exp).wired(open, exp, hi, "ts")
             trigger <- elementWithClass(ui, "p-treeselect")
         yield
             assert(trigger.attrs.role.contains("combobox"))

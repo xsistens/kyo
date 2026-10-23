@@ -94,6 +94,18 @@ object Validator:
     def url(code: String = "url"): Validator[String] =
         satisfy(code)(v => v.isEmpty || UrlRx.matches(v))
 
+    // ---- built-in choice rules ------------------------------------------------
+
+    /** A choice that may stay empty must hold an option: the `required` of a `FormField[Maybe[A]]`, under the same code, so
+      * one translation covers a text field and a choice alike.
+      */
+    def chosen[A](code: String = "required"): Validator[Maybe[A]] =
+        satisfy(code)(_.isDefined)
+
+    /** A choice of several must hold at least one option, again under the `required` code. */
+    def chosenAny[A](code: String = "required"): Validator[Set[A]] =
+        satisfy(code)(_.nonEmpty)
+
     // ---- built-in numeric / ordered rules -------------------------------------
 
     /** Value must be `>= bound`. Works for any ordered type (`Int` / `Long` / `Double`,
