@@ -100,6 +100,22 @@ class DeferSpec extends kyo.test.Test[Any]:
             }
         }
 
+        "reads a GraphQL 17 (pending/completed) body the same way" in {
+            val graphql17 =
+                s"--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                    """{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":["country"],"label":"capital"}],"hasNext":true}""" +
+                    s"\r\n--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                    """{"incremental":[{"id":"0","data":{"capital":"Berlin"}}],"completed":[{"id":"0"}],"hasNext":false}""" +
+                    s"\r\n--$boundary--\r\n"
+            val t = transport(engineOf(respond(200, contentType, graphql17)))
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
+                assert(rs.size == 2)
+                assert(rs(0).data == Present(Data(Some(Loc("DE", None)))))
+                assert(rs(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
+                assert(rs(1).complete)
+            }
+        }
+
         "a server that ignores @defer (plain JSON) collapses to a single response" in {
             val body = """{"data":{"country":{"code":"DE","capital":"Berlin"}}}"""
             val t    = transport(engineOf(respond(200, "application/json", body)))

@@ -79,7 +79,7 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
     private val url      = HttpUrl(Present("https"), "example.com", 443, "/graphql", Absent)
 
     private val plainAccept = "application/graphql-response+json, application/json"
-    private val deferAccept = s"multipart/mixed; deferSpec=20220824, $plainAccept"
+    private val deferAccept = s"multipart/mixed; deferSpec=20220824, multipart/mixed; incrementalSpec=v0.2, $plainAccept"
 
     "HttpRequestComposer" - {
 
