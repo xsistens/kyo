@@ -5,15 +5,15 @@ import kyo.Maybe
 /** A type-indexed, immutable bag of context elements threaded through a request
   * and echoed onto its response.
   *
-  * Interceptors (Task 5) attach out-of-band metadata here — a cache policy, a
-  * request-timing marker, an auth token — without widening [[ApolloRequest]] /
+  * Interceptors attach out-of-band metadata here (a cache policy, a
+  * request-timing marker, an auth token) without widening [[ApolloRequest]] /
   * [[ApolloResponse]] for every new concern. Each element is keyed by a typed
   * [[ExecutionContext.Key]] so retrieval is type-safe: `ctx.get(SomeKey)`
   * returns `Maybe[ThatElementType]`.
   *
   * Modeled on apollo-kotlin's `ExecutionContext` (itself a pared-down analog of
-  * Kotlin's `CoroutineContext`). Deliberately minimal for Phase 03: `Empty`,
-  * typed `get`, and element/context union via `+` / `++`.
+  * Kotlin's `CoroutineContext`). Deliberately minimal: `Empty`, typed `get`,
+  * and element/context union via `+` / `++`.
   */
 final class ExecutionContext private (
     private val elements: Map[ExecutionContext.Key[?], ExecutionContext.Element]

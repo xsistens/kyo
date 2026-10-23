@@ -61,7 +61,7 @@ final class CacheBatchReader(
 
     /** Accumulates the key of every [[Record]] successfully resolved during the
       * read (root + each redirect/reference target actually visited). This is the
-      * dependency set a Phase 05 watcher intersects against a write's changed keys
+      * dependency set a watcher intersects against a write's changed keys
       * to decide whether to re-emit. Populated as a side effect of [[resolve]];
       * read via [[dependentKeys]] after [[toData]] completes.
       */
@@ -289,7 +289,7 @@ object CacheBatchReader:
       *
       * Identical to [[read]] on the data path, additionally returning the
       * `dependentKeys` — every record visited while assembling the response (the
-      * root plus each reference/redirect target). A Phase 05 watcher intersects
+      * root plus each reference/redirect target). A watcher intersects
       * this set with a write's changed keys to decide whether the write affects it.
       *
       * @return the decoded data and the set of record keys it touched
