@@ -166,4 +166,97 @@ class CascadeSelectTest extends UicTest:
             assert(held == "Bern")
     }
 
+    private def classed(cls: String)(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains(cls)
+
+    private def saying(cls: String, text: String)(e: UI.Ast.Element): Boolean =
+        classed(cls)(e) && e.children.exists {
+            case t: UI.Ast.Text => t.value == text
+            case _              => false
+        }
+
+    /** The cascade wired with its root panel `open` and every group `groupsOpen`. */
+    private def field(open: Boolean, groupsOpen: Boolean = false)(using
+        Frame
+    ): (SignalRef[Boolean], List[(List[Int], SignalRef[Boolean])], SignalRef[Maybe[String]], UI) < Async =
+        for
+            o     <- Signal.initRef(open)
+            refs  <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(groupsOpen).map(p -> _)).map(_.toList)
+            focus <- Signal.initRef(List.empty[Int])
+            value <- Signal.initRef(Maybe.empty[String])
+        yield (o, refs, value, cascade.selection(value).wired(o, refs, focus, Present("cs")))
+
+    "a click anywhere on the field opens it, the element carrying its id included" in {
+        for
+            (byId, _, _, ui1)   <- field(open = false)
+            _                   <- clickBubbling(ui1)(_.attrs.identifier.contains("cs"))
+            viaId               <- byId.get
+            (byIcon, _, _, ui2) <- field(open = false)
+            _                   <- clickBubbling(ui2)(classed("p-cascadeselect-dropdown"))
+            viaChevron          <- byIcon.get
+            (shut, _, _, ui3)   <- field(open = true)
+            _                   <- clickBubbling(ui3)(_.attrs.identifier.contains("cs"))
+            closed              <- shut.get
+        yield
+            assert(viaId, "the field itself is the control, so a click on its padding or by its id opens it")
+            assert(viaChevron && !closed)
+        end for
+    }
+
+    "a click on a leaf picks it once and closes the whole chain" in {
+        for
+            seen  <- Signal.initRef(0)
+            open  <- Signal.initRef(true)
+            refs  <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            focus <- Signal.initRef(List.empty[Int])
+            value <- Signal.initRef(Maybe.empty[String])
+            ui = cascade.selection(value).onChange(_ => seen.updateAndGet(_ + 1).unit).wired(open, refs, focus, Present("cs"))
+            _       <- clickBubbling(ui)(saying("p-cascadeselect-option-text", "Hamburg"))
+            got     <- value.get
+            changes <- seen.get
+            still   <- open.get
+            groups  <- Kyo.foreach(refs)((_, r) => r.get)
+        yield assert(got == Present("Hamburg") && changes == 1 && !still && groups.forall(!_))
+    }
+
+    "a click inside the open chain that lands on no leaf leaves it open and picks nothing" in {
+        val targets: List[(String, UI.Ast.Element => Boolean)] = List(
+            ("group row", saying("p-cascadeselect-option-text", "Europe")),
+            ("list space", classed("p-cascadeselect-list-container")),
+            ("panel frame", classed("p-cascadeselect-overlay"))
+        )
+        Kyo.foreach(targets) { (name, target) =>
+            for
+                (open, _, value, ui) <- field(open = true)
+                _                    <- clickBubbling(ui)(target)
+                still                <- open.get
+                got                  <- value.get
+            yield (name, still && got.isEmpty)
+        }.map(rs => assert(rs.forall(_._2), rs.filterNot(_._2).map(_._1).mkString("toggled or picked: ", ", ", "")))
+    }
+
+    "a click on a group row opens that group, and the chain stays open" in {
+        for
+            (open, refs, _, ui) <- field(open = true)
+            _                   <- clickBubbling(ui)(saying("p-cascadeselect-option-text", "Europe"))
+            still               <- open.get
+            europe              <- refs.collectFirst { case (List(0), r) => r }.get.get
+        yield assert(still && europe)
+    }
+
+    "the field is the one element listening for a click: not its label, not its chevron" in {
+        def listening(ui: UI)(using Frame): Chunk[String] < Sync =
+            elements(ui).map(_.filter(declaresClick).map(_.attrs.cssClasses.headOption.getOrElse("?")))
+        for
+            (_, _, _, closed) <- field(open = false)
+            live              <- listening(closed)
+            open              <- Signal.initRef(false)
+            refs              <- refsOf
+            focus             <- Signal.initRef(List.empty[Int])
+            disabled          <- listening(cascade.disabled(true).wired(open, refs, focus, Present("cs")))
+        yield
+            assert(live == Chunk("p-cascadeselect"), live.toString)
+            assert(disabled.isEmpty, "a disabled field opens nothing")
+        end for
+    }
+
 end CascadeSelectTest

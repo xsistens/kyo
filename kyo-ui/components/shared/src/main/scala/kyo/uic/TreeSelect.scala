@@ -292,9 +292,10 @@ final case class TreeSelect[K] private (
                 case Present(s) => s.hi.set(openHighlight).andThen(s.open.set(true))
                 case Absent     => ()
 
+        // A pointer opens through the same path as a key, so the highlight lands on a row either way.
         def toggle: UI.Action =
             st match
-                case Present(s) => s.open.set(!isOpen)
+                case Present(s) => if isOpen then s.open.set(false) else openPanel
                 case Absent     => ()
 
         // Fired by the hosted Tree AFTER its selection write: report the new set
@@ -325,12 +326,9 @@ final case class TreeSelect[K] private (
         // NBSP keeps the empty label's line box (Prime renders 'empty').
         val labelUI: UI = lbl(if labelText.isEmpty then " " else labelText)
 
-        var lblContainer = div.cssClass("p-treeselect-label-container")
-        if !disabledFlag && st.isDefined then lblContainer = lblContainer.onClick(toggle)
-        val labelContainerUI: UI = lblContainer(toChild(labelUI))
+        val labelContainerUI: UI = div.cssClass("p-treeselect-label-container")(toChild(labelUI))
 
-        var dd = div.cssClass("p-treeselect-dropdown").role("button").aria("haspopup", "tree").aria("expanded", isOpen.toString)
-        if !disabledFlag && st.isDefined then dd = dd.onClick(toggle)
+        val dd             = div.cssClass("p-treeselect-dropdown").role("button").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         val dropdownUI: UI =
             if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-treeselect-loading-icon", "p-icon", "p-icon-spin")))
             else dd(toChild(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon")))
@@ -376,6 +374,9 @@ final case class TreeSelect[K] private (
                 .panelClass("p-component")
                 .seedFocus(false)
                 .dismissOnEscape(false)
+                // The panel renders inside the field, whose click toggles it: a row pick, an
+                // expand toggle or a click on empty space ends here.
+                .containClicks(true)
             panel(
                 (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
             )
@@ -417,6 +418,8 @@ final case class TreeSelect[K] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            // The one click listener: a click anywhere on the field toggles the panel.
+            if st.isDefined then el = el.onClick(toggle)
             // Focus stays on the trigger while the panel is open, so the tree's own keyboard runs
             // from here: closed, the three opening keys; open, the tree's arrows and Escape. The
             // tree supplies the handler rather than a second copy of it living here.

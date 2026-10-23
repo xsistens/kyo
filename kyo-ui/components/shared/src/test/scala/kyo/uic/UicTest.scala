@@ -175,6 +175,72 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none)))
                     case Absent     => throw new AssertionError("the element declares no click handler")
 
+    /** Clicks the first element `target` matches the way the dispatcher delivers a click: the target's own handlers
+      * first, then each enclosing element's, innermost first, until an element that declared a click handler also set
+      * `stopPropagation(true)` (`ReactiveUI.keepBubbling`). `onClickSelf` counts on the target alone, and a disabled
+      * target skips its own handlers but still lets the click bubble, as the dispatcher does.
+      *
+      * [[click]] runs one element's handler in isolation, which cannot show what a click on a row inside a panel does
+      * to the field around it; this is the helper for that question. Mounts are walked as their placeholders, as
+      * everywhere in this class.
+      */
+    private[uic] def clickBubbling(root: UI)(target: UI.Ast.Element => Boolean)(using Frame): Any < Async =
+        def chains(node: UI, above: List[UI.Ast.Element]): Chunk[List[UI.Ast.Element]] < Sync =
+            node match
+                case e: UI.Ast.Element =>
+                    val here = e :: above
+                    Kyo.foreach(e.children)(chains(_, here)).map(cs => Chunk(here) ++ cs.flatten)
+                case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(chains(_, above))
+                case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(chains(_, above)).map(_.flatten)
+                case k: UI.Ast.KeyedChild[?] => chains(k.child, above)
+                case f: UI.Ast.Foreach[?, ?] =>
+                    f.applyTyped([T] =>
+                        (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                            signal.current(using f.frame).map { items =>
+                                Kyo.foreach(items.zipWithIndex) { (item, i) => chains(render(i, item), above) }
+                                    .map(_.flatten)
+                            }
+                    )
+                case m: UI.Ast.Mounted =>
+                    m.placeholderUI match
+                        case Present(ui) => chains(ui, above)
+                        case Absent      => Chunk.empty
+                case _ => Chunk.empty
+        def disabled(e: UI.Ast.Element): Boolean = e match
+            case d: UI.Ast.HasDisabled => d.disabled.getOrElse(false)
+            case _                     => false
+        def run(eff: Maybe[UI.Action]): Any < Async = eff match
+            case Present(a) => handled(a)
+            case Absent     => ()
+        def runWith(f: Maybe[UI.MouseEvent => UI.Action], e: UI.Ast.Element): Any < Async = f match
+            case Present(g) => handled(g(UI.MouseEvent(e.attrs.identifier, UI.Modifiers.none)))
+            case Absent     => ()
+        def walk(chain: List[UI.Ast.Element], isTarget: Boolean): Any < Async =
+            chain match
+                case Nil                                  => ()
+                case e :: rest if isTarget && disabled(e) => walk(rest, isTarget = false)
+                case e :: rest                            =>
+                    val a        = e.attrs
+                    val declared = a.onClick.nonEmpty || a.onClickEvt.nonEmpty ||
+                        (isTarget && (a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty))
+                    val self: Any < Async =
+                        if isTarget then run(a.onClickSelf).andThen(runWith(a.onClickSelfEvt, e)) else ()
+                    self
+                        .andThen(runWith(a.onClickEvt, e))
+                        .andThen(run(a.onClick))
+                        .andThen(if declared && a.stopPropagation.getOrElse(false) then () else walk(rest, isTarget = false))
+        chains(root, Nil).map { all =>
+            all.find(c => target(c.head)) match
+                case Some(chain) => walk(chain, isTarget = true)
+                case None        => throw new AssertionError("no element matches the click target")
+        }
+    end clickBubbling
+
+    /** Whether `el` declares any click handler, the self-only one included. */
+    private[uic] def declaresClick(el: UI.Ast.Element): Boolean =
+        val a = el.attrs
+        a.onClick.nonEmpty || a.onClickEvt.nonEmpty || a.onClickSelf.nonEmpty || a.onClickSelfEvt.nonEmpty
+
     /** The same, for a click that reached `el` THROUGH a control of the reader's own: an anchor in
       * a cell, a button in a row. Only the typed handler can be told, since the flag rides
       * [[kyo.UI.MouseEvent.onControl]]; an element that took the untyped form never asked.

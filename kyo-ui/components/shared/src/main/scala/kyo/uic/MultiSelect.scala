@@ -40,10 +40,12 @@ enum MultiSelectDisplay derives CanEqual:
   * (a `Set` carries no pick order); `maxSelectedLabels(n)` switches to the
   * `selectedItemsLabel` summary ("{0} items selected", `{0}` = count) beyond
   * `n` selections; `display(MultiSelectDisplay.Chip)` renders removable
-  * [[Chip]]s instead. DEVIATION: in chip mode the trigger opens via
-  * `onClickSelf` on the label area, so clicking a chip's body does not toggle
-  * the panel (kyo has no event-consumption primitive to exempt the chip remove
-  * button from a container-level handler).
+  * [[Chip]]s instead.
+  *
+  * The field is the one element listening for a click, as in Prime: a click
+  * anywhere on it toggles the panel, a chip's body included. The clear button,
+  * each chip's remove button and the panel end their clicks where they land
+  * (kyo's `stopPropagation`), so a removal or a pick never also toggles.
   *
   * Honest deferrals: virtual scrolling, per-option templates, and
   * `selectionLimit` are not implemented. Arrow keys on the open panel no longer
@@ -380,7 +382,9 @@ final case class MultiSelect[A] private (
                             toChild(
                                 Chip(labelF(a))
                                     .extraClass("p-multiselect-chip")
-                                    .removable(true)
+                                    // A disabled field changes nothing, so its chips offer no removal.
+                                    .removable(!disabledFlag)
+                                    .isolateRemove(true)
                                     .onRemove(write(current - key(a)))
                                     .render
                             )
@@ -409,15 +413,9 @@ final case class MultiSelect[A] private (
         var lbl = div.cssClass("p-multiselect-label")
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if selected.isEmpty && placeholder.isEmpty then lbl = lbl.cssClass("p-multiselect-label-empty")
-        // onClickSelf, not onClick: in chip mode the chips (and their remove
-        // buttons) live INSIDE the label, and a bubbling handler would also toggle
-        // the panel on every chip remove.
-        st.foreach(s => if !disabledFlag then lbl = lbl.onClickSelf(toggle(s)))
         val labelUI: UI = lbl(labelChildren.map(toChild)*)
 
-        var lblContainer = div.cssClass("p-multiselect-label-container")
-        st.foreach(s => if !disabledFlag then lblContainer = lblContainer.onClickSelf(toggle(s)))
-        val labelContainerUI: UI = lblContainer(toChild(labelUI))
+        val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(toChild(labelUI))
 
         // Explicitly typed effect (the untyped-match Any-inference trap).
         val clearEffect: UI.Action =
@@ -432,12 +430,13 @@ final case class MultiSelect[A] private (
                         .cssClass("p-multiselect-clear-icon")
                         .jsProp("type", "button")
                         .aria("label", "Clear")
-                        .onClick(clearEffect)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .onClick(clearEffect)
+                        // The clear sits inside the field, whose click opens the panel.
+                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
                 )
             else Nil
 
-        var dd = div.cssClass("p-multiselect-dropdown")
-        st.foreach(s => if !disabledFlag then dd = dd.onClick(toggle(s)))
+        val dd             = div.cssClass("p-multiselect-dropdown")
         val dropdownUI: UI =
             if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin")))
             else dd(toChild(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon")))
@@ -497,6 +496,10 @@ final case class MultiSelect[A] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            // The one click listener: a click anywhere on the field toggles, a chip's body included.
+            // The clear button, the chips' remove buttons and the panel (`Overlay.containClicks`)
+            // end their own clicks where they land.
+            st.foreach(s => el = el.onClick(toggle(s)))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard. A
             // filter header is the exception, taking focus into the panel and the keys with it.
@@ -523,10 +526,6 @@ final case class MultiSelect[A] private (
         if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
     end bodyStatic
 
-    /** The floating option panel: Prime's `.p-multiselect-overlay` skin on the
-      * [[Overlay]] primitive: header (select-all + filter), then the checkbox
-      * option rows.
-      */
     /** The options the panel is showing, the positions the highlight may land on, and where it is
       * now. Derived in one place because the TRIGGER reads it too: the keyboard lives on whatever
       * holds focus, and that is no longer the panel.
@@ -562,6 +561,10 @@ final case class MultiSelect[A] private (
       */
     private def toggleAllId(base: String): String = s"$base-all"
 
+    /** The floating option panel: Prime's `.p-multiselect-overlay` skin on the
+      * [[Overlay]] primitive: header (select-all + filter), then the checkbox
+      * option rows.
+      */
     private def overlayPanel(current: Set[String], s: State, toggleOption: A => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
@@ -671,7 +674,8 @@ final case class MultiSelect[A] private (
             // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
             // in it receives a key either.
             .seedFocus(false)
-            .dismissOnEscape(false)((header ++ keyCollisionCard ++ List(listUI))*)
+            .dismissOnEscape(false)
+            .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
 
