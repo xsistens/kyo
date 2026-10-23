@@ -374,17 +374,52 @@ A handler, a mount effect and a feed can all fail with any `Abort`, and none of 
 | `Escalate` | The enclosing `UI.mounted` node fails and shows its error view, with `source` set to `Handler` for a handler. Outside any mount it is `Notify`. |
 | `Run(action)` | Runs `action`, a redirect say. If the action fails in turn, that failure is notified. |
 
+<!-- doctest:scope=env:failures
 ```scala
+enum ApiError derives CanEqual:
+    case Unauthorized, TooLong
+    case Conflict(version: Int)
+
+enum Route derives CanEqual:
+    case Home, Login
+
+trait Router:
+    def go(route: Route): Unit < Async
+
+trait Toasts:
+    def error(message: String): Unit < Async
+
+case class Track(title: String)
+
+trait Api:
+    def addComment(postId: Int, text: String): Unit < (Async & Abort[ApiError])
+    def skipToNext: Unit < (Async & Abort[ApiError])
+    def queue(track: Track): Unit < (Async & Abort[ApiError])
+end Api
+
+val router: Router           = ???
+val toasts: Toasts           = ???
+val api: Api                 = ???
+val app: UI                  = ???
+val id: Int                  = ???
+val draft: SignalRef[String] = ???
+val hint: SignalRef[String]  = ???
+val selected: Chunk[Track]   = ???
+```
+-->
+
+```scala doctest:scope=env:failures
+import Route.Login
+
 val root = UI.boundary
     .onFailure {
         case ApiError.Unauthorized => UI.Reaction.Run(router.go(Login))
         case _: ApiError.Conflict  => UI.Reaction.Escalate
     }
-    .onNotice(err => toasts.error(err.getMessage))
-    (app)
+    .onNotice(err => toasts.error(err.getMessage))(app)
 
 UI.form(UI.textarea.value(draft), UI.button("Send"))
-    .onSubmit(api.addComment(id, draft.get))                         // fails with Abort[ApiError]
+    .onSubmit(draft.get.map(api.addComment(id, _))) // fails with Abort[ApiError]
     .onFailure { case ApiError.TooLong => UI.Reaction.Run(hint.set("Too long")) }
 ```
 
@@ -392,7 +427,7 @@ The rules closest to the failure come first: those of the element whose handler 
 
 A page runs its handlers one after another, so a handler that awaits a round-trip holds every event behind it. It does not hold back the mounts its writes show or hide; for a handler that moves a keyed node with several writes, see `UI.batch` in [Components that run an effect](#components-that-run-an-effect-uimounted). `UI.background(action)` starts the action on a fiber of its own and returns at once, and its failure still meets the rules that were around the handler. `UI.attempt(action)` runs an action in place and hands its failure to the rules instead of raising it, for one step of several that should each run:
 
-```scala
+```scala doctest:scope=env:failures
 UI.button("Next").onClick(UI.background(api.skipToNext))
 UI.button("Queue all").onClick(Kyo.foreachDiscard(selected)(t => UI.attempt(api.queue(t))))
 ```
