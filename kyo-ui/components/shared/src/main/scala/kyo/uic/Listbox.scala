@@ -113,8 +113,9 @@ end ListOptionScope
   * cycle), Home/End reach them directly, and Enter or Space picks the highlighted option
   * through the same write a click makes. `id(...)` wires `aria-activedescendant` to the
   * highlighted row, and a listbox with no `id` of its own mints one for that hook alone.
-  * The embedded render [[OrderList]] and [[PickList]] drive keeps the per-option tab stops,
-  * since the highlight would have to live in a signal those hosts own.
+  * The page as first rendered, before the mount has a highlight to rove, already has that one
+  * tab stop on the list, and no option is a second one. [[OrderList]] and [[PickList]] embed
+  * the same list and hand it a highlight their own mount mints.
   *
   * Two levels say where the keyboard is, and they never mix: a ring around the whole
   * component (`.p-listbox:has(.p-listbox-list:focus)`, kyo glue, since Prime clears the
@@ -295,7 +296,7 @@ final case class Listbox[K] private (
       * Both are allocated OUTSIDE the selection and query subscriptions, since a mount
       * inside a subscribed region re-runs on every emission and would allocate a new
       * highlight on each keystroke. The static projection renders through the placeholder,
-      * which is byte-identical to what this listbox rendered before it had a keyboard.
+      * where the list is already the one tab stop and carries the id, with no highlight yet.
       */
     private def renderQuery(using Frame): UI =
         val ownsQuery = filterQueryRef.isEmpty && filterableFlag
@@ -419,13 +420,14 @@ final case class Listbox[K] private (
             list = list.aria("multiselectable", "true")
         // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
         // listbox pattern asks for and what Prime does: a reader tabbing through a form should
-        // not have to press Tab once per option to get past a list of forty. The rows keep
-        // their own tab stops only where there is no highlight to rove (the static projection,
-        // and the embedded render OrderList and PickList drive).
+        // not have to press Tab once per option to get past a list of forty. That holds in the
+        // page as first rendered too, before the mount has a highlight to rove: the id is on the
+        // list, so a `Label.forId` or a focus-by-id has to find the tab stop there, and focus the
+        // reader puts on the list then stays on it once the client attaches.
         // Focus and blur sit on the LIST, not on the root: a Focus/Blur event fires only on the
         // element it targets, and the element that takes focus here is the list. Declared on the
         // root they would never run, which is how `onBlur` came to be silently dead.
-        if hiRef.isDefined && interactive then
+        if interactive then
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus).onBlur(leaveList)
             if focused >= 0 then idBase.foreach(base => list = list.aria("activedescendant", optionId(base, focused)))
         accessibleNameV match
@@ -454,9 +456,6 @@ final case class Listbox[K] private (
         var root = div.cssClass("p-listbox").cssClass("p-component")
         if disabledFlag then root = root.cssClass("p-disabled")
         if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
-        // Without a highlight to rove the tab stops are the rows, so the root is where a blur
-        // can still be observed from; the roving render puts the same effect on the list.
-        if hiRef.isEmpty then onBlurF.foreach(_ => root = root.onBlur(fireBlur))
         FieldInvalid.withMessage(
             root((headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*),
             invalidV.constTrue,
@@ -494,31 +493,20 @@ final case class Listbox[K] private (
             row = row.cssClass("p-focus").scrollAuto(true)
             idBase.foreach(base => row = row.id(optionId(base, index)))
         it.tooltip.foreach(t => row = row.jsProp("title", t))
+        // A row carries NO tabindex. `tabindex="-1"` keeps a row out of the Tab order but leaves
+        // it click-focusable, so a click parked the real focus on one row; the next key press
+        // promoted it to :focus-visible and the browser drew its own ring there, which then sat
+        // still while the highlight moved on. With no tabindex the click lands on the list, which
+        // is what holds focus anyway. The click also seeds the highlight where there is one, so
+        // the next arrow key continues from the row the reader just picked rather than from the top.
         if interactive then
-            hiRef match
-                case Present(ref) =>
-                    // A roved row carries NO tabindex. `tabindex="-1"` keeps a row out of the Tab
-                    // order but leaves it click-focusable, so a click parked the real focus on one
-                    // row; the next key press promoted it to :focus-visible and the browser drew
-                    // its own ring there, which then sat still while the highlight moved on. With
-                    // no tabindex the click lands on the list, which is what holds focus anyway.
-                    // The click also seeds the highlight, so the next arrow key continues from the
-                    // row the reader just picked rather than from the top.
-                    row = row.onClick((e: MouseEvent) =>
-                        ref.set(index).andThen(activate(it.id, e.modifiers.meta || e.modifiers.ctrl))
-                    )
-                case Absent =>
-                    // No highlight to rove: the rows stay their own tab stops, which is what this
-                    // listbox did before the list became one, and keeps the embedded render usable.
-                    row = row
-                        .onClick((e: MouseEvent) => activate(it.id, e.modifiers.meta || e.modifiers.ctrl))
-                        .tabIndex(0)
-                        .onKeyDown { e =>
-                            e.key match
-                                case Keyboard.Enter | Keyboard.Space => activate(it.id)
-                                case _                               => ()
-                        }
-            end match
+            row = row.onClick { (e: MouseEvent) =>
+                val pick: UI.Action = activate(it.id, e.modifiers.meta || e.modifiers.ctrl)
+                val eff: UI.Action  = hiRef match
+                    case Present(ref) => ref.set(index).andThen(pick)
+                    case Absent       => pick
+                eff
+            }
         end if
         val labelSlot: UI = templateF match
             case Present(f) => f(it)

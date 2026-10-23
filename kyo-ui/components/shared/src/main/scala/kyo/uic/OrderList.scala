@@ -97,8 +97,8 @@ final case class OrderList[A] private (
     /** One mount for the state the list roves: the highlight, and the id it announces it through.
       * Minted OUTSIDE the region, since a mount inside a subscribed region re-runs on every
       * emission and would hand out a new highlight per keystroke. The static projection renders
-      * through the placeholder, which is the shape this control had before its list was one tab
-      * stop: every row its own.
+      * through the placeholder: the list is already its one tab stop there, with no highlight
+      * on it yet.
       */
     private[uic] def render(using Frame): UI =
         UI.mounted {
