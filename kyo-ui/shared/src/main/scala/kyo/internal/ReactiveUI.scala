@@ -135,6 +135,9 @@ final private[kyo] class MountDispatch(
     /** The instance registered last for the mount whose content has identity `at`. */
     def instance(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
         cells.get.map(_.get(at).flatMap(_.lastMaybe))
+
+    /** How many instances are registered over every mount: none once everything that showed one has been released. */
+    def registered(using Frame): Int < Sync = cells.get.map(_.foldLeft(0)((n, _, held) => n + held.size))
 end MountDispatch
 
 private[kyo] object MountDispatch:
@@ -2450,18 +2453,21 @@ private[kyo] object ReactiveUI:
     end RowScope
 
     /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
-      * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
+      * happens only from the owning region's sequential observe loop, and from [[evictAll]] once that loop has ended.
       *
       * The key index is maintained incrementally (evicted keys leave it, fresh instances join it), so
       * neither an emission nor an event lookup rebuilds a map over every live row.
       *
       * A row is the registry's from the moment it starts subscribing, not from [[replaceAll]]: its scope is a root nothing else
-      * closes, so an emission interrupted in between would otherwise leave what the row had already subscribed running.
+      * closes, so an emission interrupted in between would otherwise leave what the row had already subscribed running. It stays
+      * the registry's until its release has completed, for the same reason: an emission evicting rows is interrupted when the region
+      * around the list closes, and the rows it had taken out of the list but not yet closed would be left to nobody.
       */
     final private[kyo] class RowRegistry(
         rows: AtomicRef[Vector[RowInstance]],
         index: AtomicRef[Map[String, RowInstance]],
-        building: AtomicRef[List[RowScope]]
+        building: AtomicRef[List[RowScope]],
+        releasing: AtomicRef[List[Seq[RowScope]]]
     ):
         def snapshot(using Frame): Vector[RowInstance] < Sync = rows.get
 
@@ -2487,29 +2493,52 @@ private[kyo] object ReactiveUI:
           * (break-before-make, the region-level closed-and-awaited guarantee extended to rows).
           */
         def evictExcept(keep: String => Boolean)(using Frame): Unit < Async =
-            for
-                old <- rows.getAndUpdate(_.filter(r => keep(r.key)))
-                gone = old.filterNot(r => keep(r.key))
-                _ <-
-                    if gone.isEmpty then Kyo.unit
+            Sync.Unsafe.defer {
+                val old  = rows.unsafe.getAndUpdate(_.filter(r => keep(r.key)))
+                val gone = old.filterNot(r => keep(r.key))
+                if gone.isEmpty then Kyo.unit
+                else
                     // A cleared list drops the whole index at once rather than one key at a time.
-                    else if gone.size == old.size then index.set(Map.empty)
-                    else index.getAndUpdate(_ -- gone.map(_.key)).unit
-                // The channel releases of every evicted row in one pass, then the finalizers, which for a plain row hold
-                // nothing and complete without suspending (initInline).
-                _ <- release(gone.map(_.scope))
-            yield ()
+                    if gone.size == old.size then index.unsafe.set(Map.empty)
+                    else discard(index.unsafe.getAndUpdate(_ -- gone.map(_.key)))
+                    val scopes   = gone.map(_.scope)
+                    val failures = take(scopes)
+                    Async.uninterruptible(logFailures(failures).andThen(settle(scopes)))
+                end if
+            }
 
-        private def release(scopes: Seq[RowScope])(using Frame): Unit < Async =
-            for
-                _        <- Sync.Unsafe.defer(scopes.foreach(_.group.release()))
-                failures <- Sync.Unsafe.defer(scopes.flatMap(_.releaseAll()))
-                _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
-                _        <- Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
-            yield ()
-
+        /** Closes every row: the listed ones, those still subscribing, and those an emission is releasing, whose release it waits for. */
         def evictAll(using Frame): Unit < Async =
-            evictExcept(_ => false).andThen(building.getAndSet(Nil).map(release))
+            Sync.Unsafe.defer {
+                val scopes   = rows.unsafe.getAndSet(Vector.empty).map(_.scope) ++ building.unsafe.getAndSet(Nil)
+                val failures =
+                    if scopes.isEmpty then Seq.empty
+                    else
+                        index.unsafe.set(Map.empty)
+                        take(scopes)
+                val batches = releasing.unsafe.get()
+                if batches.isEmpty then Kyo.unit
+                else Async.uninterruptible(logFailures(failures).andThen(Kyo.foreachDiscard(batches)(settle)))
+            }
+
+        /** Moves `scopes` from the list to the rows being released, marks their groups, and runs their channel releases, in the step that
+          * took them out of the list: no interrupt falls between taking a row and owning its release. Returns the failed releases.
+          */
+        private def take(scopes: Seq[RowScope])(using AllowUnsafe): Seq[Throwable] =
+            discard(releasing.unsafe.getAndUpdate(scopes :: _))
+            scopes.foreach(_.group.release())
+            scopes.flatMap(_.releaseAll())
+        end take
+
+        private def logFailures(failures: Seq[Throwable])(using Frame): Unit < Async =
+            Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
+
+        /** Closes and awaits the finalizers of one batch of rows, which for a plain row hold nothing and complete without suspending
+          * (initInline). A finalizer another fiber is already closing is awaited, so [[evictAll]] waits for an emission's batch.
+          */
+        private def settle(scopes: Seq[RowScope])(using Frame): Unit < Async =
+            Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
+                .andThen(releasing.getAndUpdate(_.filterNot(_ eq scopes)).unit)
     end RowRegistry
 
     private[kyo] object RowRegistry:
@@ -2518,7 +2547,8 @@ private[kyo] object ReactiveUI:
             new RowRegistry(
                 AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe,
                 AtomicRef.Unsafe.init(Map.empty[String, RowInstance]).safe,
-                AtomicRef.Unsafe.init(List.empty[RowScope]).safe
+                AtomicRef.Unsafe.init(List.empty[RowScope]).safe,
+                AtomicRef.Unsafe.init(List.empty[Seq[RowScope]]).safe
             )
     end RowRegistry
 
