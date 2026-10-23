@@ -127,6 +127,11 @@ object DateKind:
             private[uic] def fromIso(s: String): Maybe[ZonedDateTime] = parse(s)(t => LocalDate.parse(t).atTime(at).atZone(zone))
 
     // === capability markers =====================================================================
+    //
+    // Each marker is a sealed trait with ONE named implementation, a private `Evidence` class in its companion. An anonymous
+    // `new Calendar[A] {}` would do at run time, but a tool that walks a sealed hierarchy (a derivation, a settings macro)
+    // finds no named child there and reads the trait as a child of itself. The markers stay flat: no `Evidence` extends a
+    // second marker, so one given never satisfies two of them.
 
     /** Evidence that a picker over `A` shows a calendar to page through, which every kind but `LocalTime` does. Asked for by
       * `month` and `referenceDate`.
@@ -135,7 +140,9 @@ object DateKind:
     sealed trait Calendar[A]
 
     object Calendar:
-        private def of[A]: Calendar[A] = new Calendar[A] {}
+        /** The one implementation, named so the sealed hierarchy has a real child (see the note on the markers). */
+        final private class Evidence[A] extends Calendar[A]
+        private def of[A]: Calendar[A] = Evidence[A]()
         given Calendar[LocalDate]      = of
         given Calendar[LocalDateTime]  = of
         given Calendar[YearMonth]      = of
@@ -150,7 +157,9 @@ object DateKind:
     sealed trait Drill[A]
 
     object Drill:
-        private def of[A]: Drill[A] = new Drill[A] {}
+        /** The one implementation, named so the sealed hierarchy has a real child (see the note on the markers). */
+        final private class Evidence[A] extends Drill[A]
+        private def of[A]: Drill[A] = Evidence[A]()
         given Drill[LocalDate]      = of
         given Drill[LocalDateTime]  = of
         given Drill[YearMonth]      = of
@@ -164,7 +173,9 @@ object DateKind:
     sealed trait Weeks[A]
 
     object Weeks:
-        private def of[A]: Weeks[A] = new Weeks[A] {}
+        /** The one implementation, named so the sealed hierarchy has a real child (see the note on the markers). */
+        final private class Evidence[A] extends Weeks[A]
+        private def of[A]: Weeks[A] = Evidence[A]()
         given Weeks[LocalDate]      = of
         given Weeks[LocalDateTime]  = of
         given Weeks[ZonedDateTime]  = of
@@ -180,7 +191,9 @@ object DateKind:
     sealed trait Days[A]
 
     object Days:
-        private def of[A]: Days[A] = new Days[A] {}
+        /** The one implementation, named so the sealed hierarchy has a real child (see the note on the markers). */
+        final private class Evidence[A] extends Days[A]
+        private def of[A]: Days[A] = Evidence[A]()
         given Days[LocalDate]      = of
         given Days[ZonedDateTime]  = of
     end Days
@@ -190,7 +203,9 @@ object DateKind:
     sealed trait Clock[A]
 
     object Clock:
-        private def of[A]: Clock[A] = new Clock[A] {}
+        /** The one implementation, named so the sealed hierarchy has a real child (see the note on the markers). */
+        final private class Evidence[A] extends Clock[A]
+        private def of[A]: Clock[A] = Evidence[A]()
         given Clock[LocalDateTime]  = of
         given Clock[LocalTime]      = of
     end Clock
