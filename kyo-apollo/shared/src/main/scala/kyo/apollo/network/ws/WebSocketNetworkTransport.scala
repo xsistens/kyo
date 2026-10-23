@@ -619,8 +619,10 @@ final class WebSocketNetworkTransport private[apollo] (
       */
     private def worker(body: Unit < (Async & Scope))(using Frame): Worker < (Sync & Scope) =
         for
-            entered  <- AtomicBoolean.init(false)
-            released <- Fiber.Promise.init[Unit, Any]
+            entered <- AtomicBoolean.init(false)
+            // Unsafe: there is no safe constructor for an uninterruptible promise. Uninterruptible because a stop
+            // whose wait for `released` is interrupted must end that wait, not complete the release for the others.
+            released <- Sync.Unsafe.defer(Fiber.Promise.Unsafe.initUninterruptible[Unit, Any]().safe)
             fiber    <- Fiber.init(
                 Scope.run(Scope.ensure(released.completeUnitDiscard).andThen(entered.set(true)).andThen(body))
             )
