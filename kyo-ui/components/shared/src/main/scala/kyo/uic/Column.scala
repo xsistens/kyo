@@ -424,10 +424,9 @@ final case class Column[A, +K <: FlatOnly] private (
                 commit = (a, raw) =>
                     ct.parse(raw) match
                         case Result.Success(v) =>
-                            ct.check.run(v).map {
-                                case Absent     => Result.succeed(write(a, v))
-                                case Present(e) => Result.fail(e)
-                            }
+                            ct.check.run(v).map(
+                                _.foldPartial[Result[FieldError, A]](checked => Result.succeed(write(a, checked)), e => Result.fail(e))
+                            )
                         case Result.Failure(e) => Result.fail(e)
                         case other             => other.asInstanceOf[Result[FieldError, A]]
                 ,

@@ -22,10 +22,19 @@ class FormValidationTest extends UicTest:
     private enum Lang derives CanEqual:
         case De, En
 
+    // `inline val` keeps every argument to the inline `typeCheck` a compile-time constant.
+    private inline val submitPreamble = "import kyo.*\nimport kyo.uic.form.*\n"
+
+    /** A text field's rule that parses the number it holds. */
+    private val digits: Rule[String, Int] = Validator.refine[String, Int]("not-a-number")(s => Maybe.fromOption(s.toIntOption))
+
     /** A form built the way `Form.mounted` builds one, minus the `UI.mounted` wrapper,
       * so a test can hold the instance and read its signals.
       */
-    private def mkForm(using Frame): Form < Sync =
+    private def mkForm(using Frame): Form < Sync = mkFormWith(ErrorTranslator.default)
+
+    /** [[mkForm]] with the translator a test is about. */
+    private def mkFormWith(translator: ErrorTranslator)(using Frame): Form < Sync =
         for
             fieldsR    <- AtomicRef.init(Chunk.empty[FormField[?]])
             childrenR  <- AtomicRef.init(Chunk.empty[Form])
@@ -35,7 +44,7 @@ class FormValidationTest extends UicTest:
             arrays     <- AtomicRef.init(Chunk.empty[FieldArray[?]])
             counter    <- AtomicInt.init(0)
         yield new Form(
-            ErrorTranslator.default,
+            translator,
             fieldsR,
             childrenR,
             formErrs,
@@ -62,8 +71,9 @@ class FormValidationTest extends UicTest:
             epoch      <- AtomicInt.init(0)
             resetWrite <- AtomicRef.init(Maybe.empty[A])
             count      <- Signal.initRef(0)
+            named      <- Signal.initRef(false)
         yield (
-            new FormField[A](
+            FormField.declared[A, A](
                 valueRef,
                 initial,
                 baseline,
@@ -80,7 +90,8 @@ class FormValidationTest extends UicTest:
                 Reveal.WhenTouched,
                 true,
                 ErrorTranslator.default,
-                count
+                count,
+                named
             ),
             valueRef
         )
@@ -515,17 +526,17 @@ class FormValidationTest extends UicTest:
                     matchF <- Validator.matchesField(other: Signal[String]).run("nope")
                     matchO <- Validator.matchesField(other: Signal[String]).run("secret")
                 yield Seq(
-                    patF.isDefined,
-                    patO.isEmpty,
-                    patE.isEmpty,
-                    urlF.isDefined,
-                    urlO.isEmpty,
-                    minF.isDefined,
-                    minO.isEmpty,
-                    maxF.isDefined,
-                    maxO.isEmpty,
-                    matchF.isDefined,
-                    matchO.isEmpty
+                    patF.failure.isDefined,
+                    patO.failure.isEmpty,
+                    patE.failure.isEmpty,
+                    urlF.failure.isDefined,
+                    urlO.failure.isEmpty,
+                    minF.failure.isDefined,
+                    minO.failure.isEmpty,
+                    maxF.failure.isDefined,
+                    maxO.failure.isEmpty,
+                    matchF.failure.isDefined,
+                    matchO.failure.isEmpty
                 )
         yield assert(checks.forall(identity), s"every built-in rule case holds; got $checks")
     }
@@ -948,6 +959,264 @@ class FormValidationTest extends UicTest:
             assert(outcome.isSuccess, "the form reported the failure itself, so its own handler completes")
             assert(!still, "a failed handler leaves the form open for the next submit")
             assert(String.valueOf(noticed) == "server said no", "the failure reached the onNotice sink")
+    }
+
+    // ---- submit hands over the validated values ---------------------------------------------
+
+    "submit hands the handler what the field's rules refined to" in {
+        val day = LocalDate.of(2026, 7, 9)
+        for
+            got <-
+                for
+                    form <- mkForm
+                    due  <- form.field(Maybe.empty[LocalDate]).rules(Validator.chosen()).on(Activation.Submit).declare
+                    _    <- due.valueRef.set(Present(day))
+                    sink <- AtomicRef.init(Maybe.empty[LocalDate])
+                    // The ascription is the point: the handler receives the LocalDate, not the Maybe the field holds.
+                    _   <- form.submit(due)((d: LocalDate) => sink.set(Present(d)))
+                    got <- sink.get
+                yield got
+        yield assert(got == Present(day), s"the handler received the picked date: $got")
+        end for
+    }
+
+    "the refined type reaches the handler at compile time" in {
+        typeCheck(
+            submitPreamble +
+                "def x(f: Form)(using Frame) = f.field(Maybe.empty[java.time.LocalDate]).rules(Validator.chosen()).declare" +
+                ".map(due => f.submit(due)(d => { val day: java.time.LocalDate = d; Kyo.unit }))"
+        )
+        typeCheckFailure(
+            submitPreamble +
+                "def x(f: Form)(using Frame) = f.field(Maybe.empty[java.time.LocalDate]).rules(Validator.chosen()).declare" +
+                ".map(due => f.submit(due)(d => { val held: Maybe[java.time.LocalDate] = d; Kyo.unit }))"
+        )
+        // With no rules the field validates to its value type.
+        typeCheck(submitPreamble +
+            "def x(f: Form)(using Frame) = f.field.declare.map(s => f.submit(s)(t => { val text: String = t; Kyo.unit }))")
+    }
+
+    "submit with several fields hands each its validated value, in the order named" in {
+        for
+            got <-
+                for
+                    form <- mkForm
+                    age  <- form.field("42").rules(Validator.required() and digits).on(Activation.Submit).declare
+                    lang <- form.field(Maybe.empty[Lang]).rules(Validator.chosen()).on(Activation.Submit).declare
+                    _    <- lang.valueRef.set(Present(Lang.En))
+                    sink <- AtomicRef.init(Maybe.empty[(Int, Lang)])
+                    _    <- form.submit(age, lang)((n: Int, l: Lang) => sink.set(Present((n, l))))
+                    got  <- sink.get
+                yield got
+        yield assert(got == Present((42, Lang.En)), s"both refined values arrive: $got")
+        end for
+    }
+
+    "submit with four fields takes a number field too, refined through its own rules" in {
+        for
+            got <-
+                for
+                    form <- mkForm
+                    name <- form.field("Ada").rules(Validator.required()).on(Activation.Submit).declare
+                    qty  <- form.numberField(3).rules(Validator.min(1) and
+                        Validator.refine[Int, Long]("odd")(n => if n % 2 == 1 then Present(n.toLong) else Absent)).declare
+                    lang  <- form.field(Maybe.empty[Lang]).rules(Validator.chosen()).on(Activation.Submit).declare
+                    stock <- form.field(true).declare
+                    _     <- lang.valueRef.set(Present(Lang.De))
+                    sink  <- AtomicRef.init(Maybe.empty[(String, Long, Lang, Boolean)])
+                    _   <- form.submit(name, qty, lang, stock)((n: String, q: Long, l: Lang, s: Boolean) => sink.set(Present((n, q, l, s))))
+                    got <- sink.get
+                yield got
+        yield assert(got == Present(("Ada", 3L, Lang.De, true)), s"every value arrives, the number as its refined Long: $got")
+        end for
+    }
+
+    "submit does not call the handler when a named field is invalid, and focuses it" in {
+        for
+            (ran, focused, dueId, shown) <-
+                for
+                    sink  <- Signal.initRef(Chunk.empty[String])
+                    form  <- mkFocusForm(sink)
+                    name  <- form.field("Ada").rules(Validator.required()).on(Activation.Submit).declare
+                    due   <- form.field(Maybe.empty[LocalDate]).rules(Validator.chosen()).on(Activation.Submit).declare
+                    ran   <- AtomicBoolean.init(false)
+                    _     <- form.submit(name, due)((_: String, _: LocalDate) => ran.set(true))
+                    r     <- ran.get
+                    f     <- sink.get
+                    shown <- due.visibleError.current
+                yield (r, f, due.domId, shown)
+        yield
+            assert(!ran, "an empty required date keeps the handler from running")
+            assert(focused == Chunk(dueId), s"focus goes to the invalid named field: $focused")
+            assert(shown.map(_.code) == Present("required"), s"and it shows its error: $shown")
+        end for
+    }
+
+    "submit does not call the handler when a field it does not name is invalid" in {
+        for
+            ran <-
+                for
+                    form <- mkForm
+                    name <- form.field("Ada").rules(Validator.required()).on(Activation.Submit).declare
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
+                    ran  <- AtomicBoolean.init(false)
+                    _    <- form.submit(name)(_ => ran.set(true))
+                    r    <- ran.get
+                yield r
+        yield assert(!ran, "the rest of the form still has to hold")
+        end for
+    }
+
+    "a field from another form, named in a submit, shows the error that blocked it" in {
+        for
+            (ran, touchedShown, onSubmitShown, touchedMsg, untouched, unnamedShown, afterReset) <-
+                for
+                    formA     <- mkForm
+                    formB     <- mkForm
+                    whenTouch <- formB.field.rules(Validator.required()).on(Activation.Submit).declare
+                    onSubmit  <- formB.field.rules(Validator.required()).on(Activation.Submit).revealWhen(Reveal.OnSubmit).declare
+                    unnamed   <- formB.field.rules(Validator.required()).on(Activation.Submit).declare
+                    ran       <- AtomicBoolean.init(false)
+                    _         <- formA.submit(whenTouch, onSubmit)((_, _) => ran.set(true))
+                    r         <- ran.get
+                    e1        <- whenTouch.visibleError.current
+                    e2        <- onSubmit.visibleError.current
+                    m1        <- whenTouch.message.current
+                    t         <- whenTouch.touched.current
+                    u         <- unnamed.visibleError.current
+                    _         <- formB.reset
+                    gone      <- Kyo.foreach(Chunk(whenTouch, onSubmit))(_.visibleError.current)
+                yield (r, e1.map(_.code), e2.map(_.code), m1, t, u, gone)
+        yield
+            assert(!ran, "the empty foreign field blocks the handler")
+            assert(touchedShown == Present("required"), s"a WhenTouched field the submit named shows why: $touchedShown")
+            assert(onSubmitShown == Present("required"), s"so does an OnSubmit one: $onSubmitShown")
+            assert(touchedMsg == Present("required"), s"its message row too: $touchedMsg")
+            assert(!untouched, "naming a field in a submit does not pretend the reader touched it")
+            assert(unnamedShown.isEmpty, s"the form the field belongs to was not submitted, so its other fields stay quiet: $unnamedShown")
+            assert(afterReset == Chunk(Absent, Absent), s"its own form's reset closes the gate again: $afterReset")
+        end for
+    }
+
+    "a named field's rules run once per submit" in {
+        for
+            (named, plain) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field(
+                        "x"
+                    ).rules(Validator.async[String](_ => runs.incrementAndGet.andThen(Absent))).on(Activation.Submit).declare
+                    _ <- form.submit(f)(_ => Kyo.unit)
+                    n <- runs.get
+                    _ <- form.submit(Kyo.unit)
+                    p <- runs.get
+                yield (n, p - n)
+        yield
+            assert(named == 1, s"the named submit validated the field once: $named runs")
+            assert(plain == 1, s"as the plain submit does: $plain runs")
+        end for
+    }
+
+    "the handler receives the value the submit validated, not one written while it validated" in {
+        for
+            (got, now) <-
+                for
+                    form <- mkForm
+                    f    <- form.field("first").rules(Validator.required()).on(Activation.Submit).declare
+                    // A check that runs inside the submit's validation and edits the field meanwhile,
+                    // the way a reader types while an async rule is in flight.
+                    _    <- Sync.defer(discard(f.addRule(Validator.async[String](_ => f.valueRef.set("later").andThen(Absent)))))
+                    sink <- AtomicRef.init("")
+                    _    <- form.submit(f)(v => sink.set(v))
+                    got  <- sink.get
+                    now  <- f.valueRef.get
+                yield (got, now)
+        yield
+            assert(now == "later", "the edit landed")
+            assert(got == "first", s"but the handler got the value the rules judged: $got")
+        end for
+    }
+
+    // ---- text that needs no code ---------------------------------------------------------------
+
+    "a rule's message is what the default translator shows" in {
+        for
+            (empty, short) <-
+                for
+                    form <- mkForm
+                    body <- form.field
+                        .rules(
+                            Validator.required().message("Write something first.") and
+                                Validator.minLength(3).message("A comment has at least 3 characters.")
+                        )
+                        .on(Activation.Submit)
+                        .declare
+                    _     <- form.submit(Kyo.unit)
+                    empty <- body.message.current
+                    _     <- body.valueRef.set("ab")
+                    _     <- form.submit(Kyo.unit)
+                    short <- body.message.current
+                yield (empty, short)
+        yield
+            assert(empty == Present("Write something first."), s"$empty")
+            assert(short == Present("A comment has at least 3 characters."), s"$short")
+        end for
+    }
+
+    "a table entry speaks for its code over a rule's message; a rule with its own code keeps its text" in {
+        for
+            (byDefaultCode, byOwnCode, unlisted) <-
+                for
+                    form <- mkFormWith(ErrorTranslator.englishMap(Map("required" -> "Required.")))
+                    a    <- form.field.rules(Validator.required().message("Write something first.")).on(Activation.Submit).declare
+                    b    <- form.field.rules(Validator.required("comment-empty").message("Write something first.")).on(Activation.Submit)
+                        .declare
+                    c  <- form.field.rules(Validator.minLength(3).message("Three at least.")).on(Activation.Submit).declare
+                    _  <- c.valueRef.set("ab")
+                    _  <- form.submit(Kyo.unit)
+                    ma <- a.message.current
+                    mb <- b.message.current
+                    mc <- c.message.current
+                yield (ma, mb, mc)
+        yield
+            assert(byDefaultCode == Present("Required."), s"the translator has the first word: $byDefaultCode")
+            assert(byOwnCode == Present("Write something first."), s"a code the table does not list shows the rule's text: $byOwnCode")
+            assert(unlisted == Present("Three at least."), s"$unlisted")
+        end for
+    }
+
+    "raise takes text, under the one message code" in {
+        for
+            (errors, shown) <-
+                for
+                    form   <- mkForm
+                    _      <- form.raise("The server is down, try again in a minute.")
+                    errors <- form.errors.current
+                    shown  <- form.translator.translate(errors.head).current
+                yield (errors, shown)
+        yield
+            assert(errors == Chunk(FieldError(FieldError.messageCode, fallback = Present("The server is down, try again in a minute."))))
+            assert(shown == "The server is down, try again in a minute.")
+        end for
+    }
+
+    "a field's server error takes text, value-scoped like any other" in {
+        for
+            (shown, code, afterEdit) <-
+                for
+                    (f, valueRef) <- mkField("", Validator.all(), "bob")
+                    _             <- f.setError("That name is taken.")
+                    shown         <- f.message.current
+                    err           <- f.visibleError.current
+                    _             <- valueRef.set("bobby")
+                    after         <- f.message.current
+                yield (shown, err.map(_.code), after)
+        yield
+            assert(shown == Present("That name is taken."), s"$shown")
+            assert(code == Present(FieldError.messageCode))
+            assert(afterEdit.isEmpty, "the first edit hides it")
+        end for
     }
 
 end FormValidationTest

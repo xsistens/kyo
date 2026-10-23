@@ -71,14 +71,14 @@ class CellTypeTest extends UicTest:
 
     "a rule runs over the parsed value, and passes everything by default" in {
         for
-            open <- CellType.int.check.run(3)
+            open <- CellType.int.check.run(3).map(_.failure)
             gated = CellType.int.validate(Validator.min(10))
-            low  <- gated.check.run(3)
+            low  <- gated.check.run(3).map(_.failure)
             high <- gated.check.run(30)
         yield
             assert(open == Absent, "a type with no rule refuses nothing")
             assert(low.exists(_.code == "min"), "and one with a rule reports it by code")
-            assert(high == Absent)
+            assert(high.value == Present(30), "and what passes is the value the column writes")
     }
 
     // What makes a filter over the type a comparison: the numbers carry it, the types
