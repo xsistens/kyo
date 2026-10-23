@@ -585,6 +585,13 @@ object UI:
               * more than one place, none of them gets an instance: each shows a [[kyo.UI.MountErrorSource.Duplicate]] error naming
               * all of them, since only the data can say which instance belongs where.
               *
+              * A failure is final for the instance, and a move keeps it: a failed instance that moves shows its error view in its new
+              * place, rendered by that node's [[kyo.UI.MountedOps.onError]], and its effect does not run again. This holds for an interrupt that ends the
+              * effect while the move is still undecided, such as another mount's release interrupting a promise the effect awaits:
+              * whether the instance moved or went away is decided once every region has seen the writes, and the interrupt is silent
+              * only if the instance went away. If it moved, the interrupt is a [[kyo.UI.MountErrorSource.Panic]] failure in its new place.
+              * To start the effect again, change the key: the failed instance is released and a new one starts.
+              *
               * Inputs that should update a live instance belong in `Signal` parameters. A plain value the effect captures belongs in the
               * key, or the instance keeps the value it was created with.
               */

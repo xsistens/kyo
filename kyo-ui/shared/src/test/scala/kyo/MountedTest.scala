@@ -1527,6 +1527,55 @@ class MountedTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a keyed mount that moves after an interrupt from elsewhere ended its effect before the cut keeps its failure until its key changes" in {
+        val errors = new ErrorLog
+        Log.let(Log(errors)) {
+            for
+                shared    <- Promise.init[Unit, Any]
+                entered   <- Latch.init(2)
+                hold      <- Promise.init[Unit, Any]
+                runs      <- AtomicInt.init(0)
+                releasedK <- AtomicBoolean.init(false)
+                releasedX <- AtomicBoolean.init(false)
+                where     <- Signal.initRef(1)
+                // One call site, so both regions show the same identity for key 1: the write to 2 moves the instance, the write to 3
+                // shows key 2 in its place.
+                x = (key: Int) =>
+                    UI.mounted(runs.incrementAndGet.andThen(
+                        if key == 1 then awaiting(shared, entered, releasedX, "X") else span("fresh")
+                    )).keyed(key).onError(e => span(s"error:${e.source}"))
+                ui = div(
+                    where.render(w => if w == 1 then div(UI.mounted(awaiting(shared, entered, releasedK, "K")), x(1)) else span("first")),
+                    where.render(w => if w == 2 then div(x(1)) else if w == 3 then div(x(2)) else span("second empty"))
+                )
+                _ <- mountSession(ui) { (recorder, sub) =>
+                    for
+                        _ <- entered.await
+                        // The move runs in a batch held open, so K's release ends X's effect before the cut that decides the move.
+                        batch  <- Fiber.initUnscoped(sub.mountSession.within(where.set(2).andThen(hold.get)))
+                        _      <- assertEventually(releasedK.get)
+                        _      <- assertEventually(pendingVerdicts(sub.mountSession).map(_ == 1))
+                        before <- recorder.shown(Seq("1", "0"))
+                        _      <- hold.completeUnitDiscard
+                        _      <- batch.get
+                        _      <- showsEventually(recorder, Seq("1", "0"), "error:Panic")
+                        gone   <- releasedX.get
+                        once   <- runs.get
+                        log    <- errors.logged
+                        _ = assert(
+                            !before.contains("error:") && !gone && once == 1 && log.exists(_.contains("Mounted effect panicked")),
+                            s"before the cut: $before, X released: $gone, runs: $once, logged $log"
+                        )
+                        _     <- where.set(3)
+                        _     <- showsEventually(recorder, Seq("1", "0"), "fresh")
+                        _     <- assertEventually(releasedX.get)
+                        twice <- runs.get
+                    yield assert(twice == 2, s"runs after the key changed: $twice")
+                }
+            yield succeed
+        }
+    }
+
     "a keyless mount whose effect is interrupted by the release of a keyed mount shows its error view" in {
         for
             shared    <- Promise.init[Unit, Any]

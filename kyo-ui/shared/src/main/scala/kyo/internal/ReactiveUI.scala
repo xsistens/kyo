@@ -2976,7 +2976,14 @@ private[kyo] object ReactiveUI:
             group.release()
             table.settleVerdicts()
 
-        /** Whether the interrupt was a failure, when `s` can tell. */
+        /** Whether the interrupt was a failure, when `s` can tell.
+          *
+          * A filed instance that a live claim shows gets `true`. That includes, on purpose, one whose interrupt came while it was in
+          * transit and that the cut then finds in another region (it moved): like any failed instance that moves, it shows its error
+          * view in its new place and its effect does not run again, and a key change is what starts a new one (see
+          * [[kyo.UI.MountedOps.keyed]]). `false` there would not restart it either: the effect would end without publishing, and the
+          * node would stay pending for good, with neither content nor an error view.
+          */
         private[ReactiveUI] def judge(s: TableState): Maybe[Boolean] =
             if group.released then Present(false)
             else
