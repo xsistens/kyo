@@ -39,8 +39,8 @@ object PrimeIconsGen:
     end parseIcon
 
     def run(): Unit =
-        val svgDir = Common.repoRoot.resolve("gen/npm/node_modules/primeicons/raw-svg")
-        require(Files.isDirectory(svgDir), s"primeicons not installed: run gen/fetch.sh first ($svgDir)")
+        val svgDir = Common.npmModules.resolve("primeicons/raw-svg")
+        require(Files.isDirectory(svgDir), s"primeicons not installed: run kyo-ui/components/gen/fetch.sh first ($svgDir)")
         val icons = Files
             .list(svgDir)
             .iterator()

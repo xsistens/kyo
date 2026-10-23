@@ -24,7 +24,8 @@ object FioriIconsGen:
 
     def run(): Unit =
         val iconsDir = Common.inputDir.resolve("icons")
-        val icons    = Files
+        require(Files.isDirectory(iconsDir), s"fiori icons missing: run kyo-ui/components/gen/fetch.sh first ($iconsDir)")
+        val icons = Files
             .list(iconsDir)
             .iterator()
             .asScala
