@@ -379,15 +379,15 @@ object Apollo:
     /** Read a masked embedded fragment's ref — the value-carrying counterpart of
       * the entity overload. The object has no cache identity, so there is nothing
       * to watch: the signal is constant, and updates arrive the way the value did —
-      * through the parent's reactivity re-rendering the child with a fresh ref. A
-      * value that does not decode as the fragment's fields aborts with an
-      * [[ApolloParseException]].
+      * through the parent's reactivity re-rendering the child with a fresh ref. The
+      * signal holds the ref's own `value`; a value that does not decode as the
+      * fragment's fields aborts with an [[ApolloParseException]].
       */
     def fragment[Origin, D <: AnyNamedTuple](ref: EmbeddedFragment[Origin, D]#Ref)(using
         frame: Frame,
         canEqual: CanEqual[D, D]
     ): Signal[D] < (Sync & Abort[ApolloParseException]) =
-        Abort.get(ref.value).map(Signal.initRef[D](_))
+        ref.value.map(Signal.initRef[D](_))
 
     // --- Pagination ----------------------------------------------------------
 
