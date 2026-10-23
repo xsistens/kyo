@@ -1,83 +1,54 @@
 package kyo.uic
 
+import java.time.YearMonth
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
-/** DatePicker — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
-  * DatePicker anatomy: `div.p-datepicker.p-component` >
-  * `input.p-datepicker-input.p-inputtext` + `button.p-datepicker-dropdown` with
-  * the calendar glyph, over the floating `div.p-datepicker-panel` — or the
-  * `.p-datepicker-panel-inline` variant under `inline(true)` — >
-  * `div.p-datepicker-calendar-container` > `div.p-datepicker-calendar` with
-  * Prime's header (prev / month+year title buttons / next) and the
-  * `table.p-datepicker-day-view` day grid — or the `.p-datepicker-month-view` /
-  * `.p-datepicker-year-view` grids, the `.p-datepicker-time-picker`, and the
-  * `.p-datepicker-buttonbar` as configured), so the extracted `@primeuix`
-  * datepicker CSS applies verbatim.
+/** DatePicker, native kyo-ui in the PrimeOne design. It mirrors Prime's anatomy (`div.p-datepicker.p-component` over
+  * `input.p-datepicker-input.p-inputtext` and `button.p-datepicker-dropdown`, the floating `div.p-datepicker-panel` or its
+  * `.p-datepicker-panel-inline` variant, the header, the `table.p-datepicker-day-view` day grid, the month and year grids, the
+  * `.p-datepicker-time-picker` and the `.p-datepicker-buttonbar`), so the extracted `@primeuix` sheet applies verbatim.
   *
-  * The calendar is the REAL floating panel, built on the [[Overlay]] primitive
-  * with `seedFocus(false)` — focus stays on the FIELD (the panel's buttons stay
-  * reachable by Tab/click). Clicking the field or the calendar dropdown button
-  * opens it (Prime's `showOnFocus` + `showIcon` patterns); a completed pick
-  * closes it in single mode (multiple/range keep it open per Prime), and
-  * Escape (on the field or inside the panel) or an outside click closes.
+  * The value type decides what the picker is: `DatePicker[LocalDate]` picks a day, `[LocalDateTime]` a day and a time,
+  * `[LocalTime]` a time alone, `[YearMonth]` a month and `[Year]` a year, each through its [[DateKind]] given, and
+  * `DatePicker(DateKind.zoned(zone))` a day held as a `ZonedDateTime`. What it holds binds two-way as `Maybe[A]` through
+  * `value`; for the day kinds, `values` turns it into a [[MultiDatePicker]] over `Set[A]` and `range` into a
+  * [[RangeDatePicker]] over a start and an end, each with the one `onChange` and `onBlur` its value calls for. Every event
+  * reports the typed value and fires only when a write changed what is held. A setter only some kinds can honour asks for
+  * one of the [[DateKind]] capability markers, so it does not compile where it would mean nothing.
   *
-  * Keyboard (the ARIA date-grid pattern, over the pure [[CalendarNav]] machine):
-  * ArrowDown on the field opens the calendar, and a second one steps into the
-  * grid. The grid is ONE tab stop with a roving `.p-focus` highlight inside it,
-  * announced through `aria-activedescendant` — a day is a `<span>` rather than a
-  * control of its own, which is the same reason [[Listbox]] and [[Tree]] rove a
-  * highlight instead of a tabindex. The arrows step a day and a week, crossing
-  * whatever boundary that implies and carrying the displayed month with them;
-  * Home and End reach the ends of the WEEK; PageUp and PageDown turn a month and
-  * with Shift a year; Enter or Space picks the highlighted day; Escape closes and
-  * hands focus back to the field. The month and year grids answer the same keys in
-  * their own unit. Space and Enter are deliberately NOT opening keys on the field:
-  * it is a text box, so one types a space and the other belongs to the form.
-  * `open(ref)` optionally binds the visibility (self-managed via an effectful
-  * `UI.mounted` region otherwise — static projections render the closed anatomy
-  * inert). `inline(true)` renders the panel in-flow below the field instead
-  * (Prime's `inline` prop): always visible without an `open` ref, toggled by
-  * the dropdown button with one.
+  * The calendar is the REAL floating panel, built on [[Overlay]] with `seedFocus(false)`. Clicking the field or the dropdown
+  * button opens it, a completed pick closes it in single mode, and Escape or an outside click closes it. Keyboard (the ARIA
+  * date-grid pattern, over the pure [[CalendarNav]] machine): ArrowDown on the field opens the calendar and a second one steps
+  * into the grid, which is ONE tab stop with a roving `.p-focus` highlight announced through `aria-activedescendant`. The
+  * arrows step a day and a week, Home and End reach the ends of the week, PageUp and PageDown turn a month (a year with
+  * Shift), Enter or Space picks, and Escape is a cancel that puts back what the panel held before the reader touched it.
   *
-  * The value model is a deliberate deviation from Prime's `Date` objects and
-  * format strings: everything binds ISO-prefix strings two-way, keeping the
-  * shared JVM+JS render pure — it never reads `Date.now()`. Selection modes are
-  * carried by the binding overloads: `value` (single, `YYYY-MM-DD`, or with
-  * [[showTime]] `YYYY-MM-DDTHH:MM`, with [[timeOnly]] `HH:MM`, with
-  * `view(Month)` `YYYY-MM`, with `view(Year)` `YYYY`), `values`
-  * (multiple, a `Set` of ISO dates), and `range` (a start/end pair of ISO
-  * dates). The displayed month derives from an optional `month` ref
-  * (`"YYYY-MM"`, shifted by the prev/next header buttons), falling back to the
-  * bound value, then the caller-supplied `referenceDate`, then a fixed epoch.
-  * The month/year drill-down (clicking the title buttons) needs somewhere
-  * server-honest to keep the CURRENT VIEW — bind it with `currentView(ref)`
-  * (the `month`-ref pattern); without it the title buttons render disabled.
-  * Because the render is pure there is also no "today" highlight, and the
-  * button bar's Today button renders only when the app supplies `today(iso)`
-  * explicitly. All date math is hand-rolled integer arithmetic (no `java.time`,
-  * which Scala.js lacks by default).
+  * The field shows the held value as its ISO text and reads what a reader types back through the kind: text naming a value
+  * within the bounds is written, an empty field clears, and anything else writes nothing and goes back to the held value
+  * when the field loses focus.
+  *
+  * The render is pure: it never reads a clock, so the Today button renders only when the app supplies [[today]]. The month
+  * shown comes from the `month` ref, else the held value, else [[referenceDate]], else January 2000; the mount mints the
+  * month, view, open and cursor state a caller does not bind.
   */
-final case class DatePicker private (
-    valueBinding: Maybe[Input.Value] = Absent,
-    multiRef: Maybe[SignalRef[Set[String]]] = Absent,
-    rangeRefsV: Maybe[(SignalRef[String], SignalRef[String])] = Absent,
-    monthRef: Maybe[SignalRef[String]] = Absent,
+final case class DatePicker[A] private (
+    kind: DateKind[A],
+    bindingV: Maybe[DatePicker.Binding[A]] = Absent,
+    monthRef: Maybe[SignalRef[YearMonth]] = Absent,
     currentViewRefV: Maybe[SignalRef[DatePickerView]] = Absent,
-    viewV: DatePickerView = DatePickerView.Date,
     inlineFlag: Boolean = false,
-    showTimeFlag: Boolean = false,
-    timeOnlyFlag: Boolean = false,
     hourFormatV: HourFormat = HourFormat.H24,
     showButtonBarFlag: Boolean = false,
-    todayV: Maybe[String] = Absent,
+    todayV: Maybe[A] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
     disabledFlag: Boolean = false,
     readonlyFlag: Boolean = false,
     requiredFlag: Boolean = false,
     nameV: Maybe[String] = Absent,
-    minDateV: Maybe[String] = Absent,
-    maxDateV: Maybe[String] = Absent,
+    minDateV: Maybe[A] = Absent,
+    maxDateV: Maybe[A] = Absent,
     showWeekFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     variantV: FieldVariant = FieldVariant.Outlined,
@@ -88,195 +59,175 @@ final case class DatePicker private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     openRef: Maybe[SignalRef[Boolean]] = Absent,
-    referenceDateV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
+    referenceDateV: Maybe[A] = Absent,
+    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onValuesChangeF: Maybe[Set[A] => UI.Action] = Absent,
+    onRangeChangeF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
     onOpenF: Maybe[() => UI.Action] = Absent,
     onCloseF: Maybe[() => UI.Action] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+    onValuesBlurF: Maybe[Set[A] => UI.Action] = Absent,
+    onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef:
-    type Self = DatePicker
+) extends Node, OptionalFormControl[A], HasPlaceholder, HasAccessibleNameRef:
+    type Self = DatePicker[A]
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): DatePicker = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): DatePicker[A] = copy(idV = v)
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Sets a constant ISO value (`YYYY-MM-DD`; `YYYY-MM` / `YYYY` under
-      * `view(Month|Year)`; datetime/time under `showTime`/`timeOnly`).
+    /** Binds the held value two-way to `ref`, `Absent` while nothing is picked: a pick, the time picker, the button bar and a
+      * typed text write it back.
       */
-    def value(v: String): DatePicker = copy(valueBinding = Present(Input.Value.Const(v)))
+    def value(ref: SignalRef[Maybe[A]]): DatePicker[A] = copy(bindingV = Present(DatePicker.Binding.Single(ref)))
 
-    /** Binds two-way to `ref` (single selection): picking writes back the ISO string. */
-    def value(ref: SignalRef[String]): DatePicker = copy(valueBinding = Present(Input.Value.Ref(ref)))
-
-    /** Multiple selection (Prime's `selectionMode="multiple"`): binds the picked
-      * ISO dates two-way as a Set — a day click toggles membership, the panel
-      * stays open (the `Listbox.selected` / `SelectButton.values` collection
-      * pattern). Wins over [[value]].
+    /** The same picker with several days picked at once (Prime's `selectionMode="multiple"`): a [[MultiDatePicker]] bound
+      * two-way to the set. A day click toggles membership and the panel stays open. Everything set so far carries over except
+      * the single-value binding and its `onChange` and `onBlur`, which hold one value and would never fire on a set.
       */
-    def values(ref: SignalRef[Set[String]]): DatePicker = copy(multiRef = Present(ref))
+    def values(ref: SignalRef[Set[A]])(using DateKind.Days[A]): MultiDatePicker[A] =
+        MultiDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Multi(ref))))
 
-    /** Range selection (Prime's `selectionMode="range"`): binds the start/end ISO
-      * dates two-way. The first pick writes `start` (clearing `end`), a pick on
-      * or after it completes the range and closes the panel, an earlier pick
-      * restarts. In-range days render Prime's `.p-datepicker-day-selected-range`.
-      * Wins over [[value]] and [[values]].
+    /** The same picker picking a range (Prime's `selectionMode="range"`): a [[RangeDatePicker]] bound two-way to the start
+      * and end days. The first pick writes `start` (clearing `end`), a pick on or after it completes the range and closes the
+      * panel, an earlier pick restarts. Everything set so far carries over except the single-value binding and its events.
       */
-    def range(start: SignalRef[String], end: SignalRef[String]): DatePicker =
-        copy(rangeRefsV = Present((start, end)))
+    def range(start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]])(using DateKind.Days[A]): RangeDatePicker[A] =
+        RangeDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Range(start, end))))
 
-    /** Binds the DISPLAYED month two-way to `ref` (`"YYYY-MM"`): the header's
-      * prev/next buttons shift it by pure integer math (by month, year, or decade
-      * depending on the current view), and so do the page keys and any arrow that
-      * steps out of the month on the screen. Bind it only to READ or drive the
-      * month from outside; the mount mints one when you do not, so navigating the
-      * calendar is not something a caller has to opt into. An empty ref value
-      * falls back to the value-derived month.
+    /** This picker without its single-value binding and events, which is what a set or range picker is built from. */
+    private def single: DatePicker[A] = copy(bindingV = Absent, onChangeF = Absent, onBlurF = Absent)
+
+    /** Binds the DISPLAYED month two-way: the header's prev and next buttons move it (by a month, a year or a decade, as the
+      * grid on screen counts), and so do the page keys and any arrow that steps out of the page. In the month grid its year is
+      * the year shown, in the year grid its decade. Bind it only to read or drive the page from outside; the mount mints one
+      * otherwise, so navigating is not something a caller has to opt into.
       */
-    def month(ref: SignalRef[String]): DatePicker = copy(monthRef = Present(ref))
+    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): DatePicker[A] = copy(monthRef = Present(ref))
 
-    /** Renders the calendar panel IN-FLOW below the field instead of floating
-      * (Prime's `inline` prop, `.p-datepicker-panel-inline`): always visible
-      * without an [[open]] ref, toggled by the dropdown button with one.
+    /** Renders the calendar panel IN-FLOW below the field instead of floating (Prime's `inline` prop,
+      * `.p-datepicker-panel-inline`): always visible without an [[open]] ref, toggled by the dropdown button with one.
       */
-    def inline(v: Boolean): DatePicker = copy(inlineFlag = v)
+    def inline(v: Boolean): DatePicker[A] = copy(inlineFlag = v)
 
-    /** Picking granularity (Prime's `view`): `Month` starts in the month grid and
-      * picks `YYYY-MM` values, `Year` starts in the year grid and picks `YYYY`.
-      * Default `Date`.
+    /** Binds the grid on screen two-way, kyo's server-honest stand-in for Prime's internal `currentView` state: the title's
+      * month and year buttons drill into the coarser grids, and a pick there drills back. It starts at the grid the kind picks
+      * in (the day grid, or the month grid for `YearMonth`); without this binding the mount keeps the state itself.
       */
-    def view(v: DatePickerView): DatePicker = copy(viewV = v)
+    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): DatePicker[A] = copy(currentViewRefV = Present(ref))
 
-    /** Binds the CURRENT VIEW two-way to `ref` — kyo's server-honest replacement
-      * for Prime's internal `currentView` state (the `month`-ref pattern):
-      * clicking the title's month/year buttons drills into the month/year grids,
-      * picking there writes the `month` ref and drills back. Initialize the ref
-      * with the [[view]] granularity; without this binding the title buttons
-      * render disabled.
+    /** Hour display format: `H12` shows 12-hour hours plus Prime's AM/PM picker (the held value is the same either way).
+      * Default `H24`.
       */
-    def currentView(ref: SignalRef[DatePickerView]): DatePicker = copy(currentViewRefV = Present(ref))
+    def hourFormat(v: HourFormat)(using DateKind.Clock[A]): DatePicker[A] = copy(hourFormatV = v)
 
-    /** Adds Prime's time picker (`.p-datepicker-time-picker`) below the calendar;
-      * the single-selection value model extends to `YYYY-MM-DDTHH:MM` and a day
-      * pick no longer closes the panel (Prime keeps it open for the time). The
-      * hour/minute buttons render disabled while no date is picked (the pure
-      * render has no clock to default to).
+    /** Renders Prime's button bar (`.p-datepicker-buttonbar`) with Today and Clear. Clear empties the bound selection and
+      * closes the panel. Today needs a date and the render is pure (no clock), so the Today button renders only when the app
+      * supplies [[today]].
       */
-    def showTime(v: Boolean): DatePicker = copy(showTimeFlag = v)
+    def showButtonBar(v: Boolean): DatePicker[A] = copy(showButtonBarFlag = v)
 
-    /** Time-only mode (Prime's `timeOnly`): no calendar, just the time picker;
-      * the value model is `HH:MM` (an empty value edits from 00:00).
+    /** The app-supplied "now" for the button bar's Today button, which shows its page and picks it: the whole value in single
+      * mode (a time kind takes its time too), the day in multiple and range mode. Outside the bounds it renders disabled.
       */
-    def timeOnly(v: Boolean): DatePicker = copy(timeOnlyFlag = v)
+    def today(v: A): DatePicker[A] = copy(todayV = Present(v))
 
-    /** Hour display format: `H12` shows 12-hour hours plus Prime's AM/PM picker
-      * (the value model stays 24-hour ISO). Default `H24`.
-      */
-    def hourFormat(v: HourFormat): DatePicker = copy(hourFormatV = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker[A] = copy(placeholderText = v)
 
-    /** Renders Prime's button bar (`.p-datepicker-buttonbar`) with Today + Clear.
-      * Clear empties the bound selection and closes the panel. Today needs a date
-      * and the render is pure (no clock), so the Today button renders only when
-      * the app supplies [[today]] explicitly.
-      */
-    def showButtonBar(v: Boolean): DatePicker = copy(showButtonBarFlag = v)
+    def disabled(v: Boolean): DatePicker[A] = copy(disabledFlag = v)
 
-    /** The app-supplied "today" (`YYYY-MM-DD`) for the button bar's Today button —
-      * clicking it navigates the displayed month there and picks it.
-      */
-    def today(iso: String): DatePicker = copy(todayV = Present(iso))
-
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker = copy(placeholderText = v)
-
-    def disabled(v: Boolean): DatePicker = copy(disabledFlag = v)
-
-    /** Native `readonly` on the field; the calendar cannot be opened via the
-      * dropdown button either.
-      */
-    def readonly(v: Boolean): DatePicker = copy(readonlyFlag = v)
+    /** Native `readonly` on the field; the calendar cannot be opened through the dropdown button either. */
+    def readonly(v: Boolean): DatePicker[A] = copy(readonlyFlag = v)
 
     /** Marks the field required (`aria-required` + native constraint). */
-    def required(v: Boolean): DatePicker = copy(requiredFlag = v)
+    def required(v: Boolean): DatePicker[A] = copy(requiredFlag = v)
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): DatePicker = copy(nameV = Present(v))
+    def name(v: String): DatePicker[A] = copy(nameV = Present(v))
 
-    /** Earliest selectable date (ISO `YYYY-MM-DD`) — earlier day/month/year cells
-      * render disabled.
+    /** Earliest value the picker writes. Earlier day, month and year cells render disabled; a time picker cannot step below
+      * it (for a `LocalDateTime`, on its day); typed text before it is not taken.
       */
-    def minDate(iso: String): DatePicker = copy(minDateV = Present(iso))
+    def minDate(v: A): DatePicker[A] = copy(minDateV = Present(v))
 
-    /** Latest selectable date (ISO `YYYY-MM-DD`) — later day/month/year cells
-      * render disabled.
-      */
-    def maxDate(iso: String): DatePicker = copy(maxDateV = Present(iso))
+    /** Latest value the picker writes, the mirror of [[minDate]]. */
+    def maxDate(v: A): DatePicker[A] = copy(maxDateV = Present(v))
 
-    /** Shows the ISO 8601 week-number column (`td.p-datepicker-weeknumber`; hidden
-      * by default, matching Prime's `showWeek=false`).
-      */
-    def showWeek(v: Boolean): DatePicker = copy(showWeekFlag = v)
+    /** Shows the ISO 8601 week-number column (`td.p-datepicker-weeknumber`; hidden by default, as Prime's `showWeek=false`). */
+    def showWeek(v: Boolean)(using DateKind.Weeks[A]): DatePicker[A] = copy(showWeekFlag = v)
 
     /** Size of the field: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): DatePicker = copy(sizeV = v)
+    def size(v: Size): DatePicker[A] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): DatePicker = copy(variantV = v)
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    def variant(v: FieldVariant): DatePicker[A] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
-    def fluid(v: Boolean): DatePicker = copy(fluidFlag = v)
+    def fluid(v: Boolean): DatePicker[A] = copy(fluidFlag = v)
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): DatePicker                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): DatePicker                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): DatePicker = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): DatePicker[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): DatePicker[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): DatePicker[A] = copy(invalidMsgDynV = v)
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker[A] = copy(accNameRefV = v)
 
     /** Binds the calendar's visibility two-way to `ref` (as [[Dialog.open]] does). */
-    def open(ref: SignalRef[Boolean]): DatePicker = copy(openRef = Present(ref))
+    def open(ref: SignalRef[Boolean]): DatePicker[A] = copy(openRef = Present(ref))
 
-    /** The month to display when neither a `month` ref nor a value is bound (ISO
-      * `YYYY-MM-DD`) — keeps the render pure.
+    /** The page to show while neither a `month` ref nor a held value says which. Keeps the render pure. */
+    def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = copy(referenceDateV = Present(v))
+
+    /** Fired with the value now held after a write that changed it (`Absent` once cleared). A pick of the value already held
+      * fires nothing, and neither does the undo of an Escape.
       */
-    def referenceDate(iso: String): DatePicker = copy(referenceDateV = Present(iso))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fired with the picked/toggled ISO string after every pick's ref write. */
-    def onChange(f: String => UI.Action)(using Frame): DatePicker = copy(onChangeF = Present(Callback.of(f)))
+    /** Package-internal: the events [[MultiDatePicker]] and [[RangeDatePicker]] set. */
+    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A] = copy(onValuesChangeF = Present(Callback.of(f)))
+    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A]   = copy(onValuesBlurF = Present(Callback.of(f)))
+    private[uic] def withChangeRange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): DatePicker[A] =
+        copy(onRangeChangeF = Present(Callback.of2(f)))
+    private[uic] def withBlurRange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): DatePicker[A] =
+        copy(onRangeBlurF = Present(Callback.of2(f)))
 
-    /** Fired when the calendar transitions closed → open (internal path: the
-      * dropdown button). An external `openRef.set` from app code is not intercepted.
+    /** Fired when the calendar opens through the component (the field, the dropdown button). An external write to a bound
+      * `open` ref is not intercepted.
       */
-    def onOpen(f: => UI.Action)(using Frame): DatePicker = copy(onOpenF = Present(() => Callback(f)))
+    def onOpen(f: => UI.Action)(using Frame): DatePicker[A] = copy(onOpenF = Present(() => Callback(f)))
 
-    /** Fired when the calendar transitions open → closed (internal paths: the
-      * dropdown button, a completing pick, the button bar). External `openRef.set`
-      * writes are not intercepted.
+    /** Fired when the calendar closes through the component (the dropdown button, a completing pick, the button bar,
+      * Escape). An external write to a bound `open` ref is not intercepted.
       */
-    def onClose(f: => UI.Action)(using Frame): DatePicker = copy(onCloseF = Present(() => Callback(f)))
+    def onClose(f: => UI.Action)(using Frame): DatePicker[A] = copy(onCloseF = Present(() => Callback(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current date string —
-      * unlike `onChange` it fires even when the value was not edited. The
+    /** Fires on focus loss with the value held; unlike `onChange` it fires whether or not anything was edited. The
       * form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): DatePicker = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = copy(onBlurF = Present(Callback.of(f)))
 
     // === render =============================================================
 
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
+    private val minIso: Maybe[String] = minDateV.map(kind.toIso)
+    private val maxIso: Maybe[String] = maxDateV.map(kind.toIso)
+
+    /** Whether `iso` (at the kind's own precision) lies within the bounds. ISO strings of one kind compare as their values. */
+    private def inBounds(iso: String): Boolean = minIso.forall(iso >= _) && maxIso.forall(iso <= _)
+
+    /** `iso` moved into the bounds. */
+    private def clamp(iso: String): String =
+        minIso.filter(iso < _).orElse(maxIso.filter(iso > _)).getOrElse(iso)
+
     /** The keyboard state the mount allocates, and the ids it addresses cells by.
       *
-      * `monthOv` is the displayed month. A caller's own `month(ref)` wins; without one a minted
-      * ref stands in, holding `""` until something moves the month. That is what lets the header
-      * buttons and the arrows move it at all: before, an unbound `month` left them disabled and
-      * the calendar frozen on one month.
-      *
-      * `cursor` is the cell the keyboard is on, as an ISO string at the view's own precision.
-      * Cell ids are POSITIONAL (`base-c<n>`), not date-keyed, so a month change patches the cells
-      * that are already in the document instead of inserting new ones, and moving focus into the
-      * new month cannot race the render that draws it.
+      * A caller's own `month`, `currentView` and `open` refs win; the mount mints what the caller did not bind, including the
+      * held value itself, so a picker read only through `onChange` still has somewhere to keep its pick. The cursor is the cell
+      * the keyboard is on, as an ISO string at the grid's own precision. Cell ids are POSITIONAL (`base-c<n>`), so a page
+      * change patches the cells already in the document rather than inserting new ones.
       */
     private[uic] def render(using Frame): UI =
         // The static projection (SSG, the SSR page GET) is the same anatomy, inert: an inline
@@ -291,38 +242,44 @@ final case class DatePicker private (
         if !interactive then stat
         else
             UI.mounted {
+                // The held value of an unbound picker is the mount's own; its equality is the value type's `equals`, which
+                // is what every kind's value type defines.
+                given CanEqual[A, A] = CanEqual.derived
                 for
                     cmds <- UI.commands
                     base <- cmds.freshId
+                    held <- bindingV match
+                        case Present(b) => Kyo.lift(b)
+                        case Absent     => Signal.initRef(Maybe.empty[A]).map(r => DatePicker.Binding.Single(r): DatePicker.Binding[A])
                     oref <- openRef match
                         case Present(r) => Kyo.lift(r)
                         case Absent     => Signal.initRef(inlineFlag)
                     mref <- monthRef match
-                        case Present(r) => Kyo.lift(r)
-                        case Absent     => Signal.initRef("")
+                        case Present(r) => Kyo.lift(DatePicker.ShownMonth.Bound(r))
+                        case Absent     => Signal.initRef("").map(DatePicker.ShownMonth.Own(_))
                     vref <- currentViewRefV match
                         case Present(r) => Kyo.lift(r)
-                        case Absent     => Signal.initRef(viewV)
+                        case Absent     => Signal.initRef(kind.view)
                     cur     <- Signal.initRef("")
                     seed    <- Signal.initRef(false)
                     restore <- Signal.initRef(Maybe.empty[DatePicker.Restore])
-                    refs = DatePicker.Refs(oref, mref, cur, vref, seed, restore)
-                yield wired(refs, base, id => cmds.focusId(id))
+                    draft   <- Signal.initRef(Maybe.empty[String])
+                    refs = DatePicker.Refs(oref, mref, cur, vref, seed, restore, draft)
+                yield copy(bindingV = Present(held)).wired(refs, base, id => cmds.focusId(id))
+                end for
             }.placeholder(stat)
         end if
     end render
 
-    /** The host the mount publishes — the seam golden tests render directly (a full top-down
-      * re-render shows mounted regions as placeholders).
+    /** The host the mount publishes, and the seam golden tests render directly (a full top-down re-render shows mounted
+      * regions as placeholders).
       *
-      * The FIELD is built once, outside the open ref's subscription: only the panel and the
-      * root's anchor class follow it. That is what makes the focus return on Escape safe, since
-      * the element focus goes back to is never the one a close replaces.
+      * The FIELD is built outside the open ref's subscription: only the panel and the root's anchor class follow it. That is
+      * what makes the focus return on Escape safe, since the element focus goes back to is never one a close replaces.
       */
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
-        // The mount mints a view ref when the caller binds none, the way it mints the month one.
-        // Without it the month and year buttons rendered disabled and a drill-down had nothing to
-        // write, which left the two granular grids unreachable in the default configuration.
+        // The mount mints a view ref when the caller binds none, the way it mints the month one. Without it the month and year
+        // buttons rendered disabled and a drill-down had nothing to write.
         copy(currentViewRefV = Present(refs.view)).wiredWith(refs, base, focus)
 
     private def wiredWith(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
@@ -331,12 +288,11 @@ final case class DatePicker private (
         val cursor                                                   = refs.cursor
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
-            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, base, focus)
-        // The cursor and the seed flag are read together rather than through a second nested
-        // render: two regions over the same grid would leave the inner one drawing against the
-        // cursor it closed over.
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus)
+        // The cursor and the seed flag are read together rather than through a second nested render: two regions over the
+        // same grid would leave the inner one drawing against the cursor it closed over.
         val body: UI =
-            mref.render(mv =>
+            mref.signal.render(mv =>
                 cursor.combineLatest(seed).render { pair =>
                     val (cv, sd) = pair
                     calendarReactive(Present(oref), Present(nav(mv, cv, sd)), inline = inlineFlag)
@@ -356,10 +312,9 @@ final case class DatePicker private (
         panel: UI,
         openSignal: Maybe[SignalRef[Boolean]] = Absent
     )(using Frame): UI =
-        // Reactive-invalid gate (BELOW every UI.mounted node — assemble runs inside
-        // the open ref's subscription / at the static projection, never around the
-        // mount): with a reactive slot set, re-render field + root + message through
-        // the shared helper; otherwise the untouched static form.
+        // Reactive-invalid gate (BELOW every UI.mounted node: assemble runs inside the open ref's subscription or at the
+        // static projection, never around the mount). With a reactive slot set, field, root and message re-render through the
+        // shared helper; otherwise the static form.
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => assembleStatic(oref, nav, floating, panel, openSignal)
             case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
@@ -374,19 +329,25 @@ final case class DatePicker private (
         panel: UI,
         openSignal: Maybe[SignalRef[Boolean]]
     )(using Frame): UI =
-        val field: UI = rangeRefsV match
-            case Present((s, e)) =>
-                s.render(sv => e.render(ev => fieldUI(Present(rangeText(sv, ev)), oref, nav, floating)))
-            case Absent =>
-                multiRef match
-                    case Present(mref) =>
-                        mref.render(set => fieldUI(Present(set.toList.sorted.mkString(", ")), oref, nav, floating))
-                    case Absent => fieldUI(Absent, oref, nav, floating)
+        val field: UI = bindingV match
+            case Present(single @ DatePicker.Binding.Single(_)) =>
+                // The typed text and a rejected draft are read together, as one region: the draft is what puts a rejected
+                // text back once the field loses focus.
+                val held = single.snapshot(kind).map(DatePicker.anchorOf)
+                nav match
+                    case Present(n) =>
+                        held.combineLatest(n.draft).render { pair =>
+                            val (text, draft) = pair
+                            fieldUI(draft.getOrElse(text), editable = true, oref, nav, floating)
+                        }
+                    case Absent => held.render(text => fieldUI(text, editable = true, oref, nav, floating))
+                end match
+            case Present(b) => b.snapshot(kind).render(snap => fieldUI(DatePicker.displayText(snap), editable = false, oref, nav, floating))
+            case Absent     => fieldUI("", editable = true, oref, nav, floating)
 
-        // The dropdown button toggles the calendar, firing onOpen/onClose on
-        // actual transitions. Inline without an open ref keeps it disabled (the
-        // always-on panel has nothing to toggle); the floating static projection
-        // renders it enabled-looking but inert until the mount wires it.
+        // The dropdown button toggles the calendar, firing onOpen/onClose on actual transitions. Inline without an open ref
+        // keeps it disabled (the always-on panel has nothing to toggle); the floating static projection renders it
+        // enabled-looking but inert until the mount wires it.
         var dd = button
             .cssClass("p-datepicker-dropdown")
             .jsProp("type", "button")
@@ -399,9 +360,8 @@ final case class DatePicker private (
         if invalidV.constTrue then el = el.cssClass("p-invalid")
         if disabledFlag then el = el.cssClass("p-disabled")
         if fluidFlag then el = el.cssClass("p-datepicker-fluid")
-        // Reactive rather than a render-time branch: the anchor class was the only thing the
-        // field's own subtree needed the open state for, and re-rendering the field on every open
-        // is what made the focus return on Escape a race.
+        // Reactive rather than a render-time branch: the anchor class was the only thing the field's own subtree needed the
+        // open state for, and re-rendering the field on every open made the focus return on Escape a race.
         openSignal match
             case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig)
             case _                        => ()
@@ -409,13 +369,13 @@ final case class DatePicker private (
         FieldInvalid.withMessage(root, invalidV.constTrue, invalidMsgV)
     end assembleStatic
 
-    /** The text field. Single selection binds two-way; multiple/range supply a
-      * derived DISPLAY text (`displayOverride`) — the field is not parsed back.
-      * In the floating host a click on the field opens the panel (Prime's
-      * `showOnFocus` default) and Escape closes it.
+    /** The text field. Under a [[value]] binding it shows the held value and reads a typed text back (`editable`); under
+      * [[values]] and [[range]] it shows a derived text and is read-only. In the floating host a click on the field opens the
+      * panel (Prime's `showOnFocus` default) and Escape closes it.
       */
     private def fieldUI(
-        displayOverride: Maybe[String],
+        text: String,
+        editable: Boolean,
         oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav],
         floating: Boolean
@@ -429,20 +389,13 @@ final case class DatePicker private (
         end match
         if variantV == FieldVariant.Filled then i = i.cssClass("p-variant-filled")
         if invalidV.constTrue then i = i.aria("invalid", "true")
-        displayOverride match
-            case Present(text) => i = i.value(text)
-            case Absent        =>
-                valueBinding match
-                    case Present(Input.Value.Const(v)) => i = i.value(v)
-                    case Present(Input.Value.Ref(r))   => i = i.value(r)
-                    case Absent                        => ()
-        end match
+        i = i.value(text)
         i = placeholderText match
             case Present(TextValue.Const(v)) => i.placeholder(v)
             case Present(TextValue.Dyn(sig)) => i.placeholder(sig)
             case Absent                      => i
         if disabledFlag then i = i.disabled(true)
-        if readonlyFlag || displayOverride.isDefined then i = i.readOnly(true)
+        if readonlyFlag || !editable then i = i.readOnly(true)
         if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
         i = nameV.map(v => i.jsProp("name", v)).getOrElse(i)
         i = accNameV match
@@ -450,33 +403,23 @@ final case class DatePicker private (
             case Present(TextValue.Dyn(s))   => i.aria("label", s)
             case Absent                      => i
         i = accNameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
-        if displayOverride.isEmpty then i = onChangeF.map(f => i.onChange(f)).getOrElse(i)
-        onBlurF.foreach { f =>
-            // onBlur carries no payload, so the current value is read from the bound ref
-            // (the derived display text for the multiple/range modes, which aren't parsed back).
-            val eff = displayOverride match
-                case Present(text) => f(text)
-                case Absent        =>
-                    valueBinding match
-                        case Present(Input.Value.Ref(r))   => r.use(f)
-                        case Present(Input.Value.Const(v)) => f(v)
-                        case Absent                        => f("")
-            i = i.onBlur(eff)
+        nav.foreach { n =>
+            if editable && interactive then i = i.onChange(typed => commitText(typed, n))
+            // onBlur carries no payload, so what is held is read from the bound refs. A rejected text goes back to the held
+            // value here, which is the moment the reader is done with it.
+            val blur: UI.Action = n.draft.set(Absent).andThen(blurReport)
+            i = i.onBlur(blur)
+            i = i.id(n.fieldId)
         }
-        nav.foreach(n => i = i.id(n.fieldId))
         if floating && interactive then
             oref.foreach { r =>
-                // Opening puts the reader in the grid, however the panel was opened: that is where
-                // the calendar's keys are, and a panel nobody is standing in answers none of them.
-                // The cost is the text field: while the panel is open the caret is not in it, so
-                // typing a date by hand means Escape (or Shift+Tab) first.
+                // Opening puts the reader in the grid, however the panel was opened: that is where the calendar's keys are.
+                // The cost is the text field: while the panel is open the caret is not in it, so typing a value by hand
+                // means Escape (or Shift+Tab) first.
                 i = i.onClick(seedGrid(nav).andThen(openPanel(r)))
                 i = i.onKeyDown { e =>
-                    // ArrowDown opens, and nothing else does. This is a TEXT BOX, not one of the
-                    // library's four div-shaped select triggers: Space types a space and Enter
-                    // belongs to the form, so taking either of them here would cost the reader a
-                    // key they need for what the field is actually for. Once open, ArrowDown a
-                    // second time steps into the grid, which is where the calendar keyboard is.
+                    // ArrowDown opens, and nothing else does. This is a TEXT BOX: Space types a space and Enter belongs to
+                    // the form. Once open, ArrowDown a second time steps into the grid.
                     val eff: UI.Action = e.key match
                         case Keyboard.Escape    => cancelVia(Present(r), nav)
                         case Keyboard.ArrowDown => enterGrid(r, nav)
@@ -488,13 +431,44 @@ final case class DatePicker private (
         i
     end fieldUI
 
+    /** What `onBlur` (or its set or range form) reports: what the binding holds at the moment focus leaves. */
+    private def blurReport(using Frame): UI.Action =
+        bindingV match
+            case Present(DatePicker.Binding.Single(r)) =>
+                onBlurF match
+                    case Present(f) => r.use(f)
+                    case Absent     => ()
+            case Present(DatePicker.Binding.Multi(r)) =>
+                onValuesBlurF match
+                    case Present(f) => r.use(f)
+                    case Absent     => ()
+            case Present(DatePicker.Binding.Range(s, e)) =>
+                onRangeBlurF match
+                    case Present(f) => s.use(sv => e.use(ev => f(sv, ev)))
+                    case Absent     => ()
+            case Absent =>
+                onBlurF match
+                    case Present(f) => f(Absent)
+                    case Absent     => ()
+
+    /** A typed text, committed by the field's `change`: an empty field clears, a text the kind reads as a value within the
+      * bounds is written, and anything else writes nothing and is kept as a draft until the field loses focus.
+      */
+    private def commitText(typed: String, nav: DatePicker.Nav)(using Frame): UI.Action =
+        val trimmed            = typed.trim
+        val iso: Maybe[String] =
+            if trimmed.isEmpty then Present("")
+            else kind.fromIso(trimmed).map(kind.toIso).filter(inBounds)
+        iso match
+            case Present(v) => nav.draft.set(Absent).andThen(putValue(v))
+            case Absent     => nav.draft.set(Present(typed))
+    end commitText
+
     /** ArrowDown on the field: opens the calendar and puts the reader in the grid.
       *
-      * A focus COMMAND cannot do the opening half of that, since the grid does not exist until the
-      * panel is rendered and the command would race the insert. So the press raises the seed flag
-      * instead, the grid renders `focusAuto` while it is up, and the client focuses the grid in
-      * the same patch that inserts it. The flag is declarative for exactly that reason, and it is
-      * lowered by every pointer open, where the reader wants the text field they clicked.
+      * A focus COMMAND cannot do the opening half of that, since the grid does not exist until the panel is rendered and the
+      * command would race the insert. So the press raises the seed flag instead, the grid renders `focusAuto` while it is up,
+      * and the client focuses the grid in the same patch that inserts it.
       */
     private def enterGrid(oref: SignalRef[Boolean], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         for
@@ -510,17 +484,13 @@ final case class DatePicker private (
 
     /** Raises the flag that says the next grid to appear takes the focus.
       *
-      * It starts down and is never lowered: what it keeps out is the page's own first paint,
-      * where an in-flow calendar would otherwise take the focus off the document the moment it
-      * loaded. Everything after that is a reader asking to be in the calendar.
+      * It starts down and is never lowered: what it keeps out is the page's own first paint, where an in-flow calendar would
+      * otherwise take the focus off the document the moment it loaded.
       */
     private def seedGrid(nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         nav match
             case Present(n) => n.seed.set(true)
             case Absent     => ()
-
-    private def rangeText(s: String, e: String): String =
-        if s.isEmpty then "" else if e.isEmpty then s else s"$s - $e"
 
     /** Toggles the panel via the bound ref, firing onOpen/onClose on the transition. */
     private def togglePanel(oref: SignalRef[Boolean])(using Frame): UI.Action =
@@ -541,14 +511,34 @@ final case class DatePicker private (
             case Present(g) => g()
             case Absent     => ()
 
-    private def fireChange(iso: String)(using Frame): UI.Action =
+    // === writes =============================================================
+
+    /** Writes the value `iso` names into a [[value]] binding (`""` clears) and fires `onChange` when that changed it. */
+    private def putValue(iso: String)(using Frame): UI.Action =
+        bindingV match
+            case Present(DatePicker.Binding.Single(r)) =>
+                DatePicker.Binding.put(r, kind, iso).map {
+                    case Present(now) => fireValue(now)
+                    case Absent       => (): UI.Action
+                }
+            case _ => ()
+
+    private def fireValue(now: Maybe[A])(using Frame): UI.Action =
         onChangeF match
-            case Present(f) => f(iso)
+            case Present(f) => f(now)
             case Absent     => ()
 
-    /** Closes the panel through the EFFECTIVE open ref (bound or mount-allocated),
-      * firing `onClose` on an actual transition.
-      */
+    private def fireValues(now: Set[A])(using Frame): UI.Action =
+        onValuesChangeF match
+            case Present(f) => f(now)
+            case Absent     => ()
+
+    private def fireRange(now: (Maybe[A], Maybe[A]))(using Frame): UI.Action =
+        onRangeChangeF match
+            case Present(f) => f(now._1, now._2)
+            case Absent     => ()
+
+    /** Closes the panel through the EFFECTIVE open ref (bound or mount-allocated), firing `onClose` on an actual transition. */
     private def closeVia(oref: Maybe[SignalRef[Boolean]])(using Frame): UI.Action =
         oref match
             case Present(r) =>
@@ -560,16 +550,11 @@ final case class DatePicker private (
 
     /** Closes the panel and hands the focus back to the field.
       *
-      * A pick destroys what the reader is standing on: the grid they arrowed through, or the
-      * button bar's button they pressed. Without the return the focus falls to the document, and
-      * the next Tab starts at the top of the page instead of after the field. Plain [[closeVia]]
-      * is for the closes whose focus is already outside the panel (the field's own Escape) or
-      * belongs where the pointer left it.
+      * A pick destroys what the reader is standing on: the grid they arrowed through, or the button bar's button they
+      * pressed. Without the return the focus falls to the document, and the next Tab starts at the top of the page.
       *
-      * An in-flow calendar is left alone entirely. It is the page's own furniture rather than a
-      * panel over it: a pick is not a reason to take it away, an Escape has no panel to dismiss,
-      * and the grid the reader is standing on stays, so there is nothing to hand back either.
-      * The `open` ref an inline caller binds is their toggle, not the pick's.
+      * An in-flow calendar is left alone entirely: it is the page's own furniture rather than a panel over it, so a pick is
+      * not a reason to take it away and there is nothing to hand back.
       */
     private def closeAndReturn(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         if inlineFlag then ()
@@ -582,36 +567,19 @@ final case class DatePicker private (
                     case Absent     => (): UI.Action
             yield r
 
-    /** Records the values the panel holds, unless this open already recorded them.
+    /** Records what the binding holds, unless this open already recorded it.
       *
-      * Every write inside the panel goes through here first, which is what makes Escape a cancel:
-      * the memory is taken before the first change rather than at the open, so it does not matter
-      * whether the reader opened the panel, or a caller wrote the open ref they bound.
+      * Every write inside the panel goes through here first, which is what makes Escape a cancel: the memory is taken before
+      * the first change rather than at the open, so it does not matter who opened the panel.
       */
     private def remember(nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
-        nav match
-            case Absent     => ()
-            case Present(n) =>
+        (nav, bindingV) match
+            case (Present(n), Present(b)) =>
                 n.restore.use {
                     case Present(_) => (): UI.Action
-                    case Absent     =>
-                        for
-                            single <- valueBinding match
-                                case Present(Input.Value.Ref(r))   => r.get
-                                case Present(Input.Value.Const(v)) => Kyo.lift(v)
-                                case Absent                        => Kyo.lift("")
-                            multi <- multiRef match
-                                case Present(r) => r.get
-                                case Absent     => Kyo.lift(Set.empty[String])
-                            start <- rangeRefsV match
-                                case Present((r, _)) => r.get
-                                case Absent          => Kyo.lift("")
-                            end <- rangeRefsV match
-                                case Present((_, r)) => r.get
-                                case Absent          => Kyo.lift("")
-                            r <- n.restore.set(Present(DatePicker.Restore(single, multi, start, end)))
-                        yield r
+                    case Absent     => b.capture.map(rs => n.restore.set(Present(rs)))
                 }
+            case _ => ()
 
     /** Drops the memory, which a close that commits has no more use for. */
     private def forget(nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
@@ -619,12 +587,8 @@ final case class DatePicker private (
             case Present(n) => n.restore.set(Absent)
             case Absent     => ()
 
-    /** Escape: put back what the panel held before the reader changed anything in it, then close
-      * and hand the focus back. The refs carry the restored values, and `onChange` stays silent,
-      * because over the whole open nothing changed.
-      *
-      * An in-flow calendar has nothing to cancel: it does not close, and what is picked in it is
-      * picked in the page rather than in a panel over it.
+    /** Escape: put back what the panel held before the reader changed anything in it, then close and hand the focus back.
+      * The refs carry the restored values, and no change callback fires, because over the whole open nothing changed.
       */
     private def cancelVia(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         if inlineFlag then ()
@@ -633,37 +597,15 @@ final case class DatePicker private (
                 case Absent     => ()
                 case Present(n) =>
                     n.restore.use {
-                        case Present(rs) => writeBack(rs)
+                        case Present(rs) => rs.put
                         case Absent      => (): UI.Action
                     }
             undo.andThen(closeAndReturn(oref, nav))
 
-    /** Puts a [[DatePicker.Restore]] back into whichever refs this picker binds. */
-    private def writeBack(rs: DatePicker.Restore)(using Frame): UI.Action =
-        val single: UI.Action = valueBinding match
-            case Present(Input.Value.Ref(ref)) => ref.set(rs.single)
-            case _                             => ()
-        val multi: UI.Action = multiRef match
-            case Present(ref) => ref.set(rs.multi)
-            case Absent       => ()
-        val range: UI.Action = rangeRefsV match
-            case Present((s, e)) => s.set(rs.start).andThen(e.set(rs.end))
-            case Absent          => ()
-        single.andThen(multi).andThen(range)
-    end writeBack
-
     // === reactive panel =====================================================
 
-    /** The resolved selection at render time. */
-    private enum Snapshot:
-        case Single(value: String)
-        case Multi(values: Set[String])
-        case Range(start: String, end: String)
-    end Snapshot
-
-    /** The calendar, reacting to the bound selection, month ref, and view ref.
-      * `oref` is the EFFECTIVE open ref picks close through; `inline` picks the
-      * panel variant class.
+    /** The calendar, reacting to the bound selection, month ref and view ref. `oref` is the EFFECTIVE open ref picks close
+      * through; `inline` picks the panel variant class.
       */
     private def calendarReactive(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav], inline: Boolean)(using Frame): UI =
         withView { view =>
@@ -675,54 +617,40 @@ final case class DatePicker private (
     private def withView(f: DatePickerView => UI)(using Frame): UI =
         currentViewRefV match
             case Present(ref) => ref.render(f)
-            case Absent       => f(viewV)
+            case Absent       => f(kind.view)
 
-    /** The displayed month. The mount's own ref is already resolved into [[Nav]] (and rendered
-      * one level up), so this only has to turn its empty state back into "no override"; without a
-      * mount a caller's own `month(ref)` is the only source there is.
+    /** The displayed month. The mount's own ref is already resolved into [[DatePicker.Nav]] (and rendered one level up), so
+      * this only has to turn its empty state back into "no override"; without a mount a caller's own `month(ref)` is the only
+      * source there is.
       */
     private def withMonthOverride(nav: Maybe[DatePicker.Nav])(f: Maybe[String] => UI)(using Frame): UI =
         nav match
             case Present(n) => f(if n.monthOvV.isEmpty then Absent else Present(n.monthOvV))
             case Absent     =>
                 monthRef match
-                    case Present(ref) => ref.render(m => f(Present(m)))
+                    case Present(ref) => DatePicker.ShownMonth.Bound(ref).signal.render(m => f(Present(m)))
                     case Absent       => f(Absent)
 
-    private def withSelection(f: Snapshot => UI)(using Frame): UI =
-        rangeRefsV match
-            case Present((s, e)) => s.render(sv => e.render(ev => f(Snapshot.Range(sv, ev))))
-            case Absent          =>
-                multiRef match
-                    case Present(mref) => mref.render(set => f(Snapshot.Multi(set)))
-                    case Absent        =>
-                        valueBinding match
-                            case Present(Input.Value.Ref(ref)) => ref.render(v => f(Snapshot.Single(v)))
-                            case Present(Input.Value.Const(v)) => f(Snapshot.Single(v))
-                            case Absent                        => f(Snapshot.Single(""))
+    private def withSelection(f: DatePicker.Snapshot => UI)(using Frame): UI =
+        bindingV match
+            case Present(b) => b.snapshot(kind).render(f)
+            case Absent     => f(DatePicker.Snapshot.Single(""))
 
-    /** The value the displayed month derives from (before override/referenceDate). */
-    private def anchorValue(snap: Snapshot): String = snap match
-        case Snapshot.Single(v)   => v
-        case Snapshot.Multi(set)  => set.maxOption.getOrElse("")
-        case Snapshot.Range(s, _) => s
-
-    /** Builds the panel for the derived month and current view — the SAME render
-      * for both hosts; only the variant class differs (`-inline` in-flow vs the
-      * bare floating panel inside the Overlay).
+    /** Builds the panel for the derived month and current view, the SAME render for both hosts; only the variant class
+      * differs (`-inline` in-flow vs the bare floating panel inside the Overlay).
       */
     private def panelUI(
         view: DatePickerView,
         monthOverride: Maybe[String],
-        snap: Snapshot,
+        snap: DatePicker.Snapshot,
         oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav],
         inline: Boolean
     )(using Frame): UI =
-        val (year, month) = deriveMonth(anchorValue(snap), monthOverride)
+        val (year, month) = deriveMonth(DatePicker.anchorOf(snap), monthOverride)
 
         val calendarChildren: List[UI] =
-            if timeOnlyFlag then Nil
+            if kind.timeOnly then Nil
             else
                 val grid: List[UI] = view match
                     case DatePickerView.Date => List(dayView(year, month, snap, oref, nav))
@@ -742,7 +670,7 @@ final case class DatePicker private (
                 calendar :: (monthGrid ++ yearGrid)
 
         val timeChildren: List[UI] =
-            if timeOnlyFlag || (showTimeFlag && view == DatePickerView.Date) then List(timePickerUI(snap, nav))
+            if kind.timeOnly || (kind.withTime && view == DatePickerView.Date) then List(timePickerUI(snap, nav))
             else Nil
 
         val barChildren: List[UI] = if showButtonBarFlag then List(buttonBarUI(snap, oref, nav)) else Nil
@@ -751,18 +679,19 @@ final case class DatePicker private (
             .cssClass("p-datepicker-panel")
             .cssClass("p-component")
         if inline then panel = panel.cssClass("p-datepicker-panel-inline")
-        if timeOnlyFlag then panel = panel.cssClass("p-datepicker-timeonly")
+        if kind.timeOnly then panel = panel.cssClass("p-datepicker-timeonly")
         panel((calendarChildren ++ timeChildren ++ barChildren).map(toChild)*)
     end panelUI
 
-    /** Prime's calendar header: prev button, the month/year title BUTTONS (they drill into the
-      * month and year grids through the view ref), next button. The nav buttons shift the month
-      * ref by month, year or decade depending on the view.
+    /** The page the month override and the header buttons write: the minted ref in a mounted picker, else the caller's own. */
+    private def shownMonth(nav: Maybe[DatePicker.Nav]): Maybe[DatePicker.ShownMonth] =
+        nav.map(_.monthOv).orElse(monthRef.map(DatePicker.ShownMonth.Bound(_)))
+
+    /** Prime's calendar header: prev button, the month/year title BUTTONS (they drill into the month and year grids through
+      * the view ref), next button. The nav buttons shift the month by a month, a year or a decade depending on the view.
       *
-      * The mount mints both refs when the caller binds none, so every button here is live in a
-      * mounted picker. They render disabled only in the static projection, which is inert
-      * throughout: a title button that cannot be pressed would leave the two granular grids, and
-      * the keyboard in them, unreachable.
+      * The mount mints both refs when the caller binds none, so every button here is live in a mounted picker. They render
+      * disabled only in the static projection, which is inert throughout.
       */
     private def headerUI(view: DatePickerView, year: Int, month: Int, nav: Maybe[DatePicker.Nav])(using Frame): UI =
         def navButton(cls: String, glyph: IconGlyph, target: (Int, Int), label: String): UI =
@@ -776,14 +705,9 @@ final case class DatePicker private (
                 .cssClass("p-button-text")
                 .jsProp("type", "button")
                 .aria("label", label)
-            // The mount mints a month ref when the caller binds none, so these are live by
-            // default. They were disabled without one, which left the calendar frozen on the
-            // month it derived and gave the arrows nowhere to page to.
-            val mv: Maybe[SignalRef[String]] = nav.map(_.monthOv).orElse(monthRef)
-            mv match
+            shownMonth(nav) match
                 case Present(mref) =>
-                    val iso = DatePicker.pad(target._1, 4) + "-" + DatePicker.pad(target._2, 2)
-                    b = b.onClick(mref.set(iso))
+                    b = b.onClick(mref.set(DatePicker.pad(target._1, 4) + "-" + DatePicker.pad(target._2, 2)))
                 case Absent => b = b.disabled(true)
             end match
             b(toChild(GlyphSvg(glyph, "p-icon")))
@@ -801,9 +725,8 @@ final case class DatePicker private (
         def viewButton(cls: String, text: String, target: DatePickerView, label: String): UI =
             var b = button.cssClass(cls).jsProp("type", "button").aria("label", label)
             currentViewRefV match
-                // The switch redraws the header without the button that was pressed (the year view
-                // titles a decade, and neither granular view keeps its own button), so the focus
-                // goes on to the grid that appeared rather than falling to the document.
+                // The switch redraws the header without the button that was pressed, so the focus goes on to the grid that
+                // appeared rather than falling to the document.
                 case Present(vref) =>
                     b = b.onClick(seedGrid(nav).andThen(vref.set(target)).andThen(focusGrid(nav)))
                 case Absent => b = b.disabled(true)
@@ -834,13 +757,16 @@ final case class DatePicker private (
 
     // === day view ===========================================================
 
-    /** Prime's `table.p-datepicker-day-view`: a weekday header row over full weeks
-      * of day cells; leading/trailing cells show the adjacent months' days
-      * (`.p-datepicker-other-month`, non-interactive).
+    /** Prime's `table.p-datepicker-day-view`: a weekday header row over full weeks of day cells; leading and trailing cells
+      * show the adjacent months' days (`.p-datepicker-other-month`, non-interactive).
       */
-    private def dayView(year: Int, month: Int, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
-        Frame
-    ): UI =
+    private def dayView(
+        year: Int,
+        month: Int,
+        snap: DatePicker.Snapshot,
+        oref: Maybe[SignalRef[Boolean]],
+        nav: Maybe[DatePicker.Nav]
+    )(using Frame): UI =
         val dim      = DatePicker.daysInMonth(year, month)
         val firstDow = DatePicker.dayOfWeek(year, month, 1) // 0 = Sunday
         val (py, pm) = if month == 1 then (year - 1, 12) else (year, month - 1)
@@ -865,15 +791,15 @@ final case class DatePicker private (
         val leading: List[UI] = (0 until firstDow).toList.map { i =>
             otherMonthCell(pdim - firstDow + 1 + i)
         }
-        // Where the keyboard is. A cursor outside the displayed month is not this grid's, so it
-        // falls back to the selected day and then to the first, which is what a reader who has
-        // just paged into a month means by "here".
+        // Where the keyboard is. A cursor outside the displayed month is not this grid's, so it falls back to the selected
+        // day and then to the first, which is what a reader who has just paged into a month means by "here".
         val cursorIso      = dayCursor(year, month, snap, nav)
         val days: List[UI] = (1 to dim).toList.map { d =>
             val iso = DatePicker.isoDate(year, month, d)
-            // ISO strings compare lexicographically, so plain string order is date order.
+            // A day is out of bounds when all of it is: a bound with a time of day still leaves its own day pickable, and the
+            // pick is clamped to the bound.
             val outOfRange =
-                minDateV.exists(min => iso < min) || maxDateV.exists(max => iso > max)
+                minIso.exists(min => iso < DatePicker.datePart(min)) || maxIso.exists(max => iso > DatePicker.datePart(max))
             var daySpan = span.cssClass("p-datepicker-day")
             if outOfRange then daySpan = daySpan.cssClass("p-disabled").aria("disabled", "true")
             else
@@ -881,10 +807,8 @@ final case class DatePicker private (
                 dayStateClass(iso, snap).foreach(c => daySpan = daySpan.cssClass(c))
             end if
             if iso == cursorIso then daySpan = daySpan.cssClass("p-focus").scrollAuto(true)
-            // Every cell answers to an id, not only the highlighted one, so the attribute that
-            // names it points at something already in the document whichever day it moves to. The
-            // id is on the CELL, which is what carries the role a grid's highlight may name; the
-            // class is on the day inside it, which is what the sheet paints.
+            // Every cell answers to an id, so the attribute that names the highlight points at something already in the
+            // document whichever day it moves to. The id is on the CELL, which carries the role; the class is on the day.
             var cell = td.cssClass("p-datepicker-day-cell").role("gridcell")
             nav.foreach(n => cell = cell.id(n.cellId(firstDow + d - 1)))
             cell(daySpan(d.toString))
@@ -903,10 +827,9 @@ final case class DatePicker private (
             tr.role("row")((weekCell ++ week).map(toChild)*)
         }
 
-        // ONE tab stop with the arrows inside it, and the highlight announced rather than focused:
-        // a day is a `<span>`, not a control of its own, so this is the roving-highlight form the
-        // list family already uses. Nothing here moves DOM focus, which is also why nothing here
-        // can race the render that draws the month it moved into.
+        // ONE tab stop with the arrows inside it, and the highlight announced rather than focused: a day is a `<span>`, not a
+        // control of its own. Nothing here moves DOM focus, which is also why nothing here can race the render that draws the
+        // month it moved into.
         var grid = table.cssClass("p-datepicker-day-view").role("grid")
         nav.foreach { n =>
             grid = grid
@@ -922,14 +845,14 @@ final case class DatePicker private (
     end dayView
 
     /** The day the keyboard is on, clamped into the month on the screen. */
-    private def dayCursor(year: Int, month: Int, snap: Snapshot, nav: Maybe[DatePicker.Nav]): String =
+    private def dayCursor(year: Int, month: Int, snap: DatePicker.Snapshot, nav: Maybe[DatePicker.Nav]): String =
         val prefix = DatePicker.pad(year, 4) + "-" + DatePicker.pad(month, 2)
-        // Length as well as prefix: the cursor is shared with the month and year grids, so after
-        // a drill it can still hold a `YYYY-MM`, which starts with the prefix and is no day.
+        // Length as well as prefix: the cursor is shared with the month and year grids, so after a drill it can still hold a
+        // `YYYY-MM`, which starts with the prefix and is no day.
         val fromCursor = nav.map(_.cursorV).filter(c => c.length == 10 && c.startsWith(prefix))
         if fromCursor.isDefined then fromCursor.getOrElse("")
         else
-            val selected = DatePicker.datePart(anchorValue(snap))
+            val selected = DatePicker.datePart(DatePicker.anchorOf(snap))
             if selected.startsWith(prefix) then selected
             else if nav.isDefined then prefix + "-01"
             else ""
@@ -938,16 +861,15 @@ final case class DatePicker private (
 
     /** One key over the day grid, through [[CalendarNav]].
       *
-      * Every move is expressed in days and applied with the same arithmetic the grid is drawn
-      * from, so crossing a week boundary lands on the next day and crossing a month boundary
-      * carries the displayed month with it. `Page` is a month, and its Shift form a year, which
-      * is what the ARIA date-grid pattern asks for and what [[GridNav]]'s pages could not mean.
+      * Every move is expressed in days and applied with the same arithmetic the grid is drawn from, so crossing a week
+      * boundary lands on the next day and crossing a month boundary carries the displayed month with it. `Page` is a month,
+      * and its Shift form a year.
       */
     private def dayKey(
         year: Int,
         month: Int,
         cursorIso: String,
-        snap: Snapshot,
+        snap: DatePicker.Snapshot,
         oref: Maybe[SignalRef[Boolean]],
         nav: DatePicker.Nav
     )(e: KeyboardEvent)(using Frame): UI.Action =
@@ -968,22 +890,31 @@ final case class DatePicker private (
                             case Present((ny, nm, nd)) => moveDayCursor(ny, nm, nd, nav)
                             case Absent                => ()
                         val acted: UI.Action = step match
-                            case Activate => selectDay(cursorIso, snap, oref, Present(nav))
+                            case Activate => selectDayIfInBounds(cursorIso, snap, oref, Present(nav))
                             case Dismiss  => cancelVia(oref, Present(nav))
                             case _        => ()
                         moved.andThen(acted)
     end dayKey
 
-    /** A click on a cell seeds the highlight, so the next arrow carries on from the cell the
-      * pointer named rather than from wherever the grid last derived one. The ring stays the
-      * keyboard's: this writes the highlight, not the focus.
-      */
+    /** Enter on a day the bounds rule out does what a click on its disabled cell does: nothing. */
+    private def selectDayIfInBounds(
+        iso: String,
+        snap: DatePicker.Snapshot,
+        oref: Maybe[SignalRef[Boolean]],
+        nav: Maybe[DatePicker.Nav]
+    )(using Frame): UI.Action =
+        val outOfRange =
+            minIso.exists(min => iso < DatePicker.datePart(min)) || maxIso.exists(max => iso > DatePicker.datePart(max))
+        if outOfRange then () else selectDay(iso, snap, oref, nav)
+    end selectDayIfInBounds
+
     /** Hands the focus to the grid on screen, which is where a view switch leaves the reader. */
     private def focusGrid(nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         nav match
             case Present(n) => n.focus(n.gridId)
             case Absent     => ()
 
+    /** A click on a cell seeds the highlight, so the next arrow carries on from the cell the pointer named. */
     private def seedCursor(iso: String, nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         nav match
             case Present(n) => n.cursor.set(iso)
@@ -997,15 +928,15 @@ final case class DatePicker private (
         nav.cursor.set(iso).andThen(page)
     end moveDayCursor
 
-    /** Prime's day state classes: endpoints/picked days get `-day-selected`,
-      * strictly-in-range days of a complete range get `-day-selected-range`.
+    /** Prime's day state classes: endpoints and picked days get `-day-selected`, strictly-in-range days of a complete range
+      * get `-day-selected-range`.
       */
-    private def dayStateClass(iso: String, snap: Snapshot): Maybe[String] = snap match
-        case Snapshot.Single(v) =>
+    private def dayStateClass(iso: String, snap: DatePicker.Snapshot): Maybe[String] = snap match
+        case DatePicker.Snapshot.Single(v) =>
             if v.nonEmpty && DatePicker.datePart(v) == iso then Present("p-datepicker-day-selected") else Absent
-        case Snapshot.Multi(set) =>
+        case DatePicker.Snapshot.Multi(set) =>
             if set.contains(iso) then Present("p-datepicker-day-selected") else Absent
-        case Snapshot.Range(s, e) =>
+        case DatePicker.Snapshot.Range(s, e) =>
             if iso == s || (e.nonEmpty && iso == e) then Present("p-datepicker-day-selected")
             else if s.nonEmpty && e.nonEmpty && s < iso && iso < e then Present("p-datepicker-day-selected-range")
             else Absent
@@ -1015,83 +946,59 @@ final case class DatePicker private (
             span.cssClass("p-datepicker-day").cssClass("p-disabled")(day.toString)
         )
 
-    /** A day pick, per selection mode: single writes the ISO string (keeping the
-      * time part under `showTime`) and closes unless the time picker needs the
-      * panel; multiple toggles set membership and stays open; range fills
-      * start/end and closes on completion. Every write fires `onChange` with the
-      * picked day.
+    /** A day pick, per binding: a single value takes the day (keeping its time of day for a time kind, clamped into the
+      * bounds) and closes unless the time picker needs the panel; a set toggles the day and stays open; a range fills start
+      * and end and closes on completion.
       */
-    private def selectDay(iso: String, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def selectDay(iso: String, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI.Action =
         remember(nav).andThen(selectDayNow(iso, snap, oref, nav))
 
-    private def selectDayNow(iso: String, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
-        Frame
+    private def selectDayNow(iso: String, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(
+        using Frame
     ): UI.Action =
-        snap match
-            case Snapshot.Single(cur) =>
-                val newValue = if showTimeFlag then iso + "T" + DatePicker.timeText(cur) else iso
-                for
-                    _ <- writeSingle(newValue)
-                    _ <- fireChange(newValue)
-                    r <- if showTimeFlag then (): UI.Action else closeAndReturn(oref, nav)
-                yield r
-                end for
-            case Snapshot.Multi(set) =>
-                val toggled          = if set.contains(iso) then set - iso else set + iso
-                val write: UI.Action = multiRef match
-                    case Present(ref) => ref.set(toggled)
-                    case Absent       => ()
-                for
-                    _ <- write
-                    r <- fireChange(iso)
-                yield r
-                end for
-            case Snapshot.Range(s, e) =>
-                rangeRefsV match
-                    case Present((startRef, endRef)) =>
-                        if s.isEmpty || e.nonEmpty || iso < s then
-                            // (Re)start the range: write start, clear a stale end.
-                            for
-                                _ <- startRef.set(iso)
-                                _ <- endRef.set("")
-                                r <- fireChange(iso)
-                            yield r
-                        else
-                            for
-                                _ <- endRef.set(iso)
-                                _ <- fireChange(iso)
-                                r <- closeAndReturn(oref, nav)
-                            yield r
-                    case Absent => fireChange(iso)
+        bindingV match
+            case Present(DatePicker.Binding.Multi(ref)) =>
+                DatePicker.Binding.toggle(ref, kind, iso).map {
+                    case Present(now) => fireValues(now)
+                    case Absent       => (): UI.Action
+                }
+            case Present(DatePicker.Binding.Range(start, end)) =>
+                DatePicker.Binding.pickRange(start, end, kind, iso).map { (change, complete) =>
+                    val report: UI.Action = change match
+                        case Present(now) => fireRange(now)
+                        case Absent       => ()
+                    report.andThen(if complete then closeAndReturn(oref, nav) else (): UI.Action)
+                }
+            case _ =>
+                val cur = snap match
+                    case DatePicker.Snapshot.Single(v) => v
+                    case _                             => ""
+                val newValue = if kind.withTime then clamp(iso + "T" + DatePicker.timeText(cur)) else iso
+                putValue(newValue).andThen(if kind.withTime then (): UI.Action else closeAndReturn(oref, nav))
     end selectDayNow
-
-    private def writeSingle(newValue: String)(using Frame): UI.Action =
-        valueBinding match
-            case Present(Input.Value.Ref(ref)) => ref.set(newValue)
-            case _                             => ()
 
     // === month / year views =================================================
 
-    /** Prime's `.p-datepicker-month-view`: 12 month cells. Under `view(Month)`
-      * a pick writes the `YYYY-MM` value and closes; while drilling from the day
-      * view it writes the displayed `month` ref and drills back.
+    /** Prime's `.p-datepicker-month-view`: 12 month cells. For a `YearMonth` a pick writes the value and closes; while
+      * drilling from the day view it writes the displayed month and drills back.
       */
-    private def monthView(year: Int, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def monthView(year: Int, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI =
-        val current         = DatePicker.datePart(anchorValue(snap)).take(7)
+        val current         = DatePicker.datePart(DatePicker.anchorOf(snap)).take(7)
         val cursor          = granularCursor(DatePicker.pad(year, 4) + "-", current, 7, nav)
+        val picks           = kind.view == DatePickerView.Month
         val cells: List[UI] = (1 to 12).toList.map { m =>
             val iso7       = DatePicker.pad(year, 4) + "-" + DatePicker.pad(m, 2)
             val outOfRange =
-                minDateV.exists(min => iso7 < min.take(7)) || maxDateV.exists(max => iso7 > max.take(7))
+                minIso.exists(min => iso7 < min.take(7)) || maxIso.exists(max => iso7 > max.take(7))
             var cell = span.cssClass("p-datepicker-month")
             if current == iso7 then cell = cell.cssClass("p-datepicker-month-selected")
             val action: Maybe[UI.Action] =
                 if outOfRange then Absent
-                else if viewV == DatePickerView.Month then Present(pickGranular(iso7, oref, nav))
+                else if picks then Present(pickGranular(iso7, oref, nav))
                 else drillTo(iso7, DatePickerView.Date, nav)
             action match
                 case Present(a) => cell = cell.onClick(seedCursor(iso7, nav).andThen(a))
@@ -1100,8 +1007,7 @@ final case class DatePicker private (
             if iso7 == cursor then cell = cell.cssClass("p-focus").scrollAuto(true)
             cell(DatePicker.monthNamesShort(m - 1))
         }
-        // Prime lays the twelve months out three to a row, which is the width the vertical
-        // arrows step by.
+        // Prime lays the twelve months out three to a row, which is the width the vertical arrows step by.
         granularGrid("p-datepicker-month-view", cells, cursor, iso => DatePicker.monthOf(iso) - 1, 3, oref, nav) { (at, step) =>
             import CalendarNav.Step.*
             step match
@@ -1113,37 +1019,41 @@ final case class DatePicker private (
                 case Activate | Dismiss => Absent
             end match
         } { iso7 =>
-            if viewV == DatePickerView.Month then pickGranular(iso7, oref, nav)
+            val outOfRange =
+                minIso.exists(min => iso7 < min.take(7)) || maxIso.exists(max => iso7 > max.take(7))
+            if outOfRange then ()
+            else if picks then pickGranular(iso7, oref, nav)
             else
                 drillTo(iso7, DatePickerView.Date, nav) match
                     case Present(eff) => eff
                     case Absent       => (): UI.Action
+            end if
         }
     end monthView
 
-    /** Prime's `.p-datepicker-year-view`: the displayed decade's 10 year cells.
-      * Under `view(Year)` a pick writes the `YYYY` value and closes; while
-      * drilling it writes the `month` ref's year and drills to the month grid.
+    /** Prime's `.p-datepicker-year-view`: the displayed decade's 10 year cells. For a `Year` a pick writes the value and
+      * closes; while drilling it writes the displayed month's year and drills to the month grid.
       */
     private def yearView(
         year: Int,
         month: Int,
-        snap: Snapshot,
+        snap: DatePicker.Snapshot,
         oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(using Frame): UI =
-        val current         = DatePicker.datePart(anchorValue(snap)).take(4)
+        val current         = DatePicker.datePart(DatePicker.anchorOf(snap)).take(4)
         val base            = year - Math.floorMod(year, 10)
         val cursor          = granularCursor("", current, 4, nav, fallback = DatePicker.pad(base, 4))
+        val picks           = kind.view == DatePickerView.Year
         val cells: List[UI] = (base to base + 9).toList.map { y =>
             val iso4       = DatePicker.pad(y, 4)
             val outOfRange =
-                minDateV.exists(min => iso4 < min.take(4)) || maxDateV.exists(max => iso4 > max.take(4))
+                minIso.exists(min => iso4 < min.take(4)) || maxIso.exists(max => iso4 > max.take(4))
             var cell = span.cssClass("p-datepicker-year")
             if current == iso4 then cell = cell.cssClass("p-datepicker-year-selected")
             val action: Maybe[UI.Action] =
                 if outOfRange then Absent
-                else if viewV == DatePickerView.Year then Present(pickGranular(iso4, oref, nav))
+                else if picks then Present(pickGranular(iso4, oref, nav))
                 else drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month, nav)
             action match
                 case Present(a) => cell = cell.onClick(seedCursor(iso4, nav).andThen(a))
@@ -1164,11 +1074,15 @@ final case class DatePicker private (
                     case Activate | Dismiss => Absent
                 end match
         } { iso4 =>
-            if viewV == DatePickerView.Year then pickGranular(iso4, oref, nav)
+            val outOfRange =
+                minIso.exists(min => iso4 < min.take(4)) || maxIso.exists(max => iso4 > max.take(4))
+            if outOfRange then ()
+            else if picks then pickGranular(iso4, oref, nav)
             else
                 drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month, nav) match
                     case Present(eff) => eff
                     case Absent       => (): UI.Action
+            end if
         }
     end yearView
 
@@ -1189,14 +1103,13 @@ final case class DatePicker private (
         end if
     end granularCursor
 
-    /** An index that comes round rather than stopping, since a granular grid is a closed ring of
-      * twelve months or ten years and the page keys are what leave it.
+    /** An index that comes round rather than stopping, since a granular grid is a closed ring of twelve months or ten years
+      * and the page keys are what leave it.
       */
     private def wrapIndex(i: Int, size: Int): Int = Math.floorMod(i, size)
 
-    /** The shared wiring of the month and year grids: one tab stop, the highlight announced, and
-      * [[CalendarNav]] read against the grid's own width. `move` maps a step onto the next cell's
-      * ISO string, `activate` picks it.
+    /** The shared wiring of the month and year grids: one tab stop, the highlight announced, and [[CalendarNav]] read against
+      * the grid's own width. `move` maps a step onto the next cell's ISO string, `activate` picks it.
       */
     private def granularGrid(
         cls: String,
@@ -1230,34 +1143,31 @@ final case class DatePicker private (
                 eff
             }
         }
-        // A `gridcell` with no `row` over it is outside the grid as far as the ARIA tree is
-        // concerned, and Prime's own markup lays the cells straight into a wrapping flex box. The
-        // rows carry the structure and `display: contents` in the extra sheet keeps the layout,
-        // so the twelve months still wrap the way Prime draws them.
+        // A `gridcell` with no `row` over it is outside the grid as far as the ARIA tree is concerned, and Prime's own markup
+        // lays the cells straight into a wrapping flex box. The rows carry the structure and `display: contents` in the extra
+        // sheet keeps the layout.
         val rows: List[UI] =
             cells.grouped(perRow).toList.map(row => div.role("row")(row.map(toChild)*))
         grid(rows.map(toChild)*)
     end granularGrid
 
-    /** A granularity pick (`view(Month|Year)`): write the ISO prefix, close. */
+    /** A pick in the grid the kind picks in (`YearMonth`, `Year`): write the value, close. */
     private def pickGranular(iso: String, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI.Action =
         for
             _ <- remember(nav)
-            _ <- writeSingle(iso)
-            _ <- fireChange(iso)
+            _ <- putValue(iso)
             r <- closeAndReturn(oref, nav)
         yield r
 
-    /** A drill-down pick: write the displayed month and switch the view back.
-      * Needs BOTH the `month` and `currentView` refs; `Absent` renders the cell
-      * disabled instead.
+    /** A drill-down pick: write the displayed month and switch the view. Needs BOTH the month and the view refs; `Absent`
+      * renders the cell disabled instead.
       */
     private def drillTo(yearMonth: String, target: DatePickerView, nav: Maybe[DatePicker.Nav])(using
         Frame
     ): Maybe[UI.Action] =
-        (nav.map(_.monthOv).orElse(monthRef), currentViewRefV) match
+        (shownMonth(nav), currentViewRefV) match
             case (Present(mref), Present(vref)) =>
                 Present(
                     for
@@ -1271,31 +1181,26 @@ final case class DatePicker private (
 
     // === time picker ========================================================
 
-    /** Prime's `.p-datepicker-time-picker`: hour/minute columns of increment /
-      * display / decrement, plus the AM/PM column under `hourFormat(H12)`. Only
-      * the single-selection value model carries a time.
+    /** Prime's `.p-datepicker-time-picker`: hour and minute columns of increment, display and decrement, plus the AM/PM
+      * column under `hourFormat(H12)`. A step that would leave the bounds renders its button disabled.
       */
-    private def timePickerUI(snap: Snapshot, nav: Maybe[DatePicker.Nav])(using Frame): UI =
+    private def timePickerUI(snap: DatePicker.Snapshot, nav: Maybe[DatePicker.Nav])(using Frame): UI =
         val cur = snap match
-            case Snapshot.Single(v) => v
-            case _                  => ""
-        // timeOnly edits from 00:00; date+time needs a picked date first (the pure
-        // render has no clock to substitute), so the buttons render disabled.
-        val editable       = timeOnlyFlag || cur.nonEmpty
-        val (hour, minute) = DatePicker.parseTime(DatePicker.timeText(cur))
+            case DatePicker.Snapshot.Single(v) => v
+            case _                             => ""
+        // A time alone edits from midnight (or the earliest time the bounds allow); a day and a time needs a picked day first
+        // (the pure render has no clock to substitute), so its buttons render disabled until then.
+        val start          = if cur.nonEmpty then cur else if kind.timeOnly then clamp("00:00") else ""
+        val editable       = start.nonEmpty
+        val (hour, minute) = DatePicker.parseTime(DatePicker.timeText(start))
 
-        def write(h: Int, m: Int): UI.Action =
-            val t        = DatePicker.pad(h, 2) + ":" + DatePicker.pad(m, 2)
-            val newValue = if timeOnlyFlag then t else DatePicker.datePart(cur) + "T" + t
-            for
-                _ <- remember(nav)
-                _ <- writeSingle(newValue)
-                r <- fireChange(newValue)
-            yield r
-            end for
-        end write
+        def candidate(h: Int, m: Int): String =
+            val t = DatePicker.pad(h, 2) + ":" + DatePicker.pad(m, 2)
+            if kind.timeOnly then t else DatePicker.datePart(start) + "T" + t
 
-        def spinButton(cls: String, glyph: IconGlyph, label: String, action: UI.Action): UI =
+        def write(iso: String): UI.Action = remember(nav).andThen(putValue(iso))
+
+        def spinButton(cls: String, glyph: IconGlyph, label: String, iso: String): UI =
             var b = button
                 .cssClass(cls)
                 .cssClass("p-button")
@@ -1306,11 +1211,11 @@ final case class DatePicker private (
                 .cssClass("p-button-text")
                 .jsProp("type", "button")
                 .aria("label", label)
-            if editable then b = b.onClick(action) else b = b.disabled(true)
+            if editable && inBounds(iso) then b = b.onClick(write(iso)) else b = b.disabled(true)
             b(toChild(GlyphSvg(glyph, "p-icon")))
         end spinButton
 
-        def column(cls: String, inc: UI.Action, dec: UI.Action, text: String, incLabel: String, decLabel: String): UI =
+        def column(cls: String, inc: String, dec: String, text: String, incLabel: String, decLabel: String): UI =
             div.cssClass(cls)(
                 toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, incLabel, inc)),
                 toChild(span(text)),
@@ -1325,8 +1230,8 @@ final case class DatePicker private (
             List(
                 column(
                     "p-datepicker-hour-picker",
-                    write(Math.floorMod(hour + 1, 24), minute),
-                    write(Math.floorMod(hour - 1, 24), minute),
+                    candidate(Math.floorMod(hour + 1, 24), minute),
+                    candidate(Math.floorMod(hour - 1, 24), minute),
                     hourText,
                     "Next Hour",
                     "Previous Hour"
@@ -1334,8 +1239,8 @@ final case class DatePicker private (
                 div(toChild(span(":"))),
                 column(
                     "p-datepicker-minute-picker",
-                    write(hour, Math.floorMod(minute + 1, 60)),
-                    write(hour, Math.floorMod(minute - 1, 60)),
+                    candidate(hour, Math.floorMod(minute + 1, 60)),
+                    candidate(hour, Math.floorMod(minute - 1, 60)),
                     DatePicker.pad(minute, 2),
                     "Next Minute",
                     "Previous Minute"
@@ -1343,7 +1248,7 @@ final case class DatePicker private (
             ) ++
                 (hourFormatV match
                     case HourFormat.H12 =>
-                        val toggle = write(Math.floorMod(hour + 12, 24), minute)
+                        val toggle = candidate(Math.floorMod(hour + 12, 24), minute)
                         List(
                             div.cssClass("p-datepicker-ampm-picker")(
                                 toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, "AM/PM", toggle)),
@@ -1358,13 +1263,14 @@ final case class DatePicker private (
 
     // === button bar =========================================================
 
-    /** Prime's `.p-datepicker-buttonbar`: Today (only with an explicit [[today]]
-      * date — the render is pure) + Clear, both in Prime's small secondary text
-      * Button skin.
+    /** Prime's `.p-datepicker-buttonbar`: Today (only with an explicit [[today]], the render being pure) and Clear, both in
+      * Prime's small secondary text Button skin.
       */
-    private def buttonBarUI(snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI =
-        def barButton(cls: String, label: String, action: UI.Action): UI =
-            button
+    private def buttonBarUI(snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+        Frame
+    ): UI =
+        def barButton(cls: String, label: String, action: Maybe[UI.Action]): UI =
+            var b = button
                 .cssClass(cls)
                 .cssClass("p-button")
                 .cssClass("p-component")
@@ -1372,109 +1278,232 @@ final case class DatePicker private (
                 .cssClass("p-button-text")
                 .cssClass("p-button-sm")
                 .jsProp("type", "button")
-                .onClick(action)(toChild(span.cssClass("p-button-label")(label)))
+            b = action match
+                case Present(a) => b.onClick(a)
+                case Absent     => b.disabled(true)
+            b(toChild(span.cssClass("p-button-label")(label)))
+        end barButton
 
-        val todayButton: List[UI] = todayV.toList.map { iso =>
-            val navigate: UI.Action = monthRef match
-                case Present(mref) => mref.set(iso.take(7))
-                case Absent        => ()
-            val action =
-                for
-                    _ <- navigate
-                    r <- selectDay(DatePicker.datePart(iso), snap, oref, nav)
-                yield r
-            barButton("p-datepicker-today-button", "Today", action)
+        val todayButton: List[UI] = todayV.toList.map { t =>
+            val iso                 = kind.toIso(t)
+            val navigate: UI.Action =
+                (shownMonth(nav), DatePicker.parseYearMonth(iso)) match
+                    case (Present(mref), Present((y, m))) if !kind.timeOnly =>
+                        mref.set(DatePicker.pad(y, 4) + "-" + DatePicker.pad(m, 2))
+                    case _ => ()
+            val pick: UI.Action = bindingV match
+                case Present(DatePicker.Binding.Multi(_)) | Present(DatePicker.Binding.Range(_, _)) =>
+                    selectDay(DatePicker.datePart(iso), snap, oref, nav)
+                case _ =>
+                    remember(nav).andThen(putValue(iso)).andThen(closeAndReturn(oref, nav))
+            barButton("p-datepicker-today-button", "Today", if inBounds(iso) then Present(navigate.andThen(pick)) else Absent)
         }
 
         val clearAction: UI.Action =
-            val wipeSingle: UI.Action = writeSingle("")
-            val wipeMulti: UI.Action  = multiRef match
-                case Present(ref) => ref.set(Set.empty)
-                case Absent       => ()
-            val wipeRange: UI.Action = rangeRefsV match
-                case Present((s, e)) =>
+            val wipe: UI.Action = bindingV match
+                case Present(DatePicker.Binding.Single(_)) => putValue("")
+                case Present(DatePicker.Binding.Multi(r))  =>
+                    r.getAndSet(Set.empty[A]).map(prev => if prev.isEmpty then (): UI.Action else fireValues(Set.empty))
+                case Present(DatePicker.Binding.Range(s, e)) =>
                     for
-                        _ <- s.set("")
-                        r <- e.set("")
+                        sv <- s.getAndSet(Maybe.empty[A])
+                        ev <- e.getAndSet(Maybe.empty[A])
+                        r  <- if sv.isEmpty && ev.isEmpty then (): UI.Action else fireRange((Absent, Absent))
                     yield r
                 case Absent => ()
             for
                 _ <- remember(nav)
-                _ <- wipeSingle
-                _ <- wipeMulti
-                _ <- wipeRange
-                _ <- fireChange("")
+                _ <- wipe
                 r <- closeAndReturn(oref, nav)
             yield r
             end for
         end clearAction
 
-        val clearButton: UI = barButton("p-datepicker-clear-button", "Clear", clearAction)
+        val clearButton: UI = barButton("p-datepicker-clear-button", "Clear", Present(clearAction))
 
         div.cssClass("p-datepicker-buttonbar")((todayButton :+ clearButton).map(toChild)*)
     end buttonBarUI
 
-    /** Derives `(year, month)` from the month override, else the bound value, else
-      * the reference date, else a fixed epoch.
-      */
+    /** Derives `(year, month)` from the month override, else the held value, else the reference value, else January 2000. */
     private def deriveMonth(current: String, monthOverride: Maybe[String]): (Int, Int) =
-        val fromOverride = monthOverride.flatMap(DatePicker.parseYearMonth)
-        fromOverride match
-            case Present(ym) => ym
-            case Absent      =>
-                DatePicker.parseYearMonth(current) match
-                    case Present(ym) => ym
-                    case Absent      =>
-                        referenceDateV match
-                            case Present(rd) => DatePicker.parseYearMonth(rd).getOrElse((2000, 1))
-                            case Absent      => (2000, 1)
-        end match
-    end deriveMonth
+        monthOverride.flatMap(DatePicker.parseYearMonth)
+            .orElse(DatePicker.parseYearMonth(current))
+            .orElse(referenceDateV.flatMap(r => DatePicker.parseYearMonth(kind.toIso(r))))
+            .getOrElse((2000, 1))
 end DatePicker
 
 object DatePicker:
-    def apply(): DatePicker = new DatePicker()
 
-    /** The keyboard state the mount allocates, and the ids it addresses the calendar by.
-      *
-      * On the companion rather than inside the class, because the reactive-invalid path renders
-      * through a `copy` of the field and a state typed against the original instance would not
-      * fit it (the [[CascadeSelect]] precedent).
-      *
-      * `monthOv` is the displayed month. A caller's own `month(ref)` wins; without one a minted
-      * ref stands in, holding `""` until something moves the month. That is what lets the header
-      * buttons and the arrows move it at all: before, an unbound `month` left them disabled and
-      * the calendar frozen on whatever month it derived.
-      *
-      * `cursor` is the cell the keyboard is on, as an ISO string at the view's own precision.
-      */
-    /** The values the panel held before the reader changed anything in it, which is what Escape
-      * puts back. Recorded once per open, at the first write rather than at the open itself, so
-      * an open a caller drove through its own ref is remembered too.
-      */
-    final private[uic] case class Restore(single: String, multi: Set[String], start: String, end: String) derives CanEqual
+    /** A picker over the value type `A`, whose [[DateKind]] given decides what it shows: `uic.DatePicker[LocalDate]()`. */
+    def apply[A]()(using kind: DateKind[A]): DatePicker[A] = new DatePicker[A](kind)
 
-    /** The refs a mount hands the wired host: the ones a caller may bind (open, month, view) and
-      * the ones the component keeps for itself (the keyboard cursor, the flag that says the
-      * keyboard is coming into the grid, and what Escape puts back).
+    /** A picker over an explicitly chosen kind, which is how a `ZonedDateTime` picker is made:
+      * `uic.DatePicker(uic.DateKind.zoned(zone))`.
+      */
+    @targetName("applyKind")
+    def apply[A](kind: DateKind[A]): DatePicker[A] = new DatePicker[A](kind)
+
+    /** The selection the calendar renders, as ISO strings at the kind's precision (`""` for none). Every comparison the grids
+      * make is between such strings, which is what keeps the date math integer arithmetic over them.
+      */
+    private[uic] enum Snapshot derives CanEqual:
+        case Single(value: String)
+        case Multi(values: Set[String])
+        case Range(start: String, end: String)
+    end Snapshot
+
+    /** The value the displayed month derives from (before the month override and the reference value). */
+    private def anchorOf(snap: Snapshot): String = snap match
+        case Snapshot.Single(v)   => v
+        case Snapshot.Multi(set)  => set.maxOption.getOrElse("")
+        case Snapshot.Range(s, _) => s
+
+    /** The field's text under a set or range binding, which is shown and not read back. */
+    private def displayText(snap: Snapshot): String = snap match
+        case Snapshot.Single(v)   => v
+        case Snapshot.Multi(set)  => set.toList.sorted.mkString(", ")
+        case Snapshot.Range(s, e) => if s.isEmpty then "" else if e.isEmpty then s else s"$s - $e"
+
+    /** What a [[DatePicker]] holds its selection in: a value that may stay empty, a set of days, or a range of them, each in
+      * the app's own type.
+      *
+      * The calendar reads them as ISO strings through the picker's [[DateKind]] and writes back values parsed from such
+      * strings. Two values the kind writes as one string are one pick, so a write naming the value already held leaves the
+      * app's instance in place and reports no change, which is what keeps the change callbacks from announcing a write that
+      * did not happen.
+      */
+    private[uic] enum Binding[A]:
+        case Single(ref: SignalRef[Maybe[A]])
+        case Multi(ref: SignalRef[Set[A]])
+        case Range(start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]])
+
+        /** The held selection as ISO strings. */
+        def snapshot(kind: DateKind[A])(using Frame): Signal[Snapshot] =
+            this match
+                case Single(r)   => r.map(m => Snapshot.Single(Binding.isoOf(kind, m)))
+                case Multi(r)    => r.map(as => Snapshot.Multi(as.map(kind.toIso)))
+                case Range(s, e) =>
+                    s.map(Binding.isoOf(kind, _)).combineLatest(e.map(Binding.isoOf(kind, _))).map((a, b) => Snapshot.Range(a, b))
+
+        /** What the binding holds now, as the write that would put it back: Escape's memory. */
+        def capture(using Frame): Restore < Sync =
+            this match
+                case Single(r)   => r.get.map(v => Restore(r.set(v)))
+                case Multi(r)    => r.get.map(v => Restore(r.set(v)))
+                case Range(s, e) =>
+                    for
+                        sv <- s.get
+                        ev <- e.get
+                    yield Restore(s.set(sv).andThen(e.set(ev)))
+    end Binding
+
+    private[uic] object Binding:
+
+        private[uic] def isoOf[A](kind: DateKind[A], v: Maybe[A]): String = v.map(kind.toIso).getOrElse("")
+
+        /** The value `iso` names, keeping `prev` where it names the same one. */
+        private def keep[A](kind: DateKind[A], prev: Maybe[A], iso: String): Maybe[A] =
+            if isoOf(kind, prev) == iso then prev
+            else if iso.isEmpty then Absent
+            else kind.fromIso(iso)
+
+        /** Writes the value `iso` names (`""` for none) unless it is the one held, and answers the value now held where the
+          * write changed it. A string the kind cannot read writes nothing.
+          */
+        def put[A](ref: SignalRef[Maybe[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Maybe[A]] < Sync =
+            if iso.nonEmpty && kind.fromIso(iso).isEmpty then Kyo.lift(Maybe.empty[Maybe[A]])
+            else
+                ref.getAndUpdate(prev => keep(kind, prev, iso)).map { prev =>
+                    if isoOf(kind, prev) == iso then Absent else Present(keep(kind, prev, iso))
+                }
+
+        /** Toggles the day `iso` names in or out of the set, and answers the set now held. A member the set already holds
+          * stays as the app wrote it.
+          */
+        def toggle[A](ref: SignalRef[Set[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Set[A]] < Sync =
+            def step(prev: Set[A]): Set[A] =
+                if prev.exists(a => kind.toIso(a) == iso) then prev.filterNot(a => kind.toIso(a) == iso)
+                else kind.fromIso(iso).map(prev + _).getOrElse(prev)
+            ref.getAndUpdate(step).map { prev =>
+                val now = step(prev)
+                if now.map(kind.toIso) == prev.map(kind.toIso) then Absent else Present(now)
+            }
+        end toggle
+
+        /** One pick of a range: it restarts the range (start written, end cleared) when there is no start yet, when the range
+          * is already complete, or when the day is before the start; otherwise it completes the range. Answers the start and
+          * end now held where either changed, and whether the pick completed the range.
+          */
+        def pickRange[A](start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]], kind: DateKind[A], iso: String)(using
+            Frame
+        ): (Maybe[(Maybe[A], Maybe[A])], Boolean) < Sync =
+            for
+                sv <- start.get
+                ev <- end.get
+                sIso           = isoOf(kind, sv)
+                eIso           = isoOf(kind, ev)
+                restart        = sIso.isEmpty || eIso.nonEmpty || iso < sIso
+                (sNext, eNext) = if restart then (keep(kind, sv, iso), Maybe.empty[A]) else (sv, keep(kind, ev, iso))
+                _ <- start.set(sNext)
+                _ <- end.set(eNext)
+            yield
+                val changed = isoOf(kind, sNext) != sIso || isoOf(kind, eNext) != eIso
+                (if changed then Present((sNext, eNext)) else Absent, !restart)
+    end Binding
+
+    /** What Escape puts back: the write that restores the values the panel held before the reader changed anything in it.
+      * Recorded once per open, at the first write rather than at the open itself, so an open a caller drove through its own
+      * ref is remembered too. It holds the app's own instances, so an undo gives back exactly what was there.
+      */
+    final private[uic] case class Restore(put: Unit < Sync)
+
+    private[uic] object Restore:
+        given CanEqual[Restore, Restore] = CanEqual.derived
+
+    /** The displayed month, as the `YYYY-MM` the header and the keyboard write: a caller's own `SignalRef[YearMonth]`, or the
+      * mount's own ref, whose `""` means "derive it from the held value".
+      */
+    private[uic] enum ShownMonth:
+        case Bound(ref: SignalRef[YearMonth])
+        case Own(ref: SignalRef[String])
+
+        def signal(using Frame): Signal[String] =
+            this match
+                case Bound(r) => r.map(ym => pad(ym.getYear, 4) + "-" + pad(ym.getMonthValue, 2))
+                case Own(r)   => r
+
+        def set(iso: String)(using Frame): Unit < Sync =
+            this match
+                case Bound(r) =>
+                    parseYearMonth(iso) match
+                        case Present((y, m)) => r.set(YearMonth.of(y, m))
+                        case Absent          => ()
+                case Own(r) => r.set(iso)
+    end ShownMonth
+
+    /** The refs a mount hands the wired host: the ones a caller may bind (open, month, view) and the ones the component keeps
+      * for itself (the keyboard cursor, the flag that says the keyboard is coming into the grid, what Escape puts back, and a
+      * typed text the field did not take).
       */
     final private[uic] case class Refs(
         open: SignalRef[Boolean],
-        month: SignalRef[String],
+        month: ShownMonth,
         cursor: SignalRef[String],
         view: SignalRef[DatePickerView],
         seed: SignalRef[Boolean],
-        restore: SignalRef[Maybe[Restore]]
+        restore: SignalRef[Maybe[Restore]],
+        draft: SignalRef[Maybe[String]]
     )
 
     final private[uic] case class Nav(
-        monthOv: SignalRef[String],
+        monthOv: ShownMonth,
         monthOvV: String,
         cursor: SignalRef[String],
         cursorV: String,
         seed: SignalRef[Boolean],
         seedV: Boolean,
         restore: SignalRef[Maybe[Restore]],
+        draft: SignalRef[Maybe[String]],
         base: String,
         focus: String => UI.Action
     ):
@@ -1513,7 +1542,7 @@ object DatePicker:
             case 2                           => if isLeap(y) then 29 else 28
             case _                           => 30
 
-    // Sakamoto's algorithm — returns 0 = Sunday .. 6 = Saturday.
+    // Sakamoto's algorithm: 0 = Sunday .. 6 = Saturday.
     private val sakamoto                               = Array(0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4)
     private def dayOfWeek(y: Int, m: Int, d: Int): Int =
         val yy = if m < 3 then y - 1 else y
@@ -1521,15 +1550,15 @@ object DatePicker:
 
     private def dayOfYear(y: Int, m: Int, d: Int): Int = (1 until m).foldLeft(d)((acc, mm) => acc + daysInMonth(y, mm))
 
-    /** Number of ISO 8601 weeks in `y` (52 or 53) — 53 iff the year starts or ends on
-      * a Thursday, expressed via the standard `p(y)` weekday-of-Dec-31 formula.
+    /** Number of ISO 8601 weeks in `y` (52 or 53): 53 iff the year starts or ends on a Thursday, expressed via the standard
+      * `p(y)` weekday-of-Dec-31 formula.
       */
     private def isoWeeksInYear(y: Int): Int =
         def p(yy: Int): Int = Math.floorMod(yy + yy / 4 - yy / 100 + yy / 400, 7)
         if p(y) == 4 || p(y - 1) == 3 then 53 else 52
 
-    /** ISO 8601 week number (weeks start Monday; week 1 contains the year's first
-      * Thursday). Pure integer math — same no-`java.time` constraint as [[dayOfWeek]].
+    /** ISO 8601 week number (weeks start Monday; week 1 contains the year's first Thursday), in integer math like the rest of
+      * the grid.
       */
     private def isoWeekNumber(y: Int, m: Int, d: Int): Int =
         val dowRaw = dayOfWeek(y, m, d)
@@ -1552,14 +1581,12 @@ object DatePicker:
     /** The month of an ISO `YYYY-MM[-DD]`, or 1 for anything that does not parse. */
     private def monthOf(iso: String): Int = parseYearMonth(iso).map(_._2).getOrElse(1)
 
-    /** The date part of an ISO value (`"…T…"` → before the `T`; else unchanged). */
+    /** The date part of an ISO value: what comes before the `T`, else the whole value. */
     private def datePart(v: String): String =
         val t = v.indexOf('T')
         if t >= 0 then v.take(t) else v
 
-    /** The time part of an ISO value: after the `T`, or the whole value when it IS
-      * a time (`HH:MM`), else `"00:00"`.
-      */
+    /** The time part of an ISO value: after the `T`, or the whole value when it IS a time (`HH:MM`), else `"00:00"`. */
     private def timeText(v: String): String =
         val t = v.indexOf('T')
         if t >= 0 then v.drop(t + 1)
@@ -1567,7 +1594,7 @@ object DatePicker:
         else "00:00"
     end timeText
 
-    /** Parses `HH:MM` into clamped `(hour, minute)`; anything malformed → 0. */
+    /** Parses `HH:MM` into clamped `(hour, minute)`; anything malformed reads as 0. */
     private def parseTime(t: String): (Int, Int) =
         val parts = t.split(":")
         val h     = if parts.length >= 1 then parts(0).toIntOption.getOrElse(0) else 0
@@ -1589,9 +1616,8 @@ object DatePicker:
 
     /** `n` days from `(y, m, d)`, crossing month and year boundaries.
       *
-      * A day-at-a-time walk rather than an epoch conversion, because the only shifts the
-      * calendar asks for are one day and one week: the loop is over in seven steps and is
-      * obviously right, where a day-number round trip is neither.
+      * A day-at-a-time walk rather than an epoch conversion, because the only shifts the calendar asks for are one day and one
+      * week: the loop is over in seven steps and is obviously right.
       */
     private def addDays(y: Int, m: Int, d: Int, n: Int): (Int, Int, Int) =
         @annotation.tailrec
@@ -1607,8 +1633,8 @@ object DatePicker:
         loop(y, m, d, n)
     end addDays
 
-    /** `n` months from `(y, m)`, with the day clamped into the month it lands in: a 31st
-      * paged into a 30-day month is that month's 30th, not its 1st.
+    /** `n` months from `(y, m)`, with the day clamped into the month it lands in: a 31st paged into a 30-day month is that
+      * month's 30th, not its 1st.
       */
     private def addMonths(y: Int, m: Int, d: Int, n: Int): (Int, Int, Int) =
         val total = (y * 12 + (m - 1)) + n
@@ -1617,8 +1643,8 @@ object DatePicker:
         (ny, nm, math.min(d, daysInMonth(ny, nm)))
     end addMonths
 
-    /** Parses the leading `YYYY[-MM]` out of an ISO string (a bare 4-digit year
-      * reads as January — the year-granularity value model).
+    /** Parses the leading `YYYY[-MM]` out of an ISO string (a bare 4-digit year reads as January, which is how the year grid's
+      * values page).
       */
     private def parseYearMonth(s: String): Maybe[(Int, Int)] =
         val parts = datePart(s).split("-")
@@ -1634,3 +1660,200 @@ object DatePicker:
         end if
     end parseYearMonth
 end DatePicker
+
+/** A [[DatePicker]] picking several days at once (Prime's `selectionMode="multiple"`), bound two-way to the `Set[A]` of the
+  * days picked. Made by [[DatePicker.values]], and a type of its own because its value is a set: it has one `onChange` and
+  * one `onBlur`, both over `Set[A]`, so a callback for a single value cannot be set on it and left never to fire.
+  *
+  * A day click toggles membership and the panel stays open; Clear empties the set. A member the set already holds stays as
+  * the app wrote it. It renders through the picker it was made from, so the two share every display setter, the bounds, the
+  * keyboard and the anatomy; the field shows the picked days and is read-only.
+  *
+  * It carries the validation vocabulary ([[FormControl]]) but is not a form-bindable control: the form layer's set-valued
+  * trait binds through `selection`, and a second spelling of the binding `values` already made would be a slot with two names.
+  */
+final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+    type Self = MultiDatePicker[A]
+
+    private def on(p: DatePicker[A]): MultiDatePicker[A] = copy(picker = p)
+
+    /** Fired with the set now held after a toggle or a clear changed it; the undo of an Escape fires nothing. */
+    def onChange(f: Set[A] => UI.Action)(using Frame): MultiDatePicker[A] = on(picker.withChangeSet(f))
+
+    /** Fires on focus loss with the set held, whether or not anything was edited. */
+    def onBlur(f: Set[A] => UI.Action)(using Frame): MultiDatePicker[A] = on(picker.withBlurSet(f))
+
+    /** Earliest day the picker writes, as [[DatePicker.minDate]]. */
+    def minDate(v: A): Self = on(picker.minDate(v))
+
+    /** Latest day the picker writes, as [[DatePicker.maxDate]]. */
+    def maxDate(v: A): Self = on(picker.maxDate(v))
+
+    /** The app-supplied "now" for the Today button, which shows its page and picks its day. */
+    def today(v: A): Self = on(picker.today(v))
+
+    /** Renders the calendar in-flow below the field, as [[DatePicker.inline]]. */
+    def inline(v: Boolean): Self = on(picker.inline(v))
+
+    /** Renders Prime's button bar with Today and Clear, as [[DatePicker.showButtonBar]]. */
+    def showButtonBar(v: Boolean): Self = on(picker.showButtonBar(v))
+
+    /** Shows the ISO 8601 week-number column. */
+    def showWeek(v: Boolean)(using DateKind.Weeks[A]): Self = on(picker.showWeek(v))
+
+    /** Binds the displayed month two-way, as [[DatePicker.month]]. */
+    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(ref))
+
+    /** The page to show while neither a month ref nor a held day says which. */
+    def referenceDate(v: A)(using DateKind.Calendar[A]): Self = on(picker.referenceDate(v))
+
+    /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
+    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
+
+    /** Binds the calendar's visibility two-way. */
+    def open(ref: SignalRef[Boolean]): Self = on(picker.open(ref))
+
+    /** Fired when the calendar opens through the component. */
+    def onOpen(f: => UI.Action)(using Frame): Self = on(picker.onOpen(f))
+
+    /** Fired when the calendar closes through the component. */
+    def onClose(f: => UI.Action)(using Frame): Self = on(picker.onClose(f))
+
+    def disabled(v: Boolean): Self = on(picker.disabled(v))
+
+    /** Native `readonly` on the field; the calendar cannot be opened either. */
+    def readonly(v: Boolean): Self = on(picker.readonly(v))
+
+    /** Marks the field required (`aria-required` + native constraint). */
+    def required(v: Boolean): Self = on(picker.required(v))
+
+    /** Native `name` for HTML form participation. */
+    def name(v: String): Self = on(picker.name(v))
+
+    /** Size of the field. */
+    def size(v: Size): Self = on(picker.size(v))
+
+    /** Fill variant. */
+    def variant(v: FieldVariant): Self = on(picker.variant(v))
+
+    /** Spans the full width of its container. */
+    def fluid(v: Boolean): Self = on(picker.fluid(v))
+
+    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
+    private[uic] def elementId: Maybe[String]              = picker.elementId
+
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
+
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
+
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
+
+    /** The seam golden tests render, as [[DatePicker.wired]]. */
+    private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
+        picker.wired(refs, base, focus)
+
+    private[uic] def render(using Frame): UI = picker.render
+end MultiDatePicker
+
+/** A [[DatePicker]] picking a range of days (Prime's `selectionMode="range"`), bound two-way to a start and an end, each
+  * `Absent` until picked. Made by [[DatePicker.range]], and a type of its own because its value is a pair: it has one
+  * `onChange` and one `onBlur`, both over the start and the end, so a callback for a single value cannot be set on it and
+  * left never to fire.
+  *
+  * The first pick writes the start (clearing the end), a pick on or after it completes the range and closes the panel, an
+  * earlier pick restarts; in-range days render Prime's `.p-datepicker-day-selected-range`. It renders through the picker it
+  * was made from, so the two share every display setter, the bounds, the keyboard and the anatomy; the field shows the
+  * range and is read-only.
+  *
+  * It carries the validation vocabulary ([[FormControl]]) but no form binding, since no form field holds two refs.
+  */
+final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+    type Self = RangeDatePicker[A]
+
+    private def on(p: DatePicker[A]): RangeDatePicker[A] = copy(picker = p)
+
+    /** Fired with the start and end now held after a pick or a clear changed either; the undo of an Escape fires nothing. */
+    def onChange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): RangeDatePicker[A] = on(picker.withChangeRange(f))
+
+    /** Fires on focus loss with the start and end held, whether or not anything was edited. */
+    def onBlur(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): RangeDatePicker[A] = on(picker.withBlurRange(f))
+
+    /** Earliest day the picker writes, as [[DatePicker.minDate]]. */
+    def minDate(v: A): Self = on(picker.minDate(v))
+
+    /** Latest day the picker writes, as [[DatePicker.maxDate]]. */
+    def maxDate(v: A): Self = on(picker.maxDate(v))
+
+    /** The app-supplied "now" for the Today button, which shows its page and picks its day. */
+    def today(v: A): Self = on(picker.today(v))
+
+    /** Renders the calendar in-flow below the field, as [[DatePicker.inline]]. */
+    def inline(v: Boolean): Self = on(picker.inline(v))
+
+    /** Renders Prime's button bar with Today and Clear, as [[DatePicker.showButtonBar]]. */
+    def showButtonBar(v: Boolean): Self = on(picker.showButtonBar(v))
+
+    /** Shows the ISO 8601 week-number column. */
+    def showWeek(v: Boolean)(using DateKind.Weeks[A]): Self = on(picker.showWeek(v))
+
+    /** Binds the displayed month two-way, as [[DatePicker.month]]. */
+    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(ref))
+
+    /** The page to show while neither a month ref nor a held day says which. */
+    def referenceDate(v: A)(using DateKind.Calendar[A]): Self = on(picker.referenceDate(v))
+
+    /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
+    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
+
+    /** Binds the calendar's visibility two-way. */
+    def open(ref: SignalRef[Boolean]): Self = on(picker.open(ref))
+
+    /** Fired when the calendar opens through the component. */
+    def onOpen(f: => UI.Action)(using Frame): Self = on(picker.onOpen(f))
+
+    /** Fired when the calendar closes through the component. */
+    def onClose(f: => UI.Action)(using Frame): Self = on(picker.onClose(f))
+
+    def disabled(v: Boolean): Self = on(picker.disabled(v))
+
+    /** Native `readonly` on the field; the calendar cannot be opened either. */
+    def readonly(v: Boolean): Self = on(picker.readonly(v))
+
+    /** Marks the field required (`aria-required` + native constraint). */
+    def required(v: Boolean): Self = on(picker.required(v))
+
+    /** Native `name` for HTML form participation. */
+    def name(v: String): Self = on(picker.name(v))
+
+    /** Size of the field. */
+    def size(v: Size): Self = on(picker.size(v))
+
+    /** Fill variant. */
+    def variant(v: FieldVariant): Self = on(picker.variant(v))
+
+    /** Spans the full width of its container. */
+    def fluid(v: Boolean): Self = on(picker.fluid(v))
+
+    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
+    private[uic] def elementId: Maybe[String]              = picker.elementId
+
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
+
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
+
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
+
+    /** The seam golden tests render, as [[DatePicker.wired]]. */
+    private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
+        picker.wired(refs, base, focus)
+
+    private[uic] def render(using Frame): UI = picker.render
+end RangeDatePicker

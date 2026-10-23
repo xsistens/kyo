@@ -1,9 +1,8 @@
 package kyo.uic.form
 
 /** Bridges a typed numeric value `A` to and from the `Double` that `uic.InputNumber`
-  * binds natively (its two-way ref is `SignalRef[Double]`). Mirrors [[DateCodec]]: the
-  * `Double` stays the source of truth and `A` is a derived view, so there is no second
-  * ref to keep in sync.
+  * binds natively (its two-way ref is `SignalRef[Double]`). The `Double` stays the source
+  * of truth and `A` is a derived view, so there is no second ref to keep in sync.
   *
   * `integer` reports whether the field is whole-valued (`Int`/`Long`); when it is, the
   * binding turns on `InputNumber.integer(true)`, whose client keystroke mask rejects the

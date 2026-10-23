@@ -1,5 +1,9 @@
 package kyo.uic.test
 
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.YearMonth
 import kyo.*
 import kyo.UI.*
 import kyo.uic
@@ -64,7 +68,7 @@ object ShowcaseCompile:
         notes: SignalRef[String],
         country: SignalRef[Maybe[(String, String)]],
         city: SignalRef[String],
-        date: SignalRef[String],
+        date: SignalRef[Maybe[LocalDate]],
         calendarOpen: SignalRef[Boolean],
         submit: Any < Async
     )(using Frame): UI =
@@ -90,7 +94,7 @@ object ShowcaseCompile:
                 .value(city)
                 .placeholder("City")
                 .showClear(true),
-            uic.DatePicker().value(date).open(calendarOpen).placeholder("YYYY-MM-DD"),
+            uic.DatePicker[LocalDate]().value(date).open(calendarOpen).placeholder("YYYY-MM-DD"),
 
             // uic component inside fragment(...) (Node => UI lift)
             fragment(uic.ToggleSwitch().checked(live): UI),
@@ -353,14 +357,14 @@ object ShowcaseCompile:
         )
 
     def deepenedControlPage(
-        date: SignalRef[String],
-        monthValue: SignalRef[String],
-        datetime: SignalRef[String],
-        clock: SignalRef[String],
-        picked: SignalRef[Set[String]],
-        rangeStart: SignalRef[String],
-        rangeEnd: SignalRef[String],
-        displayedMonth: SignalRef[String],
+        date: SignalRef[Maybe[LocalDate]],
+        monthValue: SignalRef[Maybe[YearMonth]],
+        datetime: SignalRef[Maybe[LocalDateTime]],
+        clock: SignalRef[Maybe[LocalTime]],
+        picked: SignalRef[Set[LocalDate]],
+        rangeStart: SignalRef[Maybe[LocalDate]],
+        rangeEnd: SignalRef[Maybe[LocalDate]],
+        displayedMonth: SignalRef[YearMonth],
         calView: SignalRef[uic.DatePickerView],
         calOpen: SignalRef[Boolean],
         pageIdx: SignalRef[Int],
@@ -370,24 +374,24 @@ object ShowcaseCompile:
     )(using Frame): UI =
         UI.main.cssClass("deepened-control-demo")(
             // month/year drill-down (currentView ref) + button bar with an explicit today
-            uic.DatePicker()
+            uic.DatePicker[LocalDate]()
                 .value(date)
                 .month(displayedMonth)
                 .currentView(calView)
                 .open(calOpen)
                 .showButtonBar(true)
-                .today("2026-07-16"),
+                .today(LocalDate.of(2026, 7, 16)),
 
-            // granularity views: month/year value models stay ISO-prefix strings
-            uic.DatePicker().value(monthValue).view(uic.DatePickerView.Month).open(calOpen),
+            // the value type picks the grid: a YearMonth picks in the month grid
+            uic.DatePicker[YearMonth]().value(monthValue).open(calOpen),
 
-            // multiple + range selection (ISO string collections / start-end pair)
-            uic.DatePicker().values(picked).open(calOpen),
-            uic.DatePicker().range(rangeStart, rangeEnd).open(calOpen),
+            // multiple + range selection (a typed set / start-end pair)
+            uic.DatePicker[LocalDate]().values(picked).open(calOpen),
+            uic.DatePicker[LocalDate]().range(rangeStart, rangeEnd).open(calOpen),
 
-            // time picking: datetime, 12-hour clock, time-only
-            uic.DatePicker().value(datetime).showTime(true).hourFormat(uic.HourFormat.H12).open(calOpen),
-            uic.DatePicker().value(clock).timeOnly(true).open(calOpen),
+            // time picking: a day and a time with a 12-hour clock, a time alone
+            uic.DatePicker[LocalDateTime]().value(datetime).hourFormat(uic.HourFormat.H12).open(calOpen),
+            uic.DatePicker[LocalTime]().value(clock).open(calOpen),
 
             // paginator with windowed links and all three template slots
             uic.Paginator()
