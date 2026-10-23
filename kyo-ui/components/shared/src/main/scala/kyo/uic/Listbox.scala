@@ -129,6 +129,9 @@ end ListOptionScope
   * [[Select.filterable]] / [[MultiSelect.filterable]]), and `filterQuery(ref)`
   * renders it over a query the app owns. Either way the options are filtered by
   * a case-insensitive contains at render time.
+  *
+  * `id` lands on the `ul.p-listbox-list`, the listbox that holds the one tab stop, and each option derives
+  * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
 final case class Listbox[K] private (
     optionsV: List[OptionItem[ListItem[K]]] = Nil,
@@ -409,6 +412,9 @@ final case class Listbox[K] private (
             else Nil
 
         var list = ul.cssClass("p-listbox-list").role("listbox")
+        // The id goes on the list, the listbox that holds the one tab stop, so a `Label.forId` and
+        // the form's focus-first-invalid reach it; the options derive theirs from the same value.
+        idV.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
         // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
@@ -446,7 +452,6 @@ final case class Listbox[K] private (
                 List(div.cssClass("p-listbox-header")(toChild(field)))
 
         var root = div.cssClass("p-listbox").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
         if disabledFlag then root = root.cssClass("p-disabled")
         if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
         // Without a highlight to rove the tab stops are the rows, so the root is where a blur

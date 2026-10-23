@@ -76,6 +76,9 @@ end CascadeItem
   * inner `ul` Prime's list padding, so the visible box computes identically.
   *
   * Honest deferrals: the mobile query mode, option templates, and showClear.
+  *
+  * `id` lands on the field root, the combobox that holds the tab stop, and the chain derives `$id-list` and the
+  * travelling highlight `$id-active` from it (a minted base stands in where none is given).
   */
 final case class CascadeSelect[A] private (
     items: List[CascadeItem[A]],
@@ -325,7 +328,6 @@ final case class CascadeSelect[A] private (
         val labelText       = if showPlaceholder then placeholder.getOrElse("") else selText
 
         var lbl = span.cssClass("p-cascadeselect-label")
-        idV.foreach(v => lbl = lbl.id(v))
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if labelText.isEmpty then lbl = lbl.cssClass("p-cascadeselect-label-empty")
         if !disabledFlag && st.isDefined then lbl = lbl.onClick(toggleRoot)
@@ -389,6 +391,9 @@ final case class CascadeSelect[A] private (
 
         // === field root ==========================================================
         var el = div.cssClass("p-cascadeselect").cssClass("p-component").cssClass("p-inputwrapper")
+        // On the root, the combobox that holds the tab stop, not on the label text inside it: see
+        // [[HasElementId]]. The chain's parts derive from the same value.
+        idV.foreach(v => el = el.id(v))
         if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")

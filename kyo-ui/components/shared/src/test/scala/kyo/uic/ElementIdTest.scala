@@ -127,4 +127,231 @@ class ElementIdTest extends UicTest:
             assert(headers.map(_.attrs.identifier).toSeq == Seq(Present("mine-one"), Present("mine-two")))
         end for
     }
+
+    // ==== Field-shaped controls: the id lands on the element that takes focus ====
+    //
+    // `HasElementId`'s other half. `Label.forId`, `Commands.focusById` and the form layer's
+    // focus-first-invalid all hand the id to the browser as "the thing to focus", so an id on a
+    // span inside the control is an id nothing can use: the label points at text, the submit
+    // focuses nothing, and an app's `#id` highlight covers the label alone.
+
+    /** Whether the browser would put focus on `e`: a native control not taken out of the tab
+      * order, or any element given a tab stop.
+      */
+    private def focusable(e: UI.Ast.Element): Boolean =
+        e.attrs.tabIndex match
+            case Present(i) => i >= 0
+            case Absent     => e.isInstanceOf[UI.Ast.Focusable]
+
+    /** The element carrying `mine`, which must be focusable. */
+    private def owner(ui: UI)(using Frame, kyo.test.AssertScope): UI.Ast.Element < Sync =
+        elementWithId(ui, "mine").map { e =>
+            assert(focusable(e), s"the element carrying the id must take focus, got ${e.attrs.cssClasses} tabIndex=${e.attrs.tabIndex}")
+            e
+        }
+
+    final private case class Fruit(id: String, name: String) derives CanEqual
+    private val fruit = List(Fruit("a", "Apple"), Fruit("b", "Banana"))
+
+    "a Select carries it on the combobox, live and in the static projection" in {
+        val sel = uic.Select[Fruit]().options(fruit)(_.name).optionKey(_.id).id("mine")
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(0)
+            q     <- Signal.initRef("")
+            live  <- owner(sel.wired(open, hi, q, Present("mine")))
+            stat  <- owner(sel.render)
+            filt  <- owner(sel.filterable(true).wired(open, hi, q, Present("mine")))
+            label <- elementWithClass(sel.wired(open, hi, q, Present("mine")), "p-select-label")
+        yield
+            assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-select"))
+            assert(stat.attrs.cssClasses.contains("p-select"))
+            assert(filt.attrs.cssClasses.contains("p-select"), "with a filter header the trigger is still where Tab lands")
+            assert(label.attrs.identifier.isEmpty, "the label text is not the control")
+            // The parts derived from the id still come off the same value.
+            assert(live.attrs.ariaAttrs.get("controls").contains("mine-list"))
+            assert(live.attrs.ariaAttrs.get("activedescendant").contains("mine-option-0"))
+        end for
+    }
+
+    "a CascadeSelect carries it on the combobox" in {
+        val cs = uic.CascadeSelect[String]().options(List(uic.CascadeItem.leaf("Bern"), uic.CascadeItem.leaf("Rome")))(identity).id("mine")
+        for
+            open  <- Signal.initRef(false)
+            focus <- Signal.initRef(List.empty[Int])
+            live  <- owner(cs.wired(open, Nil, focus, Present("mine")))
+            stat  <- owner(cs.render)
+        yield
+            assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-cascadeselect"))
+            assert(live.attrs.ariaAttrs.get("controls").exists(_.startsWith("mine")))
+            assert(stat.attrs.cssClasses.contains("p-cascadeselect"))
+        end for
+    }
+
+    "a MultiSelect carries it on the combobox" in {
+        val ms = uic.MultiSelect[Fruit]().options(fruit)(_.name).optionKey(_.id).id("mine")
+        for
+            open <- Signal.initRef(true)
+            hi   <- Signal.initRef(0)
+            q    <- Signal.initRef("")
+            live <- owner(ms.wired(open, hi, q, Present("mine")))
+            stat <- owner(ms.render)
+        yield
+            assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-multiselect"))
+            assert(live.attrs.ariaAttrs.get("controls").contains("mine-list"))
+            assert(stat.attrs.cssClasses.contains("p-multiselect"))
+        end for
+    }
+
+    "a TreeSelect carries it on the combobox, and derives its rows from it" in {
+        val ts = uic.TreeSelect[String]().nodes(TreeNode("src", "src"), TreeNode("build", "build")).id("mine")
+        for
+            open <- Signal.initRef(true)
+            exp  <- Signal.initRef(Set.empty[String])
+            hi   <- Signal.initRef(0)
+            live <- owner(ts.wired(open, exp, hi, "mine"))
+            stat <- owner(ts.render)
+        yield
+            assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-treeselect"))
+            assert(live.attrs.ariaAttrs.get("activedescendant").contains(uic.Tree.rowId("mine", 0)))
+            assert(stat.attrs.cssClasses.contains("p-treeselect"))
+        end for
+    }
+
+    "a Listbox carries it on the list, the one tab stop it roves from" in {
+        val lb = uic.Listbox[String]().item("Paris", "par").item("Rome", "rom").selectionMode(uic.SelectionMode.Single).id("mine")
+        for
+            hi   <- Signal.initRef(0)
+            live <- owner(lb.resolved(Set.empty, "", Present(hi), 0))
+        yield
+            assert(live.attrs.role.contains("listbox"))
+            assert(live.attrs.ariaAttrs.get("activedescendant").exists(_.startsWith("mine")))
+        end for
+    }
+
+    "a single SelectButton carries it on its tab stop, and arrows still reach every option" in {
+        val sizes = Seq("Small", "Medium", "Large")
+        val ids   = List("sb-0", "sb-1", "sb-2")
+        for
+            value <- Signal.initRef(Maybe("Medium"))
+            moved <- Signal.initRef(List.empty[String])
+            ui = uic.SelectButton[String]().options(sizes).selection(value).id("mine")
+                .wired(ids, id => moved.updateAndGet(_ :+ id).unit)
+            live <- owner(ui)
+            opts <- elementsWithClass(ui, "p-togglebutton")
+            _    <- press(opts(1), UI.Keyboard.ArrowRight)
+            went <- moved.get
+            root <- elementWithClass(ui, "p-selectbutton")
+            none <- Signal.initRef(Maybe.empty[String])
+            stat <- owner(uic.SelectButton[String]().options(sizes).selection(none).id("mine").render)
+        yield
+            assert(live.attrs.ariaAttrs.get("checked").contains("true"), "the selected option is the group's tab stop")
+            assert(opts.map(_.attrs.identifier) == Chunk(Present("sb-0"), Present("mine"), Present("sb-2")))
+            assert(went == List("sb-2"))
+            assert(root.attrs.identifier.isEmpty)
+            assert(textOf(stat) == "Small", "with nothing chosen the first option is where Tab lands")
+        end for
+    }
+
+    "a multiple SelectButton carries it on the first option a reader can reach" in {
+        for
+            value <- Signal.initRef(Set.empty[String])
+            ui = uic.SelectButton[String]().options(Seq("Small", "Medium")).multiple
+                .optionDisabled(_ == "Small").selection(value).id("mine").render
+            live <- owner(ui)
+        yield assert(textOf(live) == "Medium")
+    }
+
+    "a Rating carries it on the radio that holds the tab stop" in {
+        for
+            ref  <- Signal.initRef(3)
+            live <- owner(uic.Rating().value(ref).id("mine").wired("r"))
+            zero <- owner(uic.Rating().value(0).id("mine").wired("r"))
+            root <- elementWithClass(uic.Rating().value(ref).id("mine").wired("r"), "p-rating")
+        yield
+            assert(live.attrs.ariaAttrs.get("label").contains("3 stars"), "the checked star, which a radio group tabs to")
+            assert(zero.attrs.ariaAttrs.get("label").contains("1 star"), "with none checked, the first")
+            assert(root.attrs.identifier.isEmpty)
+        end for
+    }
+
+    "a ColorPicker carries it on the swatch, or inline on the plane" in {
+        for
+            ref    <- Signal.initRef("#ff0000")
+            open   <- Signal.initRef(false)
+            opened <- Signal.initRef("#ff0000")
+            swatch <- owner(uic.ColorPicker().value(ref).id("mine").wired(uic.ColorPicker.Panel(open, opened), Present(ref), "#ff0000"))
+            stat   <- owner(uic.ColorPicker().value(ref).id("mine").render)
+            plane  <- owner(uic.ColorPicker().inline(true).value(ref).id("mine").render)
+        yield
+            assert(swatch.attrs.cssClasses.contains("p-colorpicker-preview"))
+            assert(stat.attrs.cssClasses.contains("p-colorpicker-preview"))
+            assert(plane.attrs.ariaAttrs.get("label").contains("Saturation and brightness"))
+        end for
+    }
+
+    "a live DatePicker keeps the caller's id on its input, and derives its parts from it" in {
+        import java.time.LocalDate
+        import kyo.uic.DateKind.given
+        for
+            oref    <- Signal.initRef(true)
+            mref    <- Signal.initRef("2026-07")
+            cur     <- Signal.initRef("2026-07-09")
+            vref    <- Signal.initRef(uic.DatePickerView.Date)
+            seed    <- Signal.initRef(false)
+            restore <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
+            draft   <- Signal.initRef(Maybe.empty[String])
+            held    <- Signal.initRef(Maybe.empty[LocalDate])
+            refs = uic.DatePicker.Refs(oref, uic.DatePicker.ShownMonth.Own(mref), cur, vref, seed, restore, draft)
+            ui   = uic.DatePicker[LocalDate]().value(held).id("mine").wired(refs, "mine", _ => ())
+            live <- owner(ui)
+            grid <- elementsWithClass(ui, "p-datepicker-day-view")
+        yield
+            assert(live.attrs.cssClasses.contains("p-datepicker-input"))
+            assert(grid.flatMap(_.attrs.identifier.toList) == Chunk("mine-grid"))
+        end for
+    }
+
+    "a FileUpload's input stays in the tab order: hidden from sight, not from the keyboard" in {
+        for
+            live <- owner(uic.FileUpload().id("mine").render)
+        yield
+            assert(live.attrs.cssClasses.contains("p-hidden-accessible"))
+            assert(
+                uic.Theme.primeExtraCss.contains(".p-fileupload input[type='file'].p-hidden-accessible"),
+                "the sheet's display:none on the file input is overridden, or the hidden-accessible class changes nothing"
+            )
+        end for
+    }
+
+    "every other field-shaped control already carries it on its focusable element" in {
+        val cases: List[(String, UI)] = List(
+            "Input"        -> uic.Input().id("mine").render,
+            "TextArea"     -> uic.TextArea().id("mine").render,
+            "InputMask"    -> uic.InputMask().id("mine").render,
+            "InputNumber"  -> uic.InputNumber().id("mine").render,
+            "Password"     -> uic.Password().id("mine").render,
+            "InputOtp"     -> uic.InputOtp().id("mine").render,
+            "AutoComplete" -> uic.AutoComplete[String]().id("mine").render,
+            "Knob"         -> uic.Knob().id("mine").render,
+            "Slider"       -> uic.Slider().id("mine").render,
+            "CheckBox"     -> uic.CheckBox().id("mine").render,
+            "RadioButton"  -> uic.RadioButton().id("mine").render,
+            "ToggleSwitch" -> uic.ToggleSwitch().id("mine").render,
+            "ToggleButton" -> uic.ToggleButton().id("mine").render,
+            "DatePicker"   -> uic.DatePicker[java.time.LocalDate]().id("mine").render
+        )
+        Kyo.foreach(cases)((name, ui) => elementWithId(ui, "mine").map(e => name -> focusable(e))).map { got =>
+            assert(got.filterNot(_._2).isEmpty, s"not focusable: ${got.filterNot(_._2).map(_._1)}")
+        }
+    }
+
+    /** All the text an element holds, however deeply. */
+    private def textOf(e: UI.Ast.Element)(using Frame): String =
+        def walk(u: UI): String = u match
+            case t: UI.Ast.Text     => t.value
+            case el: UI.Ast.Element => el.children.map(walk).mkString
+            case _                  => ""
+        e.children.map(walk).mkString
+    end textOf
 end ElementIdTest

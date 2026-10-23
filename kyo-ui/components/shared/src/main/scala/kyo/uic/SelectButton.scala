@@ -24,6 +24,10 @@ import scala.annotation.targetName
   * It is a [[ChoiceFormControl]], so `uic.SelectButton[A]().bind(field)` wires the
   * selection, validity, message and the blur trigger for a `FormField[A]` or a
   * `FormField[Maybe[A]]`.
+  *
+  * `id` lands on the option a Tab reaches, since the group itself takes no focus: the selected option of a
+  * single group (the first enabled one while nothing is selected), the first enabled option of a [[multiple]] one.
+  * It moves with the selection, and that option's minted id gives way to it.
   */
 final case class SelectButton[A] private (
     items: List[A],
@@ -234,7 +238,6 @@ final case class SelectButton[A] private (
         // A choice of ONE is a radio group: it says so, holds one tab stop, and moves inside it
         // with the arrows. Several independent choices stay a group of toggle buttons.
         el = el.role(if multipleFlag then "group" else "radiogroup")
-        idV.foreach(v => el = el.id(v))
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         // Blur fires even without a pick: the validation layer's Blur trigger. Reads the
         // bound ref LIVE, so it reports the selection at blur time. The element carries ONE
@@ -273,6 +276,18 @@ final case class SelectButton[A] private (
             case -1 => navigable.headOption.getOrElse(-1)
             case i  => i
 
+        // The caller's id goes on the option a reader lands on by Tab, since a group takes no focus
+        // of its own and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
+        // that does: the radio group's one tab stop, or the first option of a group of toggles. That
+        // option's own id gives way to it, and the arrows move focus through the same list, so the
+        // id an arrow targets is always the one the option is rendered with.
+        val idAt: Int                      = if multipleFlag then navigable.headOption.getOrElse(0) else tabStop
+        val optionIds: Maybe[List[String]] = nav.map { (ids, _) =>
+            idV match
+                case Present(v) if ids.isDefinedAt(idAt) => ids.updated(idAt, v)
+                case _                                   => ids
+        }
+
         val buttons: List[UI] = items.zipWithIndex.map { (a, i) =>
             val k     = key(a)
             val label = labelF(a)
@@ -285,12 +300,15 @@ final case class SelectButton[A] private (
             if disabledFlag.constTrue || optionDisabledF.exists(_(a)) then tb = tb.disabled(true)
             else tb = tb.onChange(_ => activate(a))
             if !multipleFlag then
-                nav match
-                    case Present((ids, focus)) if ids.isDefinedAt(i) =>
+                (nav, optionIds) match
+                    case (Present((_, focus)), Present(ids)) if ids.isDefinedAt(i) =>
                         tb = tb.id(ids(i)).asRadioOption(i == tabStop, optionKey(ids, navigable, i, focus))
                     // No mount, no ids: the static projection reports the role and the state, and
                     // every option keeps its own tab stop, which is what it had before the arrows.
-                    case _ => tb = tb.asRadioOption(tabbable = true, _ => ())
+                    case _ =>
+                        tb = tb.asRadioOption(tabbable = true, _ => ())
+                        if i == idAt then idV.foreach(v => tb = tb.id(v))
+            else if i == idAt then idV.foreach(v => tb = tb.id(v))
             end if
             tb.render
         }
