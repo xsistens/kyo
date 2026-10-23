@@ -7,7 +7,7 @@ import kyo.UI.*
 enum AvatarShape derives CanEqual:
     case Circle, Square
 
-/** Avatar — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Avatar
+/** Avatar: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Avatar
   * anatomy: `div.p-avatar[.p-avatar-circle][.p-avatar-lg|.p-avatar-xl][.p-avatar-image]`
   * containing initials (`span.p-avatar-text`), an icon, or a native `<img>`), so
   * the extracted `@primeuix` avatar CSS applies verbatim.
@@ -35,7 +35,7 @@ final case class Avatar private (
     /** Sets the initials text (Prime's `label`; wins over `icon` and `image`). */
     def initials(v: String): Avatar = copy(initialsV = Present(v))
 
-    /** Alias for [[initials]] — Prime's property name. */
+    /** Alias for [[initials]] (Prime's property name). */
     def label(v: String): Avatar = copy(initialsV = Present(v))
 
     def icon(glyph: IconGlyph): Avatar = copy(iconV = Present(glyph))

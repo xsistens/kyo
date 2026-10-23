@@ -4,11 +4,11 @@ import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
 
 /** Wraps the per-component CSS emitted by `gen/extract.mjs` (the .css files under
-  * gen/work/css — `@primeuix/styles` with every `dt('token.path')` resolved to
+  * gen/work/css: `@primeuix/styles` with every `dt('token.path')` resolved to
   * `var(--p-...)`)
   * into `kyo/uic/generated/ComponentCss.scala`: one `def` per component plus
   * `base`. Strings are chunked below the JVM's 64K string-constant limit and
-  * emitted as triple-quoted literals (no interpolation, no escape processing —
+  * emitted as triple-quoted literals (no interpolation, no escape processing, so
   * CSS `content: "\\2713"`-style escapes survive verbatim).
   */
 object ComponentCssGen:
@@ -29,7 +29,7 @@ object ComponentCssGen:
 
     def run(): Unit =
         val cssDir = Common.repoRoot.resolve("gen/work/css")
-        require(Files.isDirectory(cssDir), s"extracted CSS missing — run gen/fetch.sh first ($cssDir)")
+        require(Files.isDirectory(cssDir), s"extracted CSS missing: run gen/fetch.sh first ($cssDir)")
 
         val files = Files
             .list(cssDir)
@@ -54,7 +54,7 @@ object ComponentCssGen:
          |  * presets. `all` concatenates every extracted sheet.
          |  *
          |  * Each sheet is a `def`, so Scala.js method-level dead-code elimination keeps only
-         |  * the sheets a bundle names — but `all` names every one of them, so reaching for it
+         |  * the sheets a bundle names, but `all` names every one of them, so reaching for it
          |  * costs the whole set. `Theme.cssFor` is the entry point that takes the sheets
          |  * themselves. There is deliberately no `Part` enum and no `Map`: a lookup that maps
          |  * a value to a sheet references every sheet, which is the same trap `all` is.

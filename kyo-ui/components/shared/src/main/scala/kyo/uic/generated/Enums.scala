@@ -1,7 +1,7 @@
 // Hand-maintained residue of the retired CemGen (enum shapes originally derived
 // from @ui5/webcomponents 2.24.0 type declarations; now owned by hand).
 // (Trimmed during the PrimeOne migration: only the enums still used by live
-// components remain — retired ones left with their components.)
+// components remain; retired ones left with their components.)
 package kyo.uic
 
 /** TextEmptyIndicatorMode (from @ui5/webcomponents dist/types/TextEmptyIndicatorMode.d.ts). */

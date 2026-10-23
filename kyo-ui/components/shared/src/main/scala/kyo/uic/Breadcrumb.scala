@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** A single entry in a [[Breadcrumb]] trail — a `text` label plus an optional
+/** A single entry in a [[Breadcrumb]] trail: a `text` label plus an optional
   * `href` and an optional leading `icon`. A missing href renders the crumb as
   * plain text rather than a link, which the last crumb (the current page)
   * conventionally is, and which an intermediate step with no page behind it may
@@ -50,17 +50,17 @@ object BreadcrumbItemScope:
         Entry.resolve(scope, entries)
 end BreadcrumbItemScope
 
-/** Breadcrumb — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Breadcrumb: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Breadcrumb anatomy: `nav.p-breadcrumb.p-component` > `ol.p-breadcrumb-list`
-  * with interleaved `li.p-breadcrumb-item` entries — each an
+  * with interleaved `li.p-breadcrumb-item` entries (each an
   * `a.p-breadcrumb-item-link` wrapping an optional `.p-breadcrumb-item-icon`
-  * glyph plus the `span.p-breadcrumb-item-label` — and `li.p-breadcrumb-separator`
+  * glyph plus the `span.p-breadcrumb-item-label`) and `li.p-breadcrumb-separator`
   * chevron glyphs between them), so the extracted `@primeuix` breadcrumb CSS
   * applies verbatim.
   *
   * `home(icon, href)` prepends Prime's home item (`li.p-breadcrumb-home-item`,
   * icon-only). `onItemClick` fires with the item's href (or text when hrefless)
-  * in addition to — not instead of — native navigation.
+  * in addition to, not instead of, native navigation.
   */
 final case class Breadcrumb private (
     homeV: Maybe[BreadcrumbItem] = Absent,

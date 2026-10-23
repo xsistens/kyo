@@ -17,7 +17,7 @@ enum DrawerPosition derives CanEqual:
         case DrawerPosition.Bottom => "bottom"
         case DrawerPosition.Full   => "full"
 
-    /** The directional slide from-state class the panel enters with — the panel
+    /** The directional slide from-state class the panel enters with: the panel
       * transitions from this edge to its resting `translate3d(0,0,0)` (the sheet's
       * own `.p-drawer { transition: transform }`). `Full` has no directional slide
       * (its sheet rule sets `transition:none`), so it rides the mask fade.
@@ -30,25 +30,25 @@ enum DrawerPosition derives CanEqual:
         case DrawerPosition.Full   => "p-uic-enter-fade"
 end DrawerPosition
 
-/** Drawer — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Drawer: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Drawer/Sidebar anatomy: the modal `div.p-drawer-mask.p-overlay-mask
   * .p-drawer-open.p-drawer-<position>` backdrop (base.css styles
   * `.p-overlay-mask`; a `.p-uic-*` remainder expresses Prime's inline mask
   * positioning as CSS) over `div[role=dialog].p-drawer.p-component` >
   * `div.p-drawer-header` (title + icon-only `button.p-drawer-close-button`) +
   * `div.p-drawer-content` + optional `div.p-drawer-footer`), so the extracted
-  * `@primeuix` drawer CSS applies verbatim — the panel is sized and docked by
+  * `@primeuix` drawer CSS applies verbatim: the panel is sized and docked by
   * the sheet's positional rules (`.p-drawer-left .p-drawer { width: 20rem;
   * height: 100% }`, ...).
   *
-  * [[Dialog]]'s edge-docked sibling — NOT an [[Overlay]] consumer: visibility
+  * [[Dialog]]'s edge-docked sibling, NOT an [[Overlay]] consumer: visibility
   * is a `when(openRef)` reactive boundary over a full-viewport mask, exactly
   * the proven Dialog machinery. Escape and (with `dismissable`, default true)
   * a mask click write `false` back; every internal close path (close button,
   * Escape, mask click) also fires `onClose` after the ref write. Focus story
   * like Dialog (kyo's declarative `data-kyo-focus-*` contract): the panel
-  * carries `focusAuto` — opening seeds focus, so Escape dismisses without any
-  * prior click — and `focusRestore` — closing returns focus to the opener —
+  * carries `focusAuto` (opening seeds focus, so Escape dismisses without any
+  * prior click) and `focusRestore` (closing returns focus to the opener),
   * plus the renderer's element-level `focusTrap`.
   *
   * Animations: the mask fades in on open and plays Prime's own
@@ -57,14 +57,14 @@ end DrawerPosition
   * animates it in via the sheet's own `.p-drawer { transition: transform 0.3s }`;
   * on close it slides back out its docking edge from a position-keyed
   * `.p-overlay-mask-leave-active .p-drawer` rule that rides the mask's leave
-  * ghost (the panel is inside the mask subtree, so only the mask ghosts — the
+  * ghost (the panel is inside the mask subtree, so only the mask ghosts; the
   * rule slides the cloned panel as the ghost fades). `Full` fades (its sheet rule
   * sets `transition:none`). Note the sheet keeps Prime's identity `transform` on
   * the panel at rest, so the
   * drawer box is the containing block for `position: fixed` DESCENDANTS:
   * overlay-bearing components inside the drawer content confine their
   * backdrops to the drawer box. Non-modal mode (`modal(false)`, mask-less) is
-  * deferred too — the mask always renders.
+  * deferred too: the mask always renders.
   */
 final case class Drawer private (
     openRef: Maybe[SignalRef[Boolean]] = Absent,
@@ -83,10 +83,10 @@ final case class Drawer private (
 ) extends Node, HasAccessibleNameRef:
     type Self = Drawer
 
-    /** Binds visibility two-way to `ref` — the only way to open/close the drawer. */
+    /** Binds visibility two-way to `ref`, the only way to open/close the drawer. */
     def open(ref: SignalRef[Boolean]): Drawer = copy(openRef = Present(ref))
 
-    /** Which edge the panel docks to (default [[DrawerPosition.Left]] — Prime). */
+    /** Which edge the panel docks to (default [[DrawerPosition.Left]], as in Prime). */
     def position(v: DrawerPosition): Drawer = copy(positionV = v)
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
@@ -99,10 +99,10 @@ final case class Drawer private (
       */
     def header(content: UI): Drawer = copy(headerContent = Present(content))
 
-    /** Footer slot — Prime's `div.p-drawer-footer`. */
+    /** Footer slot: Prime's `div.p-drawer-footer`. */
     def footer(v: UI): Drawer = copy(footerV = Present(v))
 
-    /** Whether clicking the mask closes the drawer (default true — Prime's
+    /** Whether clicking the mask closes the drawer (default true, Prime's
       * `dismissable`).
       */
     def dismissable(v: Boolean): Drawer = copy(dismissableFlag = v)
@@ -124,7 +124,7 @@ final case class Drawer private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Drawer = copy(accessibleNameRefV = v)
 
     /** Runs `action` whenever the drawer closes itself (close button, Escape,
-      * mask click) — after the `open` ref is written to `false`. External ref
+      * mask click), after the `open` ref is written to `false`. External ref
       * writes do NOT fire it.
       */
     def onClose(action: => UI.Action)(using Frame): Drawer =
@@ -168,7 +168,7 @@ final case class Drawer private (
                         )
                     else Nil
 
-                // Prime renders the header row even without a title — it docks the
+                // Prime renders the header row even without a title, since it docks the
                 // close button; both absent renders no header at all.
                 val headerUI: List[UI] =
                     if titleChildren.isEmpty && closeBtn.isEmpty then Nil
@@ -209,7 +209,7 @@ final case class Drawer private (
                 val boxUI = box((headerUI ++ contentUI ++ footerUI).map(toChild)*)
 
                 // Enter/leave: the mask fades in via a transient from-state
-                // class (NOT Prime's permanent `p-overlay-mask-enter-active` — the Dialog
+                // class (NOT Prime's permanent `p-overlay-mask-enter-active`: the Dialog
                 // transparent-mask trap); on close the leave ghost plays Prime's own
                 // `p-overlay-mask-leave-active` keyframe. `onClickSelf`: only clicks
                 // landing on the mask itself dismiss; clicks inside the panel must not.

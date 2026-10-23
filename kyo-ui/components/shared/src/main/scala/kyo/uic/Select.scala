@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** Select — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Select
+/** Select: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Select
   * anatomy: `div.p-select.p-component[.p-invalid][.p-disabled][.p-select-sm|-lg]
   * [.p-variant-filled][.p-select-fluid][.p-select-open]` > `span.p-select-label`
   * + optional `button.p-select-clear-icon` + `span.p-select-dropdown` with the
@@ -15,7 +15,7 @@ import scala.annotation.targetName
   *
   * The option panel is the REAL floating panel, built on the [[Overlay]]
   * primitive: the trigger toggles it, an outside click or Escape closes it, and
-  * the panel takes NO focus — the trigger keeps it, which is what makes the
+  * the panel takes NO focus: the trigger keeps it, which is what makes the
   * trigger the combobox and lets its `aria-activedescendant` be read at all.
   * ArrowDown/ArrowUp move the `.p-focus` highlight (disabled options skipped),
   * Home/End reach the ends, a printable key jumps to the option it starts, Enter
@@ -95,7 +95,7 @@ final case class Select[A] private (
 
     /** Package-internal: FloatLabel stamps Prime's wrapper-state classes
       * (`p-inputwrapper` + `p-inputwrapper-filled` while a value is selected or a
-      * non-empty placeholder shows text) — stamped INSIDE the component's own
+      * non-empty placeholder shows text), stamped INSIDE the component's own
       * subscription so the filled state tracks the bound ref.
       */
     private[uic] def inputwrapper: Select[A] = copy(inputwrapperFlag = true)
@@ -131,18 +131,18 @@ final case class Select[A] private (
     def optionGroups(is: Seq[OptionItem[A]])(label: A => String): Select[A] =
         copy(optionsV = optionsV ++ is.toList, labelF = label)
 
-    /** Stable per-option key — the value written into the bound ref.
+    /** Stable per-option key: the value written into the bound ref.
       *
       * Defaults to the label projection, which is correct only while the labels are
       * unique. When they are not, two options share one key and a pick applies to
-      * the wrong one — a failure that appears only with the data that triggers it,
+      * the wrong one, a failure that appears only with the data that triggers it,
       * so it survives development and shows up in production. The panel therefore
       * renders a loud `.p-uic-key-error` card whenever the derived keys collide,
       * naming the offending keys.
       */
     def optionKey(f: A => String): Select[A] = copy(keyF = Present(f))
 
-    /** Renders matching options disabled (`.p-disabled` rows — shown in the panel
+    /** Renders matching options disabled (`.p-disabled` rows, shown in the panel
       * but not pickable; the keyboard highlight skips them).
       */
     def optionDisabled(f: A => Boolean): Select[A] = copy(optionDisabledF = Present(f))
@@ -175,7 +175,7 @@ final case class Select[A] private (
     @targetName("selectionMaybe")
     def selection(ref: SignalRef[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ref)))
 
-    /** Binds the panel visibility two-way to `ref` (optional — the panel is
+    /** Binds the panel visibility two-way to `ref` (optional; the panel is
       * self-managed otherwise): writes open and close it, trigger/outside-click/
       * Escape write back.
       */
@@ -204,13 +204,13 @@ final case class Select[A] private (
     def showClear(v: Boolean): Select[A] = copy(showClearFlag = v)
 
     /** Whether the floating options panel (and its backdrop) re-home to `document.body`
-      * ([[Overlay.portal]]) — the escape from ancestor `overflow` clipping and `transform`
+      * ([[Overlay.portal]]), the escape from ancestor `overflow` clipping and `transform`
       * containing blocks, e.g. for a Select inside a ScrollPanel or DataTable cell (default false).
       */
     def portal(v: Boolean): Select[A] = copy(portalFlag = v)
 
     /** How the open options panel responds to scroll outside it (default
-      * [[Overlay.Scroll.Close]] — Prime's hide-on-scroll). See [[Overlay.Scroll]].
+      * [[Overlay.Scroll.Close]], Prime's hide-on-scroll). See [[Overlay.Scroll]].
       */
     def scroll(v: Overlay.Scroll): Select[A] = copy(scrollV = v)
 
@@ -230,7 +230,7 @@ final case class Select[A] private (
 
     def disabled(v: Boolean): Select[A] = copy(disabledFlag = v)
 
-    /** `readonly` — the field reports `aria-readonly`, answers no key and opens no
+    /** `readonly`: the field reports `aria-readonly`, answers no key and opens no
       * panel (`.p-uic-select-readonly`), but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
@@ -251,7 +251,7 @@ final case class Select[A] private (
     /** Size: `.p-select-sm` / default / `.p-select-lg`. */
     def size(v: Size): Select[A] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): Select[A] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-select-fluid`). */
@@ -310,7 +310,7 @@ final case class Select[A] private (
     private[uic] def render(using Frame): UI =
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount. Static projections (SSG, the SSR page GET,
-        // initial render) show the placeholder — the same closed anatomy, inert —
+        // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val stat: UI = withValue(cur => body(cur, Absent))
         UI.mounted {
@@ -330,7 +330,7 @@ final case class Select[A] private (
         }.placeholder(stat)
     end render
 
-    /** The subscription tree the mount publishes — the seam golden tests render
+    /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as placeholders,
       * so the wired anatomy is only reachable here).
       */
@@ -357,7 +357,7 @@ final case class Select[A] private (
                     case Absent     => f(Absent)
 
     private def body(held: Maybe[A], st: Maybe[State])(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
+        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
         // UI.mounted node). `State` is a path-dependent inner type, so both reactive re-renders thread
         // their resolved values (placeholder text; red flag + message) into `bodyStatic` directly rather
         // than through `copy(...)` (a copied instance's `State` would not match).
@@ -539,7 +539,7 @@ final case class Select[A] private (
                 }
             }
             // Focus-loss on the trigger reports the currently bound key (or the resolved
-            // current value when unbound) — the validation layer's Blur trigger.
+            // current value when unbound): the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
                     case Present(c) => c.read(f)
@@ -699,7 +699,7 @@ final case class Select[A] private (
                     .cssClass("p-inputtext")
                     .cssClass("p-component")
                     // The bound input renders inside a reactive wrapper span, which resets sibling
-                    // positions — the sheet's :not(:last-child) padding cannot see the trailing
+                    // positions; the sheet's :not(:last-child) padding cannot see the trailing
                     // icon, so stamp the deterministic IconField padding class.
                     .cssClass("p-uic-iconfield-end")
                     .role("combobox")

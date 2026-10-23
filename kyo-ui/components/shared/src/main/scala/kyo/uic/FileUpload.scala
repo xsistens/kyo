@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** FileUpload (BASIC mode) — native kyo-ui, PrimeOne design (mirrors
+/** FileUpload (BASIC mode): native kyo-ui, PrimeOne design (mirrors
   * PrimeVue/PrimeReact's basic FileUpload anatomy:
   * `div.p-fileupload.p-fileupload-basic.p-component` >
   * `div.p-fileupload-basic-content` with the choose Button (plus glyph +
@@ -12,22 +12,22 @@ import kyo.UI.*
   * fileupload CSS applies verbatim.
   *
   * Server-honest DEVIATIONS (documented):
-  *   - Prime's choose Button forwards its click to the hidden input from JS —
+  *   - Prime's choose Button forwards its click to the hidden input from JS;
   *     here the choose affordance is a real `<label for>` wearing Prime's
   *     Button classes, so the native file dialog opens with ZERO JS. Pass a
   *     stable `inputId` (it wires the `for`/`id` pair).
   *   - kyo's file-input `onFileSelect` delivers the full
-  *     [[kyo.UI.FilePayload]] metadata — name, size, mimeType, content — so the
+  *     [[kyo.UI.FilePayload]] metadata (name, size, mimeType, content), so the
   *     basic file label now shows the chosen name(s) ON ITS OWN, from an
   *     internal signal the picker writes: no app state needed. `multiple(true)`
   *     accepts several files (the label joins their names). Prime's
-  *     `auto`/upload-URL machinery does not apply — the content already IS
+  *     `auto`/upload-URL machinery does not apply: the content already IS
   *     server-side in the handler.
   *   - The advanced mode (drag & drop, file list, progress) is deferred.
   *
   * A [[FileFormControl]] over `Seq[kyo.UI.FilePayload]`, so
   * `uic.FileUpload().bind(field)` wires value, validity, message and the blur
-  * trigger — and a validator can read the picked files' sizes and extensions
+  * trigger, and a validator can read the picked files' sizes and extensions
   * because the payload metadata IS the bound value.
   */
 final case class FileUpload private (
@@ -54,7 +54,7 @@ final case class FileUpload private (
     /** The one implementor of [[HasElementId]] whose storage is not `Maybe[String]`:
       * `inputIdV` is a plain `String` with a working default, because the native input needs
       * a `for` target whether or not a caller named one. So an `Absent` here means "keep the
-      * default", not "clear it" — which is why this writer is spelled out rather than being
+      * default", not "clear it", which is why this writer is spelled out rather than being
       * the `copy(idV = v)` every other implementor supplies.
       *
       * `id` and [[inputId]] are the same slot: `bind` stamps the field's minted id here so
@@ -64,7 +64,7 @@ final case class FileUpload private (
     private[uic] def withElementId(v: Maybe[String]): FileUpload =
         v.map(inputId).getOrElse(this)
 
-    /** Reads it back — `Absent` while the id is still the untouched default.
+    /** Reads it back; `Absent` while the id is still the untouched default.
       *
       * The family's odd one out, because `inputIdV` is a plain `String` that always has a
       * value ([[inputId]]'s working default, so the native input is addressable unasked).
@@ -77,7 +77,7 @@ final case class FileUpload private (
 
     /** Binds the picked files two-way: a pick writes the [[kyo.UI.FilePayload]] metadata
       * (name, size, MIME type, content) into `ref`, and a ref write of an empty Seq clears
-      * the label back to the empty state. This is what makes a FileUpload validatable — a
+      * the label back to the empty state. This is what makes a FileUpload validatable: a
       * rule can read the sizes and extensions it was handed.
       */
     def value(ref: SignalRef[Seq[UI.FilePayload]]): FileUpload = copy(filesRef = Present(ref))
@@ -107,11 +107,11 @@ final case class FileUpload private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = copy(invalidMsgDynV = v)
 
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size,
-      * mimeType, content) once a file is chosen — after the [[value]] write-back.
+      * mimeType, content) once a file is chosen, after the [[value]] write-back.
       */
     def onSelect(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onSelectF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the currently picked files — the validation layer's Blur
+    /** Fires on focus loss with the currently picked files: the validation layer's Blur
       * trigger. Reports an empty Seq when nothing is bound or picked.
       */
     def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onBlurF = Present(Callback.of(f)))

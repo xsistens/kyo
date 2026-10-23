@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** Slider — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Slider: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Slider anatomy: `div.p-slider.p-component.p-slider-horizontal|-vertical` >
   * `span.p-slider-range` (the value fill) + `span.p-slider-handle`), so the
   * extracted `@primeuix` slider CSS applies verbatim.
@@ -14,7 +14,7 @@ import scala.annotation.targetName
   * and the native keyboard (arrows/Home/End) work for free, and the browser
   * delivers the committed value as a Double which is written back into the
   * bound `value(SignalRef[Double])` before `onChange` fires. The Prime divs
-  * are the VISUAL layer only — the range fill and handle position are computed
+  * are the VISUAL layer only: the range fill and handle position are computed
   * server-side from the bound value ((value − min) / (max − min)), so a ref
   * write from anywhere moves the slider.
   *
@@ -23,10 +23,10 @@ import scala.annotation.targetName
   * constraint in one call.
   *
   * Honest limits under server rendering: the native `change` event fires when
-  * a drag COMMITS (pointer release) — the visual fill follows a drag on
+  * a drag COMMITS (pointer release), so the visual fill follows a drag on
   * release, not continuously (keyboard steps commit per keypress and track
   * live). Prime's dual-handle `range` mode is not ported: it would need two
-  * overlapping native inputs fighting for the same pointer surface — deferred
+  * overlapping native inputs fighting for the same pointer surface, so it is deferred
   * rather than approximated.
   */
 final case class Slider private (
@@ -81,7 +81,7 @@ final case class Slider private (
       */
     def integer(v: Boolean): Slider = copy(integerFlag = v)
 
-    /** Track orientation — `.p-slider-horizontal` (default) or `.p-slider-vertical`. */
+    /** Track orientation: `.p-slider-horizontal` (default) or `.p-slider-vertical`. */
     def orientation(v: Orientation): Slider = copy(orientationV = v)
 
     /** Disables the control (`.p-disabled` + native disabled input); a `Signal[Boolean]`
@@ -98,7 +98,7 @@ final case class Slider private (
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): Slider = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the slider's current value — unlike onChange it fires even
+    /** Fires on focus loss with the slider's current value; unlike onChange it fires even
       * when the handle was not moved. The validation layer's Blur trigger.
       */
     def onBlur(f: Double => UI.Action)(using Frame): Slider = copy(onBlurF = Present(Callback.of(f)))
@@ -171,7 +171,7 @@ final case class Slider private (
                 end for
             }
         end if
-        // Blur fires even without a drag — the validation layer's Blur trigger. Reads the
+        // Blur fires even without a drag: the validation layer's Blur trigger. Reads the
         // ref LIVE where there is one, so it reports the value at blur time.
         onBlurF.foreach { f =>
             in = in.onBlur(ref match

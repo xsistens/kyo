@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Multi-line text input — native kyo-ui, PrimeOne design (mirrors
+/** Multi-line text input: native kyo-ui, PrimeOne design (mirrors
   * PrimeVue/PrimeReact's Textarea: the component IS the bare
   * `<textarea class="p-textarea">`). Closely mirrors [[Input]] but composes the
   * kyo `<textarea>` factory, so two-way binding (`value(SignalRef)` →
@@ -74,10 +74,10 @@ final case class TextArea private (
     /** Native `name` for HTML form participation. */
     def name(v: String): TextArea = copy(nameV = Present(v))
 
-    /** Native `maxlength` — caps the number of characters. */
+    /** Native `maxlength`: caps the number of characters. */
     def maxLength(n: Int): TextArea = copy(maxLengthV = Present(math.max(0, n)))
 
-    /** Prime `autoResize` — the textarea grows with its content
+    /** Prime `autoResize`: the textarea grows with its content
       * (`.p-textarea-resizable` + the CSS `field-sizing: content` remainder class
       * `.p-uic-autoresize`; no JS measuring).
       */
@@ -86,7 +86,7 @@ final case class TextArea private (
     /** Size: `.p-textarea-sm` / default / `.p-textarea-lg`. */
     def size(v: Size): TextArea = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): TextArea = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-textarea-fluid`). */
@@ -102,7 +102,7 @@ final case class TextArea private (
     def onInput(f: String => UI.Action)(using Frame): TextArea  = copy(onInputF = Present(Callback.of(f)))
     def onChange(f: String => UI.Action)(using Frame): TextArea = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the field's current value — unlike onChange it
+    /** Fires on focus loss with the field's current value; unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
     def onBlur(f: String => UI.Action)(using Frame): TextArea = copy(onBlurF = Present(Callback.of(f)))

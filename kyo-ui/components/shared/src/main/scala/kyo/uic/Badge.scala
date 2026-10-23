@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Badge — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Badge
+/** Badge: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Badge
   * anatomy: `span.p-badge.p-component[.p-badge-<severity>][.p-badge-sm|-lg|-xl]
   * [.p-badge-dot][.p-badge-circle]` with the value text), so the extracted
   * `@primeuix` badge CSS applies verbatim.
@@ -12,7 +12,7 @@ import kyo.UI.*
   * single-character value gets `.p-badge-circle` automatically (Prime
   * semantics). Without a `severity`, the base `.p-badge` skin renders the
   * primary chip; Prime's badge vocabulary is
-  * success/info/warn/danger/secondary/contrast — `Primary` (and `Help`) keep
+  * success/info/warn/danger/secondary/contrast; `Primary` (and `Help`) keep
   * the unsuffixed base skin.
   */
 final case class Badge private (
@@ -85,15 +85,15 @@ object Badge:
       */
     def apply(value: String | Signal[String]): Badge = new Badge(valueV = Present(ReactiveValue(value)))
 
-    /** A value-less badge — the `.p-badge-dot` status dot. */
+    /** A value-less badge: the `.p-badge-dot` status dot. */
     def apply(): Badge = new Badge()
 end Badge
 
-/** OverlayBadge — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** OverlayBadge: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * OverlayBadge anatomy: `div.p-overlaybadge` wrapping ONE child plus the
   * [[Badge]], which the overlaybadge CSS pins to the child's top-end corner
   * with the outline ring), so the extracted `@primeuix` overlaybadge CSS
-  * applies verbatim. Prime puts no `p-component` on this root — neither do we.
+  * applies verbatim. Prime puts no `p-component` on this root, and neither do we.
   *
   * The kyo remainder makes the root an inline-flex row (Prime relies on a
   * plain block `div`; kyo's base CSS would make it a stretching column

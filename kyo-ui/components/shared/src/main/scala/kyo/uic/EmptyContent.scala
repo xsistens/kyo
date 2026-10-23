@@ -39,7 +39,7 @@ private[uic] object EmptyContent:
     def whenSet(c: Maybe[EmptyContent])(wrap: HtmlChildVal => UI)(using Frame): List[UI] =
         c.toList.map(v => one(v)(wrap))
 
-    /** A `Dyn` slot goes in as the wrapper's text CHILD — kyo-ui's text channel patches it in place,
+    /** A `Dyn` slot goes in as the wrapper's text CHILD: kyo-ui's text channel patches it in place,
       * where a region around `wrap` would rebuild the whole empty-state element per emission. The
       * other two build once.
       */

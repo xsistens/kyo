@@ -1,13 +1,13 @@
 // Build-time extraction of the PrimeOne design system (all inputs MIT):
-//   @primeuix/themes  — token presets (aura/material/lara/nora, light+dark)
-//   @primeuix/styles  — per-component CSS with dt('token.path') references
-//   @primeuix/styled  — the resolution engine (Theme, dt, evaluateDtExpressions)
+//   @primeuix/themes: token presets (aura/material/lara/nora, light+dark)
+//   @primeuix/styles: per-component CSS with dt('token.path') references
+//   @primeuix/styled: the resolution engine (Theme, dt, evaluateDtExpressions)
 //
 // Run from gen/: `bun extract.mjs` (deps live in gen/npm, installed by fetch.sh).
 // Emits into gen/work/ (gitignored):
-//   tokens/<preset>.json  — { light: [[name, value]...], dark: [[...]] }
-//   css/base.css          — shared/base component style (var(--p-*) consumers)
-//   css/<component>.css   — per-component style, dt() resolved to var(--p-*)
+//   tokens/<preset>.json: { light: [[name, value]...], dark: [[...]] }
+//   css/base.css:         shared/base component style (var(--p-*) consumers)
+//   css/<component>.css:  per-component style, dt() resolved to var(--p-*)
 //
 // Token names are taken verbatim from the engine's own output (never re-derived);
 // the dark bucket is whatever the engine emits under the darkModeSelector.
@@ -84,7 +84,7 @@ for (const presetName of PRESETS) {
   }, null, 1));
   console.log(`${presetName}: ${vars.light.size} light + ${vars.dark.size} dark tokens`);
 
-  // Component CSS is preset-independent (pure var(--p-*) consumers) — extract once.
+  // Component CSS is preset-independent (pure var(--p-*) consumers), so extract once.
   if (baseCss === null) {
     const { style: base } = await req2("base");
     baseCss = evaluateDtExpressions(String(base ?? ""), dt) + "\n" + (common.style ?? "");

@@ -11,8 +11,8 @@ import scala.annotation.targetName
   * with no opaque wrapper.
   *
   * The trait carries the validation setters ITSELF rather than declaring them. The
-  * vocabulary used to be unevenly distributed — some controls had the pair, some had
-  * `invalid(Boolean)` alone, some had neither — so a user who learned it on `Input`
+  * vocabulary used to be unevenly distributed (some controls had the pair, some had
+  * `invalid(Boolean)` alone, some had neither), so a user who learned it on `Input`
   * found half of it on the next control and none on the third, with no rule saying
   * which. Defining them here makes half-presence unrepresentable AND spells the
   * behaviour once: a control cannot forget a member, and cannot describe one
@@ -139,7 +139,7 @@ trait NumberFormControl extends FormControl:
 end NumberFormControl
 
 /** A file-picking control ([[FileUpload]]) bound to the picked files' metadata. The
-  * value type is `Seq[kyo.UI.FilePayload]` — name, size, MIME type and text content of
+  * value type is `Seq[kyo.UI.FilePayload]`: name, size, MIME type and text content of
   * each selected file, which is what a validator needs to check a size cap or an
   * extension, and what a submit handler needs to upload.
   */

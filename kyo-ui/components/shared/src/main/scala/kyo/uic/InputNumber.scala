@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** InputNumber button layout (Prime's `buttonLayout`): `Stacked` (default —
+/** InputNumber button layout (Prime's `buttonLayout`): `Stacked` (default:
   * the up/down pair docked inside the field's end), `Horizontal` (decrement |
   * field | increment in a row) or `Vertical` (increment above, decrement
   * below a centered field).
@@ -18,11 +18,11 @@ enum InputNumberButtonLayout derives CanEqual:
         case InputNumberButtonLayout.Vertical   => "vertical"
 end InputNumberButtonLayout
 
-/** InputNumber — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** InputNumber: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * InputNumber anatomy: `span.p-inputnumber.p-component.p-inputwrapper` >
   * `input.p-inputnumber-input.p-inputtext` plus, with `showButtons(true)`, the
   * spin buttons `.p-inputnumber-button.p-inputnumber-increment-button` /
-  * `-decrement-button` — stacked inside a `.p-inputnumber-button-group`,
+  * `-decrement-button`, stacked inside a `.p-inputnumber-button-group`,
   * horizontal/vertical as ordered siblings), so the extracted `@primeuix`
   * inputnumber CSS applies verbatim.
   *
@@ -35,7 +35,7 @@ end InputNumberButtonLayout
   * Deliberate deviation from Prime: locale/currency/thousand-separator
   * FORMATTING while typing is keystroke-bound client JS in Prime (its field is
   * `type=text` plus a formatter); a server-driven component keeps the native
-  * number field instead — `prefix`/`suffix` render as STATIC adornment spans
+  * number field instead: `prefix`/`suffix` render as STATIC adornment spans
   * (`.p-uic-inputnumber-prefix`/`-suffix`, kyo extension) beside the field,
   * never inside the typed value, and no live digit-grouping mask is applied.
   */
@@ -95,10 +95,10 @@ final case class InputNumber private (
       */
     def text(ref: SignalRef[String]): InputNumber = copy(valueBinding = Present(InputNumber.Value.Text(ref)))
 
-    /** Lower bound — native `min` plus the clamp floor for spins and commits. */
+    /** Lower bound: native `min` plus the clamp floor for spins and commits. */
     def min(v: Double): InputNumber = copy(minV = Present(v))
 
-    /** Upper bound — native `max` plus the clamp ceiling for spins and commits. */
+    /** Upper bound: native `max` plus the clamp ceiling for spins and commits. */
     def max(v: Double): InputNumber = copy(maxV = Present(v))
 
     /** Spin/arrow increment (native `step`; Prime default 1). */
@@ -107,11 +107,11 @@ final case class InputNumber private (
     /** Shows the increment/decrement buttons (Prime's `showButtons`). */
     def showButtons(v: Boolean): InputNumber = copy(showButtonsFlag = v)
 
-    /** Button placement — `Stacked` (default), `Horizontal` or `Vertical`. */
+    /** Button placement: `Stacked` (default), `Horizontal` or `Vertical`. */
     def buttonLayout(v: InputNumberButtonLayout): InputNumber = copy(buttonLayoutV = v)
 
-    /** Static adornment BEFORE the field (kyo extension `.p-uic-inputnumber-prefix`
-      * — see the class doc: Prime's in-value formatting is deliberately not ported).
+    /** Static adornment BEFORE the field (kyo extension `.p-uic-inputnumber-prefix`;
+      * see the class doc: Prime's in-value formatting is deliberately not ported).
       */
     def prefix(v: String): InputNumber = copy(prefixV = Present(v))
 
@@ -123,7 +123,7 @@ final case class InputNumber private (
     /** Disables the field + spin buttons; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): InputNumber = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Native `readonly` — focusable but not editable; the spin buttons stop too. */
+    /** Native `readonly`: focusable but not editable; the spin buttons stop too. */
     def readonly(v: Boolean): InputNumber = copy(readonlyFlag = v)
 
     /** Native `name` for HTML form participation. */
@@ -132,7 +132,7 @@ final case class InputNumber private (
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
     def size(v: Size): InputNumber = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
     def variant(v: FieldVariant): InputNumber = copy(variantV = v)
 
     /** Spans the full container width (`.p-inputnumber-fluid`). */
@@ -166,7 +166,7 @@ final case class InputNumber private (
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current number — unlike
+    /** Fires on focus loss (native `blur`) with the field's current number; unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -241,7 +241,7 @@ final case class InputNumber private (
         // deliberately keeps inputFilter/inputMask off NumberInput, because a `number` field
         // reads its value as the empty string while the content is not a valid number, so a
         // character-level filter cannot see what it is filtering. A whole-number `step` is the
-        // native mechanism — the spinner and validation both round to it. (The value model
+        // native mechanism: the spinner and validation both round to it. (The value model
         // stays Double; a whole one.)
         in = in.step(if integerFlag then stepV.max(1.0).round.toDouble else stepV)
         text match
@@ -313,7 +313,7 @@ final case class InputNumber private (
                     case InputNumberButtonLayout.Horizontal | InputNumberButtonLayout.Vertical =>
                         List(inc, dec) // visual order via the sheet's `order` rules
 
-        // === adornments (kyo extension — see class doc) =========================
+        // === adornments (kyo extension, see class doc) ==========================
         val pre  = prefixV.toList.map(t => span.cssClass("p-uic-inputnumber-prefix")(t): UI)
         val post = suffixV.toList.map(t => span.cssClass("p-uic-inputnumber-suffix")(t): UI)
 

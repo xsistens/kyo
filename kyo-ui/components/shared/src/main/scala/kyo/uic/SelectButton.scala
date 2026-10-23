@@ -4,9 +4,9 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** SelectButton — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** SelectButton: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * SelectButton anatomy: `div.p-selectbutton.p-component[.p-invalid]
-  * [role=group]` whose children are full [[ToggleButton]]s — the extracted
+  * [role=group]` whose children are full [[ToggleButton]]s; the extracted
   * `@primeuix` selectbutton CSS styles `.p-selectbutton .p-togglebutton`
   * directly, fusing the buttons into one segmented control).
   *
@@ -65,14 +65,14 @@ final case class SelectButton[A] private (
     def options(is: Seq[String])(using ev: String =:= A): SelectButton[A] =
         copy(items = items ++ is.map(ev).toList, labelF = a => ev.flip(a))
 
-    /** Stable per-option key — the value written into the bound ref(s); defaults
+    /** Stable per-option key: the value written into the bound ref(s); defaults
       * to the label projection.
       */
     def optionKey(f: A => String): SelectButton[A] = copy(keyF = Present(f))
 
     /** Custom option content (Prime's option slot): arbitrary UI rendered inside
       * each fused button instead of the text projection. The label projection
-      * stays the accessibility name and — via [[optionKey]] — the selection key.
+      * stays the accessibility name and (via [[optionKey]]) the selection key.
       */
     def itemTemplate(f: A => UI): SelectButton[A] = copy(itemTemplateF = Present(f))
 
@@ -236,7 +236,7 @@ final case class SelectButton[A] private (
         el = el.role(if multipleFlag then "group" else "radiogroup")
         idV.foreach(v => el = el.id(v))
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
-        // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
+        // Blur fires even without a pick: the validation layer's Blur trigger. Reads the
         // bound ref LIVE, so it reports the selection at blur time. The element carries ONE
         // blur handler, so the arity in force decides which of the two is wired; a control
         // that declared both would otherwise silently keep whichever was applied last.

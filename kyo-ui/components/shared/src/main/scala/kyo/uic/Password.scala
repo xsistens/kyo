@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Password — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Password: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Password anatomy: `div.p-password.p-component.p-inputwrapper` >
   * `input.p-password-input.p-inputtext[type=password]` plus, with
   * `toggleMask(true)`, the eye toggle (`.p-password-toggle-mask-icon` with
@@ -16,7 +16,7 @@ import kyo.UI.*
   * `feedback(true)` renders the strength meter (`.p-password-meter` +
   * `.p-password-meter-label` with Prime's `-weak`/`-medium`/`-strong` classes
   * inside a `.p-password-content` block). Deliberate deviation from Prime: the
-  * meter renders INLINE below the field, not in a while-typing overlay — a
+  * meter renders INLINE below the field, not in a while-typing overlay: a
   * floated panel adds focus/dismiss machinery for zero information gain on a
   * server-driven page. Strength is computed on the server from the bound value
   * with Prime's OWN default rules: medium = two of [lowercase, uppercase,
@@ -62,7 +62,7 @@ final case class Password private (
     /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
     def toggleMask(v: Boolean): Password = copy(toggleMaskFlag = v)
 
-    /** Shows the strength meter below the field (inline — see the class doc). */
+    /** Shows the strength meter below the field (inline; see the class doc). */
     def feedback(v: Boolean): Password = copy(feedbackFlag = v)
 
     /** Meter label while the value is empty (Prime default "Enter a password"). A `Signal[String]` re-
@@ -99,13 +99,13 @@ final case class Password private (
     /** Native `name` for HTML form participation. */
     def name(v: String): Password = copy(nameV = Present(v))
 
-    /** Native `maxlength` — caps the number of characters. */
+    /** Native `maxlength`: caps the number of characters. */
     def maxLength(n: Int): Password = copy(maxLengthV = Present(math.max(0, n)))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
     def size(v: Size): Password = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
     def variant(v: FieldVariant): Password = copy(variantV = v)
 
     /** Spans the full container width (`.p-password-fluid`). */
@@ -126,7 +126,7 @@ final case class Password private (
     def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)))
     def onInput(f: String => UI.Action)(using Frame): Password  = copy(onInputSF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current value — unlike
+    /** Fires on focus loss (native `blur`) with the field's current value. Unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -157,7 +157,7 @@ final case class Password private (
             case _                             => body("", rev)
 
     private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)])(using Frame): UI =
-        // Reactive-invalid gate (INSIDE the mount subscription — never around the
+        // Reactive-invalid gate (INSIDE the mount subscription, never around the
         // UI.mounted node): with a reactive slot set, re-render field + meter + message
         // through the shared helper; otherwise the untouched static form.
         (invalidV.dynSig, invalidMsgDynV) match

@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** One message queued into the [[ToastService]] store — Prime's
+/** One message queued into the [[ToastService]] store, Prime's
   * `ToastMessageOptions`: severity tint, summary/detail text pair, optional
   * `life` (timed auto-dismiss), and the close-button opt-out.
   */
@@ -15,19 +15,19 @@ final case class ToastMessage(
     closable: Boolean = true
 )
 
-/** ToastService — Prime's multi-toast store (`ToastService.add(...)` queueing
+/** ToastService: Prime's multi-toast store (`ToastService.add(...)` queueing
   * several messages into one stacked region) as a kyo Env/Layer service.
   *
   * Provide [[ToastService.layer]] ONCE at the application root (the
   * cross-cutting-service doctrine: dependencies ride the `Env` effect,
-  * discharged at the root — `Env.runAll(Memo.run(Layer.init[ToastService](
+  * discharged at the root: `Env.runAll(Memo.run(Layer.init[ToastService](
   * ToastService.layer).run))(app)`), place [[ToastService.render]]'s region
   * once in the tree, and `add` messages from anywhere that resolved the
   * service.
   *
   * Resolve the service at BUILD time, through [[ToastService.use]], and close
   * over the instance in handlers. The service itself needs nothing from `Env`
-  * once constructed — it owns its queue and its id counter — so an instance in
+  * once constructed (it owns its queue and its id counter), so an instance in
   * hand works under every transport.
   *
   * The resolution POINT is what matters. kyo-ui event handlers run on the
@@ -38,8 +38,8 @@ final case class ToastMessage(
   * `Env.get[ToastService]` inside one does not compile. `use` resolves it where
   * the tree is built.
   *
-  * `add` assigns a monotonically increasing id (a counter inside the service —
-  * the render stays pure: no clock, no randomness) and, when `life` is set,
+  * `add` assigns a monotonically increasing id (a counter inside the service,
+  * so the render stays pure: no clock, no randomness) and, when `life` is set,
   * forks the timed removal from an unscoped fiber (`Async.sleep` then
   * `remove`). This is the service half of [[Node]]'s fiber-ownership rule: a
   * message's life spans re-renders of the region, so no render's `Scope` can own
@@ -47,7 +47,7 @@ final case class ToastMessage(
   * carries its remaining `life` as `data-uic-life` (ms) for the client runtime.
   */
 trait ToastService:
-    /** Read-only view of the queued messages, oldest first — the render region
+    /** Read-only view of the queued messages, oldest first; the render region
       * subscribes here.
       */
     def signal: Signal[Seq[ToastService.Queued]]
@@ -67,7 +67,7 @@ trait ToastService:
     /** Removes every queued message. */
     def clear(using Frame): Unit < Sync
 
-    /** This instance's stacked region — the instance-method spelling of
+    /** This instance's stacked region: the instance-method spelling of
       * [[ToastService.render]], so a block that got the service from
       * [[ToastService.use]] never has to reach back into `Env` to place it.
       */
@@ -80,7 +80,7 @@ object ToastService:
     /** A queued toast: the service-assigned `id` plus the message. */
     final case class Queued(id: Int, message: ToastMessage) derives CanEqual
 
-    /** The service layer — holds the queue (`SignalRef[Seq[Queued]]`) and the id
+    /** The service layer: holds the queue (`SignalRef[Seq[Queued]]`) and the id
       * counter internally. Provide once at the application root.
       */
     def layer(using Frame): Layer[ToastService, Sync] = Layer(init)
@@ -88,7 +88,7 @@ object ToastService:
     /** Resolves the service ONCE, here, and hands the instance to `build`.
       *
       * This is the resolution point the class doc argues for, as an API rather than a
-      * convention: everything `build` returns — event handlers included — closes over the
+      * convention: everything `build` returns (event handlers included) closes over the
       * INSTANCE, so nothing downstream has to resolve anything at dispatch time, and the
       * transport-dependent failure has no way in.
       *
@@ -104,7 +104,7 @@ object ToastService:
     def use[A, S](build: ToastService => A < S)(using Frame): A < (S & Env[ToastService]) =
         Env.get[ToastService].map(build)
 
-    /** A fresh service instance (the layer's construction — exposed for runners
+    /** A fresh service instance (the layer's construction, exposed for runners
       * that wire services manually).
       */
     def init(using Frame): ToastService < Sync =
@@ -133,7 +133,7 @@ object ToastService:
 
     /** The stacked toast region: resolves the service from `Env`, subscribes to
       * its queue, and renders every queued message into one fixed
-      * `div.p-toast.p-component.p-toast-<position>` region (Prime's anatomy —
+      * `div.p-toast.p-component.p-toast-<position>` region (Prime's anatomy:
       * one region, many `div.p-toast-message` children). Place it once, near the
       * app root.
       */
@@ -142,7 +142,7 @@ object ToastService:
     ): UI < Env[ToastService] =
         Env.get[ToastService].map(svc => wired(svc, position))
 
-    /** The stacked region for an already-resolved service instance — for code
+    /** The stacked region for an already-resolved service instance, for code
       * that did `Env.get[ToastService]` earlier in its build (the portable
       * build-time resolution pattern).
       */

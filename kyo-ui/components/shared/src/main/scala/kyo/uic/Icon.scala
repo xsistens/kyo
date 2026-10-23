@@ -12,7 +12,7 @@ enum IconMode derives CanEqual:
     private[uic] def token: String = this.toString
 end IconMode
 
-/** Icon — native kyo-ui, PrimeOne design. Renders the glyph's SVG path as an
+/** Icon: native kyo-ui, PrimeOne design. Renders the glyph's SVG path as an
   * inline `<svg><path/></svg>` with `fill=currentColor` inside a
   * `span.p-icon.p-uic-icon`, so it needs no icon font, works in SSR string
   * renders, and inherits the surrounding text color (Prime icons carry no

@@ -3,7 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** PickList — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** PickList: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * PickList anatomy: `div.p-picklist.p-component` > source reorder controls
   * (`div.p-picklist-controls.p-picklist-source-controls`, the four angle move
   * Buttons) > `div.p-picklist-list-container.p-picklist-source-list-container`
@@ -14,7 +14,7 @@ import kyo.UI.*
   * extracted `@primeuix` picklist + listbox CSS applies verbatim.
   *
   * The two COLUMN CONTENTS are the model: `sourceItems` and `targetItems` each
-  * bind a `SignalRef[Seq[A]]` two-way — transfers append the moved items to the
+  * bind a `SignalRef[Seq[A]]` two-way: transfers append the moved items to the
   * other column (Prime's semantics) and reorders write the shuffled Seq back.
   * The `*Items` names are deliberate: [[OrderList]] is the one-column member of
   * this pair and binds a single [[OrderList.items]], so a PickList reads as two
@@ -53,7 +53,7 @@ final case class PickList[A] private (
       */
     def targetItems(ref: SignalRef[Seq[A]]): PickList[A] = copy(targetRef = Present(ref))
 
-    /** Stable item identity — the selection key (defaults to the label). */
+    /** Stable item identity: the selection key (defaults to the label). */
     def itemKey(f: A => String): PickList[A] = copy(keyF = Present(f))
 
     /** Custom row content (Prime's option slot) for both columns. */
@@ -151,7 +151,7 @@ final case class PickList[A] private (
             )
         }.placeholder(wired(Absent, Absent))
 
-    /** The tree the mount publishes — the seam the tests drive, since a golden render shows a mount
+    /** The tree the mount publishes, the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.
       */
     private[uic] def wired(source: Maybe[ListReorder.Cursor], target: Maybe[ListReorder.Cursor])(using Frame): UI =

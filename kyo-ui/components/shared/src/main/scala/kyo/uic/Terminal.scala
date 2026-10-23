@@ -8,7 +8,7 @@ import kyo.UI.*
   */
 final case class TerminalCommand(command: String, response: String) derives CanEqual
 
-/** Terminal — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Terminal: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Terminal anatomy: `div.p-terminal.p-component` > the optional
   * `div.p-terminal-welcome-message` > `div.p-terminal-command-list` of
   * `div.p-terminal-command` rows (`span.p-terminal-prompt-label` +
@@ -18,12 +18,12 @@ final case class TerminalCommand(command: String, response: String) derives CanE
   * applies verbatim.
   *
   * The HISTORY is the model: `commands` binds a
-  * `SignalRef[Seq[TerminalCommand]]`. Committing a line (Enter — the input's
-  * native change commit) runs `commandHandler(cmd): String < Async` — a real
-  * effect, evaluated wherever the UI runs (in server-push transports that is the
-  * SERVER, which makes Terminal the natural server-push showcase) — and appends
+  * `SignalRef[Seq[TerminalCommand]]`. Committing a line (Enter, the input's
+  * native change commit) runs `commandHandler(cmd): String < Async` (a real
+  * effect, evaluated wherever the UI runs; in server-push transports that is the
+  * SERVER, which makes Terminal the natural server-push showcase) and appends
   * the `TerminalCommand` to the ref; the re-render clears the input. Prime's
-  * TerminalService event bus is replaced by the effect-typed handler — same
+  * TerminalService event bus is replaced by the effect-typed handler: same
   * contract, no global bus.
   *
   * Auto-scroll (self-addressing): the newest history row carries a
@@ -32,7 +32,7 @@ final case class TerminalCommand(command: String, response: String) derives CanE
   * fire-and-forget `UI.scrollIntoView(newestId)`, so a long transcript keeps the
   * latest output in view exactly as Prime's client scroll does. Fire-and-forget is
   * the right door here: a dropped auto-scroll self-corrects on the next append and
-  * needs no reply — unlike Form's submit-time reveal, which couples scroll with
+  * needs no reply, unlike Form's submit-time reveal, which couples scroll with
   * focus and uses the guaranteed `Commands` channel. The static projection (before
   * the transport attaches) renders no id and does not scroll.
   */
@@ -58,7 +58,7 @@ final case class Terminal private (
       */
     def commands(ref: SignalRef[Seq[TerminalCommand]]): Terminal = copy(commandsRef = Present(ref))
 
-    /** The command interpreter — an effect: the committed line in, the response
+    /** The command interpreter, an effect: the committed line in, the response
       * text out. Runs where the UI runs (server-side under server-push).
       */
     def commandHandler(f: String => String < Async): Terminal = copy(handlerF = Present(f))
@@ -68,13 +68,13 @@ final case class Terminal private (
     private[uic] def render(using Frame): UI =
         (commandsRef, handlerF) match
             case (Present(r), Present(_)) =>
-                // Auto-scroll needs a stable id for the newest row — mint one from the
+                // Auto-scroll needs a stable id for the newest row: mint one from the
                 // session `Commands` (`freshId`) once in a mounted effect, then the
                 // reactive body reads it. The scroll ITSELF goes through the Local
                 // fire-and-forget door (`UI.scrollIntoView`), not `Commands.scrollIntoViewId`:
                 // a missed auto-scroll is harmless (the next append re-scrolls) and the op
                 // needs no return channel or ordering with any other command, so it wants
-                // the lost-op-is-fine transport — see the A+ two-door contract on UI.Commands.
+                // the lost-op-is-fine transport (see the A+ two-door contract on UI.Commands).
                 // The post-insertion mount below already guarantees the row exists when the
                 // command lands, which is exactly the discipline the fire-and-forget door needs.
                 UI.mounted {
@@ -86,7 +86,7 @@ final case class Terminal private (
             case (Present(r), _) => r.render(h => body(h, Absent, Absent))
             case _               => body(Seq.empty, Absent, Absent)
 
-    /** The scrolling subscription the mount publishes — the golden seam.
+    /** The scrolling subscription the mount publishes: the golden seam.
       * `scrollTo` scrolls the row with the given id into view (production: the Local
       * fire-and-forget `UI.scrollIntoView`; tests inject a fake to observe the seam).
       */
@@ -125,7 +125,7 @@ final case class Terminal private (
         }
         val list: UI = div.cssClass("p-terminal-command-list")(rows.map(toChild)*)
 
-        // The input value is fixed at "" — committing a line appends to the bound
+        // The input value is fixed at "": committing a line appends to the bound
         // history ref, and the resulting re-render recreates the input empty.
         var field = input
             .cssClass("p-terminal-prompt-value")
@@ -148,7 +148,7 @@ final case class Terminal private (
 
     /** Runs the handler effect on the committed line and appends the executed
       * command to the bound history. The newest row scrolls itself into view via
-      * its own on-mount effect (see [[body]]) — reliable because it fires AFTER
+      * its own on-mount effect (see [[body]]), reliable because it fires AFTER
       * the row is inserted, unlike scrolling from here (which races the render).
       */
     private def execute(line: String)(using Frame): UI.Action =

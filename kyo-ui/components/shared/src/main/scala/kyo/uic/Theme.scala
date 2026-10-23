@@ -10,11 +10,11 @@ import kyo.*
   *
   * Presets: Aura (default, on `:root`) / Material / Lara / Nora via a
   * `data-theme` attribute on any ancestor; dark scheme via `data-scheme="dark"`,
-  * composable with every preset. Fonts: nothing is embedded — components
+  * composable with every preset. Fonts: nothing is embedded. Components
   * inherit the page font; the root rule prefers Inter with a system-ui
   * fallback, so self-hosting Inter is optional.
   *
-  * Usage — SSG/SSR: `PageHead(css = uic.Theme.css)`; client mount: put
+  * Usage: SSG/SSR: `PageHead(css = uic.Theme.css)`; client mount: put
   * `uic.Theme.css` in the host page's `<style>`.
   *
   * Branding: [[preset]] emits your own palette in the same shape the four shipped
@@ -23,7 +23,7 @@ import kyo.*
   * [[kyo.uic.Tokens]] stores and [[kyo.Stylesheet.scopedVars]] renders.
   *
   * Size: [[css]] is every preset in both schemes and all 75 component sheets, whatever
-  * the page places — the right default, and about 684 KB of CSS out of ~1.15 MB of Scala
+  * the page places: the right default, and about 684 KB of CSS out of ~1.15 MB of Scala
   * constants. [[cssFor]] takes the token sets and the sheets themselves, so a bundle keeps
   * only what its own call site names.
   */
@@ -112,7 +112,7 @@ object Theme:
         // The Aura base set is re-declared on every theme/scheme scope (not just
         // `:root`): component tokens are var() chains (`--p-inputtext-background:
         // var(--p-form-field-background)`), and CSS substitutes var() at the element
-        // that DECLARES the property — a `data-scheme="dark"` scope below `<html>`
+        // that DECLARES the property: a `data-scheme="dark"` scope below `<html>`
         // only re-derives the chains if they are declared on the scope element too.
         val base = Seq(
             TokenBlock(Absent, false, Tokens.auraLight),
@@ -137,13 +137,13 @@ object Theme:
       * declaration winning. Names carry no leading `--`, so the result feeds straight into
       * [[preset]] or [[kyo.Stylesheet.scopedVars]].
       *
-      * Use it to DERIVE a brand preset from a shipped one — `tokens(Preset.Aura,
+      * Use it to DERIVE a brand preset from a shipped one: `tokens(Preset.Aura,
       * Scheme.Dark) ++ myRamps` is Aura's dark palette with your colours over it. For most
       * brands the ramps alone are enough (the semantic tokens are `var()` chains onto
       * them), and this is the escape hatch for the rest.
       *
       * COSTS THE WHOLE TOKEN LAYER. Folding the blocks means reaching all four presets, so
-      * this pulls every token set into a bundle — about 765 KB — exactly the way [[css]]
+      * this pulls every token set into a bundle (about 765 KB), exactly the way [[css]]
       * does. That is free when you use [[css]] anyway. On the [[cssFor]] path, name the set
       * you want directly (`Tokens.auraLight ++ myRamps`) and keep the saving.
       */
@@ -158,25 +158,25 @@ object Theme:
       * that out-specifies the library's own `[data-scheme="dark"]` (0,1,0) at (0,2,0).
       * Token names carry no leading `--`, matching [[kyo.uic.Tokens]].
       *
-      * The paired block is ALWAYS emitted and carries `light ++ dark` — `dark` is a delta,
+      * The paired block is ALWAYS emitted and carries `light ++ dark`; `dark` is a delta,
       * so name only what actually differs there. Two things it buys:
       *   - it is the only place a preset can hold values that DIFFER by scheme at all;
       *   - at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block
       *     (0,1,0), so the preset lands whatever order the sheets end up in. Emitted after
-      *     [[css]], as below, the plain block would already win on source order alone —
+      *     [[css]], as below, the plain block would already win on source order alone;
       *     the paired block is what makes the order stop mattering. Measured: with the
       *     sheet in that order, removing the paired block changes no computed token.
       *
       * Two things decide whether the override lands, and both are about WHERE:
       *   - `--p-*` tokens are `var()` chains, and CSS substitutes a `var()` at the element
       *     that DECLARES the property. Re-pointing the ramps (`p-primary-*`,
-      *     `p-surface-*`) re-derives every semantic token downstream — but only because
+      *     `p-surface-*`) re-derives every semantic token downstream, but only because
       *     this block matches the same element the library's own blocks do.
       *   - So the `data-theme`/`data-scheme` attributes must sit on the element the tokens
       *     are declared against. Stamping them on a shell `div` works; declaring your own
       *     tokens on `:root` while theming a `div` does not.
       *
-      * Emit it AFTER [[css]] — at equal specificity the later declaration wins.
+      * Emit it AFTER [[css]]: at equal specificity the later declaration wins.
       *
       * {{{
       * val brand = uic.Theme.preset("spotify", Seq("p-primary-400" -> "#1ed760", "p-surface-900" -> "#121212"))
@@ -206,7 +206,7 @@ object Theme:
       * kyo-specific remainder ([[primeExtraCss]]).
       *
       * This is every preset in both schemes and all 75 sheets, whatever the page places.
-      * That is the right default — nothing can be missing — and it is roughly 1.15 MB of
+      * That is the right default (nothing can be missing), and it is roughly 1.15 MB of
       * string constants. [[cssFor]] is the way to pay for less.
       */
     lazy val primeCss: String =
@@ -216,7 +216,7 @@ object Theme:
       *
       * Two rungs, and the first is almost all of it. Measured on a real app: dropping three
       * of the four presets saved 771 035 bundle bytes, and dropping 52 of the 74 sheets on
-      * top of that saved a further 239 594 — the tokens are 76 % of the win and cost
+      * top of that saved a further 239 594: the tokens are 76 % of the win and cost
       * nothing to give up, since `ComponentCss.all` is still every sheet.
       *
       * {{{
@@ -236,7 +236,7 @@ object Theme:
       * `Map` or a `byName` lookup references every branch as soon as it is reachable, so a
       * `cssFor(parts: Part*)` would ship all 1.15 MB and look like it had done something.
       * Taking the sheets themselves means a bundle keeps exactly the `ComponentCss` and
-      * `Tokens` defs its own call site mentions — the same rule `Icons` follows for its 309
+      * `Tokens` defs its own call site mentions, the same rule `Icons` follows for its 309
       * glyphs, which is why that object has no `all` either.
       *
       * `light` lands on `:root, [data-theme], [data-scheme]` and `dark` on
@@ -251,8 +251,8 @@ object Theme:
       * come to ~243 KB against [[css]]'s ~684 KB, a factor of 2.8.
       *
       * The list is yours to keep correct. A component whose sheet is not named here renders
-      * its `.p-*` markup completely unstyled, and nothing says so — see the README section
-      * "Shipping only the CSS you use".
+      * its `.p-*` markup completely unstyled, and nothing says so (see the README section
+      * "Shipping only the CSS you use").
       */
     def cssFor(
         light: Seq[(String, String)],
@@ -290,7 +290,7 @@ object Theme:
       |   the failure it causes is silent and data-dependent, so the card is deliberately loud. */
       |.p-uic-key-error { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
       |  border-radius: var(--p-border-radius-sm, 4px); padding: 0.375rem 0.5rem; font-size: 0.875rem; }
-      |/* "You are here" on a menu row (MenuItem.current) — a nav's whole job. Deliberately NOT
+      |/* "You are here" on a menu row (MenuItem.current), a nav's whole job. Deliberately NOT
       |   Prime's item-focus tokens: .p-focus is the roving keyboard highlight the component
       |   moves and drops on blur, and the two co-occur, so arrowing past the current page must
       |   not hide which page that is. Weight inherits down to the label; the colour is set on
@@ -319,7 +319,7 @@ object Theme:
       |/* aria-disabled button: greyed like :disabled but STILL focusable + clickable (pointer-events
       |   stays on) so the click can route through form.submit → focus-first-invalid. */
       |.p-uic-aria-disabled { opacity: var(--p-disabled-opacity, 0.6); cursor: not-allowed; }
-      |/* PrimeVue sets this via ToggleSwitchStyle.inlineStyles — the extracted component CSS lacks it. */
+      |/* PrimeVue sets this via ToggleSwitchStyle.inlineStyles; the extracted component CSS lacks it. */
       |.p-toggleswitch { position: relative; }
       |/* GlyphSvg renders <span class="..."><svg/></span>; Prime sizes the icon element
       |   itself, so spans sized by the component CSS scale their inner svg with them. */
@@ -327,11 +327,11 @@ object Theme:
       |span.p-tag-icon, span.p-avatar-icon { display: inline-flex; align-items: center; justify-content: center; }
       |span.p-checkbox-icon > svg, span.p-message-icon > svg, span.p-message-close-icon > svg,
       |span.p-tag-icon > svg, span.p-avatar-icon > svg { width: 100%; height: 100%; }
-      |/* Icon (p-uic-icon): the span hugs its svg — the svg carries the size, overriding
+      |/* Icon (p-uic-icon): the span hugs its svg; the svg carries the size, overriding
       |   .p-icon's 1rem default box. */
       |.p-uic-icon { display: inline-flex; align-items: center; justify-content: center; width: auto; height: auto; }
       |/* kyo-ui's base CSS defaults every div to a COLUMN flexbox; Prime's component
-      |   CSS relies on the browser's row default and never declares flex-direction —
+      |   CSS relies on the browser's row default and never declares flex-direction, so
       |   restore row on the flex containers these components depend on. */
       |.p-message-content, .p-toolbar, .p-toolbar-start, .p-toolbar-center, .p-toolbar-end,
       |.p-panel-header, .p-tablist, .p-tablist-tab-list, .p-breadcrumb-list,
@@ -400,7 +400,7 @@ object Theme:
       |   carry structure only and hand their children back to it. */
       |.p-datepicker-month-view > [role="row"],
       |.p-datepicker-year-view > [role="row"] { display: contents; }
-      |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
+      |/* Link (kyo extension: Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }
       |.p-uic-link:not(.p-disabled):hover { text-decoration: underline; }
@@ -418,7 +418,7 @@ object Theme:
       |.p-uic-option-icon { margin-inline-end: 0.5rem; flex-shrink: 0; }
       |.p-uic-option-extra { margin-inline-start: auto; padding-inline-start: 0.75rem; color: var(--p-text-muted-color); font-size: 0.875rem; white-space: nowrap; }
       |/* Tabs: count badge (kyo extension) + the ink bar, which Prime positions via
-      |   JS measuring — here it sits inside the active tab and spans it. */
+      |   JS measuring; here it sits inside the active tab and spans it. */
       |.p-uic-tab-count { font-size: 0.75rem; line-height: 1.25; padding: 0 0.375rem; border-radius: 0.625rem; background: var(--p-primary-color); color: var(--p-primary-contrast-color); }
       |.p-tab > .p-tablist-active-bar { inset-inline: 0; }
       |/* Shared hook for kyo onClick extensions on inert Prime components (Tag, Avatar). */
@@ -445,7 +445,7 @@ object Theme:
       |.p-uic-card-caption-row--interactive { cursor: pointer; }
       |/* Panel header actions: the extracted panel CSS lacks this container rule. */
       |.p-panel-header-actions { display: flex; align-items: center; gap: 0.25rem; }
-      |/* Title/Text: Prime ships no typographic primitives — rem scale, Inter inherits. */
+      |/* Title/Text: Prime ships no typographic primitives: rem scale, Inter inherits. */
       |.p-uic-title { color: var(--p-text-color); font-weight: 600; margin: 0; }
       |.p-uic-title--h1 { font-size: 2rem; }
       |.p-uic-title--h2 { font-size: 1.5rem; }
@@ -460,7 +460,7 @@ object Theme:
       |/* ProgressSpinner size presets (Prime sizes the spinner via an inline style). */
       |.p-uic-progressspinner-sm { width: 2rem; height: 2rem; }
       |.p-uic-progressspinner-lg { width: 8rem; height: 8rem; }
-      |/* FlexBox (kyo layout primitive — Prime ships none). */
+      |/* FlexBox (kyo layout primitive; Prime ships none). */
       |.p-uic-flex { display: flex; }
       |.p-uic-flex--wrap-reverse { flex-wrap: wrap-reverse; }
       |.p-uic-flex--fit { width: 100%; height: 100%; }
@@ -484,14 +484,14 @@ object Theme:
       |.p-datepicker { flex-wrap: wrap; }
       |.p-datepicker-panel-inline { margin-block-start: 0.25rem; }
       |.p-datepicker-day-view th { text-align: center; }
-      |/* Dialog: Prime centers the mask and stacks the box via inline styles —
+      |/* Dialog: Prime centers the mask and stacks the box via inline styles,
       |   expressed as CSS here. */
       |.p-dialog-mask { display: flex; flex-direction: row; align-items: center; justify-content: center; z-index: 1200; }
       |.p-dialog { display: flex; flex-direction: column; min-width: 20rem; }
       |/* Dialog severity accent (kyo extension): subtle colored border under the
       |   header + tinted leading icon. */
       |.p-uic-dialog-severity-icon { display: inline-flex; margin-inline-end: 0.5rem; }
-      |/* Toast: Prime pins the region via inline styles — expressed per position
+      |/* Toast: Prime pins the region via inline styles, expressed per position
       |   token here (the center tokens pair with the extracted transform rules). */
       |.p-toast { position: fixed; z-index: 1300; }
       |.p-toast-top-left { top: 20px; left: 20px; }
@@ -634,15 +634,15 @@ object Theme:
       |   declares flex-direction and relies on the browser's row default). */
       |.p-divider-horizontal, .p-divider-vertical, .p-avatar-group, .p-chip,
       |.p-metergroup-meters, ol.p-metergroup-label-list { flex-direction: row; }
-      |/* Skeleton: PrimeVue sets this via SkeletonStyle.inlineStyles — the ::after
+      |/* Skeleton: PrimeVue sets this via SkeletonStyle.inlineStyles; the ::after
       |   shimmer is absolutely positioned against the root. */
       |.p-skeleton { position: relative; }
       |/* OverlayBadge: Prime relies on a plain block div; kyo's column-flex div
-      |   default would stretch the child and misplace the corner badge — an
+      |   default would stretch the child and misplace the corner badge; an
       |   inline-flex row hugs the single wrapped child instead. */
       |.p-overlaybadge { display: inline-flex; flex-direction: row; }
       |/* Chip remove affordance renders as a real <button> around the glyph (Prime
-      |   uses a bare svg with handlers) — strip the native button chrome; the
+      |   uses a bare svg with handlers), so strip the native button chrome; the
       |   extracted .p-chip-remove-icon rules size and color it. */
       |button.p-chip-remove-icon { background: transparent; border: 0 none; padding: 0; flex-shrink: 0; justify-content: center; }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
@@ -652,7 +652,7 @@ object Theme:
       |   but the UA button font/color do not inherit on their own. */
       |button.p-fieldset-toggle-button { font: inherit; color: inherit; }
       |/* ScrollPanel (server-honest deferral): Prime hides the native scrollbars and
-      |   drives custom .p-scrollpanel-bar elements from JS scroll measuring — with
+      |   drives custom .p-scrollpanel-bar elements from JS scroll measuring. With
       |   no JS lifecycle server-side, scroll NATIVELY instead: re-enable the native
       |   scrollbars and style them thin with the scrollpanel bar tokens. */
       |.p-scrollpanel .p-scrollpanel-content {
@@ -688,7 +688,7 @@ object Theme:
       |/* Steppanel is a plain block in Prime; kyo's column flexbox would stretch
       |   buttons/fields in the panel content to full width. */
       |.p-steppanel { display: block; }
-      |/* Two-way bound kyo fields render inside a classless reactive <span> — the
+      |/* Two-way bound kyo fields render inside a classless reactive <span>, the
       |   kyo analogue of Prime's .p-inputwrapper. Mirror the inputwrapper rules on
       |   it so InputGroup keeps fusing radii and stretching the field. */
       |.p-inputgroup > span[data-kyo-reactive] { display: inline-flex; flex: 1 1 auto; width: 1%; }
@@ -723,26 +723,26 @@ object Theme:
       |   flexbox would stretch buttons/fields in the panel to full width. */
       |.p-steppanel-content { display: block; }
       |/* MeterGroup vertical label list: the `ol.p-metergroup-label-list`
-      |   row restorer above outweighs Prime's single-class vertical rule — re-
-      |   declare the column at matching specificity after it. */
+      |   row restorer above outweighs Prime's single-class vertical rule, so
+      |   redeclare the column at matching specificity after it. */
       |ol.p-metergroup-label-list-vertical { flex-direction: column; }
       |/* ==== IconField / FloatLabel / TextArea / Select / DataView ==== */
       |/* Prime's base visually-hidden helper (Rating's hidden per-option radios):
       |   injected by Prime's styled engine at runtime, not the extracted
-      |   per-component sheets — values byte-match the live PrimeVue 4.5 rule. */
+      |   per-component sheets; values byte-match the live PrimeVue 4.5 rule. */
       |.p-hidden-accessible {
       |  border: 0; clip: rect(0 0 0 0); height: 1px; margin: -1px; opacity: 0;
       |  overflow: hidden; padding: 0; pointer-events: none; position: absolute;
       |  white-space: nowrap; width: 1px;
       |}
-      |/* IconField hosts beyond Input (kyo extension — Prime's sheet only pads
+      |/* IconField hosts beyond Input (kyo extension: Prime's sheet only pads
       |   .p-inputtext): same padding calc for TextArea and the native Select. */
       |.p-iconfield .p-textarea.p-uic-iconfield-start { padding-inline-start: calc((var(--p-form-field-padding-x) * 2) + var(--p-icon-size)); }
       |.p-iconfield .p-textarea.p-uic-iconfield-end { padding-inline-end: calc((var(--p-form-field-padding-x) * 2) + var(--p-icon-size)); }
       |.p-iconfield .p-select.p-uic-iconfield-start .p-select-label { padding-inline-start: calc((var(--p-form-field-padding-x) * 2) + var(--p-icon-size)); }
       |.p-iconfield .p-select.p-uic-iconfield-end .p-select-label { padding-inline-end: calc((var(--p-form-field-padding-x) * 2) + var(--p-icon-size)); }
       |/* FloatLabel on Select: the sheet floats wrapped fields via the JS-stamped
-      |   .p-inputwrapper-focus — mirror the focus float with :focus-within on the
+      |   .p-inputwrapper-focus; mirror the focus float with :focus-within on the
       |   div trigger (tabindex="0"; the open panel lives inside the root, so the
       |   float holds while the panel is open) using the sheet's active values. */
       |.p-floatlabel:has(.p-select:focus-within) label {
@@ -768,17 +768,17 @@ object Theme:
       |}
       |span.p-uic-toggleswitch-handle-icon > svg { width: 100%; height: 100%; }
       |/* DataView loading: PrimeReact anchors the absolute overlay on the root via
-      |   its root modifier — the extracted sheet ships only the overlay rule. */
+      |   its root modifier; the extracted sheet ships only the overlay rule. */
       |.p-dataview-loading { position: relative; min-height: 4rem; }
       |""".stripMargin
 
-    /** The second half of [[primeExtraCss]], from the overlay section on — see
-      * [[primeExtraCssHead]] for why there are two.
+    /** The second half of [[primeExtraCss]], from the overlay section on (see
+      * [[primeExtraCssHead]] for why there are two).
       */
     private lazy val primeExtraCssTail: String =
         """/* ==== Overlay primitive + Select floating panel ==== */
       |/* Overlay (kyo primitive): anchor glue + backdrop/panel geometry. The anchor
-      |   element must be position:relative — stamp .p-uic-overlay-anchor on it.
+      |   element must be position:relative: stamp .p-uic-overlay-anchor on it.
       |   z-index: non-modal overlays sit at 1000/1001 (Prime's overlay layer),
       |   below the Dialog mask (1200) and Toast (1300); an overlay INSIDE a
       |   dialog still paints above the mask because it lives in the dialog's
@@ -789,7 +789,7 @@ object Theme:
       |   compared), and block children stack the same way. cursor resets to auto
       |   so an anchor's pointer (Prime's .p-select trigger) does not leak in. */
       |.p-uic-overlay-panel { position: absolute; z-index: 1001; display: block; cursor: auto; }
-      |/* The panel is a tabindex="-1" focus-seed target — no native ring on it. */
+      |/* The panel is a tabindex="-1" focus-seed target, so no native ring on it. */
       |.p-uic-overlay-panel:focus { outline: none; }
       |/* Prime's overlay gutter: 2px between anchor and panel (byte-compared
       |   against the live PrimeVue select overlay). */
@@ -801,7 +801,7 @@ object Theme:
       |/* Portal mode (Overlay.portal(true)): the panel re-homes to document.body (fork
       |   portal) and is placed with measured FIXED viewport coordinates patched in
       |   place. position:fixed overrides the anchor classes' absolute geometry (two
-      |   classes beat one); opacity:0 gates the unmeasured first paint — the first
+      |   classes beat one); opacity:0 gates the unmeasured first paint; the first
       |   geometry patch sets opacity:1 inline. The probe is an inset-0 child of the
       |   anchor that stands in for it as a measurable, id-addressed box. */
       |.p-uic-overlay-panel.p-uic-overlay-portal { position: fixed; opacity: 0; }
@@ -809,7 +809,7 @@ object Theme:
       |/* Prime's select header/list container are blocks (kyo base CSS would make
       |   these divs column flexboxes). */
       |.p-select-overlay .p-select-list-container, .p-select-overlay .p-select-header { display: block; }
-      |/* Select focus ring: Prime stamps .p-focus from JS — map the ring onto
+      |/* Select focus ring: Prime stamps .p-focus from JS; map the ring onto
       |   native :focus-within (the trigger root carries tabindex="0"; the open
       |   panel also lives inside the root, so the ring holds while open, exactly
       |   Prime's open-field look). */
@@ -836,7 +836,7 @@ object Theme:
       |   an inline style on the list container; expressed as CSS here. */
       |.p-select-overlay .p-select-list-container { max-height: 14rem; }
       |/* The clear affordance is a real <button> (Prime uses a bare svg with
-      |   handlers) — strip the native chrome; the extracted .p-select-clear-icon
+      |   handlers), so strip the native chrome; the extracted .p-select-clear-icon
       |   rule colors it. It sits as a flex sibling between label and chevron. */
       |button.p-select-clear-icon { background: transparent; border: 0 none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
@@ -846,7 +846,7 @@ object Theme:
       |span.p-select-option-check-icon > svg, button.p-select-clear-icon svg { width: 100%; height: 100%; }
       |/* ==== Tooltip + Popover + AutoComplete/DatePicker floating panels ==== */
       |/* Tooltip (CSS-driven deviation): Prime's directive mounts/positions the box
-      |   from JS — here the box is always in the DOM (the sheet ships display:none)
+      |   from JS; here the box is always in the DOM (the sheet ships display:none)
       |   and the relative wrapper's :hover/:focus-within shows it. width:max-content
       |   frees the box from the wrapper's shrink-to-fit width; pointer-events:none
       |   matches Prime's autoHide default (the box is not interactive). z-index
@@ -867,7 +867,7 @@ object Theme:
       |.p-tooltip-right .p-tooltip-arrow { left: 0; top: 50%; }
       |.p-tooltip-left .p-tooltip-arrow { right: 0; top: 50%; }
       |/* Popover: the sheet's :before/:after arrow reads --p-popover-arrow-left,
-      |   which Prime sets from JS pointer measuring — fix it at 0 (the arrow sits
+      |   which Prime sets from JS pointer measuring, so fix it at 0 (the arrow sits
       |   at the token offset from the panel's start edge). The panel margin
       |   restores the sheet's arrow gutter over the Overlay geometry's 2px. */
       |.p-popover { --p-popover-arrow-left: 0px; }
@@ -878,7 +878,7 @@ object Theme:
       |.p-uic-popover-anchor { display: inline-flex; flex-direction: row; }
       |.p-uic-popover-trigger { display: inline-flex; }
       |/* AutoComplete floating panel: the two-way bound field renders inside kyo's
-      |   classless reactive <span> — size it like the input flex item the sheet
+      |   classless reactive <span>, so size it like the input flex item the sheet
       |   expects; the list container is a block capped at Prime's scrollHeight
       |   default (14rem, an inline style in Prime). */
       |.p-autocomplete > span[data-kyo-reactive] { display: inline-flex; flex: 1 1 auto; }
@@ -895,7 +895,7 @@ object Theme:
       |button.p-autocomplete-dropdown { font: inherit; }
       |/* ==== menu family (Menu/Menubar/TieredMenu/MegaMenu/SplitButton/SpeedDial) ==== */
       |/* Overlay side placements (Prime's nested-submenu geometry: the panel sits
-      |   beside its anchor, top-aligned — the sheet's `left: 100%; top: 0`). */
+      |   beside its anchor, top-aligned: the sheet's `left: 100%; top: 0`). */
       |.p-uic-overlay-right-start { top: 0; bottom: auto; left: 100%; right: auto; }
       |.p-uic-overlay-left-start { top: 0; bottom: auto; right: 100%; left: auto; }
       |/* Row restorers (kyo base CSS: every div/ul is a COLUMN flexbox; Prime never
@@ -911,19 +911,19 @@ object Theme:
       |li.p-menu-item, li.p-menubar-item, li.p-tieredmenu-item, li.p-megamenu-item,
       |li.p-menu-submenu-label, li.p-megamenu-submenu-label { flex-direction: column; align-items: stretch; }
       |/* Submenu panels ride the Overlay primitive; the panel geometry class sets
-      |   display:block — restore the sheet's flex column (menubar) and kill the
+      |   display:block, so restore the sheet's flex column (menubar) and kill the
       |   overlay gutter (Prime nested submenus sit flush: left:100%/top:100%). */
       |.p-uic-overlay-panel.p-menubar-submenu, .p-uic-overlay-panel.p-tieredmenu-submenu {
       |  display: flex; flex-direction: column; margin: 0;
       |}
       |/* The rows ride inside a real <ul> (the HTML parser closes an open <li>
-      |   when it meets a new <li> even across a <div> panel) — lay the li's out
+      |   when it meets a new <li> even across a <div> panel), so lay the li's out
       |   as if they were the panel's direct children. */
       |ul.p-uic-submenu-list { display: contents; }
       |.p-uic-overlay-panel.p-megamenu-overlay { margin: 0; }
       |/* The tieredmenu popup sheet's JS-era will-change:transform would make the
       |   panel the containing block for the nested submenus' position:fixed
-      |   backdrops — neutralize it (perf hint only, zero visual effect). */
+      |   backdrops; neutralize it (perf hint only, zero visual effect). */
       |.p-uic-overlay-panel.p-tieredmenu-overlay { will-change: auto; }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
       |span.p-menubar-submenu-icon, span.p-tieredmenu-submenu-icon, span.p-megamenu-submenu-icon {
@@ -932,7 +932,7 @@ object Theme:
       |span.p-menubar-submenu-icon > svg, span.p-tieredmenu-submenu-icon > svg,
       |span.p-megamenu-submenu-icon > svg { width: 100%; height: 100%; }
       |/* SpeedDial linear directions: Prime lays these out via
-      |   SpeedDialStyle.inlineStyles — expressed as CSS here (ToggleSwitch
+      |   SpeedDialStyle.inlineStyles, expressed as CSS here (ToggleSwitch
       |   precedent). */
       |.p-speeddial-up { flex-direction: column-reverse; align-items: center; }
       |.p-speeddial-up .p-speeddial-list { flex-direction: column-reverse; }
@@ -956,27 +956,27 @@ object Theme:
       |   blocks in Prime (kyo's div default is a column flexbox); the sheet's
       |   chip-mode label rule (0,2,0) keeps winning with display: flex. */
       |.p-multiselect-label, .p-drawer-title, .p-drawer-content { display: block; }
-      |/* The chip wrapper is a plain inline span in Prime — an inline-flex/flex
+      |/* The chip wrapper is a plain inline span in Prime; an inline-flex/flex
       |   wrapper would make the chip a flex item and blockify its inline-flex. */
       |span.p-multiselect-chip-item { display: inline; }
       |/* Panel list/tree containers are blocks; Prime caps them via the
       |   scrollHeight prop as an inline style (multiselect default 14rem,
-      |   treeselect 20rem) — expressed as CSS here. */
+      |   treeselect 20rem), expressed as CSS here. */
       |.p-multiselect-overlay .p-multiselect-list-container { display: block; max-height: 14rem; }
       |.p-treeselect-overlay .p-treeselect-tree-container { display: block; max-height: 20rem; }
       |.p-cascadeselect-overlay .p-cascadeselect-list-container { display: block; }
       |/* The nested cascade sub-panel rides the Overlay primitive; the sheet's
       |   `.p-cascadeselect-option-list { display: none }` targets Prime's
-      |   JS-toggled nested ul — restore the open panel (0,2,0 beats 0,1,0) and
+      |   JS-toggled nested ul: restore the open panel (0,2,0 beats 0,1,0) and
       |   kill the overlay gutter (nested panels sit flush: the sheet's
       |   inset-inline-start: 100%; inset-block-start: 0). */
       |.p-uic-overlay-panel.p-cascadeselect-option-list { display: block; margin: 0; }
       |/* An open cascade group row hosts its absolutely-positioned sub-panel;
-      |   kyo's li default is a centered row flexbox — stack content full-width
+      |   kyo's li default is a centered row flexbox, so stack content full-width
       |   (the tree-node/menu-row lesson). */
       |li.p-cascadeselect-option { flex-direction: column; align-items: stretch; }
       |/* The multiselect/treeselect clear affordance is a real <button> (Prime
-      |   uses a bare svg with handlers) — strip the native chrome; the extracted
+      |   uses a bare svg with handlers), so strip the native chrome; the extracted
       |   .p-*-clear-icon rules color it. */
       |button.p-multiselect-clear-icon { background: transparent; border: 0 none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
       |button.p-multiselect-clear-icon svg { width: 100%; height: 100%; }
@@ -987,9 +987,9 @@ object Theme:
       |}
       |span.p-multiselect-dropdown-icon > svg, span.p-cascadeselect-dropdown-icon > svg,
       |span.p-treeselect-dropdown-icon > svg, span.p-cascadeselect-group-icon > svg { width: 100%; height: 100%; }
-      |/* Drawer: Prime positions the mask via DrawerStyle.inlineStyles —
+      |/* Drawer: Prime positions the mask via DrawerStyle.inlineStyles,
       |   expressed as CSS here (the ToggleSwitch/Toast precedent). The mask
-      |   shares the Dialog mask's z-index layer (1200 — Prime's modal layer). */
+      |   shares the Dialog mask's z-index layer (1200, Prime's modal layer). */
       |.p-drawer-mask { position: fixed; inset: 0; display: flex; flex-direction: row; z-index: 1200; }
       |.p-drawer-mask.p-drawer-left { justify-content: flex-start; align-items: center; }
       |.p-drawer-mask.p-drawer-right { justify-content: flex-end; align-items: center; }
@@ -998,11 +998,11 @@ object Theme:
       |.p-drawer-mask.p-drawer-full { justify-content: center; align-items: center; }
       |/* ==== ContextMenu / ToastService / ConfirmDialog ==== */
       |/* ContextMenu rows mirror the menu-family restorers above: kyo's li
-      |   default is a centered row flexbox — stack content full-width; the link
+      |   default is a centered row flexbox, so stack content full-width; the link
       |   restores the browser's row default. */
       |li.p-contextmenu-item { flex-direction: column; align-items: stretch; }
       |a.p-contextmenu-item-link { flex-direction: row; }
-      |/* The root panel rides the Overlay primitive (display:block geometry) —
+      |/* The root panel rides the Overlay primitive (display:block geometry);
       |   the root list inside it is the sheet's flex column. Nested submenus sit
       |   flush against their row (the sheet's left:100%/top:0): kill the overlay
       |   gutter and restore the sheet's flex column over the panel's block. */
@@ -1011,7 +1011,7 @@ object Theme:
       |span.p-contextmenu-submenu-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
       |span.p-contextmenu-submenu-icon > svg { width: 100%; height: 100%; }
       |/* ConfirmDialog content: the sheet declares display:flex without a
-      |   direction and relies on the browser's row default — kyo's div column
+      |   direction and relies on the browser's row default, so kyo's div column
       |   default must be restored to row. */
       |.p-confirmdialog .p-dialog-content { flex-direction: row; }
       |/* ConfirmDialog icon: the sheet sizes .p-confirmdialog-icon; the GlyphSvg
@@ -1023,7 +1023,7 @@ object Theme:
       |   declares flex-direction and relies on the browser's row default). The
       |   InputNumber root is a span (inline-flex row by default) and needs none. */
       |.p-password, .p-inputotp { flex-direction: row; }
-      |/* InputNumber static adornments (kyo extension — Prime's in-value
+      |/* InputNumber static adornments (kyo extension: Prime's in-value
       |   locale/currency formatting is keystroke-bound client JS and is
       |   deliberately not ported; see InputNumber.scala). */
       |.p-uic-inputnumber-prefix, .p-uic-inputnumber-suffix {
@@ -1031,7 +1031,7 @@ object Theme:
       |  color: var(--p-text-muted-color); white-space: nowrap;
       |}
       |/* Password: the strength meter renders INLINE below the field (kyo
-      |   deviation — Prime floats it in a while-typing overlay); the sheet's
+      |   deviation: Prime floats it in a while-typing overlay); the sheet's
       |   .p-password-content flex column applies, this adds the gap and a width
       |   tied to the field above. */
       |.p-uic-password-feedback { margin-block-start: 0.5rem; width: 100%; }
@@ -1042,7 +1042,7 @@ object Theme:
       |}
       |span.p-password-toggle-mask-icon > svg { width: 100%; height: 100%; }
       |/* Slider: the interaction layer is a REAL invisible <input type=range>
-      |   stretched over the Prime track divs (kyo extension) — native drag +
+      |   stretched over the Prime track divs (kyo extension): native drag +
       |   keyboard for free, the visual fill/handle stay Prime's anatomy. The
       |   hit area is grown past the 3px track so the thumb stays grabbable. */
       |.p-uic-slider-native {
@@ -1057,7 +1057,7 @@ object Theme:
       |  writing-mode: vertical-lr; direction: rtl;
       |}
       |.p-slider.p-disabled > .p-uic-slider-native { cursor: default; }
-      |/* PrimeVue positions range + handle via SliderStyle.inlineStyles — the
+      |/* PrimeVue positions range + handle via SliderStyle.inlineStyles; the
       |   extracted component CSS lacks it (the ToggleSwitch precedent). */
       |.p-slider-range, .p-slider-handle { position: absolute; }
       |/* Knob: kyo's div column default centers the dial; the sheet only styles
@@ -1077,12 +1077,12 @@ object Theme:
       |   the visible-window items carry Prime's inline flex-basis sizing. */
       |.p-carousel-item { display: block; }
       |/* Carousel slide: the runtime strip renders ALL items and is translated in
-      |   place (bindStyleById) on a page turn — a kyo class carries the transition
+      |   place (bindStyleById) on a page turn; a kyo class carries the transition
       |   so it never fights Prime's own .p-carousel-item-list rules (which have no
       |   transform transition). The per-item flex-basis sizing stays inline. */
       |.p-uic-carousel-track { transition: transform .3s ease; }
       |/* FileUpload basic: the choose affordance is a real <label for> (native file
-      |   dialog without JS) wearing Prime's Button classes — restore the row that
+      |   dialog without JS) wearing Prime's Button classes; restore the row that
       |   kyo's label column default breaks. */
       |label.p-button { flex-direction: row; }
       |/* Galleria default templates: the preview image fills the stage, thumbnails
@@ -1092,13 +1092,13 @@ object Theme:
       |/* The empty-message row is a template slot in Prime, so the extracted sheet
       |   carries no rules for it (the DataTable precedent). */
       |.p-treetable-tbody > tr.p-treetable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
-      |/* PrimeVue scrolls the container via TreeTableStyle.inlineStyles — expressed
+      |/* PrimeVue scrolls the container via TreeTableStyle.inlineStyles, expressed
       |   as CSS here (the ToggleSwitch precedent). */
       |.p-treetable-table-container { overflow: auto; }
-      |/* Leaf togglers keep their box but hide — Prime's inline visibility style. */
+      |/* Leaf togglers keep their box but hide (Prime's inline visibility style). */
       |.p-uic-tt-toggle-hidden { visibility: hidden; }
-      |/* OrgChart: collapsed subtrees keep their rows and hide via visibility —
-      |   Prime's inline childStyle. */
+      |/* OrgChart: collapsed subtrees keep their rows and hide via visibility
+      |   (Prime's inline childStyle). */
       |.p-uic-oc-hidden { visibility: hidden; }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
       |span.p-galleria-prev-icon, span.p-galleria-next-icon,
@@ -1115,7 +1115,7 @@ object Theme:
       |   rect; the reactive tint/handle inside them must NOT intercept the pointer
       |   (a per-frame re-render would otherwise detach the captured target and the
       |   payload rect would be the wrong element's). So the handles, the tint
-      |   background, AND the reactive wrapper spans are pointer-transparent — the
+      |   background, AND the reactive wrapper spans are pointer-transparent: the
       |   pointer always lands on the stable surface. */
       |.p-colorpicker-color-handle, .p-colorpicker-hue-handle,
       |.p-colorpicker-color-background { pointer-events: none; }
@@ -1129,7 +1129,7 @@ object Theme:
       |   kyo-ui's LEAVE ghost keeps the leave class until animation/transitionend,
       |   so Prime's own keyframe -leave-active classes (from the extracted sheets)
       |   drive the exit animations verbatim. The fork's ENTER seeds a class, forces
-      |   reflow, then releases it next frame — a FROM-STATE + transition model, which
+      |   reflow, then releases it next frame: a FROM-STATE + transition model, which
       |   Prime's animation-based enter keyframes do NOT fit; so enter rides small
       |   from-state classes below whose base element carries a transition, mirroring
       |   the start state of Prime's enter keyframes. */
@@ -1161,7 +1161,7 @@ object Theme:
       |.p-drawer-mask.p-drawer-bottom.p-overlay-mask-leave-active .p-drawer { transform: translate3d(0, 100%, 0); }
       |/* Stepper panel crossfade (mounted+keyed on the active step): the incoming panel
       |   enters with p-uic-enter-fade and the outgoing leave ghost fades via
-      |   p-uic-leave-fade — both ride this opacity transition. */
+      |   p-uic-leave-fade; both ride this opacity transition. */
       |.p-uic-steppanel-anim { transition: opacity 0.2s ease; }
       |/* ---- toggleable container collapse (in-place class toggle) ----
       |   The Fieldset/Panel/Accordion content containers already come out of the
@@ -1169,7 +1169,7 @@ object Theme:
       |   anatomy: container = grid, wrapper = the single row). .p-uic-collapse adds the
       |   grid-rows transition; .p-uic-collapsed animates the row to 0fr. The class is
       |   toggled IN PLACE (bindClassById, so the element is never replaced and the
-      |   transition fires — an outerHTML swap would reset it). overflow:hidden clips
+      |   transition fires; an outerHTML swap would reset it). overflow:hidden clips
       |   the row as it closes; the inner padding rides along. The 0,2,0 collapsed rule
       |   wins over the sheet's 0,1,0 container rule (source order also favors it). */
       |.p-uic-collapse { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.2s ease; }
@@ -1195,7 +1195,7 @@ object Theme:
             + textClampCss
             + dialogSeverityCss
 
-    /** Line-clamp rules behind [[Text.maxLines]] (`data-uic-max-lines`, 1–10). */
+    /** Line-clamp rules behind [[Text.maxLines]] (`data-uic-max-lines`, 1 to 10). */
     private def textClampCss: String = (1 to 10)
         .map(n => s""".p-uic-text--clamp[data-uic-max-lines="$n"] { -webkit-line-clamp: $n; }""")
         .mkString("", "\n", "\n")

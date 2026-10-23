@@ -6,7 +6,7 @@ import kyo.uic.TreeNav.Op
 import kyo.uic.TreeNav.Row
 import kyo.uic.TreeNav.Step
 
-/** Pure-logic assertions for the [[TreeNav]] WAI-ARIA tree keyboard state machine — no DOM,
+/** Pure-logic assertions for the [[TreeNav]] WAI-ARIA tree keyboard state machine: no DOM,
   * no effects (the semantics [[Tree]] and [[TreeSelect]] map onto their focus and expansion
   * state).
   */

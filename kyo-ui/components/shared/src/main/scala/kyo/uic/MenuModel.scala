@@ -6,8 +6,8 @@ import kyo.UI.*
 /** One entry of the menu family (Menu, Menubar, TieredMenu, SplitButton,
   * SpeedDial; MegaMenu groups its items through [[MenuGroup]]): a label with an
   * optional leading icon, an optional `onSelect` effect, an optional `url`
-  * (renders the row as a real anchor — Link precedent), a `disabled` state, and
-  * nested `items` (a submenu — flattened to a labelled section in the plain
+  * (renders the row as a real anchor, the Link precedent), a `disabled` state,
+  * and nested `items` (a submenu: flattened to a labelled section in the plain
   * Menu, a nested floating panel in Menubar/TieredMenu).
   *
   * `MenuItem.separator` is the divider row (`li.p-<component>-separator`).
@@ -32,14 +32,14 @@ final case class MenuItem private (
       * carries the union while several plain-`Boolean` `disabled` slots elsewhere do
       * not: every other one describes the state of the page, while a menu item's
       * describes its TARGET, and the target changes with each right-click. Rebuilding
-      * the item list per target is not the alternative — the host allocates its open
+      * the item list per target is not the alternative: the host allocates its open
       * state in its own unkeyed `UI.mounted`, so re-rendering it would close the menu
       * on the click that opened it.
       *
       * Resolved by the host BEFORE it builds rows, through
-      * [[MenuRender.resolveDisabled]], so everything downstream — the navigable index
+      * [[MenuRender.resolveDisabled]], so everything downstream (the navigable index
       * set, `MenuNav.skip`, the `.p-disabled` class, whether an activate effect is
-      * attached — stays a pure function of a plain `Boolean` and reads it through
+      * attached) stays a pure function of a plain `Boolean` and reads it through
       * `constTrue`. A host that forgets to resolve reads `false`, which is the same
       * trap `BoolValue` carries everywhere and is pinned per host by a test.
       */
@@ -52,7 +52,7 @@ final case class MenuItem private (
     def url(v: String): MenuItem = copy(urlV = Present(v))
 
     /** THIS row is the page the reader is on: `aria-current="page"` on the row's link plus
-      * `.p-uic-menu-item-current` on the row, for a menu carrying [[url]] rows — which is what
+      * `.p-uic-menu-item-current` on the row, for a menu carrying [[url]] rows, which is what
       * a menu becomes the moment it is a nav, and the one thing such a menu is for.
       *
       * Distinct from `.p-focus`, which is the roving keyboard highlight the component moves as
@@ -60,15 +60,15 @@ final case class MenuItem private (
       * past the current page must not hide which page that is.
       *
       * Takes a `Signal[Boolean]` because the current route is one, and both slots it writes are
-      * kyo-ui CHANNELS — `cssClass(name, sig)` toggles the class through `classList.toggle` and
+      * kyo-ui CHANNELS: `cssClass(name, sig)` toggles the class through `classList.toggle` and
       * `aria(name, sig)` patches the attribute in place, each with NO re-render. So a nav is
       * built once and stays built: navigating does not rebuild the list, and the keyboard
       * position survives the navigation that a `Routes.current.render { … }` around the whole
       * strip would have thrown away.
       *
       * That is also why this needs none of [[MenuRender.resolveDisabled]]'s machinery, which
-      * `disabled` does need: being current changes nothing structural — not the navigable index
-      * set, not `MenuNav.skip`, not whether an activate effect is attached — so there is nothing
+      * `disabled` does need: being current changes nothing structural (not the navigable index
+      * set, not `MenuNav.skip`, not whether an activate effect is attached), so there is nothing
       * downstream that must read it as a plain `Boolean`.
       *
       * Rendered by every host that builds `MenuItem` rows: Menu, Menubar, TieredMenu, ContextMenu
@@ -184,7 +184,7 @@ end MenuGroupScope
 private[uic] object MenuRender:
 
     /** Paths (index chains from the root) of every item carrying a submenu, in
-      * tree order — one open/closed `SignalRef[Boolean]` is allocated per path.
+      * tree order; one open/closed `SignalRef[Boolean]` is allocated per path.
       */
     def submenuPaths(items: List[MenuItem], prefix: List[Int] = Nil): List[List[Int]] =
         items.zipWithIndex.flatMap { (it, i) =>
@@ -192,7 +192,7 @@ private[uic] object MenuRender:
             if it.itemsV.nonEmpty then p :: submenuPaths(it.itemsV, p) else Nil
         }
 
-    /** Subscribes to every submenu ref and rebuilds the tree on any change — ONE
+    /** Subscribes to every submenu ref and rebuilds the tree on any change: ONE
       * reactive wrapper chain around the whole component, so Prime's direct-child
       * selectors (`.p-menubar-root-list > .p-menubar-item > ...`) stay intact (a
       * per-item subscription would interpose kyo's classless reactive `<span>`).
@@ -235,7 +235,7 @@ private[uic] object MenuRender:
       *
       * The value-level [[BoolValue.reactive]] over a LIST, and subscribed the same way
       * [[renderAll]] subscribes submenu state: ONE chain around the whole component
-      * rather than a subscription per row. That is not a micro-optimisation — a per-row
+      * rather than a subscription per row. That is not a micro-optimisation: a per-row
       * `Signal.render` interposes kyo's classless reactive `<span>` between the list and
       * its rows, and Prime's direct-child selectors (`.p-menubar-root-list >
       * .p-menubar-item > ...`) stop matching.
@@ -260,7 +260,7 @@ private[uic] object MenuRender:
         loop(dyns, seed)
     end chain
 
-    /** [[resolveDisabled]] for MegaMenu, whose leaves sit two containers deeper —
+    /** [[resolveDisabled]] for MegaMenu, whose leaves sit two containers deeper:
       * `MegaMenuItem.columnsV : List[List[MenuGroup]]`, each group holding the
       * `MenuItem`s. The root rows carry their own plain-`Boolean` `disabled` and are
       * untouched; only the leaves have the reactive slot. Paths are
@@ -295,7 +295,7 @@ private[uic] object MenuRender:
     end resolveMegaDisabled
 
     /** Opens exactly the chain leading to `target` (every prefix of the path) and
-      * closes everything else — this also flushes stale descendant state left
+      * closes everything else; this also flushes stale descendant state left
       * behind by per-level backdrop dismissal (the Overlay backdrop only writes
       * its own level's ref). `Absent` closes the whole tree.
       */
@@ -308,8 +308,8 @@ private[uic] object MenuRender:
         }
 
     /** Applies a [[MenuNav.Step]] to a keyboard host's signals: threads the
-      * `OpenOp` through [[openExactly]], and — on `activate` (run the focused
-      * leaf's action) or `dismiss` — collapses the submenu tree, closes the popup
+      * `OpenOp` through [[openExactly]], and, on `activate` (run the focused
+      * leaf's action) or `dismiss`, collapses the submenu tree, closes the popup
       * if any, and clears the highlight. Plain movement just writes the new focus
       * path. Shared by every nested menu host (TieredMenu, ContextMenu, Menubar,
       * MegaMenu).

@@ -2,7 +2,7 @@
 # Populates the generator inputs. Rerun to bump versions, then `sbt gen/run`
 # and commit the regenerated Scala.
 #
-# PrimeOne design system (all MIT): pinned in gen/npm/package.json —
+# PrimeOne design system (all MIT): pinned in gen/npm/package.json:
 #   @primeuix/themes (token presets), @primeuix/styles (component CSS with
 #   dt() refs), @primeuix/styled (resolution engine), primeicons (SVGs).
 # extract.mjs runs the engine once at build time (PrimeVue's styled mode,

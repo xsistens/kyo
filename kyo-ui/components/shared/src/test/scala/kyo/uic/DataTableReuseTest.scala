@@ -9,7 +9,7 @@ import kyo.internal.UIExchange
   *
   * Every other suite here asks what the table renders. This one asks how much of it the table renders
   * again, which no assertion on markup can see: the same HTML comes out either way. The unit is a
-  * count of column-body invocations, taken around the real engine — `normalize` plus `subscribe` —
+  * count of column-body invocations, taken around the real engine (`normalize` plus `subscribe`),
   * because reuse is an engine property and a pure walk of the tree re-renders everything by
   * construction.
   *
@@ -43,7 +43,7 @@ class DataTableReuseTest extends UicTest:
                 changed: UI
             )(using Frame): Unit < Async = ()
 
-    // Was 80 for these forty rows — two full passes per write — before the body's reactive unit
+    // Was 80 for these forty rows (two full passes per write) before the body's reactive unit
     // became the row.
     "one selected row costs one rendered row" in {
         Scope.run {
@@ -181,7 +181,7 @@ class DataTableReuseTest extends UicTest:
     "appending a row costs the row appended" in {
         // The list grows and nothing else moves, which is what a fetchMore does. It used to cost
         // every row: the key list a shift-range spans was carried in each row's spec, so a list
-        // one longer made all of them unequal. Nothing reads it there — the range reads it live —
+        // one longer made all of them unequal. Nothing reads it there (the range reads it live),
         // and it is gone.
         Scope.run {
             val counted = new Renders
@@ -207,7 +207,7 @@ class DataTableReuseTest extends UicTest:
     }
 
     "a frozen row group reuses its own rows" in {
-        // Two bodies, two keyed lists, two key namespaces — a frozen row may share a key with a
+        // Two bodies, two keyed lists, two key namespaces: a frozen row may share a key with a
         // body row and that is a diagnosed state, not a silent collision, because the regions are
         // separate. Here the same rows are in both, which is the worst case for telling them apart.
         Scope.run {

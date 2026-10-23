@@ -6,7 +6,7 @@ package kyo.uic
   * message `error`).
   *
   * "No accent" is expressed as `Maybe[Severity]` (`Absent`), never a `None`
-  * enum case — form-field validation is the separate boolean `invalid(...)`
+  * enum case; form-field validation is the separate boolean `invalid(...)`
   * plus `invalidMessage(...)`, exactly like Prime's `.p-invalid` model.
   */
 enum Severity derives CanEqual:
@@ -53,7 +53,7 @@ object Size:
     case object Normal extends Size
     case object Large  extends Size
 
-    /** Avatar and Badge only — the sole `-xl` rules in the PrimeOne sheet. */
+    /** Avatar and Badge only: the sole `-xl` rules in the PrimeOne sheet. */
     case object XLarge extends ExtendedSize
 end Size
 
@@ -63,7 +63,7 @@ end Size
 enum SelectionMode derives CanEqual:
     case None, Single, Multiple, Checkbox, Radio
 
-/** What one activation does to a selection set — the two rulesets behind [[SelectionMode]],
+/** What one activation does to a selection set: the two rulesets behind [[SelectionMode]],
   * written down once so the components that offer them cannot drift apart.
   *
   * `metaKeySelection` off is the plain ruleset and the default everywhere: an activation toggles
@@ -72,7 +72,7 @@ enum SelectionMode derives CanEqual:
   *
   *   - only a MODIFIED activation on an already-picked id removes it
   *   - a plain one replaces the whole set with that id, INCLUDING when the id was already in it,
-  *     which collapses a selection to one rather than clearing it — that is what leaves an anchor
+  *     which collapses a selection to one rather than clearing it; that is what leaves an anchor
   *     under the pointer, so click-then-shift-click is a range every time rather than every
   *     other time
   *   - `meta` is the caller's `event.metaKey || event.ctrlKey`, never one of the two, or the
@@ -108,7 +108,7 @@ end SelectionPick
 
 /** Package-internal builder for the `invalidMessage` row shared by the migrated
   * form fields: when the field is `invalid` AND a message is set, the field is
-  * followed by a `div.p-uic-invalid-message` (kyo extension — Prime leaves the
+  * followed by a `div.p-uic-invalid-message` (kyo extension; Prime leaves the
   * message to the form layer). Emitted as a fragment, so no wrapper element is
   * introduced around the field.
   */
@@ -124,7 +124,7 @@ private[uic] object FieldInvalid:
     /** Reactive validity seam shared by every form field's `invalid(Signal)` /
       * `invalidMessage(Signal)` overloads. Derives the red state (explicit override,
       * else message presence) and the message text from the reactive slots, then
-      * hands both to `build` inside a nested `Signal.render` boundary — `build`
+      * hands both to `build` inside a nested `Signal.render` boundary; `build`
       * re-renders the field for that `(red, message)` snapshot so the `.p-invalid`
       * stamp and the message row stay in sync. The const path never reaches here, so
       * static output (golden tests) is unaffected. Callers on mounted fields must
@@ -141,7 +141,7 @@ private[uic] object FieldInvalid:
 end FieldInvalid
 
 /** Layout orientation (`.p-*-horizontal` / `.p-*-vertical`; MeterGroup's meters
-  * and label list — Prime's `orientation` / `labelOrientation` props).
+  * and label list, Prime's `orientation` / `labelOrientation` props).
   */
 enum Orientation derives CanEqual:
     case Horizontal, Vertical
@@ -152,7 +152,7 @@ enum Orientation derives CanEqual:
 end Orientation
 
 /** Placement of a secondary block relative to the main one (MeterGroup's label
-  * list — Prime's `labelPosition="start"|"end"`).
+  * list, Prime's `labelPosition="start"|"end"`).
   */
 enum LabelPosition derives CanEqual:
     case Start, End

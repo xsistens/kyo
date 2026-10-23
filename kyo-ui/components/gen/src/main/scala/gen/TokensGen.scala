@@ -29,7 +29,7 @@ object TokensGen:
         // `def`, never `val`: a val in an object is built by the static initialiser, so it is
         // retained the moment anything touches `Tokens` at all, and a consumer that names one
         // preset would still carry all eight sets. One def per accessor is what lets Scala.js
-        // method-level DCE keep only what a bundle references — the same rule PrimeIconsGen
+        // method-level DCE keep only what a bundle references, the same rule PrimeIconsGen
         // states for the 309 icon defs.
         val concat =
             if groups.isEmpty then s"  def $ident: Seq[(String, String)] = Seq.empty"
@@ -39,7 +39,7 @@ object TokensGen:
 
     def run(): Unit =
         val tokensDir = Common.repoRoot.resolve("gen/work/tokens")
-        require(Files.isDirectory(tokensDir), s"token JSON missing — run gen/fetch.sh first ($tokensDir)")
+        require(Files.isDirectory(tokensDir), s"token JSON missing: run gen/fetch.sh first ($tokensDir)")
 
         val sections = Presets.flatMap { preset =>
             val json                                      = ujson.read(Files.readString(tokensDir.resolve(s"$preset.json")))

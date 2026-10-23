@@ -3,20 +3,20 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** TieredMenu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** TieredMenu: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * TieredMenu anatomy: `div.p-tieredmenu.p-component` >
   * `ul.p-tieredmenu-root-list[role=menu]` of `li.p-tieredmenu-item` rows;
   * items with children open side-nested `p-tieredmenu-submenu` panels, the
   * sheet's `left: 100%; top: 0` geometry), so the extracted `@primeuix`
   * tieredmenu CSS applies verbatim.
   *
-  * The vertical sibling of [[Menubar]] — the same nested-[[Overlay]] machinery:
-  * click toggles a submenu (deliberate deviation from Prime's hover-open — a
+  * The vertical sibling of [[Menubar]], with the same nested-[[Overlay]] machinery:
+  * click toggles a submenu (deliberate deviation from Prime's hover-open, since a
   * server round-trip per hover is heavy), an outside click closes one level
   * (topmost backdrop), Escape closes one level (per-panel keydown
   * consumption), panels seed focus.
   *
-  * Two modes like Prime: inline (default) and `popup(openRef)` — the popup
+  * Two modes like Prime: inline (default) and `popup(openRef)`; the popup
   * wraps the root list in an Overlay with Prime's `.p-tieredmenu-overlay` skin
   * (whose JS-era `will-change: transform` is neutralized by the theme glue: it
   * would otherwise trap the nested submenus' `position: fixed` backdrops).
@@ -27,8 +27,8 @@ import kyo.UI.*
   * its first row), ArrowLeft climbs back out one level, Home/End jump, Enter or
   * Space activates a leaf (runs its action, then collapses the tree / closes the
   * popup), and Escape closes one level (then the popup at the root). Only the ROOT
-  * list ever holds focus — the nested submenu panels do not seed it, and the
-  * highlight rides `aria-activedescendant` from the root, wired by `id(...)` —
+  * list ever holds focus: the nested submenu panels do not seed it, and the
+  * highlight rides `aria-activedescendant` from the root, wired by `id(...)`;
   * the focused row is exposed as `s"$id-active"`. Keyboard navigation works
   * without an id, only the ARIA hook is omitted.
   *
@@ -101,7 +101,7 @@ final case class TieredMenu private (
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        // mint. Kept apart from `idV`, which is only ever the caller's; see Menu.wired.
         partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
@@ -127,7 +127,7 @@ final case class TieredMenu private (
         var list = ul.cssClass("p-tieredmenu-root-list").role("menu")
         if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         // In a popup the component's root is the overlay panel, which this does not own, so the
-        // caller's id lands on the `ul[role=menu]` — see Menu.body for the same split.
+        // caller's id lands on the `ul[role=menu]`; see Menu.body for the same split.
         if popupRefV.isDefined then idV.foreach(v => list = list.id(v))
         popupRefV match
             case Present(openRef) =>
@@ -161,5 +161,5 @@ final case class TieredMenu private (
 end TieredMenu
 
 object TieredMenu:
-    /** An empty tiered menu — add root items via [[TieredMenu.items]]. */
+    /** An empty tiered menu; add root items via [[TieredMenu.items]]. */
     def apply(): TieredMenu = new TieredMenu()

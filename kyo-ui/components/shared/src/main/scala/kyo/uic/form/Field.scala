@@ -16,26 +16,26 @@ import scala.annotation.targetName
   * it on submit. Display is gated: the error surfaces only once the field is `touched`
   * (entered and left) OR the form has been submitted (`submitCount > 0`).
   *
-  * `A` is the field's value type — `String` for text controls, `Boolean` for
+  * `A` is the field's value type: `String` for text controls, `Boolean` for
   * checkbox/switch/radio, and so on. The gating, message, and aggregation logic is
   * value-agnostic (it only ever handles `Maybe[FieldError]`); only value binding and the
   * blur trigger are type-specific, which is why `bind` splits by control family below.
   * `CanEqual[A, A]` is required because a server error is scoped to the value it judged
-  * ([[serverVisible]]) — and a `Signal[A]` demands it anyway.
+  * ([[serverVisible]]), and a `Signal[A]` demands it anyway.
   *
   * Two independent error channels feed the display:
-  *   - the CLIENT error (`clientErrorRef`) — the rule chain's verdict, re-derived on
+  *   - the CLIENT error (`clientErrorRef`): the rule chain's verdict, re-derived on
   *     every trigger and at submit;
-  *   - the SERVER error (`serverErrorRef`) — an out-of-band result from `setError`,
+  *   - the SERVER error (`serverErrorRef`): an out-of-band result from `setError`,
   *     [[ServerError]]-scoped to the value it was set against. It is shown only
-  *     while the value is unchanged, so the first edit hides it — which re-enables the
+  *     while the value is unchanged, so the first edit hides it, which re-enables the
   *     submit button (the only way to re-check a server-side rule). Without this the
   *     button that produced the error would be the one it disables: a deadlock.
   *
-  * Constructed by [[FieldSpec.declare]] — never directly. Everything decided AT declaration
+  * Constructed by [[FieldSpec.declare]], never directly. Everything decided AT declaration
   * (the rules it starts with, its triggers, its id, its reveal mode, whether submit may focus
   * it) is a parameter of that spec and arrives here already settled; what stays on this class
-  * is what a caller can only do AFTERWARDS — [[addRule]] and [[matches]], which need a second
+  * is what a caller can only do AFTERWARDS: [[addRule]] and [[matches]], which need a second
   * field that does not exist yet when the first is declared.
   */
 final class FormField[A] private[form] (
@@ -58,13 +58,13 @@ final class FormField[A] private[form] (
     submitCount: Signal[Int]
 )(using CanEqual[A, A]) derives CanEqual:
 
-    /** The two-way value cell — bind it to a control, or read it at submit. */
+    /** The two-way value cell; bind it to a control, or read it at submit. */
     val value: Signal[A] = valueRef
 
     /** True once the field has been entered and left (first blur/commit). */
     val touched: Signal[Boolean] = touchedRef
 
-    /** True while an async validator is in flight — drive a spinner off this. */
+    /** True while an async validator is in flight; drive a spinner off this. */
     val validating: Signal[Boolean] = validatingRef
 
     /** The server error, but only while the value still matches the one it was set
@@ -96,7 +96,7 @@ final class FormField[A] private[form] (
         end match
     end visibleError
 
-    /** The gated, translated message for inline display — `Present` shows the row and
+    /** The gated, translated message for inline display: `Present` shows the row and
       * turns the field red. Re-renders on locale change (translator returns a Signal).
       */
     def message(using Frame): Signal[Maybe[String]] =
@@ -112,7 +112,7 @@ final class FormField[A] private[form] (
     def setError(e: Maybe[FieldError])(using Frame): Unit < Sync =
         valueRef.get.map(v => serverErrorRef.set(e.map(err => ServerError(err, v))))
 
-    /** Append another rule (ordered short-circuit) — e.g. a cross-field rule that
+    /** Append another rule (ordered short-circuit), e.g. a cross-field rule that
       * reads a sibling handle. Returns this field for chaining.
       */
     def addRule(v: Validator[A])(using Frame): FormField[A] =
@@ -120,7 +120,7 @@ final class FormField[A] private[form] (
         this
 
     /** Append a predicate rule in the same `satisfy(code)(pred)` shape used at the form level
-      * ([[Form.satisfy]]) and to build a standalone [[Validator]] ([[Validator.satisfy]]) — so a
+      * ([[Form.satisfy]]) and to build a standalone [[Validator]] ([[Validator.satisfy]]), so a
       * field's post-hoc rule reads exactly like a form's. Sugar for
       * `addRule(Validator.satisfy(code, args)(p))`; `true` = valid. Reach for [[addRule]] directly
       * for built-in rules (`required`/`email`) or compositions (`a and b`). Chainable.
@@ -128,21 +128,21 @@ final class FormField[A] private[form] (
     def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): FormField[A] =
         addRule(Validator.satisfy(code, args)(p))
 
-    /** The field's original default value — the baseline it was constructed with (also
+    /** The field's original default value: the baseline it was constructed with (also
       * where [[Form.reset]] lands a never-rebaselined field). The *live* baseline that
       * [[isDirty]] compares against can move via [[rebase]] / [[Form.markPristine]].
       */
     def initialValue: A = initial
 
     /** True while the current value differs from the live baseline (initially [[initialValue]],
-      * moved by [[rebase]]). Reactive — gate a "discard" button or an unsaved-changes
+      * moved by [[rebase]]). Reactive: gate a "discard" button or an unsaved-changes
       * indicator off it.
       */
     def isDirty(using Frame): Signal[Boolean] =
         valueRef.combineLatest(baselineRef).map((v, b) => v != b)
 
     /** Snapshot the current value as the new clean baseline (e.g. after a successful save),
-      * so [[isDirty]] reads `false` and [[Form.reset]] returns here — without reverting the
+      * so [[isDirty]] reads `false` and [[Form.reset]] returns here, without reverting the
       * value now.
       */
     def rebase(using Frame): Unit < Sync =
@@ -154,7 +154,7 @@ final class FormField[A] private[form] (
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) =
         Kyo.foreach(sigs)(s => Fiber.init(s.observe(_ => revalidate)).unit).unit
 
-    /** This field must equal the live value of `other` (the password-confirmation pattern) —
+    /** This field must equal the live value of `other` (the password-confirmation pattern):
       * one call for what is otherwise two coupled statements: it appends
       * [[Validator.matchesField]] AND wires [[dependsOn]]`(other)` so the field re-validates as
       * soon as `other` changes. Forgetting the dependency (the common footgun) is impossible.
@@ -166,25 +166,25 @@ final class FormField[A] private[form] (
 
     // --- internals -------------------------------------------------------------
 
-    /** True when this field validates on focus-loss — the `bind` extensions read it to
+    /** True when this field validates on focus-loss; the `bind` extensions read it to
       * decide whether to wire `onBlur`.
       */
     private[form] def wantsBlur: Boolean = triggers(Activation.Blur)
 
-    /** True when this field validates on every value change — [[wireChange]] launches the
+    /** True when this field validates on every value change; [[wireChange]] launches the
       * observer that drives it.
       */
     private[form] def wantsChange: Boolean = triggers(Activation.Change)
 
     /** Wire the [[Activation.Change]] behaviour: observe the bound value and, on every change,
-      * validate. The FIRST emission is the current (mount) value — validate it SILENTLY (no
+      * validate. The FIRST emission is the current (mount) value: validate it SILENTLY (no
       * reveal) so [[isValid]] is correct from the start without flagging an untouched field;
       * every subsequent (real) change runs [[onEvent]], which marks the field touched so the
       * error surfaces inline as the user types (RHF `onChange` mode). A no-op unless the
       * field declared `Activation.Change`. Launched in the mount scope by `Form.mountedWith`,
       * so the observer is torn down with the form. Field-array rows are added long after that
       * mount body ran and have no ambient `Scope`, so they take [[wireChangeUnscoped]]
-      * instead — the trigger behaves identically there.
+      * instead; the trigger behaves identically there.
       */
     private[form] def wireChange(using Frame): Unit < (Async & Scope) =
         if !wantsChange then Kyo.unit
@@ -195,7 +195,7 @@ final class FormField[A] private[form] (
             yield ()
 
     /** [[wireChange]] for a caller with no ambient `Scope`: the observer runs on an UNSCOPED
-      * fiber, handed back so the caller owns its lifetime. `FieldArray` is that caller — it
+      * fiber, handed back so the caller owns its lifetime. `FieldArray` is that caller: it
       * cancels a row's fibers when the row is removed and when the form's mount scope closes,
       * which is what makes `Activation.Change` behave on rows exactly as it does on the
       * static tree. `Absent` for a field that did not declare the trigger.
@@ -231,7 +231,7 @@ final class FormField[A] private[form] (
     private[form] var idConflict: Maybe[String] = Absent
 
     private[form] def noteIdConflict(previous: String): Unit =
-        // The form's own stamp is not a conflict — a field bound twice would otherwise
+        // The form's own stamp is not a conflict; a field bound twice would otherwise
         // report against itself.
         if previous != domId then idConflict = Present(previous)
 
@@ -270,7 +270,7 @@ final class FormField[A] private[form] (
     private[form] def visibleErrorChunk(using Frame): Signal[Chunk[FieldError]] =
         visibleError.map(e => e.map(Chunk(_)).getOrElse(Chunk.empty))
 
-    /** The UNGATED error as a (0-or-1) chunk — the raw client/server verdict regardless of
+    /** The UNGATED error as a (0-or-1) chunk: the raw client/server verdict regardless of
       * touched/submit-reveal. Feeds `Form.isValid(onlyVisible = false)`.
       */
     private[form] def errorChunk(using Frame): Signal[Chunk[FieldError]] =

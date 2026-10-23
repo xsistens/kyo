@@ -7,22 +7,22 @@ import kyo.UI.*
 enum MessageVariant derives CanEqual:
     case Outlined, Simple
 
-/** Message — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** Message: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Message anatomy: `div.p-message.p-message-<severity>` > `.p-message-content-wrapper`
   * > `.p-message-content` > icon + `.p-message-text` + optional
   * `button.p-message-close-button`), so the extracted `@primeuix` message CSS
   * applies verbatim.
   *
   * `severity` defaults to `Info` (Prime's default); each severity carries a
-  * design-derived default leading icon from the Prime icon set — override it via
+  * design-derived default leading icon from the Prime icon set; override it via
   * `icon(...)` or suppress it entirely with `hideIcon`. The close button only
-  * renders with `closable(true)` (Prime semantics — messages are not closable by
+  * renders with `closable(true)` (Prime semantics: messages are not closable by
   * default).
   *
   * A Message does NOT own its visibility: it has no ref to write, so pressing the
   * close button notifies and nothing disappears until the app removes the message
   * from its own state. That is why the callback is [[onDismissed]] and not
-  * `onClose` — `onClose` is reserved across this module for the surfaces that own
+  * `onClose`: `onClose` is reserved across this module for the surfaces that own
   * a visibility ref and close themselves ([[Dialog]], [[Drawer]], [[Toast]]).
   */
 final case class Message private (
@@ -69,7 +69,7 @@ final case class Message private (
     def closable(v: Boolean): Message = copy(closableFlag = v)
 
     /** Runs `action` when the close button is pressed. Past tense on purpose: the
-      * message has been dismissed by the user, and nothing has been hidden — remove
+      * message has been dismissed by the user, and nothing has been hidden; remove
       * it from your own state if you want it gone. Contrast [[Dialog.onClose]],
       * which fires after the component has already written its own visibility ref.
       */
@@ -103,14 +103,14 @@ final case class Message private (
             .role("alert")
             .aria("live", "assertive")
             .aria("atomic", "true")
-            // Enter/leave: fades in when inserted, and — when the app removes
-            // the message from its own reactive state — plays Prime's own
+            // Enter/leave: fades in when inserted, and, when the app removes
+            // the message from its own reactive state, plays Prime's own
             // `p-message-leave-active` keyframe on the leave ghost.
             .enterTransition("p-uic-enter-fade")
             .leaveTransition("p-message-leave-active")
         idV.foreach(v => el = el.id(v))
         // Constant severity joins the class list; a reactive one binds one class per DISTINCT token
-        // (Info/Primary/Help all map to "info"), condition = the current severity maps to that token —
+        // (Info/Primary/Help all map to "info"), condition = the current severity maps to that token,
         // so many-to-one severities never toggle the same class against each other.
         severityV match
             case SeverityValue.Const(s) => el = el.cssClass(s"p-message-${messageToken(s)}")

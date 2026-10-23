@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.*
 import scala.annotation.targetName
 
-/** One entry of a [[CascadeSelect]] option tree — the typed nested analogue of
+/** One entry of a [[CascadeSelect]] option tree: the typed nested analogue of
   * Select's flat options: a `Leaf` carries a pickable value `A` (projected to
   * text by the component's label function), a `Group` carries its own label and
   * nested children (opening a side sub-panel).
@@ -33,13 +33,13 @@ object CascadeItem:
     end navNodes
 end CascadeItem
 
-/** CascadeSelect — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** CascadeSelect: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * CascadeSelect anatomy: `div.p-cascadeselect.p-component.p-inputwrapper
   * [.p-invalid][.p-disabled][.p-cascadeselect-sm|-lg][.p-variant-filled]
   * [.p-cascadeselect-fluid][.p-cascadeselect-open]` > `span.p-cascadeselect-label`
   * + `div.p-cascadeselect-dropdown` with the chevron, floating
   * `div.p-cascadeselect-overlay` panel > `div.p-cascadeselect-list-container` >
-  * `ul.p-cascadeselect-list[role=tree]` of `li.p-cascadeselect-option` rows —
+  * `ul.p-cascadeselect-list[role=tree]` of `li.p-cascadeselect-option` rows;
   * groups (`.p-cascadeselect-option-group`, trailing `.p-cascadeselect-group-icon`)
   * open SIDE-NESTED sub-panels stamped `.p-cascadeselect-overlay
   * .p-cascadeselect-option-list`), so the extracted `@primeuix` cascadeselect
@@ -58,21 +58,21 @@ end CascadeItem
   * (default: the label projection) supplies the stable key leaves are matched
   * by; `selection(ref)` binds the chosen leaf itself (over `A`, or over
   * `Maybe[A]`). Clicking a group row opens exactly its chain (the Menubar
-  * `openExactly` machinery — sibling branches close); clicking a LEAF writes
+  * `openExactly` machinery: sibling branches close); clicking a LEAF writes
   * it, fires `onChange`, and closes the whole chain. `loading` says the tree is
   * still arriving; without it a held leaf the tree does not carry is named in a
   * `.p-uic-key-error` card. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
-  * it), Escape closes ONE level too (each panel consumes its own keydown —
+  * it), Escape closes ONE level too (each panel consumes its own keydown,
   * the Overlay per-level story), and no panel seeds focus: it stays on the trigger, which is the
   * combobox, wears the whole cascade keyboard, and announces the highlight wherever in the chain it
   * has walked to. Group opening is click-driven (a
-  * deliberate deviation from Prime's hover-open — a server round-trip per hover
+  * deliberate deviation from Prime's hover-open, since a server round-trip per hover
   * is heavy; the sheet's hover styling is untouched).
   *
   * DEVIATION: a nested sub-panel is a `div` Overlay panel holding a real
   * `ul.p-cascadeselect-list` (Prime renders the nested `ul` itself as the
-  * panel) — the panel div carries the `.p-cascadeselect-overlay` skin, the
+  * panel): the panel div carries the `.p-cascadeselect-overlay` skin, the
   * inner `ul` Prime's list padding, so the visible box computes identically.
   *
   * Honest deferrals: the mobile query mode, option templates, and showClear.
@@ -112,7 +112,7 @@ final case class CascadeSelect[A] private (
     def options(is: Seq[CascadeItem[A]])(label: A => String): CascadeSelect[A] =
         copy(items = items ++ is.toList, labelF = label)
 
-    /** Stable per-leaf key — the value written into the bound ref (defaults to
+    /** Stable per-leaf key: the value written into the bound ref (defaults to
       * the label projection).
       */
     def optionKey(f: A => String): CascadeSelect[A] = copy(keyF = Present(f))
@@ -128,7 +128,7 @@ final case class CascadeSelect[A] private (
     @targetName("selectionMaybe")
     def selection(ref: SignalRef[Maybe[A]]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Optional(ref)))
 
-    /** Binds the ROOT panel visibility two-way to `ref` (optional — self-managed
+    /** Binds the ROOT panel visibility two-way to `ref` (optional, self-managed
       * otherwise); the nested group panels stay component-internal.
       */
     def open(ref: SignalRef[Boolean]): CascadeSelect[A] = copy(openRefV = Present(ref))
@@ -147,7 +147,7 @@ final case class CascadeSelect[A] private (
     /** Size: `.p-cascadeselect-sm` / default / `.p-cascadeselect-lg`. */
     def size(v: Size): CascadeSelect[A] = copy(sizeV = v)
 
-    /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
+    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CascadeSelect[A] = copy(variantV = v)
 
     /** Spans the full width of its container (`.p-cascadeselect-fluid`). */
@@ -176,7 +176,7 @@ final case class CascadeSelect[A] private (
     /** The stable leaf key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
-    /** Paths (index chains from the root) of every GROUP item, in tree order —
+    /** Paths (index chains from the root) of every GROUP item, in tree order;
       * one open/closed ref is allocated per path (the Menubar machinery).
       */
     private[uic] def groupPaths: List[List[Int]] =
@@ -247,7 +247,7 @@ final case class CascadeSelect[A] private (
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State]
     )(using Frame): UI =
-        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
+        // Reactive-placeholder + -invalid gates (INSIDE the mount subscription, never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
         // helper; otherwise the untouched static form. The resolved placeholder text threads through.
         BoolValue.reactive(loadingV): ld =>
@@ -457,7 +457,7 @@ final case class CascadeSelect[A] private (
 
     /** One panel level: `ul.p-cascadeselect-list` (role `tree` at the root,
       * `group` nested) of leaf and group rows; an OPEN group row anchors its
-      * side-nested Overlay sub-panel (host-gated single-subscription form — the
+      * side-nested Overlay sub-panel (host-gated single-subscription form; the
       * wired chain already subscribes to every group ref).
       */
     private def list(

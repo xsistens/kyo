@@ -6,7 +6,7 @@ import kyo.uic
 
 /** A form-validation scope. Forms nest: [[child]] creates a sub-scope, so a
   * reusable sub-form owns its own fields and its errors bubble into the parent's
-  * aggregate. Any scope can host a [[Form.errorSummary]] — so summaries can sit at
+  * aggregate. Any scope can host a [[Form.errorSummary]], so summaries can sit at
   * the root and at sub-forms at once. Created via [[Form.mounted]] /
   * [[Form.mountedWith]] (allocates the state inside a `UI.mounted` region).
   */
@@ -25,8 +25,8 @@ final class Form private[form] (
 ):
 
     /** Declare a typed field in this scope, starting from `initial` (which is also the reset
-      * baseline). Returns a [[FieldSpec]] — a pure description with a default for every other
-      * slot — which `.declare` turns into the live handle:
+      * baseline). Returns a [[FieldSpec]] (a pure description with a default for every other
+      * slot), which `.declare` turns into the live handle:
       * {{{
       * stock <- form.field(true).declare
       * name  <- form.field("").rules(Validator.required()).domId("product-name").declare
@@ -36,7 +36,7 @@ final class Form private[form] (
     def field[A](initial: A)(using CanEqual[A, A]): FieldSpec[A] =
         FieldSpec.init(this, initial)
 
-    /** Zero-config `String` field, value starting empty — the common case, so text forms
+    /** Zero-config `String` field, value starting empty: the common case, so text forms
       * declare `form.field.declare` and say nothing else.
       */
     def field: FieldSpec[String] = FieldSpec.init(this, "")
@@ -52,7 +52,7 @@ final class Form private[form] (
 
     /** Every field declared in this scope and its child scopes, in declaration order.
       *
-      * The STATIC tree only — a field array's rows come and go after the form is built, and
+      * The STATIC tree only: a field array's rows come and go after the form is built, and
       * [[FormDiagnostics]], the one caller, reads this once at mount.
       */
     private[form] def declaredFields(using Frame): Chunk[FormField[?]] < Sync =
@@ -78,7 +78,7 @@ final class Form private[form] (
         yield c
 
     /** Allocate a fresh sub-scope that shares this form's submit/submitting state and
-      * id/focus channels, but is NOT registered in `childrenRef` — [[child]] registers it,
+      * id/focus channels, but is NOT registered in `childrenRef`: [[child]] registers it,
       * [[FieldArray]] tracks its rows separately (in its own reactive list).
       */
     private[form] def newChildScope(using Frame): Form < Sync =
@@ -109,7 +109,7 @@ final class Form private[form] (
       * `markPristine`.
       *
       * Note: a row `build` runs with `Async` only (no `Scope`). Everything that does not need
-      * one works — fields, `addRule`, `bind`, `errorSummary` — and `Activation.Change` works
+      * one works (fields, `addRule`, `bind`, `errorSummary`), and `Activation.Change` works
       * too: the array wires each row's observer on an unscoped fiber and cancels it when the
       * row is removed or the form unmounts. `dependsOn` is the exception, and the type says
       * so: it returns `Unit < (Async & Scope)`, so it cannot be called from a row at all.
@@ -122,7 +122,7 @@ final class Form private[form] (
     /** Like [[fieldArray]], but each row's builder ALSO returns a typed model `R` (typically
       * a case class of the row's field handles). The array then gives typed, live,
       * removal-correct access to every row via [[FieldArray.rows]] / [[FieldArray.currentRows]]
-      * and [[FieldArray.satisfy]] — the seam for cross-row validation ("all rows agree on a
+      * and [[FieldArray.satisfy]], the seam for cross-row validation ("all rows agree on a
       * field", "no duplicates", "sum ≤ N").
       */
     def fieldArrayOf[R](initial: Int = 0)(build: (Form, FieldArray.Row) => (UI, R) < Async)(using
@@ -136,15 +136,15 @@ final class Form private[form] (
             _ <- Kyo.foreach(0 until initial)(_ => arr.add)
         yield arr
 
-    /** This scope's focus anchor id — set once via [[anchor]], inherited by every form-level
+    /** This scope's focus anchor id, set once via [[anchor]], inherited by every form-level
       * error ([[satisfy]] / [[raise]]) on this scope.
       */
     private var anchorId: Maybe[String] = Absent
 
-    /** Set this scope's focus ANCHOR — the id of an element that an [[Form.errorSummary]] row for a
+    /** Set this scope's focus ANCHOR: the id of an element that an [[Form.errorSummary]] row for a
       * form-level error ([[satisfy]] / [[raise]]) jumps focus to. Set it once; every satisfy/raise
       * on this scope inherits it (like a field's id owns all its validators). Stamp the same id
-      * on a wrapping element — e.g. `uic.InputGroup().id(theId)(...)`: because a wrapper is not
+      * on a wrapping element (e.g. `uic.InputGroup().id(theId)(...)`): because a wrapper is not
       * itself focusable, the jump lands on its first field. For a DIFFERENT anchor, group those
       * fields in a [[child]] sub-form and give IT its own anchor. Returns this scope for chaining.
       */
@@ -171,18 +171,18 @@ final class Form private[form] (
     private var invariants: List[Form.Invariant] = Nil
 
     /** Attach a cross-field / form-level validation to this scope, in the SAME
-      * `satisfy(code)(predicate)` shape a field rule uses ([[Validator.satisfy]]) — so what you
+      * `satisfy(code)(predicate)` shape a field rule uses ([[Validator.satisfy]]), so what you
       * know from writing a field validation carries straight over to the form. `true` = valid
       * (same polarity as a field). The PREDICATE'S TYPE selects when it is activated (illegal
       * combinations stay unrepresentable, see [[Activation]]):
       *
       *   - a `Signal[Boolean]` (this overload) is a REACTIVE invariant: re-evaluated whenever its
       *     inputs change (build it from the fields, e.g.
-      *     `Signal.combineLatestAll(fields.map(_.value)).map(...)`) — no `dependsOn` needed. While
+      *     `Signal.combineLatestAll(fields.map(_.value)).map(...)`); no `dependsOn` needed. While
       *     `false` the form is invalid ([[isValid]] reflects it → live submit-enable) and submit
       *     is blocked.
       *   - a `=> Boolean < Async` thunk (the other overload) is a SUBMIT-pull check: evaluated once
-      *     per submit (so it may suspend — a REST/mutation round-trip); on `false` it blocks submit.
+      *     per submit (so it may suspend, e.g. a REST/mutation round-trip); on `false` it blocks submit.
       *
       * Pure + chainable (like [[anchor]]); inherits this scope's [[anchor]] for the summary
       * focus-jump. `reveal` controls only WHEN `code` is auto-shown in an [[Form.errorSummary]]
@@ -192,7 +192,7 @@ final class Form private[form] (
         invariants = invariants :+ Form.Invariant(code, valid, reveal, anchorId)
         this
 
-    /** Reactive `Signal[Boolean]` invariant with the default [[Reveal.OnSubmit]] — see the
+    /** Reactive `Signal[Boolean]` invariant with the default [[Reveal.OnSubmit]]; see the
       * `(code, reveal)` overload for the full contract.
       */
     def satisfy(code: String)(valid: Signal[Boolean]): Form =
@@ -201,18 +201,18 @@ final class Form private[form] (
     /** SUBMIT-pull check: `pred` is evaluated once per submit (it may suspend). On failure it
       * blocks submit; `reveal` chooses between [[Reveal.OnSubmit]] (default: raise `code` into the
       * summary; [[Reveal.Immediate]] coincides, having nothing to show earlier) and [[Reveal.Manual]]
-      * (block silently — the consumer surfaces it). See the `Signal[Boolean]` overload for the
+      * (block silently; the consumer surfaces it). See the `Signal[Boolean]` overload for the
       * reactive counterpart. Pure + chainable.
       */
     def satisfy(code: String, reveal: Reveal)(pred: => Boolean < Async): Form =
         checks = checks :+ Form.Check(code, () => pred, reveal)
         this
 
-    /** SUBMIT-pull check with the default [[Reveal.OnSubmit]] — see the `(code, reveal)` overload. */
+    /** SUBMIT-pull check with the default [[Reveal.OnSubmit]]; see the `(code, reveal)` overload. */
     def satisfy(code: String)(pred: => Boolean < Async): Form =
         satisfy(code, Reveal.OnSubmit)(pred)
 
-    /** This scope's invariant errors as reveal-gated display entries (own scope only — the
+    /** This scope's invariant errors as reveal-gated display entries (own scope only; the
       * subtree is covered by [[errorEntries]]' existing child/array recursion).
       */
     private def invariantDisplayEntries(using Frame): Seq[Signal[Chunk[Form.ErrorEntry]]] =
@@ -228,7 +228,7 @@ final class Form private[form] (
             end match
         }
 
-    /** Whether every reactive invariant in this subtree currently holds — raw validity,
+    /** Whether every reactive invariant in this subtree currently holds: raw validity,
       * independent of `reveal`. Folded into [[isValid]] and checked at submit. Recurses child
       * scopes; array-row invariants are not folded (rows have no `Scope`, as with `Activation.Change`).
       */
@@ -254,7 +254,7 @@ final class Form private[form] (
         allErrors.map(_.map(_.nonEmpty))
 
     /** The usual submit-button gate: blocked while submitting OR while any FIELD error is
-      * shown to the user — yet open for a pristine form (so the first click runs
+      * shown to the user, yet open for a pristine form (so the first click runs
       * submit-reveal, after which the shown errors keep it blocked). Read after the
       * fields/children are declared.
       *
@@ -262,7 +262,7 @@ final class Form private[form] (
       * `uic.Button("Save").ariaDisabled(form.submitDisabled)` is the only binding that fits.
       * A native `disabled` here is an accessibility trap: the button leaves the tab order,
       * and the reactive re-enable lands a tick after the value change, so a Tab keypress
-      * jumps past it. `aria-disabled` keeps the button focusable and the race disappears —
+      * jumps past it. `aria-disabled` keeps the button focusable and the race disappears,
       * and routing its click through [[submit]] is what moves focus to the first invalid
       * field. Reach for `.signal` when you want the raw boolean for something else.
       *
@@ -296,14 +296,14 @@ final class Form private[form] (
             Signal.combineLatestAll(parts).map(chunks => chunks.foldLeft(Chunk.empty[Form.ErrorEntry])(_ ++ _))
 
     /** All DISPLAYABLE errors in this subtree (own gated field errors + form errors +
-      * descendants), for a summary — the field-association-free view of [[errorEntries]].
+      * descendants), for a summary: the field-association-free view of [[errorEntries]].
       * Read after the fields are declared.
       */
     def allErrors(using Frame): Signal[Chunk[FieldError]] < Sync =
         errorEntries.map(_.map(_.map(_.error)))
 
-    /** Move DOM focus (and scroll into view) to the field with the given id — the id an
-      * [[errorEntries]] entry carries, so a custom summary's rows can jump to their field.
+    /** Move DOM focus (and scroll into view) to the field with the given id (the id an
+      * [[errorEntries]] entry carries), so a custom summary's rows can jump to their field.
       */
     def focus(fieldId: String)(using Frame): Unit < Async = focusField(fieldId)
 
@@ -331,7 +331,7 @@ final class Form private[form] (
     /** Whether every FIELD in this subtree currently holds valid data, as a reactive signal.
       *
       * `onlyVisible = false` (default) is UNGATED: it reflects the raw client/server field
-      * verdict even for untouched fields — so a submit button can be enabled live the moment
+      * verdict even for untouched fields, so a submit button can be enabled live the moment
       * the data becomes valid, before any field is touched. `onlyVisible = true` is the gated
       * view: valid unless an error is currently DISPLAYED (touched or after submit-reveal).
       *
@@ -389,7 +389,7 @@ final class Form private[form] (
             _      <- Kyo.foreach(arrays)(_.resetRows)
         yield ()
 
-    /** True while ANY field in this subtree differs from its live baseline — the form has
+    /** True while ANY field in this subtree differs from its live baseline: the form has
       * unsaved changes. A pristine (or freshly [[markPristine]]d) form reads `false`. Gate
       * a "discard" button or an unsaved-changes indicator off it; read after the fields are
       * declared.
@@ -406,7 +406,7 @@ final class Form private[form] (
             else Signal.combineLatestAll(parts).map(_.exists(identity))
 
     /** Snapshot the whole subtree's current values as the new clean baseline (e.g. after a
-      * successful save), so [[isDirty]] reads `false` and [[reset]] returns here — without
+      * successful save), so [[isDirty]] reads `false` and [[reset]] returns here, without
       * reverting any values now.
       */
     def markPristine(using Frame): Unit < Sync =
@@ -425,7 +425,7 @@ final class Form private[form] (
       * (own fields + nested children). Called once by `Form.mountedWith` after `build`, in
       * the mount scope, so the observers live for the form's lifetime.
       *
-      * Field-array ROWS are not reached from here — they are added later, from an event
+      * Field-array ROWS are not reached from here: they are added later, from an event
       * handler with no ambient `Scope`. They wire the same trigger through
       * [[wireRowChangeActivations]] and the array owns the resulting fibers; the
       * `Scope.ensure` below is what tears those down when the form unmounts, so a row
@@ -456,7 +456,7 @@ final class Form private[form] (
             _      <- Kyo.foreach(arrays)(_.wireRowActivations)
         yield ()
 
-    /** Cancel every observer fiber [[wireRowChangeActivations]] started in this subtree —
+    /** Cancel every observer fiber [[wireRowChangeActivations]] started in this subtree:
       * on row removal, on form reset of the array, and on unmount.
       */
     private[form] def cancelRowChangeActivations(using Frame): Unit < Async =
@@ -485,7 +485,7 @@ final class Form private[form] (
         yield ()
 
     /** Validate every field in this subtree in declaration order (own fields, then nested
-      * children, then array rows), pairing each field with its result — the order
+      * children, then array rows), pairing each field with its result, in the order
       * [[focusFirstInvalid]] walks to pick the field to focus.
       */
     private[form] def validateSubtree(using Frame): Chunk[(FormField[?], Maybe[FieldError])] < Async =
@@ -501,7 +501,7 @@ final class Form private[form] (
             fields.zip(own) ++ kidResults.foldLeft(empty)(_ ++ _) ++ arrayResults.foldLeft(empty)(_ ++ _)
 
     /** Move DOM focus (and scroll into view) to the first invalid, focusable field in
-      * declaration order — the accessibility win of focus-first-invalid-on-submit. A
+      * declaration order: the accessibility win of focus-first-invalid-on-submit. A
       * no-op when the behaviour is disabled ([[Form.mountedWith]]'s `focusInvalidOnSubmit`)
       * or when no field is invalid (e.g. only a cross-field `check` failed).
       */
@@ -552,7 +552,7 @@ object Form:
     ): UI.Ast.Mounted < Env[ErrorTranslator] =
         Env.get[ErrorTranslator].map(tr => mountedWith(tr, focusInvalidOnSubmit)(build))
 
-    /** Root form with an explicit translator — no `Env` wiring needed. Use
+    /** Root form with an explicit translator; no `Env` wiring needed. Use
       * `ErrorTranslator.default` for English fallbacks / no i18n. `focusInvalidOnSubmit`
       * defaults on (opt-out): a failed submit moves focus (and scroll) to the first invalid
       * field in declaration order; pass `false` to disable, or exclude a single field with
@@ -567,7 +567,7 @@ object Form:
     ): UI.Ast.Mounted =
         UI.mounted {
             for
-                // The session's imperative channel — captured once so the form's field-id
+                // The session's imperative channel, captured once so the form's field-id
                 // minting and focus commands need no `UI.commands` lookup downstream (mirrors
                 // Overlay/InputOtp's self-addressing pattern).
                 cmds <- UI.commands
@@ -602,13 +602,13 @@ object Form:
             ownsSubmit = true
         )
 
-    /** A displayable error paired with the id of the field it belongs to — `Absent` for a
-      * form-level ([[Form.raise]]) error, which has no field to focus. Produced by
+    /** A displayable error paired with the id of the field it belongs to (`Absent` for a
+      * form-level ([[Form.raise]]) error, which has no field to focus). Produced by
       * [[Form.errorEntries]]; consumed by [[errorSummary]] and any custom summary.
       */
     final case class ErrorEntry(error: FieldError, fieldId: Maybe[String]) derives CanEqual
 
-    /** An OPTIONAL, opinionated error-summary view for a scope — NOT shipped with every form:
+    /** An OPTIONAL, opinionated error-summary view for a scope, NOT shipped with every form:
       * a summary is a use-case-specific View, so it lives here as a helper over the data a
       * [[Form]] exposes ([[Form.errorEntries]] + [[Form.submitCount]] + [[Form.focus]]), not
       * as a method on the data-holding form. Drop ONE near a submit button. It shows only
@@ -618,13 +618,13 @@ object Form:
       * The jump rows say `type="button"` because the summary is meant to sit inside real
       * markup, and a `<button>` without a type is a SUBMIT button: put this near the submit
       * control of a native `<form>` and the browser would submit on a click meant to move
-      * focus, and — being the first submit button in the form — would answer Enter in a text
+      * focus, and (being the first submit button in the form) would answer Enter in a text
       * field as well. A [[Form]] is a validation scope and renders no element of its own, so
       * whether a `<form>` is there at all is the caller's choice, which is precisely why this
       * cannot be left to the default.
       *
       * For anything more bespoke (custom layout, grouping, inline placement), build your own
-      * from `scope.errorEntries` — this is just a sensible default.
+      * from `scope.errorEntries`; this is just a sensible default.
       */
     def errorSummary(scope: Form)(using Frame): UI < Sync =
         scope.errorEntries.map { entriesSig =>

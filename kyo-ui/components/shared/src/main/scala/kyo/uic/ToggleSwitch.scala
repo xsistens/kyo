@@ -3,12 +3,12 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** On/off toggle — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
+/** On/off toggle: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * ToggleSwitch anatomy: `div.p-toggleswitch` > hidden native
   * `input.p-toggleswitch-input[role=switch]` + visual `div.p-toggleswitch-slider`
   * with the sliding `div.p-toggleswitch-handle`). The kyo
   * `<input type="checkbox">` provides the real boolean state, so the change
-  * event and disabled state are inherited. Prime has no on/off state text —
+  * event and disabled state are inherited. Prime has no on/off state text;
   * place a plain `span` next to the switch instead. `handleIcon` fills Prime's
   * handle slot with a per-state glyph riding inside the sliding handle. Two-way
   * binding mirrors [[CheckBox]].
@@ -49,7 +49,7 @@ final case class ToggleSwitch private (
       */
     def disabled(v: Boolean | Signal[Boolean]): ToggleSwitch = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly` — the switch reports `aria-readonly` and refuses to change, but
+    /** `readonly`: the switch reports `aria-readonly` and refuses to change, but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
@@ -69,7 +69,7 @@ final case class ToggleSwitch private (
     private[uic] def withTooltip(v: Maybe[TextValue]): ToggleSwitch = copy(tooltipV = v)
 
     /** Prime's handle slot: a glyph rendered inside the sliding
-      * `.p-toggleswitch-handle` — `checked` while on, `unchecked` while off.
+      * `.p-toggleswitch-handle`, `checked` while on, `unchecked` while off.
       */
     def handleIcon(checked: IconGlyph, unchecked: IconGlyph): ToggleSwitch =
         copy(handleIconsV = Present((checked, unchecked)))
@@ -79,7 +79,7 @@ final case class ToggleSwitch private (
 
     def onChange(f: Boolean => UI.Action)(using Frame): ToggleSwitch = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the switch's current state — unlike onChange it
+    /** Fires on focus loss with the switch's current state. Unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = copy(onBlurF = Present(Callback.of(f)))

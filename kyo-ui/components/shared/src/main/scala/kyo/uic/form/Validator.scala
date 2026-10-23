@@ -6,7 +6,7 @@ import scala.util.matching.Regex
 /** A validator maps a value to an optional error in the one effect a mounted event
   * handler actually runs in: `Async`. A pure/sync rule widens for free; an async
   * rule (a kyo-apollo mutation, a REST call, anything) discharges its OWN failure
-  * channel into a [[FieldError]] BEFORE it becomes a `Validator` — so the core
+  * channel into a [[FieldError]] BEFORE it becomes a `Validator`, so the core
   * never depends on any transport library. Failure-as-error, not failure-as-Abort:
   * `Absent` = valid, `Present(e)` = invalid.
   */
@@ -30,7 +30,7 @@ object Validator:
         private[uic] def run(a: A)(using Frame): Maybe[FieldError] < Async = self(a)
 
         /** Ordered short-circuit: run `self`; on the first failure stop and report it,
-          * otherwise run `next`. A field shows only ONE error at a time — the first
+          * otherwise run `next`. A field shows only ONE error at a time: the first
           * open rule of the chain (e.g. `required and minLength(5)` shows "required"
           * until the field is non-empty, then "min-length").
           */
@@ -42,7 +42,7 @@ object Validator:
                 }
     end extension
 
-    /** No rules: every value passes. The default of a field that only holds a value —
+    /** No rules: every value passes. The default of a field that only holds a value:
       * `Form.field` starts every spec here, so a caller declaring no rules writes nothing.
       *
       * It is also the identity of [[and]], which is what `all()` over an empty sequence
@@ -55,7 +55,7 @@ object Validator:
     def all[A](vs: Validator[A]*)(using Frame): Validator[A] =
         if vs.isEmpty then none[A] else vs.reduce(_ and _)
 
-    /** A rule that applies only when `cond` holds — the escape hatch for
+    /** A rule that applies only when `cond` holds: the escape hatch for
       * "rule depends on a condition / on other form state".
       */
     def when[A](cond: A => Boolean)(v: Validator[A]): Validator[A] =
@@ -78,7 +78,7 @@ object Validator:
 
     private val EmailRx = """^[^@\s]+@[^@\s]+\.[^@\s]+$""".r
 
-    /** Empty passes (so `required` owns emptiness — chain them). */
+    /** Empty passes (so `required` owns emptiness; chain them). */
     def email(code: String = "email"): Validator[String] =
         satisfy(code)(v => v.isEmpty || EmailRx.matches(v))
 
@@ -130,7 +130,7 @@ object Validator:
 
     // ---- built-in cross-field rule --------------------------------------------
 
-    /** The value must equal the current value of `other` — the password-confirmation
+    /** The value must equal the current value of `other`: the password-confirmation
       * pattern, generalized. Reads `other` live at validation time; pair the field with
       * `field.dependsOn(other)` for as-you-type re-validation when the other field changes.
       */
