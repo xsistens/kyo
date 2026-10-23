@@ -39,7 +39,9 @@ trait FormControl extends Node, HasElementId:
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self
 
     /** Marks the control invalid (`.p-invalid` + `aria-invalid`). A `Signal[Boolean]` toggles the
-      * invalid state on emission, and is the explicit override of the message-derived red default.
+      * invalid state on emission. Either form is the explicit override of the message-derived red
+      * default: once `invalid` is set, it alone decides whether the control is red and whether a
+      * message row shows.
       */
     final def invalid(v: Boolean | Signal[Boolean]): Self = withInvalid(Present(ReactiveValue(v)))
 

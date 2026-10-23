@@ -154,6 +154,27 @@ class FieldValidityTest extends UicTest:
             assert(cls == Chunk(true), s"the class follows the explicit override: $cls")
     }
 
+    "an explicit constant invalid wins over a reactive message, as an explicit signal does" in {
+        for
+            msg <- message("Required")
+            red = Input().invalid(true).invalidMessage(msg).render
+            field  <- elementWithClass(red, "p-inputtext")
+            on     <- messageRows(red)
+            _      <- msg.set(Absent)
+            redCls <- Kyo.foreach(field.attrs.reactiveClasses.get("p-invalid").toSeq)(_.current)
+            redNow = field.attrs.cssClasses.contains("p-invalid") || redCls == Chunk(true)
+            other <- message("Required")
+            calm = Input().invalid(false).invalidMessage(other).render
+            calmField <- elementWithClass(calm, "p-inputtext")
+            calmRows  <- messageRows(calm)
+            calmCls   <- Kyo.foreach(calmField.attrs.reactiveClasses.get("p-invalid").toSeq)(_.current)
+        yield
+            assert(on == 1, "invalid(true) with a message shows the row")
+            assert(redNow, s"invalid(true) stays red after the message clears: $redCls")
+            assert(calmRows == 0, "invalid(false) hides the row although a message is set")
+            assert(!calmField.attrs.cssClasses.contains("p-invalid") && calmCls != Chunk(true), s"invalid(false) is not red: $calmCls")
+    }
+
     "the constant path is unchanged: no channel, no region" in {
         val ui = Input().invalid(true).invalidMessage("Required").render
         for
