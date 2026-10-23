@@ -257,6 +257,47 @@ class ElementIdTest extends UicTest:
         end for
     }
 
+    /** Every element of `ui` a Tab can land on. Radios that share a `name` are one stop, as the browser groups them. */
+    private def tabStops(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elements(ui).map { es =>
+            val stops                                     = es.filter(focusable)
+            def groupOf(e: UI.Ast.Element): Maybe[String] = e match
+                case r: UI.Ast.Radio => r.name
+                case _               => Absent
+            val (named, loose) = stops.partition(groupOf(_).isDefined)
+            loose ++ Chunk.from(named.groupBy(groupOf).values.map(_.head))
+        }
+
+    "a radio group as first rendered is ONE tab stop, on the element carrying the id" in {
+        // Before the client attaches, a single-choice SelectButton made every option a tab stop and
+        // a Rating every star (its radios have no name until the mount mints one), so Tab walked the
+        // reader through the whole group, where the attached render is one stop at the chosen option.
+        for
+            med    <- Signal.initRef(Maybe("Medium"))
+            none   <- Signal.initRef(Maybe.empty[String])
+            three  <- Signal.initRef(3)
+            sbHeld <- tabStops(uic.SelectButton[String]().options(Seq("Small", "Medium", "Large")).selection(med).id("mine").render)
+            sbNone <- tabStops(
+                uic.SelectButton[String]().options(Seq(
+                    "Small",
+                    "Medium",
+                    "Large"
+                )).optionDisabled(_ == "Small").selection(none).id("mine").render
+            )
+            rtHeld <- tabStops(uic.Rating().value(three).id("mine").render)
+            rtNone <- tabStops(uic.Rating().id("mine").render)
+        yield
+            assert(sbHeld.map(textOf) == Chunk("Medium"), "the chosen option")
+            assert(sbNone.map(textOf) == Chunk("Medium"), "nothing chosen: the first option a reader can reach")
+            assert(rtHeld.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("3 stars")), "the checked star")
+            assert(rtNone.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("1 star")), "none checked: the first")
+            assert(
+                Chunk(sbHeld, sbNone, rtHeld, rtNone).forall(_.map(_.attrs.identifier) == Chunk(Present("mine"))),
+                "and that one stop is the element carrying the id"
+            )
+        end for
+    }
+
     "a single SelectButton carries it on its tab stop, and arrows still reach every option" in {
         val sizes = Seq("Small", "Medium", "Large")
         val ids   = List("sb-0", "sb-1", "sb-2")

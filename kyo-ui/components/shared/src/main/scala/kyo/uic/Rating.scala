@@ -135,8 +135,8 @@ final case class Rating private (
         // The radios' `name` is what the browser groups them by, and the grouping is what gives
         // this control its single tab stop and its arrows. Without one every star was its own
         // group: five tab stops, no arrows, and nothing stopping two of them from being checked.
-        // A caller's own name wins; otherwise the mount mints one, and the static projection
-        // keeps the shape it had (the Select precedent).
+        // A caller's own name wins; otherwise the mount mints one. The static projection has no
+        // name yet, so it keeps the single tab stop by taking the other stars out of the tab order.
         if nameV.isDefined then renderNamed
         else
             UI.mounted {
@@ -206,7 +206,12 @@ final case class Rating private (
                 .checked(i == value)
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
-            nameV.foreach(n => hidden = hidden.name(n))
+            // Unnamed (the page as first rendered, before the mount mints a name), the browser does not
+            // group the radios, so every star would be a tab stop of its own; the group is one stop
+            // already, on the star the named group will tab to.
+            nameV match
+                case Present(n) => hidden = hidden.name(n)
+                case Absent     => if i != tabStop then hidden = hidden.tabIndex(-1)
             if i == tabStop then idV.foreach(v => hidden = hidden.id(v))
             // readonly keeps the stars FOCUSABLE and refuses to change: only `disabled` takes them
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such

@@ -136,7 +136,9 @@ final case class Menubar private (
         val startUI: List[UI] = startV.toList.map(u => div.cssClass("p-menubar-start")(toChild(u)))
         val endUI: List[UI]   = endV.toList.map(u => div.cssClass("p-menubar-end")(toChild(u)))
         var list              = ul.cssClass("p-menubar-root-list").role("menubar")
-        if focusRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
+        // The bar is one tab stop from the first render; its keys are wired once the mount has a focus to move.
+        list = list.tabIndex(0)
+        if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
         if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         val listUI: UI = list(rowsUI.map(toChild)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.

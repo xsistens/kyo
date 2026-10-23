@@ -333,8 +333,11 @@ final case class Menu private (
                 val seedFocus: UI.Action = hiRef match
                     case Present(hi) if hiRow < 0 && navigable.nonEmpty => hi.set(navigable.head)
                     case _                                              => ()
+                // The list is the menu's one tab stop from the first render, before the mount has a
+                // highlight to rove: the keys are wired once it has.
+                list = list.tabIndex(0)
                 if hiRef.isDefined then
-                    list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
+                    list = list.preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
                     hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
                 var root = div.cssClass("p-menu").cssClass("p-component")
                 idV.foreach(v => root = root.id(v))
