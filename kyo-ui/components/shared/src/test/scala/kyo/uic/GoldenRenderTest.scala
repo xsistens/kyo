@@ -1341,8 +1341,10 @@ class GoldenRenderTest extends UicTest:
             // then sat on that row while the highlight moved away from it.
             assert(occurrences(roved, """tabindex="-1"""") == 0, "roving: no row is a focus target")
             assert(roved.contains("focus") && roved.contains("blur"), "roving: the list registers focus and blur")
-            assert(occurrences(rows, """tabindex="0"""") == 2, "no highlight to rove: the rows are the tab stops")
-            assert(!rows.contains("""tabindex="-1""""), "no highlight to rove: and none of them is roved")
+            // Before the mount has a highlight the list is already the one tab stop: it carries the
+            // id, so it has to be what a `Label.forId` or a focus-by-id can reach (ElementIdTest).
+            assert(occurrences(rows, """tabindex="0"""") == 1, "no highlight yet: still one tab stop, the list")
+            assert(!rows.contains("""tabindex="-1""""), "no highlight yet: and no row is a focus target")
         end for
     }
 

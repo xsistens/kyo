@@ -229,6 +229,34 @@ class ElementIdTest extends UicTest:
         end for
     }
 
+    "a Listbox's page as first rendered already makes the list its one tab stop" in {
+        // Before the client attaches there is no highlight to rove, and the rows used to hold the
+        // tab stops then: the id sat on a list nothing could focus, so a `Label.forId` or a
+        // focus-by-id reached nothing until the mount had published.
+        def lb(using Frame) =
+            uic.Listbox[String]().item("Paris", "par").item("Rome", "rom").selectionMode(uic.SelectionMode.Single).id("mine")
+        for
+            sel  <- Signal.initRef(Set("rom"))
+            stat <- owner(lb.render)
+            held <- owner(lb.selection(sel).render)
+            rows <- elementsWithClass(lb.selection(sel).render, "p-listbox-option")
+        yield
+            assert(stat.attrs.role.contains("listbox") && held.attrs.role.contains("listbox"))
+            assert(rows.size == 2 && rows.forall(_.attrs.tabIndex.isEmpty), "no row is a second tab stop beside the list")
+        end for
+    }
+
+    "a Rating's page as first rendered carries it on the radio a Tab reaches" in {
+        for
+            ref  <- Signal.initRef(3)
+            stat <- owner(uic.Rating().value(ref).id("mine").render)
+            none <- owner(uic.Rating().id("mine").render)
+        yield
+            assert(stat.attrs.ariaAttrs.get("label").contains("3 stars"))
+            assert(none.attrs.ariaAttrs.get("label").contains("1 star"))
+        end for
+    }
+
     "a single SelectButton carries it on its tab stop, and arrows still reach every option" in {
         val sizes = Seq("Small", "Medium", "Large")
         val ids   = List("sb-0", "sb-1", "sb-2")
@@ -244,7 +272,10 @@ class ElementIdTest extends UicTest:
             root <- elementWithClass(ui, "p-selectbutton")
             none <- Signal.initRef(Maybe.empty[String])
             stat <- owner(uic.SelectButton[String]().options(sizes).selection(none).id("mine").render)
+            med  <- Signal.initRef(Maybe("Medium"))
+            held <- owner(uic.SelectButton[String]().options(sizes).selection(med).id("mine").render)
         yield
+            assert(textOf(held) == "Medium", "before the client attaches the id is on the chosen option too")
             assert(live.attrs.ariaAttrs.get("checked").contains("true"), "the selected option is the group's tab stop")
             assert(opts.map(_.attrs.identifier) == Chunk(Present("sb-0"), Present("mine"), Present("sb-2")))
             assert(went == List("sb-2"))

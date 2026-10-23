@@ -134,8 +134,8 @@ final case class PickList[A] private (
       * through. Both are minted OUTSIDE the region, since a mount inside a subscribed region re-runs
       * on every emission and would hand out a new highlight per keystroke.
       *
-      * The static projection renders through the placeholder, which is the shape this control had
-      * before its lists were one tab stop each: every row its own.
+      * The static projection renders through the placeholder: each list is already its one tab
+      * stop there, with no highlight on it yet.
       */
     private[uic] def render(using Frame): UI =
         UI.mounted {
