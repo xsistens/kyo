@@ -394,9 +394,11 @@ end with the failure, as they do without reconnection. This is the subscriptions
 retry: `RetryOnErrorInterceptor` never retries a subscription.
 
 `subscriptionBufferSize` (256 by default) bounds how many responses one subscription
-holds for a consumer that has not taken them yet. When it is full, the socket is not
-read further until that consumer catches up, and since one socket carries every
-subscription, a slow consumer holds the others back too.
+holds for a consumer that has not taken them yet, rounded up to the next power of two
+(300 holds 512). When it is full, the transport stops processing frames until that
+consumer catches up, and since one socket carries every subscription, a slow consumer
+holds the others back too. The socket itself is still read: incoming frames wait in
+memory without a bound, and a browser `WebSocket` cannot pause reading at all.
 
 ### Uploads
 
