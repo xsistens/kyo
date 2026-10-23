@@ -78,22 +78,21 @@ extension [D](call: ApolloCall[D])
       *
       * `ApolloResponse[D] < Async` — no `Abort`. The response preserves partial
       * `data`, GraphQL `errors`, and any transport `exception` as values, so the
-      * caller inspects them directly. A genuine wiring failure of `call.execute`
-      * (an exhausted interceptor chain, or a stream that completes with no
-      * emission) is folded back into an `ApolloResponse.error` value, keeping
-      * this path total.
+      * caller inspects them directly. `call.execute` already answers a stream that
+      * completes with no emission with such a value; a genuine wiring failure (an
+      * exhausted interceptor chain) is folded back into an `ApolloResponse.error`
+      * value too, keeping this path total.
       */
     def response(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ApolloResponse[D] < Async =
-        // `call.execute` is now a Kyo effect (`ApolloResponse[D] < (Async & Scope)`);
-        // its own `Scope` (a live watcher/subscription binds teardown there — inert
-        // for a one-shot query) is discharged with `Scope.run`. A wiring failure (an
-        // empty stream's `NoSuchElementException`, an exhausted chain) surfaces on the
-        // async PANIC channel, so — per Slice 1's panic-fold rule — `Abort.run` folds
-        // BOTH failure and panic back into an `ApolloResponse.error` value
-        // (ordinary transport errors already arrive as response values).
+        // `call.execute` is a Kyo effect (`ApolloResponse[D] < (Async & Scope)`); its
+        // own `Scope` (a live watcher or subscription binds teardown there, inert for a
+        // one-shot query) is discharged with `Scope.run`. A wiring failure (an
+        // exhausted chain) surfaces on the async panic channel, so `Abort.run` folds
+        // both failure and panic back into an `ApolloResponse.error` value (ordinary
+        // transport errors, and an empty stream, already arrive as response values).
         Abort.run[Throwable](Scope.run(call.execute)).map {
             case Result.Success(resp)  => resp
             case Result.Failure(cause) =>

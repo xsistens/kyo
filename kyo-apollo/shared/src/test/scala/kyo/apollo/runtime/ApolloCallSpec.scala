@@ -10,8 +10,9 @@ import scala.concurrent.Future
 
 /** Tests the [[ApolloCall]] async contract: `execute` is the first emission of
   * the stream-first `stream`, transport failures arrive as *values* inside
-  * `ApolloResponse.error`, and only an empty or raising stream fails the
-  * effect (surfaced here by running it through `Abort.run`).
+  * `ApolloResponse.error`, an empty stream answers with such a value too, and only
+  * a raising stream fails the effect (surfaced here by running it through
+  * `Abort.run`).
   */
 class ApolloCallSpec extends kyo.test.Test[Any]:
 
@@ -62,11 +63,12 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "execute on an empty stream fails with NoSuchElementException" in {
+        "execute on an empty stream answers with a no-response error value" in {
             Abort.run[Throwable](callOf(Stream.init(Seq.empty[ApolloResponse[Int]])).execute).map {
-                case Result.Failure(e) => assert(e.isInstanceOf[NoSuchElementException], s"got $e")
-                case Result.Panic(e)   => assert(e.isInstanceOf[NoSuchElementException], s"got $e")
-                case other             => fail(s"expected NoSuchElementException, got $other")
+                case Result.Success(response) =>
+                    assert(response.data == Absent)
+                    assert(response.error.exists(_.message.startsWith("no response")), s"${response.error}")
+                case other => fail(s"expected a response value, got $other")
             }
         }
 
