@@ -4,16 +4,22 @@ import kyo.<
 import kyo.Abort
 import kyo.Absent
 import kyo.AllowUnsafe
+import kyo.Async
 import kyo.AtomicLong
 import kyo.AtomicRef
+import kyo.Channel
 import kyo.Chunk
+import kyo.Closed
+import kyo.Emit
 import kyo.Frame
 import kyo.Kyo
 import kyo.Maybe
 import kyo.Present
 import kyo.Result
 import kyo.Scope
+import kyo.Stream
 import kyo.Sync
+import kyo.Tag
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.JsonCodec
@@ -21,11 +27,13 @@ import kyo.apollo.api.Operation
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.CacheBatchReader
 import kyo.apollo.cache.normalized.internal.Normalizer
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.exception.NoCacheIdentityException
 import kyo.apollo.json.Json
 import kyo.discard
+import scala.NamedTuple.AnyNamedTuple
 import scala.collection.mutable
 
 /** The coordinator that turns typed operation data into cache records and back,
@@ -592,6 +600,124 @@ final class ApolloStore(
             fragmentVariablesOf(fragment),
             cacheKeyResolver,
             fieldPolicies
+        )
+
+    /** Read a masked entity fragment's fields from the record its ref names, as the
+      * store holds it now (optimistic layers included). When the store has no
+      * readable record for it (evicted, or a type the store's key generator gives no
+      * identity), the fields the ref captured from its response answer instead, so a
+      * ref always reads as something. A captured slice that does not decode as the
+      * fragment's fields is the row's failure.
+      *
+      * A ref's fields are not public: code that holds one reads them only through an
+      * explicit opener, this one or [[watchFragment]] (and kyo-apollo-ui's
+      * `Apollo.fragment(ref)`), and by convention only the component that declared
+      * the fragment calls one.
+      */
+    def readFragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        Frame
+    ): D < (Sync & Abort[ApolloParseException]) =
+        keyOfRef(ref).map {
+            case Present(key) =>
+                readRef(ref, key).map {
+                    case Present((data, _)) => data
+                    case Absent             => Abort.get(ref.decoded)
+                }
+            case Absent => Abort.get(ref.decoded)
+        }
+
+    /** Follow a masked entity fragment's record: emits [[readFragment]]'s value
+      * first, then the record's value again after every write that changes a record
+      * the last read depended on. A write that leaves the record unreadable (an
+      * eviction mid-life) emits nothing, so the stream keeps its last value until the
+      * record is back. A value can repeat, since a write the fragment does not see
+      * still reads again.
+      *
+      * No write is lost to a read that runs while it lands, including a write to a
+      * record the read is only starting to depend on: a read during which
+      * [[currentGeneration]] moved reads again before it answers.
+      *
+      * While the stream runs, the records the last read depended on stay retained for
+      * [[garbageCollect]]. The stream, its change listener and the retain end with the
+      * `Scope` it runs in. A type the store gives no identity has no record to follow:
+      * the stream emits the ref's own fields once and ends.
+      */
+    def watchFragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        Frame,
+        Tag[Emit[Chunk[D]]]
+    ): Stream[D, Async & Scope & Abort[ApolloParseException]] =
+        Stream.unwrap(followFragment(ref).map((first, follow) => Stream.init(Seq(first)).concat(follow.updates)))
+
+    /** What [[watchFragment]] and kyo-apollo-ui's `Apollo.fragment(ref)` run on: the
+      * first value, as [[readFragment]] answers it, and the follow that answers the
+      * later ones.
+      */
+    private[apollo] def followFragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        Frame
+    ): (D, StoreFollow[D]) < (Sync & Scope & Abort[ApolloParseException]) =
+        keyOfRef(ref).map {
+            case Present(key) =>
+                follow(Set(key))(readRef(ref, key)).map { followed =>
+                    followed.initial.fold[D < Abort[ApolloParseException]](Abort.get(ref.decoded))(data => data)
+                        .map((_, followed))
+                }
+            case Absent => Abort.get(ref.decoded).map((_, new StoreFollow[D](Absent, Absent, Maybe.empty[D])))
+        }
+
+    /** Follow `read` over this store: read once now, and again after every write that
+      * changes a key the last read depended on, until the enclosing `Scope` closes.
+      * `read` answers a value with the keys it depended on, or `Absent` when the cache
+      * cannot satisfy it, which keeps the keys held so far. `start` is watched until a
+      * read answers. The watched keys stay retained for [[garbageCollect]].
+      *
+      * The listener is registered before the first read, so a write to a watched key
+      * is heard however it interleaves with a read. A write to a key the read is only
+      * starting to depend on is checked against the keys watched before and dropped,
+      * but it moved [[currentGeneration]] past the one the read started at (a publish
+      * moves it before the listeners run), so a read that sees the generation move
+      * reads again before it answers. Only a write that lands during a read drives
+      * another pass.
+      */
+    private[apollo] def follow[V](start: Set[CacheKey])(read: Maybe[(V, Set[CacheKey])] < Sync)(using
+        Frame
+    ): StoreFollow[V] < (Sync & Scope) =
+        def settled(retained: RetainedKeys): Maybe[V] < Sync =
+            currentGeneration.map { before =>
+                read.map { result =>
+                    result.fold(Kyo.unit)((_, keys) => retained.hold(keys)).andThen(
+                        currentGeneration.map(after => if after == before then result.map(_._1) else settled(retained))
+                    )
+                }
+            }
+        for
+            changed  <- Channel.init[Unit](1)
+            retained <- RetainedKeys.init(this, start)
+            _        <- addChangedKeysListener { keys =>
+                retained.touches(keys).map(touched => if touched then Abort.run[Closed](changed.offer(())).unit else Kyo.unit)
+            }
+            first <- settled(retained)
+        yield new StoreFollow(first, Present(changed), settled(retained))
+        end for
+    end follow
+
+    /** The key the store gives `ref`'s entity, or `Absent` when its generator gives
+      * the type no identity.
+      */
+    private def keyOfRef[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using Frame): Maybe[CacheKey] < Sync =
+        Abort.run[CacheReadFailure](keyOf(ref.typeName, ref.raw)).map {
+            case Result.Success(key)  => Present(key)
+            case Result.Failure(_)    => Absent
+            case Result.Panic(defect) => Abort.panic(defect)
+        }
+
+    /** `ref`'s fields read from the record under `key`, with the keys the read
+      * depended on, or `Absent` when the cache cannot satisfy them.
+      */
+    private def readRef[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref, key: CacheKey)(using
+        Frame
+    ): Maybe[(D, Set[CacheKey])] < Sync =
+        Abort.recover[CacheReadFailure](_ => Maybe.empty[(D, Set[CacheKey])])(
+            readFragmentWithKeys(ref.definition.cacheFragment, key).map((data, keys) => Maybe((data, keys + key)))
         )
 
     /** Read `operation`'s cached data, apply `update`, and write the result back —
