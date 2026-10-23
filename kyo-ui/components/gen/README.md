@@ -1,13 +1,20 @@
 # kyo-ui-components-gen: the extraction and codegen pipeline
 
-Paths below are relative to this directory (`kyo-ui/components/gen`). Inputs are pinned
-and gitignored; the generated Scala is committed under
-`kyo-ui/components/shared/src/main/scala/kyo/uic/generated`. Rerun:
+Paths in the sections below are relative to this directory (`kyo-ui/components/gen`). The inputs
+(`input/`, `work/`, `npm/node_modules/`) are pinned and gitignored; the generated Scala is
+committed under `kyo-ui/components/shared/src/main/scala/kyo/uic/generated`. Rerun from
+the repo root (needs `bun` and network access):
 
 ```
-./fetch.sh                       # bun install (npm/) + extract.mjs + fiori icons download
+kyo-ui/components/gen/fetch.sh   # bun install (npm/, frozen lockfile) + extract.mjs + fiori icons download
 sbt kyo-ui-components-gen/run    # FioriIconsGen, PrimeIconsGen, TokensGen, ComponentCssGen
+sbt kyo-ui-componentsJVM/compile # formats the generated sources
 ```
+
+The generator locates the repo root as the nearest ancestor of its working directory that
+holds `build.sbt` and this directory, and reads and writes relative to it (`Common.scala`).
+The generators write unformatted Scala and the compile runs scalafmt over it; after that,
+unchanged inputs reproduce the committed files byte for byte.
 
 ## extract.mjs (the load-bearing step)
 
@@ -47,7 +54,8 @@ repeats a number can only drift away from it.
 ## Version bumps
 
 Pin `@primeuix/styles` and `@primeuix/themes` to MATCHING majors (the `dt()`
-paths must align with the preset token paths) in `npm/package.json`;
+paths must align with the preset token paths) in `npm/package.json`, refresh
+`npm/bun.lock` with a plain `bun install`, and update the versions in `Common.scala`;
 `primeicons` and the ui5-icons version live in `npm/package.json` and
 `fetch.sh`. License boundary: only `@primeuix/*` 2.x (MIT), `primeicons`
 (MIT), `primevue` 4 (MIT, demo devDep), never `@primereact/*@11` (commercial).

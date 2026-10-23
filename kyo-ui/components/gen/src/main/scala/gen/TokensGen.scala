@@ -32,14 +32,21 @@ object TokensGen:
         // method-level DCE keep only what a bundle references, the same rule PrimeIconsGen
         // states for the 309 icon defs.
         val concat =
+            val parts = groups.indices.map(i => s"${ident}_$i").mkString(" ++ ")
+            val line  = s"  def $ident: Seq[(String, String)] = $parts"
+            // A body too long for one formatted line (4-space indent, maxColumn 140 in .scalafmt.conf)
+            // starts on its own line: scalafmt keeps a wrap it is given but lays out an over-long
+            // single line differently, so this is what makes the formatted output reproducible.
             if groups.isEmpty then s"  def $ident: Seq[(String, String)] = Seq.empty"
-            else s"  def $ident: Seq[(String, String)] = ${groups.indices.map(i => s"${ident}_$i").mkString(" ++ ")}"
+            else if line.length + 2 <= 140 then line
+            else s"  def $ident: Seq[(String, String)] =\n    $parts"
+        end concat
         s"$defs\n\n$concat"
     end chunked
 
     def run(): Unit =
-        val tokensDir = Common.repoRoot.resolve("gen/work/tokens")
-        require(Files.isDirectory(tokensDir), s"token JSON missing: run gen/fetch.sh first ($tokensDir)")
+        val tokensDir = Common.workDir.resolve("tokens")
+        require(Files.isDirectory(tokensDir), s"token JSON missing: run kyo-ui/components/gen/fetch.sh first ($tokensDir)")
 
         val sections = Presets.flatMap { preset =>
             val json                                      = ujson.read(Files.readString(tokensDir.resolve(s"$preset.json")))

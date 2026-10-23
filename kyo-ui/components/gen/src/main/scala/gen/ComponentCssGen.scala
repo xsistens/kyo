@@ -28,8 +28,8 @@ object ComponentCssGen:
     end cssDef
 
     def run(): Unit =
-        val cssDir = Common.repoRoot.resolve("gen/work/css")
-        require(Files.isDirectory(cssDir), s"extracted CSS missing: run gen/fetch.sh first ($cssDir)")
+        val cssDir = Common.workDir.resolve("css")
+        require(Files.isDirectory(cssDir), s"extracted CSS missing: run kyo-ui/components/gen/fetch.sh first ($cssDir)")
 
         val files = Files
             .list(cssDir)

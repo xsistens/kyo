@@ -1,8 +1,8 @@
 package gen
 
-/** Runs all generators: `sbt gen/run`. Inputs live in gen/input + gen/work +
-  * gen/npm/node_modules (populate with gen/fetch.sh); output goes to
-  * modules/components/src/main/scala/kyo/uic/generated.
+/** Runs all generators: `sbt kyo-ui-components-gen/run` from the repo root. Inputs live in
+  * input/, work/ and npm/node_modules/ under kyo-ui/components/gen (populate with its fetch.sh);
+  * output goes to kyo-ui/components/shared/src/main/scala/kyo/uic/generated.
   */
 object Main:
     def main(args: Array[String]): Unit =
