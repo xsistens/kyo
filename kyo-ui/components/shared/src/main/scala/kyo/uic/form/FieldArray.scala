@@ -42,6 +42,11 @@ final class FieldArray[R] private[form] (
       */
     def render(using Frame): UI = rowsRef.foreachKeyed(_.key)(_.ui)
 
+    /** [[render]] with each row laid out from its model at render time rather than by the builder: how a
+      * [[GroupArray]] renders, since its rows are declared before anyone says how they look.
+      */
+    private[form] def renderWith(row: R => UI)(using Frame): UI = rowsRef.foreachKeyed(_.key)(e => row(e.model))
+
     /** The live list of row models, reactive and removal-correct (derived from the row
       * list, so a removed row drops out). Build a cross-row indicator or an ungated
       * validity signal off it.

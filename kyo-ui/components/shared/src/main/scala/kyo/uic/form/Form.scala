@@ -136,6 +136,40 @@ final class Form private[form] (
             _ <- Kyo.foreach(0 until initial)(_ => arr.add)
         yield arr
 
+    /** Declare a named tuple of specs in one effect and hand back a [[FieldGroup]] that reads each declared handle by
+      * name and submits them as one named tuple of validated values:
+      * {{{
+      * f <- form.fields((
+      *        customer = form.field.rules(Validator.required()),
+      *        lines    = form.array(initial = 1)(row => (sku = row.field, qty = row.numberField(1))),
+      *        shipping = form.child(scope => (street = scope.field, city = scope.field))
+      *      ))
+      * }}}
+      * Each member is an UNDECLARED spec: a field or number field spec, an [[array]], or a [[child]] group. The fields are
+      * registered in declaration order, as `declare` registers them one by one.
+      */
+    def fields[N <: Tuple, S <: Tuple, H <: Tuple, V <: Tuple](specs: NamedTuple.NamedTuple[N, S])(using
+        frame: Frame,
+        members: GroupMembers.Aux[N, S, H, V]
+    ): FieldGroup[N, H, V] < Async =
+        members.declare(specs.toTuple).map(hs => new FieldGroup[N, H, V](this, members, hs))
+
+    /** A typed array of row groups for [[fields]]: each row is a fresh scope in which `row` declares its specs, `initial`
+      * rows are added at declaration, and the declared [[GroupArray]] lays the rows out with its own `render`.
+      */
+    def array[N <: Tuple, S <: Tuple, H <: Tuple, V <: Tuple](initial: Int = 0)(row: Form => NamedTuple.NamedTuple[N, S])(using
+        members: GroupMembers.Aux[N, S, H, V]
+    ): ArraySpec[N, H, V] =
+        ArraySpec.of(this, initial, row)
+
+    /** A child group for [[fields]]: a [[child]] scope (its own summary, anchor and reset) in which `build` declares its
+      * specs. The declared group reads its fields by name and carries the scope as `scope`.
+      */
+    def child[N <: Tuple, S <: Tuple, H <: Tuple, V <: Tuple](build: Form => NamedTuple.NamedTuple[N, S])(using
+        members: GroupMembers.Aux[N, S, H, V]
+    ): ChildSpec[N, H, V] =
+        ChildSpec.of(this, build)
+
     /** This scope's focus anchor id, set once via [[anchor]], inherited by every form-level
       * error ([[satisfy]] / [[raise]]) on this scope.
       */
@@ -430,7 +464,7 @@ final class Form private[form] (
       * once per submit, and their verdicts are put back in declaration order for focus-first-invalid. The named run
       * and the walk go in parallel, as the subtree's own fields always have.
       */
-    private def submitWith(named: Chunk[FormField[?]])(
+    private[form] def submitWith(named: Chunk[FormField[?]])(
         runNamed: => (Chunk[Maybe[FieldError]], Maybe[() => UI.Action]) < Async
     )(using Frame): UI.Action =
         def validate: ((Chunk[Maybe[FieldError]], Maybe[() => UI.Action]), Chunk[(FormField[?], Maybe[FieldError])]) < Async =
