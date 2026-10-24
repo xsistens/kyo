@@ -255,7 +255,7 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + form + """def x(using Frame) = g.focusable(false)""")
         // What genuinely cannot be decided at declaration stays on the field: a cross-field rule
         // needs the other field, which does not exist yet when the first one is declared.
-        typeCheck(preamble + form + """def x(using Frame): FormField[String] = g.addRule(Validator.required())""")
+        typeCheck(preamble + form + """def x(using Frame): FormField[String] < Sync = g.addRule(Validator.required())""")
     }
 
     "the seven controls that could not join a form now bind like the rest" in {

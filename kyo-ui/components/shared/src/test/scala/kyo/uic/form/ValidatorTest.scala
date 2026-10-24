@@ -126,11 +126,91 @@ class ValidatorTest extends UicTest:
         end for
     }
 
+    // `run` is how a rule is checked outside a field (a DataTable cell's commit): a submit, which runs every rule.
+    "run checks every rule, whatever activation it waits for" in {
+        for
+            runs <- AtomicInt.init(0)
+            chain = Validator.async[String](_ => runs.incrementAndGet.andThen(Absent)).on(Activation.Blur) and
+                Validator.satisfy[String]("never")(_ => false).on(Activation.Submit)
+            res <- chain.run("a")
+            n   <- runs.get
+        yield
+            assert(n == 1, s"the rule on(Blur) ran: $n")
+            assert(res.failure.map(_.code) == Present("never"), s"and so did the one on(Submit): $res")
+    }
+
     "the refined type is what the chain says" in {
         typeCheck(preamble + "def r(using Frame): Rule[Maybe[Int], Int] = Validator.chosen[Int]() and Validator.min(1)")
         // A chain that refines is not a check over its input any more.
         typeCheckFailure(preamble + "def r(using Frame): Validator[Maybe[Int]] = Validator.chosen[Int]() and Validator.min(1)")
         // And a rule over the value does not chain onto the Maybe it was unwrapped from.
         typeCheckFailure(preamble + "def r(using Frame) = Validator.chosen[Int]() and Validator.ifPresent(Validator.min[Int](1))")
+    }
+
+    // ---- rules that read another field ---------------------------------------------------------
+
+    "a reading rule receives the dependencies' values at each run" in {
+        for
+            (low, high, both) <-
+                for
+                    min  <- Signal.initRef(3)
+                    max  <- Signal.initRef(5)
+                    unit <- Signal.initRef("cm")
+                    length = Validator.reading(min)((s: String, n: Int) =>
+                        if s.length >= n then Absent else Present(FieldError("too-short", Map("min" -> n.toString)))
+                    )
+                    range = Validator.reading(Dep.recheck(min), Dep.discard(max), Dep.recheck(unit))((s: String, d: (Int, Int, String)) =>
+                        Present(FieldError("range", Map("range" -> s"${d._1}..${d._2} ${d._3}")))
+                    )
+                    l <- length.run("ab")
+                    _ <- min.set(2)
+                    h <- length.run("ab")
+                    _ <- max.set(9)
+                    b <- range.run("ab")
+                yield (l.failure, h.failure, b.failure.map(_.args))
+        yield
+            assert(low == Present(FieldError("too-short", Map("min" -> "3"))), s"the rule read the first value: $low")
+            assert(high == Absent, s"and the next run reads the new one: $high")
+            assert(both == Present(Map("range" -> "2..9 cm")), s"three dependencies arrive as one tuple, in order: $both")
+        end for
+    }
+
+    "Rule.reading refines, and hands what it yielded down the chain" in {
+        for
+            (eight, tooBig, nine) <-
+                for
+                    offset <- Signal.initRef(3)
+                    shifted = Rule.reading(offset)((s: String, o: Int) =>
+                        Maybe.fromOption(s.toIntOption) match
+                            case Present(n) => (Result.Success(n + o): Result.Partial[FieldError, Int])
+                            case Absent     => Result.Failure(FieldError("not-a-number"))
+                    ) and Validator.max(10)
+                    e <- shifted.run("5")
+                    t <- shifted.run("9")
+                    _ <- offset.set(0)
+                    n <- shifted.run("9")
+                yield (e.value, t.failure.map(_.code), n.value)
+        yield
+            assert(eight == Present(8), s"the rule yields the parsed value plus what it read: $eight")
+            assert(tooBig == Present("max"), s"the rule after it judges what it yielded, 12: $tooBig")
+            assert(nine == Present(9), s"and a new dependency value reaches the next run: $nine")
+        end for
+    }
+
+    "reading takes a signal or a Dep for one dependency, and Deps for several" in {
+        typeCheck(preamble + "def r(s: Signal[Int])(using Frame): Validator[String] = Validator.reading(s)((a: String, n: Int) => Absent)")
+        typeCheck(preamble +
+            "def r(s: Signal[Int])(using Frame): Validator[String] = Validator.reading(Dep.discard(s))((a: String, n: Int) => Absent)")
+        typeCheck(
+            preamble + "def r(s: Signal[Int])(using Frame): Validator[String] = Validator.reading(s).async((a: String, n: Int) => Absent)"
+        )
+        typeCheck(
+            preamble + "def r(s: Signal[Int], t: Signal[Long])(using Frame): Rule[String, Long] = " +
+                "Rule.reading(Dep.recheck(s), Dep.discard(t))((a: String, d: (Int, Long)) => Result.Success(d._2))"
+        )
+        // Several dependencies each state their reaction: a bare signal there has none to fall back on.
+        typeCheckFailure(
+            preamble + "def r(s: Signal[Int], t: Signal[Int])(using Frame) = Validator.reading(s, t)((a: String, d: (Int, Int)) => Absent)"
+        )
     }
 end ValidatorTest

@@ -1918,9 +1918,24 @@ val ownWords: Validator[String] = Validator.required("comment-empty").message("W
 
 `Activation` says when a rule is re-computed. `Reveal` says when a failure is displayed. They are orthogonal, and conflating them is the usual source of forms that either nag while you type or stay silent until it is too late.
 
-`Activation.Field` values combine, and a field validates on the union of the ones it declares. `Change` re-checks on every value change, `Blur` on focus loss. `Reveal` picks the display gate: `WhenTouched` (the default, so an untouched field is quiet), `OnSubmit`, `Immediate`, or `Manual` (never auto-shown, but still feeding `isValid` and still blocking submit).
+`Activation.Field` values combine. `Change` runs a rule on every value change, `Blur` on focus loss. `Reveal` picks the display gate: `WhenTouched` (the default, so an untouched field is quiet), `OnSubmit`, `Immediate`, or `Manual` (never auto-shown, but still feeding `isValid` and still blocking submit).
 
-The defaults are `Blur + Change` with `WhenTouched`, which is why the examples above declare neither: nothing is said while the reader first types, the verdict appears when they leave the field, and it stays live from then on. `Activation.Submit` is the opt-*out* rather than a third trigger: every field is validated at submit whatever it declares, so declaring `Submit` alone means "never re-check while the reader is in the field", which is what an expensive async rule wants.
+Each rule carries its own activation. `rule.on(...)` sets it on the rule; a field's `on` is the fallback for the rules that set none; without either, a rule runs on `Blur + Change`, except `Validator.async`, which waits for the `Blur` so typing does not send a request per keystroke. Inside nested ones the nearer `on` wins: `(a and b).on(Activation.Blur)` only fills the rules that do not state their own. The field's own events (default `Blur + Change`) are also what mark it touched, which is why the examples above declare neither: nothing is said while the reader first types, the verdict appears when they leave the field, and it stays live from then on.
+
+A rule not due for an event keeps its last verdict while the value is the one it judged, so a blur check's error stays until the reader edits. After an edit it is *not yet checked*: the old message goes, the rules after it wait, and `isValid()` reads `false` until it has run (the gated `isValid(onlyVisible = true)` and `submitDisabled` count only what is shown, so they do not). So a deferred rule belongs at the end of its chain, after the cheap rules that can already speak while the reader types. A rule you are handed may run on every change; `.on(Activation.Blur)` holds it to the blur, wherever it came from:
+
+```scala
+def signUp(usernameFree: Validator[String]): UI =
+    Form.mountedWith(ErrorTranslator.default) { scope =>
+        for
+            username <- scope.field
+                .rules(Validator.required() and Validator.minLength(3) and usernameFree.on(Activation.Blur))
+                .declare
+        yield div(uic.Input().bind(username))
+    }
+```
+
+`Activation.Submit` is the opt-*out* rather than a third trigger: every rule runs at submit whatever it declares (and at a DataTable cell's commit), so declaring `Submit` alone means "never re-check while the reader is in the field", which is what an expensive check wants when even the blur is too often.
 
 ```scala
 val quietUntilSubmit: UI =
@@ -2069,11 +2084,32 @@ def onServerSays(name: FormField[String], sentence: String): Unit < Sync =
 
 ### Cross-field and form-level rules
 
-Three shapes cover the cases, and which one you reach for follows from what the rule reads.
+Which shape you reach for follows from what the rule reads: another field, the whole scope, or the server.
 
-`field.matches(other)` is the password-confirmation pattern: it appends `Validator.matchesField` *and* wires `dependsOn(other)` so the field re-validates as soon as the other one changes. Forgetting the dependency is the usual footgun, and this call makes it impossible.
+`Validator.reading(dep)` builds a rule that reads another field, and the rule carries what it reads: the field subscribes to it when the form mounts (or the row is added), or as the rule is appended when `addRule` comes after that, and lets it go with the mount or the row, so there is nothing to wire and nothing to forget. The function receives the field's value and what it read, and a change of a dependency is an event for the field that reaches only the rules reading it, without touching the field. What it does to such a rule is the dependency's own reaction, independent of the rule's `on` (which governs the field's own events): `Dep.recheck(sig)` runs the rule at once with the new value, `Dep.discard(sig)` drops its verdict and runs nothing, leaving it *not yet checked* until its own event or the submit runs it. A bare signal rechecks a sync rule (`reading(sig)(f)`) and discards for an async one (`reading(sig).async(f)`), which sends no request the reader did not ask for. What a rule read is part of the input its verdict is kept for, so a dependency changed back gets the old verdict back without a run, and a rechecking rule that has already judged the value it now reads is not run again. The function receives its own field's value as its first argument, so a dependency is always another field's signal, never the field's own. `Rule.reading` is the refining counterpart, shaped like `Rule(f)`.
 
-`field.addRule` plus `field.dependsOn(sigs*)` is the general form for a rule that reads a sibling without an equality check.
+```scala
+def checkout(redeemable: (String, String, Int) => Maybe[FieldError] < Async): UI =
+    Form.mountedWith(ErrorTranslator.default) { scope =>
+        for
+            country <- scope.field.rules(Validator.required()).declare
+            items   <- scope.numberField(1).rules(Validator.min(1)).declare
+            voucher <- scope.field
+                .rules(
+                    Validator.reading(Dep.discard(country.value), Dep.recheck(items.value)).async((code: String, d: (String, Int)) =>
+                        if code.isEmpty then Absent else redeemable(code, d._1, d._2)
+                    )
+                )
+                .declare
+        yield div(uic.Input().bind(country), uic.InputNumber().bind(items), uic.Input().bind(voucher))
+    }
+```
+
+A voucher checked for one country says nothing about another, and rechecking on every letter of the country would send a request per keystroke, so the country discards: the voucher is not yet checked until the reader leaves it or submits. The item count moves a whole step at a time and the voucher's minimum order is about it, so it rechecks at once. A rule not yet checked still stops its chain, so a rule that discards belongs at the end, like every deferred rule.
+
+`field.matches(other)` is the password-confirmation pattern, `addRule(Validator.matchesField(other))`, and `matchesField` is a `reading(other)` rule: a change of the password rechecks it at once, whatever its `on`, so a match held to the blur drops its error the moment the two come to match and shows it at once on a touched field when they stop.
+
+`field.dependsOn(sigs*)` is the general fallback, for a rule appended with `addRule` that reads a signal some other way: a change of one of `sigs` runs every rule of the field, as a submit does.
 
 `scope.satisfy(code)(predicate)` attaches a rule to the whole scope, in the same `satisfy(code)(predicate)` shape a field rule uses. The predicate's *type* selects when it runs, which keeps the illegal combinations unrepresentable. A `Signal[Boolean]` is a reactive invariant: re-evaluated whenever its inputs change, blocking submit and making `isValid` false while it holds `false`. A `=> Boolean < Async` thunk is a submit-pull check: evaluated once per submit, so it may suspend on a round-trip.
 
@@ -2133,7 +2169,7 @@ val lineItems: UI =
 
 `rows.render` is a keyed list, so adding, removing, and moving rows preserve the DOM (and therefore the focus and caret) of the rows that stayed. Cross-row `satisfy` reads the live rows, so a deleted row never counts toward a check.
 
-A row builder runs with `Async` only and no `Scope`, because rows are added later, from a handler, long after the mount body ran. `Activation.Change` works there anyway: the array wires each row's observer on an unscoped fiber and owns it, cancelling it when the row is removed and when the form unmounts. `dependsOn` is the one thing a row cannot do, and its type says so rather than leaving you to find out: it returns `Unit < (Async & Scope)`, so it does not compile inside a row at all. Cross-field re-validation within a row falls back to `addRule`.
+A row builder runs with `Async` only and no `Scope`, because rows are added later, from a handler, long after the mount body ran. `Activation.Change` works there anyway: the array wires each row's observer on an unscoped fiber and owns it, cancelling it when the row is removed and when the form unmounts. A rule that reads another field (`Validator.reading`, `matches`) works there the same way, on fibers the array owns. `dependsOn` is the one thing a row cannot do, and its type says so rather than leaving you to find out: it returns `Unit < (Async & Scope)`, so it does not compile inside a row at all.
 
 ### Declaring a form as a group
 

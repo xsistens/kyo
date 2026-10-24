@@ -57,29 +57,38 @@ sealed abstract class NumberField[A] private[form] (
     /** The gated, translated inline message, delegated to the underlying field. */
     def message(using Frame): Signal[Maybe[String]] = underlying.message
 
+    /** This field typed with its rules' result, which is what a chained call hands back: `this.type` cannot be lifted
+      * into a computation, and the refinement is what a chain must not lose.
+      */
+    private def self: NumberField[A] { type Valid = NumberField.this.Valid } = this
+
     /** Append another rule over the typed value `A`, adapted onto the underlying `Double`
       * field through the [[NumberCodec]]. As with [[FormField.addRule]], what it yields is not
-      * kept. Chainable.
+      * kept, and a rule that reads another field is followed from the moment it is appended.
+      * Chainable.
       */
-    def addRule(v: Rule[A, Any])(using Frame): this.type =
-        discard(underlying.addRule(Rule[Double, Any](d => v.run(codec.fromDouble(d)))))
-        this
+    def addRule(v: Rule[A, Any])(using Frame): (NumberField[A] { type Valid = NumberField.this.Valid }) < Sync =
+        underlying.addRule(v.contramap(codec.fromDouble)).map(_ => self)
 
     /** Predicate rule over the typed value `A`, mirroring [[Form.satisfy]]: sugar for
       * `addRule(Validator.satisfy(code, args)(p))`. Chainable.
       */
-    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): this.type =
+    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using
+        Frame
+    ): (NumberField[A] { type Valid = NumberField.this.Valid }) < Sync =
         addRule(Validator.satisfy(code, args)(p))
 
-    /** This field must equal the live value of `other`: one call for `addRule` +
-      * [[dependsOn]] (see [[FormField.matches]]).
+    /** This field must equal the live value of `other`: `addRule(Validator.matchesField(other, code))`, a rule that
+      * carries its dependency (see [[FormField.matches]]). Chainable.
       */
-    def matches(other: Signal[A], code: String = "must-match")(using CanEqual[A, A], Frame): Unit < (Async & Scope) =
-        discard(addRule(Validator.matchesField(other, code)))
-        dependsOn(other)
+    def matches(other: Signal[A], code: String = "must-match")(using
+        CanEqual[A, A],
+        Frame
+    ): (NumberField[A] { type Valid = NumberField.this.Valid }) < Sync =
+        addRule(Validator.matchesField(other, code))
 
     /** Re-validate whenever any of `sigs` emits (cross-field dependency), delegated to the
-      * underlying field.
+      * underlying field. [[Validator.reading]] is the preferred shape for a rule that reads another field.
       */
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) = underlying.dependsOn(sigs*)
 

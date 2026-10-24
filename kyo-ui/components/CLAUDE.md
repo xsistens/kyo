@@ -209,7 +209,9 @@ what the type already says. Rules:
 
 ## Form rules refine, and submit hands over what they yield
 
-`Rule[-A, +B]` (opaque, `A => Result.Partial[FieldError, B] < Async`) checks an `A` and yields a `B`;
+`Rule[-A, +B]` (opaque over `Rule.Run`, which runs an `A` under a `Rule.Ctx` to a
+`Result.Partial[FieldError | S, B] < Async`; `Rule(f)` still takes a plain `A => Result.Partial[FieldError, B] < Async`)
+checks an `A` and yields a `B`;
 `Validator[A]` is the alias `Rule[A, A]` for a rule that only checks. `and` composes left to right with
 the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.chosen` refines
 `Maybe[A]` to `A`, `Validator.ifPresent(r)` lifts a rule into `Maybe`, `Validator.refine` is the pure
@@ -221,8 +223,10 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   `FormField[A]` (all the `bind` extensions) keeps working because a refinement is a subtype. The
   classes are sealed abstract with one anonymous implementation each (`FormField.declared`,
   `FieldSpec.of`), so the refinement is stated once. A setter that keeps the rules returns
-  `X[A] { type Valid = X.this.Valid }`, and `addRule`/`satisfy` return `this.type`, or the refinement
-  is lost after the first chained call.
+  `X[A] { type Valid = X.this.Valid }`, or the refinement is lost after the first chained call.
+  `addRule`/`satisfy`/`matches` hand that type back as a computation (`... < Sync`), not `this.type`:
+  appending may start a subscription, and kyo cannot lift a value typed `this.type` into one. Sequence
+  them (`_ <- f.addRule(r)`); `_ = f.addRule(r)` compiles and drops the rule.
 - **`submit(field)(v => ...)` takes `Validated`** (the common supertrait of `FormField` and
   `NumberField`) with dependent method types, up to four fields. The named fields are validated by the
   submit itself (`verdict`, one run that both decides validity and yields the value) and skipped by the
@@ -237,6 +241,68 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   replace every string. A field that needs its own words under an app-wide table gets its own code.
 - **A hand-built `FieldArray` has no typed submit**: its row model is the app's own type, so it has no
   single `Valid` the form could name. A typed array is a group member (`form.array`, below).
+- **When a rule runs is the rule's**: `rule.on(...)` beats the field's `on`, which beats the rule's own
+  default (`Blur + Change`; `Blur` for `Validator.async`). Nested, the INNER `on` wins: an outer
+  `(a and b).on(x)` only fills rules without their own. Every leaf gets a `Rule.Key` when it is built and
+  carries its default; `Rule.leaf` is the one place a rule decides, through the `Rule.Ctx` every
+  combinator passes on unchanged (a new combinator passes `ctx` too, or the rules under it lose their
+  `on`). `Validator.none` is the exception: nothing to check, so it always runs.
+- **Not due is not "passed"**: a rule not due for the event reuses its last verdict while its input is
+  the one it judged (the field's `Rule.Store`, one per field), and is otherwise NOT YET CHECKED: the chain
+  stops, the field publishes `ClientVerdict.NotChecked` (no error shown, never a `FieldError`), and
+  the ungated `Form.isValid()` reads `false` through `invalidAgg` (an error OR not yet checked, per
+  field `invalid`), which folds child scopes and array rows too. `isValid(onlyVisible = true)` and `submitDisabled` do not count it: they gate on what
+  is shown, and a deferred rule must not lock the button that would run it. Submit (`verdict`), a
+  DataTable cell commit (`run`) and a change of a `dependsOn` signal (`revalidateAll`, through
+  `Rule.Sweep.Every`) run every rule: the field's own value did not move, so a not-due rule would keep the
+  verdict it found against the dependency's old value. `dependsOn` is the general fallback; a rule that
+  reads another field is a `reading` rule (below). `revalidate` (the mount value, a `dependsOn` signal's
+  value at subscription, a reset write) is a `Change`.
+- **A rule that reads another field carries the dependency** (`Validator.reading` / `Rule.reading`, over a
+  `Dep`). The leaf reads every dependency once per run (`Rule.Source.current`), hands the values to its
+  function and keeps its stored verdict for the value AND what it read (`Store.Entry.holds`), so "reuse while the input is the one it judged"
+  covers dependencies with no special case. A change of one is a third kind of event
+  (`Rule.Ctx.of` with the signal as trigger): a leaf reading it with `Dep.recheck` is due when the value of
+  that signal it reads now differs from the one it last judged, unless its store already holds a verdict for
+  exactly its current input (then it reuses it, so a change it has judged sends no second request), every
+  other leaf is not due, so `Dep.discard` is just "not due with a different input", and
+  a dependency changed back reuses the old verdict. `on` governs only the field's own events, the
+  reaction only the dependency's; neither overrides the other. `Run.reads` is abstract, so every combinator states the signals of the rules under it (or a
+  field goes deaf to them); the field subscribes one observer per distinct signal (by identity), never
+  to its own `valueRef` (its edits are its own events; a rule gets its value as the first argument and
+  must not read the field's own signal, which for a `NumberField`'s mapped `value` identity cannot catch).
+  `RuleChain` holds the rules and the wiring in ONE `AtomicRef`, so the set of observed signals and the
+  chain cannot disagree: the wiring (BEFORE the change observer starts, so before the mount's run, for
+  static fields and rows alike) claims what the chain reads then, and an `addRule` after it claims what the new rule
+  reads that is not observed yet, whichever comes first, with no signal lost or observed twice. The
+  observers belong to the chain and end with `unwire` (the mount scope's `Scope.ensure`, a row's
+  `cancelRowChangeActivations`), which puts the chain back to `Unwired`; `keep` interrupts fibers that
+  arrive after the end. Appending runs
+  nothing. Every value an observer delivers, the one at subscription included, is a dependency event,
+  and the delivered value takes no part in it: each leaf decides against what it reads NOW and what it
+  stored (`Store.Entry.read`, what it read when it last judged). Never decide at the field: a field-level
+  "last read" is updated by the field's own runs too, so a keystroke that read the new value before the
+  observer delivered it swallowed the change for every rule the keystroke was not due for. A leaf that has
+  judged nothing compares with what the signal held at subscription (`Store.subscribe`, noted synchronously
+  before the observer starts, so a change right after an `addRule` is not lost; `Store.baseline`). Since the
+  subscription comes before the mount's run, there is no gap for a dependency to move in unheard, a normal
+  mount runs nothing extra, a late or stale delivery runs nothing, and a rule whose own value moved while
+  the dependency did not waits for its own event.
+  `matches` is `addRule(Validator.matchesField(other))` and `matchesField` is a `reading` rule. Unlike a
+  `dependsOn` change, a dependency change does not rerun the rules that do not read it.
+- **`validating` and the debounce belong to a run that runs a rule.** Every trigger takes an epoch and
+  runs the chain once. The first leaf that actually runs calls the run's `due` action first (`startDue`,
+  passed to `Rule.Ctx.of`): it claims `dueEpoch`, shows `validating` and waits out the debounce, once per
+  run. A run no leaf ran for (recalled verdicts, or not yet checked) publishes at once, with no
+  `validating` and no debounce; whether a run was due is read back from `dueEpoch` (`>= mine`). A due run
+  that finds the epoch moved by runs no rule was due for (`dueEpoch` still its own) does not publish its own
+  verdict, which may be about a value the field no longer holds: it settles (`Rule.Sweep.Settle`, every
+  signal counts as changed) on the current value and ends `validating`. A later due run (submit and reset
+  included) owns the field instead. So a blur during a change's debounce cannot strand the field not yet
+  checked, and a keystroke during a blur's request cannot let the old value's verdict through.
+- **The field wires both events whatever it declares**: the change observer and `onBlur` are always on,
+  because a rule may ask for an event its field does not. `touched` stays bound to the field's OWN events
+  (`touchedBy`: its `on`, else `Blur + Change`), so what makes a message visible did not move.
 
 ## A field group is a named tuple, and nothing else
 

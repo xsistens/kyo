@@ -443,8 +443,8 @@ def x(form: Form)(using Frame) =
                     rowN <- AtomicInt.init(0)
                     kidN <- AtomicInt.init(0)
                     count = (n: AtomicInt) => Validator.async[String](_ => n.incrementAndGet.andThen(Absent))
-                    // Submit-only, so the silent first validation a row's `Activation.Change` observer runs at `add`
-                    // does not count: only what the submit runs is measured.
+                    // Submit-only, so the silent first check a row's change observer runs at `add` skips these rules:
+                    // only what the submit runs is measured.
                     f <- form.fields((
                         name = form.field("x").rules(count(topN)).on(Activation.Submit),
                         lines = form.array(initial = 2)(row => (sku = row.field("y").rules(count(rowN)).on(Activation.Submit))),
@@ -462,6 +462,32 @@ def x(form: Form)(using Frame) =
             assert(top == 1, s"the top field ran once: $top")
             assert(row == 2, s"each of the two row fields ran once: $row")
             assert(kid == 1, s"the child field ran once: $kid")
+        end for
+    }
+
+    "a group submit runs the rules that wait for a blur or a submit, and hands over what they refined to" in {
+        for
+            (got, runs) <-
+                for
+                    form <- freshForm
+                    n    <- AtomicInt.init(0)
+                    f    <- form.fields((
+                        qty = form.field("7").rules(
+                            Validator.async[String](_ => n.incrementAndGet.andThen(Absent)).on(Activation.Blur) and
+                                Validator.refine[String, Int]("not-a-number")(s => Maybe.fromOption(s.toIntOption))
+                        ),
+                        lines = form.array(initial = 1)(row =>
+                            (units = row.numberField(3).rules(Validator[Int](_ => n.incrementAndGet.andThen(Absent)).on(Activation.Submit)))
+                        )
+                    ))
+                    sink <- AtomicRef.init(Maybe.empty[(Int, Chunk[Int])])
+                    _    <- form.submit(f)(v => sink.set(Present((v.qty, v.lines.map(_.units)))))
+                    got  <- sink.get
+                    runs <- n.get
+                yield (got, runs)
+        yield
+            assert(got == Present((7, Chunk(3))), s"the handler got the refined values: $got")
+            assert(runs == 2, s"the submit ran both deferred rules once: $runs")
         end for
     }
 
