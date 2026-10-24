@@ -468,7 +468,7 @@ class DiscoverabilityTest extends UicTest:
 
     "AutoComplete replaces ComboBox: typed options, itemTemplate, minQueryLength, showClear" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[String]): uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).value(r).filterMode(uic.FilterMode.Contains).minQueryLength(2).showClear(true)"""
+            preamble + """def x(r: SignalRef[String]): uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).value(r).filter(uic.Filter.contains(identity)).minQueryLength(2).showClear(true)"""
         )
         typeCheck(
             preamble + """def x(f: (String, String) => Any < Async)(using Frame) = uic.AutoComplete[(String, String)]().options(Seq("a" -> "A"))(_._2).itemTemplate(o => span(o._1)).onSelect(o => f(o._1, o._2))"""
@@ -669,29 +669,40 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.ListItem("A", id = "a", itemType = uic.ListItemType.Navigation)""")
     }
 
-    "one word per filtering concept across the pickers: filterable / filterQuery / filterMode" in {
-        // The on/off toggle is `filterable` everywhere it exists...
+    "one word per filtering concept across the pickers: filterable / filterQuery / filter" in {
+        // The on/off switch is `filterable` everywhere it exists, a constant or a signal...
         typeCheck(preamble + """def x: uic.Listbox[String] = uic.Listbox[String]().filterable(true).item("A", "a")""")
+        typeCheck(preamble + """def x(on: Signal[Boolean]): uic.Listbox[String] = uic.Listbox[String]().filterable(on).item("A", "a")""")
         typeCheck(preamble + """def x: uic.Select[String] = uic.Select[String]().options(Seq("A")).filterable(true)""")
+        typeCheck(
+            preamble + """def x(on: Signal[Boolean]): uic.Select[String] = uic.Select[String]().options(Seq("A")).filterable(on)"""
+        )
         typeCheck(preamble + """def x: uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterable(true)""")
+        typeCheck(
+            preamble + """def x(on: Signal[Boolean]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterable(on)"""
+        )
         // ...the app-owned query is `filterQuery` everywhere it exists...
         typeCheck(preamble + """def x(q: SignalRef[String]): uic.Listbox[String] = uic.Listbox[String]().filterQuery(q).item("A", "a")""")
         typeCheck(preamble + """def x(q: SignalRef[String]): uic.Select[String] = uic.Select[String]().options(Seq("A")).filterQuery(q)""")
         typeCheck(
             preamble + """def x(q: SignalRef[String]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterQuery(q)"""
         )
-        // ...and the matching strategy is `filterMode`, which only AutoComplete has.
+        // ...and how an option matches the query is `filter`, on the three pickers over a typed option.
         typeCheck(
-            preamble + """def x: uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).filterMode(uic.FilterMode.Contains)"""
+            preamble + """def x: uic.Select[String] = uic.Select[String]().options(Seq("A")).filter(uic.Filter.startsWith(identity))"""
         )
+        typeCheck(
+            preamble + """def x: uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filter(uic.Filter.contains(identity))"""
+        )
+        typeCheck(preamble + """def x: uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).filter(uic.Filter.all)""")
+        // An AutoComplete always filters, so it has no switch and no separate query.
         typeCheckFailure(preamble + """def x = uic.AutoComplete[String]().options(Seq("A")).filterable(true)""")
         typeCheckFailure(preamble + """def x(q: SignalRef[String]) = uic.AutoComplete[String]().options(Seq("A")).filterQuery(q)""")
-        typeCheckFailure(preamble + """def x = uic.Select[String]().options(Seq("A")).filterMode(uic.FilterMode.Contains)""")
-        // The one overloaded word that meant three things is gone from all four.
-        typeCheckFailure(preamble + """def x(q: SignalRef[String]) = uic.Listbox[String]().filter(q)""")
+        // A Listbox matches its item labels by contains and takes no matcher.
+        typeCheckFailure(preamble + """def x = uic.Listbox[String]().filter(uic.Filter.all)""")
+        // The switch is a Boolean, never the matcher.
         typeCheckFailure(preamble + """def x = uic.Select[String]().options(Seq("A")).filter(true)""")
-        typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().options(Seq("A")).filter(true)""")
-        typeCheckFailure(preamble + """def x = uic.AutoComplete[String]().options(Seq("A")).filter(uic.FilterMode.Contains)""")
+        typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().options(Seq("A")).filterable(uic.Filter.all)""")
     }
 
     "DataTable replaces Table: typed rows/columns; the old UI-cell API is retired" in {

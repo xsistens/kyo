@@ -22,10 +22,11 @@ import scala.annotation.targetName
   * or Space picks the highlighted option, Escape closes. A filter header is the
   * one exception: it holds a text box, so focus is seeded THERE and that box
   * becomes the combobox, exactly as in [[AutoComplete]]. `filterable(true)`
-  * renders Prime's header filter input (case-insensitive contains on the label
-  * projection) over a query the select owns, `filterQuery(ref)` over one the app
-  * owns; `showClear(true)` the clear affordance on the trigger while a value is
-  * set; `checkmark(true)` Prime's per-option check column.
+  * renders Prime's header filter input over a query the select owns,
+  * `filterQuery(ref)` over one the app owns, and `filter` says how an option
+  * matches it (case-insensitive contains on the label projection by default, see
+  * [[Filter]]); `showClear(true)` the clear affordance on the trigger while a value
+  * is set; `checkmark(true)` Prime's per-option check column.
   *
   * Options are TYPED: `options(items)(label)` projects any `A` to its visible
   * text; `optionKey` (defaults to the label projection) supplies the stable key
@@ -61,7 +62,8 @@ final case class Select[A] private (
     itemTemplateF: Maybe[A => UI] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
-    filterableFlag: Boolean = false,
+    filterableV: Maybe[BoolValue] = Absent,
+    filterF: Maybe[(A, String) => Boolean] = Absent,
     filterQueryRefV: Maybe[SignalRef[String]] = Absent,
     showClearFlag: Boolean = false,
     checkmarkFlag: Boolean = false,
@@ -193,16 +195,28 @@ final case class Select[A] private (
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = copy(placeholderV = v)
 
-    /** Renders Prime's header filter (`div.p-select-header` >
-      * `input.p-select-filter`) over a query the select allocates itself,
-      * filtering the options by a case-insensitive contains on the label
-      * projection; the query resets on every open. Same word and same meaning on
-      * [[MultiSelect.filterable]] and [[Listbox.filterable]].
+    /** Switches Prime's header filter (`div.p-select-header` > `input.p-select-filter`), over a query the select
+      * allocates itself unless [[filterQuery]] hands it one; while it is on, the query starts fresh on every open.
+      *
+      * Without it, setting [[filter]] or [[filterQuery]] turns the header on. Set, constant or signal, it decides
+      * alone, so `filterable(false)` keeps the header off whatever else is set. Off, the header is gone and every
+      * option shows, but the query is left as it is: switched back on, the header shows it and filters by it again. A
+      * signal never rebuilds the field: closed, only the trigger's role follows it; open, the panel stays open and
+      * only its header comes and goes. Same word and same meaning on [[MultiSelect.filterable]] and
+      * [[Listbox.filterable]].
       */
-    def filterable(v: Boolean): Select[A] = copy(filterableFlag = v)
+    def filterable(v: Boolean | Signal[Boolean]): Select[A] = copy(filterableV = Present(ReactiveValue(v)))
+
+    /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query
+      * as typed. [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by
+      * either text. Without it the match is a case-insensitive contains on the label projection. Setting it turns the
+      * header filter on unless [[filterable]] says otherwise.
+      */
+    def filter(f: (A, String) => Boolean): Select[A] = copy(filterF = Present(f))
 
     /** Renders the same header filter over a query the APP owns: typing writes
-      * `ref`, external writes re-filter the panel. Implies [[filterable]].
+      * `ref`, external writes re-filter the panel. Turns the header filter on unless
+      * [[filterable]] says otherwise.
       * Server-driven option lists bind this and re-`options` on emission; the
       * matching binding on [[Listbox.filterQuery]] takes the same shape.
       */
@@ -300,10 +314,32 @@ final case class Select[A] private (
 
     private def isOptionDisabled(a: A): Boolean = optionDisabledF.exists(_(a))
 
-    /** Whether the header filter renders: asked for by [[filterable]], or implied
-      * by an app-owned [[filterQuery]].
+    /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
+      * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
-    private def filtering: Boolean = filterableFlag || filterQueryRefV.isDefined
+    private def filterOn: BoolValue =
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQueryRefV.isDefined))
+
+    /** How an option matches the query: [[filter]], else a contains on the label projection. */
+    private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
+
+    /** Hands `f` whether the filter is on. A signal is subscribed only while the panel is open: a closed field reads
+      * the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching it re-renders nothing.
+      */
+    private def withFilterOn(isOpen: Boolean)(f: Boolean => UI)(using Frame): UI =
+        filterOn match
+            case BoolValue.Dyn(on) if isOpen => on.render(f)
+            case BoolValue.Const(on)         => f(on)
+            case _                           => f(false)
+
+    /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
+      * so switching the filter back on finds it as it was.
+      */
+    private def freshQuery(q: SignalRef[String])(using Frame): UI.Action =
+        filterOn match
+            case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then q.set("") else Kyo.unit)
+            case BoolValue.Const(true) => q.set("")
+            case _                     => Kyo.unit
 
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
@@ -315,6 +351,10 @@ final case class Select[A] private (
         hiV: Int,
         q: SignalRef[String],
         qV: String,
+        /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
+          * is not subscribed, and the trigger's role follows the switch itself.
+          */
+        filtering: Boolean,
         /** The id the highlight is announced through. A caller's own `id` wins, and where there is
           * none a minted one stands in, so `aria-activedescendant` is not something a reader has to
           * opt into to be told which option is highlighted. Absent only in the placeholder, which
@@ -356,9 +396,11 @@ final case class Select[A] private (
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
-            hi.render { h =>
-                q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base)), validity))
+            withFilterOn(o) { f =>
+                hi.render { h =>
+                    q.render { qq =>
+                        withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, f, base)), validity))
+                    }
                 }
             }
         }
@@ -392,10 +434,12 @@ final case class Select[A] private (
         loading: Boolean,
         validity: FieldValidity
     )(using Frame): UI =
-        val isOpen  = st.exists(_.isOpen)
-        val all     = items
-        val current = held.fold("")(key)
-        val selIdx  = all.indexWhere(a => key(a) == current)
+        val isOpen = st.exists(_.isOpen)
+        // Whether the filter is on, as far as this render reads it: only an open panel subscribes a signal switch.
+        val filtering = st.fold(filterOn.const.getOrElse(false))(_.filtering)
+        val all       = items
+        val current   = held.fold("")(key)
+        val selIdx    = all.indexWhere(a => key(a) == current)
         // The trigger shows the option the held value matches, and the value itself where no option carries it yet,
         // so a field whose options are still arriving does not read empty.
         val shownOpt: Maybe[A] = if selIdx >= 0 then Present(all(selIdx)) else held
@@ -424,7 +468,7 @@ final case class Select[A] private (
         // Opens with the highlight seeded on the selected option and a fresh query.
         def openPanel(s: State): UI.Action =
             for
-                _ <- s.q.set("")
+                _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
@@ -523,7 +567,12 @@ final case class Select[A] private (
         // header focus never leaves this trigger, so the trigger is the combobox. With one, focus
         // goes into the header's text box and that box is the combobox, exactly as in
         // [[AutoComplete]]; the trigger is then the button that reveals it.
-        el = el.role(if filtering then "button" else "combobox")
+        // A signal switch is a `role` attribute CHANNEL rather than a read: a closed field subscribes nothing else
+        // of it, so switching the filter patches the role in place and rebuilds nothing.
+        el = filterOn match
+            case BoolValue.Dyn(on) => el.withReactiveAttr("role", on.map(isOn => if isOn then "button" else "combobox"))
+            case _                 => el.role(if filtering then "button" else "combobox")
+        el = el
             .aria("haspopup", "listbox")
             .aria("expanded", isOpen.toString)
         st.flatMap(_.idBase).foreach { b =>
@@ -555,7 +604,7 @@ final case class Select[A] private (
                         e.key match
                             case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
                             case _                                                    => ()
-                    else if filtering then ()
+                    else if s.filtering then ()
                     else panelKey(shown, navigable, hiEff, s, pick)(e)
                 }
             }
@@ -614,7 +663,7 @@ final case class Select[A] private (
         s: State,
         pick: A => State => UI.Action
     )(e: KeyboardEvent)(using Frame): UI.Action =
-        val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
+        val caretOwns = s.filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         if e.key == Keyboard.Tab then s.open.set(false)
         else if caretOwns then ()
         else
@@ -643,8 +692,9 @@ final case class Select[A] private (
       */
     private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
-            if filtering && s.qV.nonEmpty then
-                OptionItem.filter(optionsV, a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
+            if s.filtering && s.qV.nonEmpty then
+                val m = matcher
+                OptionItem.filter(optionsV, a => m(a, s.qV))
             else optionsV
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
@@ -705,7 +755,7 @@ final case class Select[A] private (
         // Prime wraps the filter in an IconField with a trailing search icon; the
         // sibling :not(:last-child) sheet rule pads the input for the icon.
         val header: List[UI] =
-            if filtering then
+            if s.filtering then
                 var filterEl = input
                     .cssClass("p-select-filter")
                     .cssClass("p-inputtext")

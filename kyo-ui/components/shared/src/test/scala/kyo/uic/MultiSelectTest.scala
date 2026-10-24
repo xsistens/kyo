@@ -348,4 +348,158 @@ class MultiSelectTest extends UicTest:
         end for
     }
 
+    // ---- filter and filterable ----
+
+    private val users = List(
+        MultiSelectTest.User("Ada Lovelace", "ada@engine.org"),
+        MultiSelectTest.User("Grace Hopper", "grace@navy.mil"),
+        MultiSelectTest.User("Alan Turing", "alan@bletchley.uk")
+    )
+
+    private def people(using Frame) = uic.MultiSelect[MultiSelectTest.User]().options(users)(_.name).id("ms")
+
+    /** `base` wired with its panel `open` over the query `query`, and the refs a test reads back. */
+    private def search(base: uic.MultiSelect[MultiSelectTest.User], open: Boolean, query: String)(using
+        Frame
+    ): (SignalRef[Boolean], SignalRef[String], SignalRef[Set[MultiSelectTest.User]], UI) < Async =
+        for
+            o <- Signal.initRef(open)
+            h <- Signal.initRef(-1)
+            q <- Signal.initRef(query)
+            v <- Signal.initRef(Set.empty[MultiSelectTest.User])
+        yield (o, q, v, base.selection(v).wired(o, h, q, Present("ms")))
+
+    /** All the text an element holds, however deeply. */
+    private def textOf(e: UI.Ast.Element)(using Frame): String =
+        def walk(u: UI): String = u match
+            case t: UI.Ast.Text     => t.value
+            case el: UI.Ast.Element => el.children.map(walk).mkString
+            case _                  => ""
+        e.children.map(walk).mkString
+    end textOf
+
+    private def shownNames(ui: UI)(using Frame): Chunk[String] < Sync =
+        elementsWithClass(ui, "p-multiselect-option").map(_.map(textOf))
+
+    private def hasFilter(ui: UI)(using Frame): Boolean < Sync = elementsWithClass(ui, "p-multiselect-filter").map(_.nonEmpty)
+
+    private def roleOf(e: UI.Ast.Element)(using Frame): String < Sync =
+        e.attrs.reactiveAttrs.get("role") match
+            case Some(sig) => sig.current
+            case None      => e.attrs.role.getOrElse("")
+
+    private def boundTo(e: UI.Ast.Element, ref: SignalRef[String]): Boolean =
+        e match
+            case t: UI.Ast.TextInput =>
+                t.value match
+                    case Present(UI.Bound.Ref(r)) => r eq ref
+                    case _                        => false
+            case _ => false
+
+    "a filter searches every text it is given, and select-all takes what it found" in {
+        for
+            (_, _, held, ui) <- search(people.filter(uic.Filter.contains(_.name, _.email)), open = true, query = "NAVY")
+            names            <- shownNames(ui)
+            header           <- hasFilter(ui)
+            input            <- elementWithClass(ui, "p-multiselect-filter")
+            _                <- press(input, UI.Keyboard.Char('a'), UI.Modifiers(ctrl = true))
+            got              <- held.get
+        yield
+            assert(header, "setting a filter turns the header filter on")
+            assert(names == Chunk("Grace Hopper"), s"the email is searched too: $names")
+            assert(got.map(_.name) == Set("Grace Hopper"), s"select-all applies to what the filter found: $got")
+    }
+
+    "without a filter the label alone is searched, by contains" in {
+        for
+            (_, _, _, byLabel) <- search(people.filterable(true), open = true, query = "OPP")
+            labels             <- shownNames(byLabel)
+            (_, _, _, byEmail) <- search(people.filterable(true), open = true, query = "navy")
+            emails             <- shownNames(byEmail)
+        yield
+            assert(labels == Chunk("Grace Hopper"))
+            assert(emails.isEmpty, s"the email is no part of the default match: $emails")
+    }
+
+    "an explicit filterable(false) decides alone, over filter and filterQuery" in {
+        for
+            q                <- Signal.initRef("navy")
+            (_, _, _, ui)    <- search(people.filter(uic.Filter.contains(_.name, _.email)).filterable(false), open = true, query = "navy")
+            (_, _, _, byRef) <- search(people.filterable(false).filterQuery(q), open = true, query = "navy")
+            names            <- shownNames(ui)
+            header           <- hasFilter(ui)
+            refNames         <- shownNames(byRef)
+            refHeader        <- hasFilter(byRef)
+            trigger          <- elementWithClass(ui, "p-multiselect")
+            role             <- roleOf(trigger)
+        yield
+            assert(!header && !refHeader, "no filter input")
+            assert(names.size == 3 && refNames.size == 3, s"every option: $names / $refNames")
+            assert(role == "combobox", "without a filter the trigger stays the combobox")
+    }
+
+    "a filterable signal shows and hides the filter on the open panel, and the query outlives it" in {
+        for
+            on               <- Signal.initRef(true)
+            (open, q, _, ui) <- search(people.filterable(on), open = true, query = "grace")
+            headerOn         <- hasFilter(ui)
+            namesOn          <- shownNames(ui)
+            _                <- on.set(false)
+            headerOff        <- hasFilter(ui)
+            namesOff         <- shownNames(ui)
+            stillOpen        <- open.get
+            kept             <- q.get
+            _                <- on.set(true)
+            headerAgain      <- hasFilter(ui)
+            namesAgain       <- shownNames(ui)
+            input            <- elementWithClass(ui, "p-multiselect-filter")
+        yield
+            assert(headerOn && namesOn == Chunk("Grace Hopper"), s"on: filter=$headerOn shown=$namesOn")
+            assert(!headerOff && namesOff.size == 3, s"off: no filter and every option, got filter=$headerOff shown=$namesOff")
+            assert(stillOpen, "the panel stays open")
+            assert(kept == "grace", s"the query is kept, only not applied: $kept")
+            assert(headerAgain && namesAgain == Chunk("Grace Hopper"), s"back on, the old query filters at once: $namesAgain")
+            assert(boundTo(input, q), "and the filter shows it, since it is bound to the same query")
+    }
+
+    "toggling filterable on a closed panel leaves the field alone, and only its role follows in place" in {
+        for
+            on                 <- Signal.initRef(true)
+            (open, q, _, live) <- search(people.filterable(on), open = false, query = "grace")
+            (_, _, _, fixed)   <- search(people.filterable(true), open = false, query = "grace")
+            fixedRegions       <- regionsAbove(fixed, "p-multiselect")
+            regionsOn          <- regionsAbove(live, "p-multiselect")
+            roleOn             <- elementWithClass(live, "p-multiselect").map(roleOf)
+            _                  <- on.set(false)
+            regionsOff         <- regionsAbove(live, "p-multiselect")
+            field              <- elementWithClass(live, "p-multiselect")
+            roleOff            <- roleOf(field)
+            stillClosed        <- open.get
+            kept               <- q.get
+        yield
+            assert(
+                regionsOn == fixedRegions && regionsOff == fixedRegions,
+                s"no region of the switch over the closed field: $regionsOn / $regionsOff, a constant has $fixedRegions"
+            )
+            assert(field.attrs.reactiveAttrs.contains("role"), "the role is a channel on the field, patched in place")
+            assert(roleOn == "button" && roleOff == "combobox", s"the role follows the switch: $roleOn then $roleOff")
+            assert(!stillClosed && kept == "grace")
+        end for
+    }
+
+    "opening while the filter is off leaves the query alone" in {
+        for
+            off                <- Signal.initRef(false)
+            (open, q, _, live) <- search(people.filterable(off), open = false, query = "grace")
+            trigger            <- elementWithClass(live, "p-multiselect")
+            _                  <- press(trigger, UI.Keyboard.ArrowDown)
+            opened             <- open.get
+            kept               <- q.get
+        yield assert(opened && kept == "grace", s"the query is not the panel's to clear while the filter is off ($kept)")
+    }
+
+end MultiSelectTest
+
+object MultiSelectTest:
+    final case class User(name: String, email: String) derives CanEqual
 end MultiSelectTest

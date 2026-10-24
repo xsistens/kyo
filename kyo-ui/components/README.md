@@ -844,7 +844,22 @@ Its bound selection is spelled `selection`, like every other picker's, because a
 
 Every component that can run out of rows takes the same `emptyContent`, in three forms: a `String`, a `Signal[String]` for a locale-driven line, or arbitrary `UI`. The UI form matters more than it sounds. An empty state is rarely a sentence; it is an icon over a line of explanation and a button that creates the first record, and a component that only accepted a `String` would push that layout outside itself, where it no longer sits in the list, table body or panel the emptiness belongs to.
 
-Filtering has one word per concept across the whole family, and each component offers the ones it can mean. `filterable(Boolean)` renders the header filter over a query the component allocates itself; `filterQuery(SignalRef[String])` renders the same header over a query *you* own, which is what you want when the option list is fetched per keystroke. `Listbox`, `Select`, and `MultiSelect` all have both. `AutoComplete` has neither, because it filters by construction; what it has instead is `filterMode(FilterMode)`, the matching strategy: `StartsWithPerTerm`, `StartsWith`, `Contains`, or `None` when you pre-filter server-side.
+Filtering has one word per concept across the whole family, and each component offers the ones it can mean. `filterable(Boolean | Signal[Boolean])` switches the header filter on or off; `filterQuery(SignalRef[String])` renders the header over a query *you* own, which is what you want when the option list is fetched per keystroke; `filter((A, String) => Boolean)` says how an option matches the typed query. `Listbox` has the first two, `Select` and `MultiSelect` all three, and `AutoComplete` only `filter`, because it filters by construction and its typed text is the query. Without a `filter`, `Select` and `MultiSelect` match a case-insensitive contains on the label and `AutoComplete` the start of any word of it. `uic.Filter` holds the ready-made matchers (`contains`, `startsWith`, `startsWithPerTerm`, and `all` for when you pre-filter server-side), and each takes as many text projections as you want searched, so a member is found by name or by email:
+
+```scala
+final case class Member(name: String, email: String) derives CanEqual
+val members = Seq(Member("Ada Lovelace", "ada@example.org"), Member("Grace Hopper", "grace@example.org"))
+
+val memberPicker: UI < Async =
+    for chosen <- Signal.initRef(Maybe.empty[Member])
+    yield uic.Select[Member]()
+        .options(members)(_.name)
+        .optionKey(_.email)
+        .selection(chosen)
+        .filter(uic.Filter.contains(_.name, _.email)): UI
+```
+
+Setting `filter` or `filterQuery` turns the header on by itself. An explicit `filterable` decides alone, so `filterable(false)` keeps the header off whatever else is set, and a `Signal[Boolean]` switches it while the page runs. Switched off, the header is gone and every option shows, but the query is kept: switched back on, the header shows the old text and filters by it again. The switch never rebuilds the field: on a closed picker nothing but its role changes, and an open panel stays open while its header comes and goes.
 
 ## Floating panels
 
