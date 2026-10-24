@@ -80,7 +80,7 @@ final class FieldArray[R] private[form] (
         satisfy(code, Reveal.OnSubmit)(pred)
 
     /** Append a new row: allocate its sub-scope, run `build` (which declares the row's
-      * fields and returns its UI + model), start the row's `Activation.Change` observers,
+      * fields and returns its UI + model), start the row's change observers,
       * capture the row's aggregation signals, publish it.
       */
     def add(using Frame): Unit < Async =
@@ -92,9 +92,9 @@ final class FieldArray[R] private[form] (
             _        <- child.wireRowChangeActivations
             dirtySig <- child.isDirty
             entries  <- child.errorEntries
-            fErrsSig <- child.fieldErrorsAgg(visible = true)
-            rawFErrs <- child.fieldErrorsAgg(visible = false)
-            _        <- rowsRef.updateAndGet(_ :+ RowEntry(key, child, built._1, built._2, dirtySig, entries, fErrsSig, rawFErrs))
+            fErrsSig <- child.fieldErrors
+            invalid  <- child.invalidAgg
+            _        <- rowsRef.updateAndGet(_ :+ RowEntry(key, child, built._1, built._2, dirtySig, entries, fErrsSig, invalid))
         yield ()
 
     /** Remove the row at index `i` (no-op if out of range). */
@@ -109,7 +109,7 @@ final class FieldArray[R] private[form] (
         dropWhere(_.indexWhere(_.key == key))
 
     /** Drop the row `locate` points at (a negative index is a no-op), cancelling its
-      * `Activation.Change` observers first: those fibers are unscoped (a row is added from
+      * change observers first: those fibers are unscoped (a row is added from
       * an event handler, outside any `Scope`), so this array owns their lifetime and a
       * removed row must not keep validating.
       */
@@ -124,14 +124,14 @@ final class FieldArray[R] private[form] (
                         .andThen(rowsRef.updateAndGet(_.patch(i, Nil, 1)).unit)
         yield ()
 
-    /** Start the `Activation.Change` observers of every CURRENT row: the recursion step for
+    /** Start the change observers of every CURRENT row: the recursion step for
       * an array nested inside another array's row (its rows exist before the outer row is
       * wired).
       */
     private[form] def wireRowActivations(using Frame): Unit < Async =
         rowsRef.get.map(rows => Kyo.foreach(rows)(_.form.wireRowChangeActivations).unit)
 
-    /** Cancel the `Activation.Change` observers of every current row, on unmount, and as
+    /** Cancel the change observers of every current row, on unmount, and as
       * the recursion step when an enclosing row is removed.
       */
     private[form] def cancelRowActivations(using Frame): Unit < Async =
@@ -166,13 +166,17 @@ final class FieldArray[R] private[form] (
             else Signal.combineLatestAll(rows.map(_.entriesSig)).map(_.foldLeft(Chunk.empty[Form.ErrorEntry])(_ ++ _))
         }
 
-    private[form] def fieldErrorsSignal(visible: Boolean)(using Frame): Signal[Chunk[FieldError]] =
-        unionSignal(e => if visible then e.fErrsSig else e.rawFErrsSig)
-
-    private def unionSignal(pick: RowEntry[R] => Signal[Chunk[FieldError]])(using Frame): Signal[Chunk[FieldError]] =
+    private[form] def fieldErrorsSignal(using Frame): Signal[Chunk[FieldError]] =
         rowsRef.switchMap { rows =>
             if rows.isEmpty then Signal.initConst(Chunk.empty[FieldError])
-            else Signal.combineLatestAll(rows.map(pick)).map(_.foldLeft(Chunk.empty[FieldError])(_ ++ _))
+            else Signal.combineLatestAll(rows.map(_.fErrsSig)).map(_.foldLeft(Chunk.empty[FieldError])(_ ++ _))
+        }
+
+    /** True while a field of any current row is not valid, whatever is shown (the ungated [[Form.isValid]]). */
+    private[form] def invalidSignal(using Frame): Signal[Boolean] =
+        rowsRef.switchMap { rows =>
+            if rows.isEmpty then Signal.initConst(false)
+            else Signal.combineLatestAll(rows.map(_.invalidSig)).map(_.exists(identity))
         }
 
     // --- effectful walks over the CURRENT rows ---------------------------------
@@ -238,7 +242,7 @@ object FieldArray:
         dirtySig: Signal[Boolean],
         entriesSig: Signal[Chunk[Form.ErrorEntry]], // field-id-tagged errors: errorEntries/summary view
         fErrsSig: Signal[Chunk[FieldError]],        // gated (touched/submit): submitDisabled view
-        rawFErrsSig: Signal[Chunk[FieldError]]      // ungated: isValid(onlyVisible = false) view
+        invalidSig: Signal[Boolean]                 // ungated, a rule not yet checked included: isValid(onlyVisible = false) view
     ) derives CanEqual
 
     /** The per-row control handed to a build function: it addresses THIS row by its stable

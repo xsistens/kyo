@@ -66,27 +66,26 @@ class FormValidationTest extends UicTest:
             baseline   <- Signal.initRef(initial)
             touched    <- Signal.initRef(true)
             validating <- Signal.initRef(false)
-            clientErr  <- Signal.initRef(Absent: Maybe[FieldError])
+            client     <- Signal.initRef(ClientVerdict.Checked(Absent): ClientVerdict)
             serverErr  <- Signal.initRef(Absent: Maybe[ServerError[A]])
             epoch      <- AtomicInt.init(0)
             resetWrite <- AtomicRef.init(Maybe.empty[A])
             count      <- Signal.initRef(0)
             named      <- Signal.initRef(false)
             owner      <- mkForm
-        yield (
-            FormField.declared[A, A](
+            field      <- FormField.declared[A, A](
                 valueRef,
                 initial,
                 baseline,
                 "test-field-id",
                 touched,
                 validating,
-                clientErr,
+                client,
                 serverErr,
                 epoch,
                 resetWrite,
                 rules,
-                Set[Activation.Field](Activation.Submit),
+                Present(Set[Activation.Field](Activation.Submit)),
                 Duration.Zero,
                 Reveal.WhenTouched,
                 true,
@@ -94,9 +93,8 @@ class FormValidationTest extends UicTest:
                 count,
                 named,
                 owner
-            ),
-            valueRef
-        )
+            )
+        yield (field, valueRef)
 
     /** A form whose id minting is a real counter (so fields get distinct ids) and whose
       * focus command appends the targeted id to `focused`, which lets a test assert exactly
@@ -307,13 +305,13 @@ class FormValidationTest extends UicTest:
     // `Validator.all[String]()` and "no triggers" as `Activation.Submit`, both of which read
     // as omissions. These pin what saying nothing now means.
 
-    "a field that declares nothing re-checks on blur and on change" in {
+    "a field that declares nothing is touched by the blur and by a change" in {
         for
             form <- mkForm
             f    <- form.field("").declare
         yield
-            assert(f.wantsBlur, "the reader leaving the field is a verdict")
-            assert(f.wantsChange, "and so is every edit after that")
+            assert(f.touchedBy(Activation.Blur), "the reader leaving the field is a verdict")
+            assert(f.touchedBy(Activation.Change), "and so is every edit after that")
     }
 
     // The other half of the default is Reveal.WhenTouched, which is what keeps the FIRST
@@ -325,14 +323,14 @@ class FormValidationTest extends UicTest:
             f      <- form.field("").rules(Validator.required()).declare
             _      <- f.revalidate
             before <- f.visibleError.current
-            _      <- f.onEvent("")
+            _      <- f.onEvent("", Activation.Blur)
             after  <- f.visibleError.current
         yield
             assert(before.isEmpty, "invalid from the start, and says nothing about it")
             assert(after.exists(_.code == "required"), "once touched, the same verdict is shown")
     }
 
-    "on(Activation.Submit) is how a field opts OUT: it adds no trigger of its own" in {
+    "on(Activation.Submit) is how a field opts OUT: no event of its own touches it" in {
         for
             form <- mkForm
             f    <- form.field("").rules(Validator.required()).on(Activation.Submit).declare
@@ -340,8 +338,8 @@ class FormValidationTest extends UicTest:
             // Submit alone means 'never re-check while the reader is in the field'.
             v <- f.validateForSubmit
         yield
-            assert(!f.wantsBlur, "no blur trigger")
-            assert(!f.wantsChange, "no change trigger")
+            assert(!f.touchedBy(Activation.Blur), "not the blur")
+            assert(!f.touchedBy(Activation.Change), "not a change")
             assert(v.exists(_.code == "required"), "and submit still checks it")
     }
 
@@ -404,12 +402,12 @@ class FormValidationTest extends UicTest:
             (beforeSubmit, afterSubmit) <-
                 for
                     form  <- mkForm
-                    field <- form.field(3.0).rules(Validator.satisfy[Double]("min-volume")(_ >= 5.0)).on(Activation.Submit).declare
+                    field <- form.field(3.0).rules(Validator.satisfy[Double]("min-volume")(_ >= 5.0)).declare
                     bound = uic.Slider().min(0).max(10).bind(field)
                     pre <- UI.runRender(bound).take(1).run
-                    // Marks the field touched AND validates, the same path a real Blur takes,
-                    // so the error is both recorded and revealed.
-                    _    <- field.onEvent(3.0)
+                    // Marks the field touched AND validates, the path a real Blur takes, so the
+                    // error is both recorded and revealed.
+                    _    <- field.onEvent(3.0, Activation.Blur)
                     post <- UI.runRender(bound).take(1).run
                 yield (pre.mkString, post.mkString)
 
@@ -575,11 +573,11 @@ class FormValidationTest extends UicTest:
                 for
                     form <- mkForm
                     f    <- form.field.on(Activation.Submit).declare
-                    _ = f.satisfy("must-be-ok")(_ == "ok") // pure + chainable, mirrors form.satisfy
-                    _  <- f.valueRef.set("nope")
-                    e1 <- f.validateForSubmit
-                    _  <- f.valueRef.set("ok")
-                    e2 <- f.validateForSubmit
+                    _    <- f.satisfy("must-be-ok")(_ == "ok") // chainable, mirrors form.satisfy
+                    _    <- f.valueRef.set("nope")
+                    e1   <- f.validateForSubmit
+                    _    <- f.valueRef.set("ok")
+                    e2   <- f.validateForSubmit
                 yield (e1.exists(_.code == "must-be-ok"), e2.isEmpty)
         yield
             assert(invalidWhenBad, "field.satisfy fails when the predicate is false")
@@ -615,13 +613,13 @@ class FormValidationTest extends UicTest:
                 for
                     form <- mkForm
                     f    <- form.field.rules(Validator.required()).on(Activation.Change).declare // touched = false
-                    _  <- f.revalidate           // the observer's mount emission → validate SILENTLY
-                    e0 <- f.error.current        // raw error computed
-                    v0 <- f.visibleError.current // but NOT displayed (untouched, no submit)
-                    _  <- f.onEvent("")          // a real change (still empty) → touched + validate
-                    v1 <- f.visibleError.current // now revealed inline
+                    _  <- f.revalidate                      // the observer's mount emission → validate SILENTLY
+                    e0 <- f.error.current                   // raw error computed
+                    v0 <- f.visibleError.current            // but NOT displayed (untouched, no submit)
+                    _  <- f.onEvent("", Activation.Change)  // a real change (still empty) → touched + validate
+                    v1 <- f.visibleError.current            // now revealed inline
                     _  <- f.valueRef.set("x")
-                    _  <- f.onEvent("x")         // change to a valid value → re-validates, clears
+                    _  <- f.onEvent("x", Activation.Change) // change to a valid value → re-validates, clears
                     v2 <- f.visibleError.current
                 yield (e0.isDefined, v0.isEmpty, v1.isDefined, v2.isEmpty)
         yield
@@ -1189,7 +1187,7 @@ class FormValidationTest extends UicTest:
                     f    <- form.field("first").rules(Validator.required()).on(Activation.Submit).declare
                     // A check that runs inside the submit's validation and edits the field meanwhile,
                     // the way a reader types while an async rule is in flight.
-                    _    <- Sync.defer(discard(f.addRule(Validator.async[String](_ => f.valueRef.set("later").andThen(Absent)))))
+                    _    <- f.addRule(Validator.async[String](_ => f.valueRef.set("later").andThen(Absent)))
                     sink <- AtomicRef.init("")
                     _    <- form.submit(f)(v => sink.set(v))
                     got  <- sink.get
@@ -1279,6 +1277,1309 @@ class FormValidationTest extends UicTest:
             assert(shown == Present("That name is taken."), s"$shown")
             assert(code == Present(FieldError.messageCode))
             assert(afterEdit.isEmpty, "the first edit hides it")
+        end for
+    }
+
+    // ---- when a rule runs ----------------------------------------------------------------------
+    //
+    // Each rule carries the events it runs on: its own `on`, else the field's, else its default
+    // (Blur + Change, Blur for Validator.async). A rule not due for an event keeps its last result
+    // while its input is unchanged and is "not yet checked" otherwise, which stops the chain and
+    // keeps the form invalid. A submit runs everything.
+
+    /** A check that counts its runs and fails on the value `bad`, built the way an async rule is. */
+    private def counted(runs: AtomicInt, bad: String = "taken")(using Frame): Validator[String] =
+        Validator.async[String](v =>
+            runs.incrementAndGet.map(_ => (if v == bad then Present(FieldError(bad)) else Absent): Maybe[FieldError])
+        )
+
+    /** A check that counts its runs and passes everything, built with `Validator(...)`. */
+    private def countedPlain(runs: AtomicInt)(using Frame): Validator[String] =
+        Validator[String](_ => runs.incrementAndGet.andThen(Absent))
+
+    "an async rule on(Blur) does not run while the reader types, and runs once when they leave" in {
+        for
+            (typing, left) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("").rules(counted(runs).on(Activation.Blur)).declare
+                    _    <- f.valueRef.set("a")
+                    _    <- f.onEvent("a", Activation.Change)
+                    _    <- f.valueRef.set("ab")
+                    _    <- f.onEvent("ab", Activation.Change)
+                    t    <- runs.get
+                    _    <- f.onEvent("ab", Activation.Blur)
+                    l    <- runs.get
+                yield (t, l)
+        yield
+            assert(typing == 0, s"two keystrokes ran it $typing times")
+            assert(left == 1, s"leaving the field ran it $left times")
+        end for
+    }
+
+    "Validator.async waits for the blur by default, and Validator(...) checks every change" in {
+        for
+            (asyncTyping, plainTyping, asyncLeft) <-
+                for
+                    asyncRuns <- AtomicInt.init(0)
+                    plainRuns <- AtomicInt.init(0)
+                    form      <- mkForm
+                    a         <- form.field("").rules(counted(asyncRuns)).declare
+                    p         <- form.field("").rules(countedPlain(plainRuns)).declare
+                    _         <- a.onEvent("x", Activation.Change)
+                    _         <- p.onEvent("x", Activation.Change)
+                    at        <- asyncRuns.get
+                    pt        <- plainRuns.get
+                    _         <- a.onEvent("x", Activation.Blur)
+                    al        <- asyncRuns.get
+                yield (at, pt, al)
+        yield
+            assert(asyncTyping == 0, s"an async rule ran $asyncTyping times while the reader typed")
+            assert(plainTyping == 1, s"a plain rule ran $plainTyping times on one change")
+            assert(asyncLeft == 1, s"the blur ran the async rule $asyncLeft times")
+        end for
+    }
+
+    "a deferred rule's error stays while the value is unchanged, and goes with the next keystroke" in {
+        for
+            (typed, left, again, edited, runs) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("").rules(counted(runs)).declare
+                    _    <- f.valueRef.set("taken")
+                    _    <- f.onEvent("taken", Activation.Change)
+                    e0   <- f.error.current
+                    _    <- f.onEvent("taken", Activation.Blur)
+                    e1   <- f.error.current
+                    _    <- f.revalidate // a change event over the same value, as a reset write sends one
+                    e2   <- f.error.current
+                    _    <- f.valueRef.set("taken!")
+                    _    <- f.onEvent("taken!", Activation.Change)
+                    e3   <- f.error.current
+                    n    <- runs.get
+                yield (e0, e1.map(_.code), e2.map(_.code), e3, n)
+        yield
+            assert(typed == Absent, s"not checked yet, so there is nothing to say: $typed")
+            assert(left == Present("taken"), s"the blur checked it: $left")
+            assert(again == Present("taken"), s"the same value keeps the verdict: $again")
+            assert(edited == Absent, s"a new value drops the verdict about the old one: $edited")
+            assert(runs == 1, s"and only the blur ran the rule: $runs runs")
+        end for
+    }
+
+    "a rule after one not yet checked does not run, and the form is not valid until it is" in {
+        for
+            (initially, laterTyping, ungatedTyping, gatedTyping, errTyping, laterLeft, ungatedLeft, gatedLeft) <-
+                for
+                    deferred <- AtomicInt.init(0)
+                    later    <- AtomicInt.init(0)
+                    form     <- mkForm
+                    f        <- form.field("").rules(counted(deferred) and countedPlain(later)).declare
+                    ungated  <- form.isValid()
+                    gated    <- form.isValid(onlyVisible = true)
+                    u0       <- ungated.current
+                    _        <- f.onEvent("x", Activation.Change)
+                    l1       <- later.get
+                    u1       <- ungated.current
+                    g1       <- gated.current
+                    e1       <- f.error.current
+                    _        <- f.onEvent("x", Activation.Blur)
+                    l2       <- later.get
+                    u2       <- ungated.current
+                    g2       <- gated.current
+                yield (u0, l1, u1, g1, e1, l2, u2, g2)
+        yield
+            assert(initially, "nothing has run yet, and nothing is wrong")
+            assert(laterTyping == 0, s"the rule after the deferred one ran $laterTyping times")
+            assert(!ungatedTyping, "isValid() does not count an unchecked rule as passed")
+            assert(gatedTyping, "isValid(onlyVisible = true) counts only what is shown, and an unchecked rule shows nothing")
+            assert(errTyping == Absent, s"an unchecked rule shows no error: $errTyping")
+            assert(laterLeft == 1, s"once the deferred rule passed, the next one ran: $laterLeft")
+            assert(ungatedLeft && gatedLeft, "and the form is valid")
+        end for
+    }
+
+    "submit runs every rule, whatever it waits for, and hands over what they refined to" in {
+        for
+            (before, got, blurRuns, submitRuns) <-
+                for
+                    blur   <- AtomicInt.init(0)
+                    submit <- AtomicInt.init(0)
+                    form   <- mkForm
+                    f      <- form.field("").rules(
+                        counted(blur) and countedPlain(submit).on(Activation.Submit) and digits
+                    ).declare
+                    _    <- f.valueRef.set("42")
+                    _    <- f.onEvent("42", Activation.Change)
+                    b0   <- blur.get
+                    s0   <- submit.get
+                    sink <- AtomicRef.init(Maybe.empty[Int])
+                    _    <- form.submit(f)(v => sink.set(Present(v)))
+                    got  <- sink.get
+                    b1   <- blur.get
+                    s1   <- submit.get
+                yield ((b0, s0), got, b1, s1)
+        yield
+            assert(before == (0, 0), s"typing ran neither deferred rule: $before")
+            assert(got == Present(42), s"the handler got the refined value: $got")
+            assert(blurRuns == 1 && submitRuns == 1, s"the submit ran both: $blurRuns, $submitRuns")
+        end for
+    }
+
+    "a rule on(Submit) runs at submit and at no other time" in {
+        for
+            (beforeSubmit, afterSubmit) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("").rules(countedPlain(runs).on(Activation.Submit)).declare
+                    _    <- f.valueRef.set("x")
+                    _    <- f.onEvent("x", Activation.Change)
+                    _    <- f.onEvent("x", Activation.Blur)
+                    _    <- f.revalidate
+                    n0   <- runs.get
+                    _    <- f.validateForSubmit
+                    n1   <- runs.get
+                yield (n0, n1)
+        yield
+            assert(beforeSubmit == 0, s"a change, a blur and a silent revalidation ran it $beforeSubmit times")
+            assert(afterSubmit == 1, s"the submit ran it: $afterSubmit")
+        end for
+    }
+
+    "a rule's own on beats the field's" in {
+        for
+            (asksChange, asksBlur) <-
+                for
+                    r1   <- AtomicInt.init(0)
+                    r2   <- AtomicInt.init(0)
+                    form <- mkForm
+                    f1   <- form.field("").rules(countedPlain(r1).on(Activation.Change)).on(Activation.Blur).declare
+                    f2   <- form.field("").rules(countedPlain(r2).on(Activation.Blur)).on(Activation.Change).declare
+                    _    <- f1.onEvent("x", Activation.Change)
+                    _    <- f2.onEvent("x", Activation.Change)
+                    n1   <- r1.get
+                    n2   <- r2.get
+                yield (n1, n2)
+        yield
+            assert(asksChange == 1, s"a rule on(Change) in a field on(Blur) runs on a change: $asksChange")
+            assert(asksBlur == 0, s"a rule on(Blur) in a field on(Change) does not: $asksBlur")
+        end for
+    }
+
+    "the field's on beats a rule's default, Validator.async's included" in {
+        for
+            (asyncInChangeField, plainInBlurField) <-
+                for
+                    r1   <- AtomicInt.init(0)
+                    r2   <- AtomicInt.init(0)
+                    form <- mkForm
+                    f1   <- form.field("").rules(counted(r1)).on(Activation.Change).declare
+                    f2   <- form.field("").rules(countedPlain(r2)).on(Activation.Blur).declare
+                    _    <- f1.onEvent("x", Activation.Change)
+                    _    <- f2.onEvent("x", Activation.Change)
+                    n1   <- r1.get
+                    n2   <- r2.get
+                yield (n1, n2)
+        yield
+            assert(asyncInChangeField == 1, s"an async rule in a field on(Change) runs on a change: $asyncInChangeField")
+            assert(plainInBlurField == 0, s"a plain rule in a field on(Blur) does not: $plainInBlurField")
+        end for
+    }
+
+    "the nearer on wins: an outer on only fills the rules that state none" in {
+        for
+            (onChange, onBlur) <-
+                for
+                    a    <- AtomicInt.init(0)
+                    b    <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("").rules((countedPlain(a).on(Activation.Change) and countedPlain(b)).on(Activation.Blur)).declare
+                    _    <- f.onEvent("x", Activation.Change)
+                    a1   <- a.get
+                    b1   <- b.get
+                    _    <- f.onEvent("x", Activation.Blur)
+                    a2   <- a.get
+                    b2   <- b.get
+                yield ((a1, b1), (a2, b2))
+        yield
+            assert(onChange == (1, 0), s"the change ran the rule that asked for it and held back the one the outer Blur fills: $onChange")
+            assert(onBlur == (1, 1), s"the blur reused the first rule's verdict for the same value and ran the second: $onBlur")
+        end for
+    }
+
+    "a field that declares only Blur still sees the changes a rule asks for, and is not touched by them" in {
+        for
+            (runs, touched) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("").rules(countedPlain(runs).on(Activation.Change)).on(Activation.Blur).declare
+                    out  <- Scope.run {
+                        for
+                            _ <- f.wireChange
+                            // The observer checks the mount value, then waits on the ref again.
+                            _ <- assertEventually(f.valueRef.waiters.map(_ == 1))
+                            _ <- f.valueRef.set("x")
+                            _ <- assertEventually(runs.get.map(_ == 2))
+                            n <- runs.get
+                            t <- f.touched.current
+                        yield (n, t)
+                    }
+                yield out
+        yield
+            assert(runs == 2, s"the mount value and the edit both ran the rule: $runs")
+            assert(!touched, "touched follows the field's own events, and this field declared only Blur")
+        end for
+    }
+
+    "a field-array row whose rule waits for the blur keeps the form invalid until it has run" in {
+        for
+            (whileUnchecked, afterBlur, runs) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    captured <- AtomicRef.init(Chunk.empty[FormField[String]])
+                    form     <- mkForm
+                    arr      <- form.fieldArray(0) { (row, _) =>
+                        for
+                            fld <- row.field("ok").rules(counted(runs)).declare
+                            _   <- captured.updateAndGet(_ :+ fld)
+                        yield (fragment(): UI)
+                    }
+                    valid <- form.isValid()
+                    _     <- arr.add
+                    flds  <- captured.get
+                    fld = flds.head
+                    // The row's change observer checks the mount value, then waits on the ref again.
+                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 1))
+                    v0 <- valid.current
+                    _  <- fld.onEvent("ok", Activation.Blur)
+                    v1 <- valid.current
+                    n  <- runs.get
+                    _  <- arr.removeAt(0)
+                yield (v0, v1, n)
+        yield
+            assert(!whileUnchecked, "a row's unchecked rule keeps the form invalid")
+            assert(afterBlur, "and the blur that checks it makes it valid")
+            assert(runs == 1, s"only the blur ran it: $runs")
+        end for
+    }
+
+    "a number field's rules keep their activation through the codec" in {
+        for
+            (typing, left) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    n    <- form.numberField(1).rules(Validator[Int](_ => runs.incrementAndGet.andThen(Absent)).on(Activation.Blur)).declare
+                    _    <- n.underlying.onEvent(2.0, Activation.Change)
+                    c    <- runs.get
+                    _    <- n.underlying.onEvent(2.0, Activation.Blur)
+                    b    <- runs.get
+                yield (c, b)
+        yield
+            assert(typing == 0, s"a change ran it $typing times")
+            assert(left == 1, s"the blur ran it $left times")
+        end for
+    }
+
+    "an appended rule and the combinators carry the activation through" in {
+        for
+            (typing, left) <-
+                for
+                    added   <- AtomicInt.init(0)
+                    wrapped <- AtomicInt.init(0)
+                    form    <- mkForm
+                    f       <- form.field("").declare
+                    _       <- f.addRule(counted(added))
+                    g       <- form.field(Maybe.empty[String]).rules(
+                        Validator.ifPresent(Validator.when[String](_ => true)(counted(wrapped)).message("Checked on blur."))
+                    ).declare
+                    _  <- f.onEvent("x", Activation.Change)
+                    _  <- g.onEvent(Present("x"), Activation.Change)
+                    a0 <- added.get
+                    w0 <- wrapped.get
+                    _  <- f.onEvent("x", Activation.Blur)
+                    _  <- g.onEvent(Present("x"), Activation.Blur)
+                    a1 <- added.get
+                    w1 <- wrapped.get
+                yield ((a0, w0), (a1, w1))
+        yield
+            assert(typing == (0, 0), s"addRule, ifPresent, when and message kept the async default: $typing")
+            assert(left == (1, 1), s"and the blur ran both: $left")
+        end for
+    }
+
+    // ---- a dependency runs every rule ----------------------------------------------------------
+    //
+    // A field that `dependsOn` another re-checks when the other changes, and its own value has not
+    // moved, so a rule not due for the event would answer the verdict it stored for that value: the
+    // one about the OTHER field's old value. A dependency therefore runs the whole chain.
+
+    /** Wait until the field's runs reached `n` and the run that made it `n` has published. `runs` counts a rule that
+      * runs on every event, so it moves once per run of the chain, and `validating` drops after the publish.
+      */
+    private def settled(f: FormField[String], runs: AtomicInt, n: Int)(using Frame, kyo.test.AssertScope): Unit < Async =
+        assertEventually(runs.get.map(_ == n).map(ok => if ok then f.validating.current.map(!_) else false))
+
+    "a dependency that comes to match clears the error a field on(Blur) showed for the old value" in {
+        for
+            (shown, cleared, visible, touched, plainRuns) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    password <- Signal.initRef("secret")
+                    form     <- mkForm
+                    confirm  <- form.field("").rules(countedPlain(runs).on(Activation.Blur, Activation.Change)).on(Activation.Blur).declare
+                    _        <- confirm.matches(password)
+                    out      <- Scope.run {
+                        for
+                            _  <- confirm.wireDependencies
+                            _  <- assertEventually(password.waiters.map(_ == 1))
+                            _  <- confirm.valueRef.set("secrex")
+                            _  <- confirm.onEvent("secrex", Activation.Blur)
+                            e0 <- confirm.visibleError.current
+                            _  <- password.set("secrex")
+                            _  <- assertEventually(quiet(confirm, Absent))
+                            e1 <- confirm.error.current
+                            v1 <- confirm.visibleError.current
+                            t1 <- confirm.touched.current
+                            n  <- runs.get
+                        yield (e0.map(_.code), e1, v1, t1, n)
+                    }
+                yield out
+        yield
+            assert(shown == Present("must-match"), s"the blur judged the mismatch: $shown")
+            assert(cleared == Absent, s"the passwords match now, so the error goes: $cleared")
+            assert(visible == Absent, s"and nothing is shown: $visible")
+            assert(touched, "the blur touched the field")
+            assert(plainRuns == 1, s"the rule that does not read the password kept its verdict: $plainRuns runs")
+        end for
+    }
+
+    "a dependency that stops matching shows the error of a rule on(Blur) at once" in {
+        for
+            (before, after) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    password <- Signal.initRef("secret")
+                    form     <- mkForm
+                    confirm  <- form.field("").rules(countedPlain(runs)).declare
+                    out      <- Scope.run {
+                        for
+                            _  <- confirm.addRule(Validator.matchesField(password).on(Activation.Blur))
+                            _  <- confirm.dependsOn(password)
+                            _  <- settled(confirm, runs, 1)
+                            _  <- confirm.valueRef.set("secret")
+                            _  <- confirm.onEvent("secret", Activation.Blur)
+                            e0 <- confirm.visibleError.current
+                            _  <- password.set("secret2")
+                            _  <- settled(confirm, runs, 3)
+                            e1 <- confirm.visibleError.current
+                        yield (e0, e1.map(_.code))
+                    }
+                yield out
+        yield
+            assert(before == Absent, s"the blur found a match: $before")
+            assert(after == Present("must-match"), s"the new password no longer matches, and the touched field says so: $after")
+        end for
+    }
+
+    "a dependency judges an untouched field without touching it, and later events reuse that verdict" in {
+        for
+            (raw, visible, touched, reused, runsAfter) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    password <- Signal.initRef("secret")
+                    form     <- mkForm
+                    confirm  <- form.field("").rules(countedPlain(runs).on(Activation.Change)).declare
+                    out      <- Scope.run {
+                        for
+                            _  <- confirm.addRule(Validator.matchesField(password).on(Activation.Submit))
+                            _  <- confirm.dependsOn(password)
+                            _  <- settled(confirm, runs, 1)
+                            _  <- password.set("other")
+                            _  <- settled(confirm, runs, 2)
+                            e0 <- confirm.error.current
+                            v0 <- confirm.visibleError.current
+                            t0 <- confirm.touched.current
+                            _  <- confirm.revalidate // a change event over the same value: the rule on(Submit) is not due
+                            e1 <- confirm.error.current
+                            n  <- runs.get
+                        yield (e0.map(_.code), v0, t0, e1.map(_.code), n)
+                    }
+                yield out
+        yield
+            assert(raw == Present("must-match"), s"the dependency ran the rule that waits for the submit: $raw")
+            assert(visible == Absent, s"an untouched field shows nothing: $visible")
+            assert(!touched, "a dependency does not touch the field")
+            assert(reused == Present("must-match"), s"the next event reuses the verdict the dependency stored: $reused")
+            assert(runsAfter == 3, s"three runs of the chain: $runsAfter")
+        end for
+    }
+
+    // ---- rules that read another field ---------------------------------------------------------
+    //
+    // A rule built with `reading` names the signals it reads, and the field subscribes to them. A
+    // change of one is an event for the field: a leaf that reads it with `Dep.recheck` runs, every
+    // other leaf is not due, and the dependency values are part of the input a verdict is kept for.
+
+    /** True once the field's last run has published and its raw error is `expected`. */
+    private def quiet(f: FormField[String], expected: Maybe[FieldError])(using Frame): Boolean < Sync =
+        f.error.current.map(e => if e == expected then f.validating.current.map(!_) else false)
+
+    /** True once the field's last run has published a rule that is not yet checked. */
+    private def unchecked(f: FormField[String])(using Frame): Boolean < Sync =
+        f.notChecked.current.map(n => if n then f.validating.current.map(!_) else false)
+
+    /** A rule reading the longest length a value may have; its error carries the limit it was given. */
+    private def tooLong(s: String, n: Int): Maybe[FieldError] =
+        if s.length > n then Present(FieldError("too-long", Map("max" -> n.toString))) else Absent
+
+    /** [[tooLong]] as an async rule that counts its runs. */
+    private def countedTooLong(runs: AtomicInt)(s: String, n: Int)(using Frame): Maybe[FieldError] < Async =
+        runs.incrementAndGet.map(_ => tooLong(s, n))
+
+    "a rule reading another field runs again when it changes, with the new value, and does not touch the field" in {
+        for
+            (first, wider, narrower, value, touched) <-
+                for
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("abcdef").rules(Validator.reading(maxLen)(tooLong)).declare
+                    out    <- Scope.run {
+                        for
+                            _  <- f.wireDependencies
+                            _  <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _  <- f.revalidate
+                            e0 <- f.error.current
+                            _  <- maxLen.set(10)
+                            _  <- assertEventually(quiet(f, Absent))
+                            e1 <- f.error.current
+                            _  <- maxLen.set(3)
+                            _  <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "3")))))
+                            e2 <- f.error.current
+                            v  <- f.value.current
+                            t  <- f.touched.current
+                        yield (e0, e1, e2, v, t)
+                    }
+                yield out
+        yield
+            assert(first == Present(FieldError("too-long", Map("max" -> "5"))), s"the mount judged against 5: $first")
+            assert(wider == Absent, "a longer limit clears the error at once")
+            assert(narrower == Present(FieldError("too-long", Map("max" -> "3"))), s"and the rule received the new limit: $narrower")
+            assert(value == "abcdef", s"the field's own value never moved: $value")
+            assert(!touched, "a dependency does not touch the field")
+        end for
+    }
+
+    "an async reading rule drops its verdict when the dependency changes, and the submit runs it" in {
+        for
+            (runsAfterChange, errorAfterChange, ungated, gated, runsAfterSubmit, errorAfterSubmit, validAfterSubmit) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    maxLen   <- Signal.initRef(5)
+                    form     <- mkForm
+                    f        <- form.field("abcdef").rules(Validator.reading(maxLen).async(countedTooLong(runs))).declare
+                    ungatedV <- form.isValid()
+                    gatedV   <- form.isValid(onlyVisible = true)
+                    out      <- Scope.run {
+                        for
+                            _  <- f.wireDependencies
+                            _  <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _  <- f.onEvent("abcdef", Activation.Blur)
+                            _  <- maxLen.set(10)
+                            _  <- assertEventually(unchecked(f))
+                            r0 <- runs.get
+                            e0 <- f.error.current
+                            u0 <- ungatedV.current
+                            g0 <- gatedV.current
+                            _  <- form.submit(Kyo.unit)
+                            r1 <- runs.get
+                            e1 <- f.error.current
+                            u1 <- ungatedV.current
+                        yield (r0, e0, u0, g0, r1, e1, u1)
+                    }
+                yield out
+        yield
+            assert(runsAfterChange == 1, s"only the blur ran it, not the dependency: $runsAfterChange")
+            assert(errorAfterChange == Absent, s"the verdict about the old limit is gone: $errorAfterChange")
+            assert(!ungated, "the rule has not judged the new limit, so the form is not valid")
+            assert(gated, "and nothing is shown, so the gated view is")
+            assert(runsAfterSubmit == 2, s"the submit ran it: $runsAfterSubmit")
+            assert(errorAfterSubmit == Absent, s"with the current limit, which the value fits: $errorAfterSubmit")
+            assert(validAfterSubmit, "and the form is valid again")
+        end for
+    }
+
+    "a dependency changed back to the value a verdict was kept for reuses it without a run" in {
+        for
+            (runs, restored) <-
+                for
+                    runs   <- AtomicInt.init(0)
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("abcdef").rules(Validator.reading(maxLen).async(countedTooLong(runs))).declare
+                    out    <- Scope.run {
+                        for
+                            _ <- f.wireDependencies
+                            _ <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _ <- f.onEvent("abcdef", Activation.Blur)
+                            _ <- maxLen.set(10)
+                            _ <- assertEventually(unchecked(f))
+                            _ <- maxLen.set(5)
+                            _ <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "5")))))
+                            n <- runs.get
+                            e <- f.error.current
+                        yield (n, e)
+                    }
+                yield out
+        yield
+            assert(runs == 1, s"the rule ran once, at the blur: $runs")
+            assert(restored == Present(FieldError("too-long", Map("max" -> "5"))), s"the kept verdict is back: $restored")
+        end for
+    }
+
+    "each dependency of one rule reacts its own way" in {
+        for
+            (afterDiscard, uncheckedAfterDiscard, afterRecheck, error) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    min  <- Signal.initRef(1)
+                    max  <- Signal.initRef(5)
+                    form <- mkForm
+                    rule = Validator.reading(Dep.discard(min), Dep.recheck(max)).async((s: String, d: (Int, Int)) =>
+                        runs.incrementAndGet.map(_ =>
+                            if s.length < d._1 || s.length > d._2 then Present(FieldError("length", Map("range" -> s"${d._1}..${d._2}")))
+                            else Absent
+                        )
+                    )
+                    f   <- form.field("abc").rules(rule).declare
+                    out <- Scope.run {
+                        for
+                            _  <- f.wireDependencies
+                            _  <- assertEventually(min.waiters.map(_ == 1).map(a => if a then max.waiters.map(_ == 1) else false))
+                            _  <- f.onEvent("abc", Activation.Blur)
+                            _  <- min.set(4)
+                            _  <- assertEventually(unchecked(f))
+                            r0 <- runs.get
+                            c0 <- f.notChecked.current
+                            _  <- max.set(6)
+                            _  <- assertEventually(quiet(f, Present(FieldError("length", Map("range" -> "4..6")))))
+                            r1 <- runs.get
+                            e  <- f.error.current
+                        yield (r0, c0, r1, e)
+                    }
+                yield out
+        yield
+            assert(afterDiscard == 1, s"the discarded dependency ran nothing: $afterDiscard")
+            assert(uncheckedAfterDiscard, "and left the rule not yet checked")
+            assert(afterRecheck == 2, s"the rechecked one ran it: $afterRecheck")
+            assert(error == Present(FieldError("length", Map("range" -> "4..6"))), s"with both current values: $error")
+        end for
+    }
+
+    "two rules reading the same signal each react their own way" in {
+        for
+            (rechecked, discarded, unchecked0, blockedRecheck) <-
+                for
+                    rechecks  <- AtomicInt.init(0)
+                    discards  <- AtomicInt.init(0)
+                    rechecks2 <- AtomicInt.init(0)
+                    maxLen    <- Signal.initRef(5)
+                    form      <- mkForm
+                    f         <- form.field("abc").rules(
+                        Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(rechecks)) and
+                            Validator.reading(Dep.discard(maxLen)).async(countedTooLong(discards))
+                    ).declare
+                    // The same two rules the other way round: the discarded one stops the chain first.
+                    g <- form.field("abc").rules(
+                        Validator.reading(Dep.discard(maxLen)).async((s: String, n: Int) => tooLong(s, n)) and
+                            Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(rechecks2))
+                    ).declare
+                    out <- Scope.run {
+                        for
+                            _  <- f.wireDependencies
+                            _  <- g.wireDependencies
+                            _  <- assertEventually(maxLen.waiters.map(_ == 2))
+                            _  <- f.onEvent("abc", Activation.Blur)
+                            _  <- g.onEvent("abc", Activation.Blur)
+                            _  <- maxLen.set(10)
+                            _  <- assertEventually(rechecks.get.map(_ == 2).map(a => if a then unchecked(f) else false))
+                            _  <- assertEventually(unchecked(g))
+                            r  <- rechecks.get
+                            d  <- discards.get
+                            c  <- f.notChecked.current
+                            r2 <- rechecks2.get
+                        yield (r, d, c, r2)
+                    }
+                yield out
+        yield
+            assert(rechecked == 2, s"the rule that rechecks ran on the change: $rechecked")
+            assert(discarded == 1, s"the one that discards did not: $discarded")
+            assert(unchecked0, "and the field is not yet checked, by the second rule")
+            assert(blockedRecheck == 1, s"after a rule not yet checked, a rechecking rule does not run: $blockedRecheck")
+        end for
+    }
+
+    "a reading rule's on governs only the field's events, and its dependency still rechecks it" in {
+        for
+            (typing, left, dependency, typingAgain) <-
+                for
+                    runs   <- AtomicInt.init(0)
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("").rules(Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(runs)).on(Activation.Blur))
+                        .on(Activation.Change).declare
+                    out <- Scope.run {
+                        for
+                            _  <- f.wireDependencies
+                            _  <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _  <- f.valueRef.set("ab")
+                            _  <- f.onEvent("ab", Activation.Change)
+                            t0 <- runs.get
+                            _  <- f.onEvent("ab", Activation.Blur)
+                            l  <- runs.get
+                            _  <- maxLen.set(1)
+                            _  <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "1")))))
+                            d  <- runs.get
+                            _  <- f.valueRef.set("abc")
+                            _  <- f.onEvent("abc", Activation.Change)
+                            t1 <- runs.get
+                        yield (t0, l, d, t1)
+                    }
+                yield out
+        yield
+            assert(typing == 0, s"the field's Change does not run a rule held to the blur: $typing")
+            assert(left == 1, s"the blur does: $left")
+            assert(dependency == 2, s"a change of what it reads does too, whatever its on: $dependency")
+            assert(typingAgain == 2, s"and typing still does not: $typingAgain")
+        end for
+    }
+
+    "a rule that does not read the dependency keeps its verdict when it changes" in {
+        for
+            (plain, reading) <-
+                for
+                    plainRuns   <- AtomicInt.init(0)
+                    readingRuns <- AtomicInt.init(0)
+                    maxLen      <- Signal.initRef(5)
+                    form        <- mkForm
+                    f           <- form.field("abc").rules(
+                        countedPlain(plainRuns) and Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(readingRuns))
+                    ).declare
+                    out <- Scope.run {
+                        for
+                            _ <- f.wireDependencies
+                            _ <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _ <- f.onEvent("abc", Activation.Blur)
+                            _ <- maxLen.set(2)
+                            _ <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "2")))))
+                            p <- plainRuns.get
+                            r <- readingRuns.get
+                        yield (p, r)
+                    }
+                yield out
+        yield
+            assert(plain == 1, s"the rule before it kept the verdict it found at the blur: $plain")
+            assert(reading == 2, s"the reading rule ran again: $reading")
+        end for
+    }
+
+    "matches carries its dependency: a field on(Blur) follows the other field at once, both ways" in {
+        for
+            (shown, cleared, reshown, plainRuns) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    password <- Signal.initRef("secret")
+                    form     <- mkForm
+                    confirm  <- form.field("").rules(countedPlain(runs)).on(Activation.Blur).declare
+                    _        <- confirm.matches(password)
+                    out      <- Scope.run {
+                        for
+                            _  <- confirm.wireDependencies
+                            _  <- assertEventually(password.waiters.map(_ == 1))
+                            _  <- confirm.valueRef.set("secrex")
+                            _  <- confirm.onEvent("secrex", Activation.Blur)
+                            e0 <- confirm.visibleError.current
+                            _  <- password.set("secrex")
+                            _  <- assertEventually(quiet(confirm, Absent))
+                            e1 <- confirm.visibleError.current
+                            _  <- password.set("secret")
+                            _  <- assertEventually(quiet(confirm, Present(FieldError("must-match"))))
+                            e2 <- confirm.visibleError.current
+                            n  <- runs.get
+                        yield (e0.map(_.code), e1, e2.map(_.code), n)
+                    }
+                yield out
+        yield
+            assert(shown == Present("must-match"), s"the blur judged the mismatch: $shown")
+            assert(cleared == Absent, s"the password came to match, and the error went at once: $cleared")
+            assert(reshown == Present("must-match"), s"it stopped matching, and the touched field says so at once: $reshown")
+            assert(plainRuns == 1, s"neither change ran the field's other rule: $plainRuns")
+        end for
+    }
+
+    "a reading rule's subscription ends with the mount, and a row's with the row" in {
+        for
+            (mounted, unmounted, rowWired, rowError, rowRemoved) <-
+                for
+                    maxLen   <- Signal.initRef(5)
+                    rowMax   <- Signal.initRef(5)
+                    captured <- AtomicRef.init(Chunk.empty[FormField[String]])
+                    form     <- mkForm
+                    _        <- form.field("abc").rules(Validator.reading(maxLen)(tooLong)).declare
+                    m        <- Scope.run {
+                        form.wireChangeActivations.andThen(assertEventually(maxLen.waiters.map(_ == 1))).andThen(maxLen.waiters)
+                    }
+                    _   <- assertEventually(maxLen.waiters.map(_ == 0))
+                    u   <- maxLen.waiters
+                    arr <- form.fieldArray(0) { (row, _) =>
+                        for
+                            fld <- row.field("abc").rules(Validator.reading(rowMax)(tooLong)).declare
+                            _   <- captured.updateAndGet(_ :+ fld)
+                        yield (fragment(): UI)
+                    }
+                    _    <- arr.add
+                    flds <- captured.get
+                    fld = flds.head
+                    _  <- assertEventually(rowMax.waiters.map(_ == 1))
+                    w  <- rowMax.waiters
+                    _  <- rowMax.set(2)
+                    _  <- assertEventually(quiet(fld, Present(FieldError("too-long", Map("max" -> "2")))))
+                    re <- fld.error.current
+                    _  <- arr.removeAt(0)
+                    _  <- assertEventually(rowMax.waiters.map(_ == 0))
+                    rr <- rowMax.waiters
+                yield (m, u, w, re, rr)
+        yield
+            assert(mounted == 1, s"the mount subscribed to what the rule reads: $mounted")
+            assert(unmounted == 0, s"and the unmount let it go: $unmounted")
+            assert(rowWired == 1, s"a row subscribes too: $rowWired")
+            assert(rowError == Present(FieldError("too-long", Map("max" -> "2"))), s"and its rule rechecks on the change: $rowError")
+            assert(rowRemoved == 0, s"removing the row lets the signal go: $rowRemoved")
+        end for
+    }
+
+    /** A rule reading the limit `maxLen` that rechecks on its change and runs on the field's every change and blur too,
+      * counting its runs.
+      */
+    private def countedReading(runs: AtomicInt, maxLen: Signal[Int])(using Frame): Validator[String] =
+        Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(runs)).on(Activation.Change, Activation.Blur)
+
+    "a reading rule appended after the mount follows its dependency, until the mount ends" in {
+        for
+            (onAdd, onChange, error, held, released) <-
+                for
+                    runs   <- AtomicInt.init(0)
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("abcd").declare
+                    out    <- Scope.run {
+                        for
+                            _  <- form.wireChangeActivations
+                            _  <- assertEventually(f.valueRef.waiters.map(_ == 1))
+                            _  <- f.addRule(countedReading(runs, maxLen))
+                            r0 <- runs.get
+                            _  <- maxLen.set(3)
+                            _  <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "3")))))
+                            r1 <- runs.get
+                            e  <- f.error.current
+                            w  <- maxLen.waiters
+                        yield (r0, r1, e, w)
+                    }
+                    _ <- assertEventually(maxLen.waiters.map(_ == 0))
+                    u <- maxLen.waiters
+                yield (out._1, out._2, out._3, out._4, u)
+        yield
+            assert(onAdd == 0, s"appending the rule does not run it: $onAdd")
+            assert(onChange == 1, s"a change of what it reads does: $onChange")
+            assert(error == Present(FieldError("too-long", Map("max" -> "3"))), s"with the new limit: $error")
+            assert(held == 1, s"the field subscribed to it once: $held")
+            assert(released == 0, s"and the unmount let it go: $released")
+        end for
+    }
+
+    "a reading rule appended to a row after it was added follows its dependency, until the row is removed" in {
+        for
+            (onChange, error, held, released) <-
+                for
+                    runs     <- AtomicInt.init(0)
+                    rowMax   <- Signal.initRef(5)
+                    captured <- AtomicRef.init(Chunk.empty[FormField[String]])
+                    form     <- mkForm
+                    arr      <- form.fieldArray(0) { (row, _) =>
+                        for
+                            fld <- row.field("abcd").declare
+                            _   <- captured.updateAndGet(_ :+ fld)
+                        yield (fragment(): UI)
+                    }
+                    _    <- arr.add
+                    flds <- captured.get
+                    fld = flds.head
+                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 1))
+                    _  <- fld.addRule(countedReading(runs, rowMax))
+                    _  <- rowMax.set(2)
+                    _  <- assertEventually(quiet(fld, Present(FieldError("too-long", Map("max" -> "2")))))
+                    r  <- runs.get
+                    e  <- fld.error.current
+                    w  <- rowMax.waiters
+                    _  <- arr.removeAt(0)
+                    _  <- assertEventually(rowMax.waiters.map(_ == 0))
+                    rr <- rowMax.waiters
+                yield (r, e, w, rr)
+        yield
+            assert(onChange == 1, s"the row's rule ran on the change: $onChange")
+            assert(error == Present(FieldError("too-long", Map("max" -> "2"))), s"with the new limit: $error")
+            assert(held == 1, s"the row subscribed to it once: $held")
+            assert(released == 0, s"removing the row lets the signal go: $released")
+        end for
+    }
+
+    "a rule reading its own field's value runs once per edit" in {
+        for
+            (atMount, afterEdit, error) <-
+                for
+                    runs <- AtomicInt.init(0)
+                    form <- mkForm
+                    f    <- form.field("ab").declare
+                    _    <- f.addRule(
+                        Validator.reading(Dep.recheck(f.value)).async((s: String, own: String) =>
+                            runs.incrementAndGet.map(_ => if own.length > 2 then Present(FieldError("too-long")) else Absent)
+                        ).on(Activation.Change, Activation.Blur)
+                    )
+                    out <- Scope.run {
+                        for
+                            _  <- form.wireChangeActivations
+                            _  <- assertEventually(f.valueRef.waiters.map(_ >= 1).map(a => if a then quiet(f, Absent) else false))
+                            r0 <- runs.get
+                            _  <- f.valueRef.set("abc")
+                            _  <- assertEventually(runs.get.map(_ >= 2).map(a =>
+                                if a then quiet(f, Present(FieldError("too-long"))) else false
+                            ))
+                            _  <- assertEventually(f.valueRef.waiters.map(_ == 1))
+                            r1 <- runs.get
+                            e  <- f.error.current
+                        yield (r0, r1, e)
+                    }
+                yield out
+        yield
+            assert(atMount == 1, s"the mount ran it once: $atMount")
+            assert(afterEdit == 2, s"and the edit once more, not a second time as a change of what it reads: $afterEdit")
+            assert(error == Present(FieldError("too-long")), s"judging the new value: $error")
+        end for
+    }
+
+    "a dependency event over what the rule already judged does not run it again" in {
+        for
+            (deliveredLate, deliveredStale, error, sameValue) <-
+                for
+                    runs   <- AtomicInt.init(0)
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("abcdef").rules(Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(runs))).declare
+                    _      <- f.onEvent("abcdef", Activation.Blur)
+                    _      <- maxLen.set(4)
+                    _      <- f.onEvent("abcdef", Activation.Blur)
+                    // The observer delivers the 4 the blur has already judged, as it does when its fiber runs after the blur.
+                    _  <- f.dependencyChanged(maxLen)
+                    r0 <- runs.get
+                    // A delivery that is behind the signal: it went on to 7 and back to the 4 the rule judged before the
+                    // delivery of the 7 arrived.
+                    _  <- maxLen.set(7)
+                    _  <- maxLen.set(4)
+                    _  <- f.dependencyChanged(maxLen)
+                    r1 <- runs.get
+                    e  <- f.error.current
+                    r2 <- Scope.run {
+                        for
+                            _ <- f.wireDependencies
+                            _ <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _ <- maxLen.set(4)
+                            _ <- assertEventually(quiet(f, Present(FieldError("too-long", Map("max" -> "4")))))
+                            n <- runs.get
+                        yield n
+                    }
+                yield (r0, r1, e, r2)
+        yield
+            assert(deliveredLate == 2, s"the two blurs ran it, the late delivery did not: $deliveredLate")
+            assert(deliveredStale == 2, s"nor did a delivery of a value the signal no longer holds: $deliveredStale")
+            assert(error == Present(FieldError("too-long", Map("max" -> "4"))), s"the verdict about the current limit stays: $error")
+            assert(sameValue == 2, s"subscribing to it and setting it to the same value ran nothing either: $sameValue")
+        end for
+    }
+
+    "a dependency that moves between the mount's run and the subscription reaches the rule" in {
+        for
+            (atMount, subscribed) <-
+                for
+                    maxLen <- Signal.initRef(5)
+                    form   <- mkForm
+                    f      <- form.field("abcdef").rules(Validator.reading(maxLen)(tooLong)).declare
+                    _      <- f.revalidate   // the mount's own run, which reads 5
+                    e0     <- f.error.current
+                    _      <- maxLen.set(10) // before the field observes it
+                    e1     <- Scope.run {
+                        for
+                            _ <- f.wireDependencies
+                            _ <- assertEventually(maxLen.waiters.map(_ == 1))
+                            e <- f.error.current
+                        yield e
+                    }
+                yield (e0, e1)
+        yield
+            assert(atMount == Present(FieldError("too-long", Map("max" -> "5"))), s"the mount judged against 5: $atMount")
+            assert(subscribed == Absent, s"the value at subscription is a change, and the rule judged 10: $subscribed")
+        end for
+    }
+
+    "a mount whose dependency does not move runs each rule as often as without one" in {
+        for
+            (plain, rechecks, onBlur, pending) <-
+                for
+                    plainRuns <- AtomicInt.init(0)
+                    readRuns  <- AtomicInt.init(0)
+                    blurRuns  <- AtomicInt.init(0)
+                    maxLen    <- Signal.initRef(5)
+                    form      <- mkForm
+                    f         <- form.field("abc").rules(
+                        countedPlain(plainRuns) and countedReading(readRuns, maxLen) and
+                            Validator.reading(Dep.recheck(maxLen)).async(countedTooLong(blurRuns))
+                    ).declare
+                    out <- Scope.run {
+                        for
+                            _ <- form.wireChangeActivations
+                            _ <- assertEventually(maxLen.waiters.map(_ == 1))
+                            _ <- assertEventually(unchecked(f))
+                            p <- plainRuns.get
+                            r <- readRuns.get
+                            b <- blurRuns.get
+                            c <- f.notChecked.current
+                        yield (p, r, b, c)
+                    }
+                yield out
+        yield
+            assert(plain == 1, s"the mount ran the plain rule once: $plain")
+            assert(rechecks == 1, s"and the reading rule due on a change once: $rechecks")
+            assert(onBlur == 0, s"the reading rule held to the blur not at all: $onBlur")
+            assert(pending, "so it is not yet checked")
+        end for
+    }
+
+    "a dependency a field event read first still rechecks a rule that event was not due for, when it reaches the field" in {
+        for
+            (blurred, typed, delivered, pending) <-
+                for
+                    other <- Signal.initRef("secret")
+                    form  <- mkForm
+                    f     <- form.field("secret").rules(Validator.matchesField(other).on(Activation.Blur)).declare
+                    _     <- f.onEvent("secret", Activation.Blur)
+                    e0    <- f.error.current
+                    _     <- other.set("public")
+                    // A keystroke the rule is not due for runs before the field hears of the change, and reads the new value.
+                    _   <- f.valueRef.set("secrets")
+                    _   <- f.onEvent("secrets", Activation.Change)
+                    n0  <- f.notChecked.current
+                    out <- Scope.run {
+                        for
+                            _ <- f.wireDependencies
+                            _ <- assertEventually(other.waiters.map(_ == 1))
+                            e <- f.error.current
+                            n <- f.notChecked.current
+                        yield (e, n)
+                    }
+                yield (e0, n0, out._1, out._2)
+        yield
+            assert(blurred == Absent, s"the blur found a match: $blurred")
+            assert(typed, "the keystroke left the rule held to the blur not yet checked")
+            assert(delivered == Present(FieldError("must-match")), s"the change of the other field rechecked the rule: $delivered")
+            assert(!pending, "so it is checked again")
+        end for
+    }
+
+    "a late delivery of a dependency a field event already read still rechecks a rule that event was not due for" in {
+        for
+            (typed, delivered, pending) <-
+                for
+                    other <- Signal.initRef("secret")
+                    form  <- mkForm
+                    f     <- form.field("secret").rules(Validator.matchesField(other).on(Activation.Blur)).declare
+                    _     <- f.onEvent("secret", Activation.Blur)
+                    _     <- other.set("public")
+                    _     <- f.valueRef.set("public")
+                    _     <- f.onEvent("public", Activation.Change)
+                    n0    <- f.notChecked.current
+                    // What the observer of `other` delivers once its fiber runs, after the keystroke.
+                    _ <- f.dependencyChanged(other)
+                    e <- f.error.current
+                    n <- f.notChecked.current
+                yield (n0, e, n)
+        yield
+            assert(typed, "the keystroke left the rule held to the blur not yet checked")
+            assert(delivered == Absent, s"the delivery rechecked the rule, and the two fields match: $delivered")
+            assert(!pending, "so it is checked again")
+        end for
+    }
+
+    // ---- what validating shows ----------------------------------------------------------------
+    //
+    // `validating` and the debounce belong to a run that runs a rule. An event no rule is due for
+    // only recalls verdicts, so it publishes at once and leaves both alone.
+
+    /** Runs `edits` on a fiber and waits until it has finished or `validating` has turned true, whichever comes first,
+      * collecting every value `validating` took meanwhile. `onChange` on a ref runs inside the write, so no value is
+      * missed. The edits are forked because a debounced run sleeps on the controlled clock, which nothing advances here.
+      */
+    private def validatingDuring(f: FormField[String])(edits: Unit < Async)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Chunk[Boolean] < (Async & Scope) =
+        for
+            seen <- AtomicRef.init(Chunk.empty[Boolean])
+            _    <- f.validating.onChange(v => seen.updateAndGet(_ :+ v).unit)
+            fib  <- Fiber.init(edits)
+            _    <- assertEventually(seen.get.map(_.contains(true)).map(t => if t then true else fib.done))
+            all  <- seen.get
+        yield all
+
+    "a field whose rules wait for the submit shows no validating while the reader types, and the old error goes at once" in {
+        Clock.withTimeControl { _ =>
+            for
+                (submitted, first, afterFirst, second, afterSecond) <-
+                    for
+                        form <- mkForm
+                        f    <- form.field("").rules(Validator.required().on(Activation.Submit)).debounce(300.millis).declare
+                        _    <- f.validateForSubmit
+                        e0   <- f.error.current
+                        out  <- Scope.run {
+                            for
+                                s1 <- validatingDuring(f)(f.valueRef.set("a").andThen(f.onEvent("a", Activation.Change)))
+                                e1 <- f.error.current
+                                s2 <- validatingDuring(f)(f.valueRef.set("ab").andThen(f.onEvent("ab", Activation.Change)))
+                                e2 <- f.error.current
+                            yield (s1, e1, s2, e2)
+                        }
+                    yield (e0.map(_.code), out._1, out._2, out._3, out._4)
+            yield
+                assert(submitted == Present("required"), s"the submit judged the empty value: $submitted")
+                assert(!first.contains(true), s"no rule is due for a change, so nothing validates: $first")
+                assert(afterFirst == Absent, s"the error about the empty value went with the first edit: $afterFirst")
+                assert(!second.contains(true), s"nor for the next one: $second")
+                assert(afterSecond == Absent, s"and nothing came back: $afterSecond")
+            end for
+        }
+    }
+
+    "a field on(Blur) shows no validating while the reader types, and the blur's error goes at once" in {
+        Clock.withTimeControl { clock =>
+            for
+                (blurred, typing, edited) <-
+                    for
+                        form <- mkForm
+                        f    <- form.field("").rules(Validator.required()).on(Activation.Blur).debounce(300.millis).declare
+                        out  <- Scope.run {
+                            for
+                                blur <- Fiber.init(f.onEvent("", Activation.Blur))
+                                _    <- clock.awaitPendingSleeper(300.millis)
+                                _    <- clock.advance(300.millis)
+                                _    <- blur.get
+                                e0   <- f.error.current
+                                s    <- validatingDuring(f)(f.valueRef.set("a").andThen(f.onEvent("a", Activation.Change)))
+                                e1   <- f.error.current
+                            yield (e0.map(_.code), s, e1)
+                        }
+                    yield out
+            yield
+                assert(blurred == Present("required"), s"the blur judged the empty value: $blurred")
+                assert(!typing.contains(true), s"no rule is due for a change, so nothing validates: $typing")
+                assert(edited == Absent, s"the error about the empty value went with the edit: $edited")
+            end for
+        }
+    }
+
+    "a field with a rule due on every change still shows validating while its debounce runs" in {
+        Clock.withTimeControl { clock =>
+            for
+                (during, after, error) <-
+                    for
+                        form <- mkForm
+                        f    <- form.field("x").rules(Validator.required()).debounce(300.millis).declare
+                        out  <- Scope.run {
+                            for
+                                _    <- f.valueRef.set("")
+                                edit <- Fiber.init(f.onEvent("", Activation.Change))
+                                _    <- clock.awaitPendingSleeper(300.millis)
+                                v0   <- f.validating.current
+                                _    <- clock.advance(300.millis)
+                                _    <- edit.get
+                                v1   <- f.validating.current
+                                e    <- f.error.current
+                            yield (v0, v1, e.map(_.code))
+                        }
+                    yield out
+            yield
+                assert(during, "the rule is due for the change, so validating shows through the debounce")
+                assert(!after, "and goes once the run has published")
+                assert(error == Present("required"), s"what the run found: $error")
+            end for
+        }
+    }
+
+    "a blur no rule is due for, during the debounce of a change's run, leaves that run to publish" in {
+        Clock.withTimeControl { clock =>
+            for
+                (blurred, error, after) <-
+                    for
+                        form <- mkForm
+                        f    <- form.field("x").rules(Validator.required().on(Activation.Change)).debounce(300.millis).declare
+                        out  <- Scope.run {
+                            for
+                                _    <- f.valueRef.set("")
+                                edit <- Fiber.init(f.onEvent("", Activation.Change))
+                                _    <- clock.awaitPendingSleeper(300.millis)
+                                _    <- f.onEvent("", Activation.Blur)
+                                v0   <- f.validating.current
+                                _    <- clock.advance(300.millis)
+                                _    <- edit.get
+                                e    <- f.error.current
+                                v1   <- f.validating.current
+                            yield (v0, e.map(_.code), v1)
+                        }
+                    yield out
+            yield
+                assert(blurred, "the change's run is still pending after the blur, so validating stays")
+                assert(error == Present("required"), s"the change's run published what it found: $error")
+                assert(!after, "and validating went with it")
+            end for
+        }
+    }
+
+    "a submit during a change's debounce ends validating, and the run it overtook publishes nothing over it" in {
+        Clock.withTimeControl { clock =>
+            for
+                (submitted, during, error, after) <-
+                    for
+                        form <- mkForm
+                        f    <- form.field("x").rules(Validator.required()).debounce(300.millis).declare
+                        out  <- Scope.run {
+                            for
+                                _    <- f.valueRef.set("")
+                                edit <- Fiber.init(f.onEvent("", Activation.Change))
+                                _    <- clock.awaitPendingSleeper(300.millis)
+                                _    <- f.valueRef.set("y")
+                                s    <- f.validateForSubmit
+                                v0   <- f.validating.current
+                                _    <- clock.advance(300.millis)
+                                _    <- edit.get
+                                e    <- f.error.current
+                                v1   <- f.validating.current
+                            yield (s, v0, e, v1)
+                        }
+                    yield out
+            yield
+                assert(submitted == Absent, s"the submit judged the value it read: $submitted")
+                assert(!during, "the submit is the field's last run, so validating went with it")
+                assert(error == Absent, s"the change's run, about the empty value, did not publish over the submit: $error")
+                assert(!after, "and validating stays off")
+            end for
+        }
+    }
+
+    "a keystroke no rule is due for drops the verdict of a run still in flight for the old value" in {
+        for
+            (typed, error, pending, after) <-
+                for
+                    started <- Latch.init(1)
+                    release <- Latch.init(1)
+                    form    <- mkForm
+                    f       <- form.field("").rules(Validator.async[String](v =>
+                        started.release.andThen(release.await).andThen(
+                            (if v == "taken" then Present(FieldError("taken")) else Absent): Maybe[FieldError]
+                        )
+                    )).declare
+                    out <- Scope.run {
+                        for
+                            _    <- f.valueRef.set("taken")
+                            blur <- Fiber.init(f.onEvent("taken", Activation.Blur))
+                            _    <- started.await
+                            _    <- f.valueRef.set("taken!")
+                            _    <- f.onEvent("taken!", Activation.Change)
+                            n0   <- f.notChecked.current
+                            _    <- release.release
+                            _    <- blur.get
+                            e    <- f.error.current
+                            n    <- f.notChecked.current
+                            v    <- f.validating.current
+                        yield (n0, e, n, v)
+                    }
+                yield out
+        yield
+            assert(typed, "the rule held to the blur has not judged the new value")
+            assert(error == Absent, s"the verdict about the old value is not shown: $error")
+            assert(pending, "the rule is still not checked for the new value")
+            assert(!after, "and validating went with the run")
+        end for
+    }
+
+    // ---- what the gated view counts ------------------------------------------------------------
+
+    "a rule not yet checked keeps isValid() false and leaves isValid(onlyVisible = true) and the submit button alone" in {
+        for
+            (gatedTyping, ungatedTyping, disabledTyping, ungatedAfterSubmit) <-
+                for
+                    form     <- mkForm
+                    f        <- form.field("").rules(Validator.required().on(Activation.Submit)).declare
+                    ungated  <- form.isValid()
+                    gated    <- form.isValid(onlyVisible = true)
+                    disabled <- form.submitDisabled
+                    _        <- f.valueRef.set("x")
+                    _        <- f.onEvent("x", Activation.Change)
+                    g0       <- gated.current
+                    u0       <- ungated.current
+                    d0       <- disabled.signal.current
+                    _        <- form.submit(Kyo.unit)
+                    u1       <- ungated.current
+                yield (g0, u0, d0, u1)
+        yield
+            assert(gatedTyping, "nothing is shown, so the gated view is valid")
+            assert(!ungatedTyping, "the rule has not judged the value, so the ungated view is not")
+            assert(!disabledTyping, "and the submit that would run the rule stays open")
+            assert(ungatedAfterSubmit, "the submit judged the value valid")
+        end for
+    }
+
+    "a field-array row's unchecked rule counts the same way in both views" in {
+        for
+            (gatedTyping, ungatedTyping, ungatedAfterSubmit) <-
+                for
+                    captured <- AtomicRef.init(Chunk.empty[FormField[String]])
+                    form     <- mkForm
+                    arr      <- form.fieldArray(0) { (row, _) =>
+                        for
+                            fld <- row.field("").rules(Validator.required().on(Activation.Submit)).declare
+                            _   <- captured.updateAndGet(_ :+ fld)
+                        yield (fragment(): UI)
+                    }
+                    ungated <- form.isValid()
+                    gated   <- form.isValid(onlyVisible = true)
+                    _       <- arr.add
+                    flds    <- captured.get
+                    fld = flds.head
+                    // The row's change observer checks the mount value, then waits on the ref again.
+                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 1))
+                    _  <- fld.valueRef.set("x")
+                    _  <- assertEventually(fld.touched.current)
+                    g0 <- gated.current
+                    u0 <- ungated.current
+                    _  <- form.submit(Kyo.unit)
+                    u1 <- ungated.current
+                    _  <- arr.removeAt(0)
+                yield (g0, u0, u1)
+        yield
+            assert(gatedTyping, "a row's unchecked rule shows nothing, so the gated view is valid")
+            assert(!ungatedTyping, "and the ungated view is not")
+            assert(ungatedAfterSubmit, "until the submit judged it")
         end for
     }
 

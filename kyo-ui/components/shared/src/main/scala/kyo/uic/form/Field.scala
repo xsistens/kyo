@@ -54,8 +54,10 @@ end Validated
   * what the rules yield, and so what [[Form.submit]] hands its handler for this field.
   *
   * Two independent error channels feed the display:
-  *   - the CLIENT error (`clientErrorRef`): the rule chain's verdict, re-derived on
-  *     every trigger and at submit;
+  *   - the CLIENT verdict (`clientRef`): what the rule chain said, re-derived on every
+  *     event and at submit. It is either an error or none ([[ClientVerdict.Checked]]), or
+  *     [[ClientVerdict.NotChecked]] while a rule the event was not due for has nothing to say
+  *     about the current value: no error shows, and the field does not count as valid;
   *   - the SERVER error (`serverErrorRef`): an out-of-band result from `setError`,
   *     [[ServerError]]-scoped to the value it was set against. It is shown only
   *     while the value is unchanged, so the first edit hides it, which re-enables the
@@ -63,7 +65,7 @@ end Validated
   *     button that produced the error would be the one it disables: a deadlock.
   *
   * Constructed by [[FieldSpec.declare]], never directly. Everything decided AT declaration
-  * (the rules it starts with, its triggers, its id, its reveal mode, whether submit may focus
+  * (the rules it starts with, its events, its id, its reveal mode, whether submit may focus
   * it) is a parameter of that spec and arrives here already settled; what stays on this class
   * is what a caller can only do AFTERWARDS: [[addRule]] and [[matches]], which need a second
   * field that does not exist yet when the first is declared.
@@ -75,11 +77,13 @@ sealed abstract class FormField[A] private[form] (
     val domId: String,
     touchedRef: SignalRef[Boolean],
     validatingRef: SignalRef[Boolean],
-    clientErrorRef: SignalRef[Maybe[FieldError]],
+    clientRef: SignalRef[ClientVerdict],
     serverErrorRef: SignalRef[Maybe[ServerError[A]]],
     epoch: AtomicInt,
+    dueEpoch: AtomicInt,
     resetWrite: AtomicRef[Maybe[A]],
-    triggers: Set[Activation.Field],
+    store: Rule.Store,
+    fieldOn: Maybe[Set[Activation.Field]],
     debounce: Duration,
     revealMode: Reveal,
     private[form] val focusableFlag: Boolean,
@@ -112,7 +116,13 @@ sealed abstract class FormField[A] private[form] (
       * server error.
       */
     def error(using Frame): Signal[Maybe[FieldError]] =
-        clientErrorRef.combineLatest(serverVisible).map((c, s) => c.orElse(s))
+        clientRef.combineLatest(serverVisible).map((c, s) => c.error.orElse(s))
+
+    /** True while a rule of the chain has not judged the current value: one that was not due for the last event, and
+      * whose last verdict was about another value ([[Rule.on]]). It shows no error and still makes the ungated
+      * [[Form.isValid]] false.
+      */
+    private[form] def notChecked(using Frame): Signal[Boolean] = clientRef.map(_ == ClientVerdict.NotChecked)
 
     /** The error as it should be DISPLAYED, gated by [[revealMode]]: the client rule error,
       * else the still-current server error, once the reveal condition opens. Feeds both inline
@@ -164,16 +174,26 @@ sealed abstract class FormField[A] private[form] (
     def setError(message: String)(using Frame): Unit < Sync =
         setError(Present(FieldError.message(message)))
 
+    /** This field typed with its rules' result, which is what a chained call hands back: `this.type` cannot be lifted
+      * into a computation, and the refinement is what a chain must not lose.
+      */
+    private def self: FormField[A] { type Valid = FormField.this.Valid } = this
+
     /** Append another rule (ordered short-circuit), e.g. a cross-field rule that
-      * reads a sibling handle. Returns this field for chaining.
+      * reads a sibling handle. Hands back this field for chaining.
       *
       * The rule runs on the field's value, after the declared chain has passed, and what it
       * yields is not kept: the field still validates to the type its declared rules yield
       * ([[Valid]]), so a later check can never change what submit hands over.
+      *
+      * It may be appended at any time, during the build or from a handler after the mount. A
+      * rule that reads another field ([[Validator.reading]]) is followed from then on: once the
+      * field is wired, appending it subscribes the field to what it reads, for as long as the
+      * mount (or the row) lives. Appending does not run it; the field's next event does, or a
+      * change of what it reads.
       */
-    def addRule(v: Rule[A, Any])(using Frame): this.type =
-        chain.append(v)
-        this
+    def addRule(v: Rule[A, Any])(using Frame): (FormField[A] { type Valid = FormField.this.Valid }) < Sync =
+        chain.append(v).map(observe).map(_ => self)
 
     /** Append a predicate rule in the same `satisfy(code)(pred)` shape used at the form level
       * ([[Form.satisfy]]) and to build a standalone [[Validator]] ([[Validator.satisfy]]), so a
@@ -181,7 +201,9 @@ sealed abstract class FormField[A] private[form] (
       * `addRule(Validator.satisfy(code, args)(p))`; `true` = valid. Reach for [[addRule]] directly
       * for built-in rules (`required`/`email`) or compositions (`a and b`). Chainable.
       */
-    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): this.type =
+    def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using
+        Frame
+    ): (FormField[A] { type Valid = FormField.this.Valid }) < Sync =
         addRule(Validator.satisfy(code, args)(p))
 
     /** The field's original default value: the baseline it was constructed with (also
@@ -204,65 +226,114 @@ sealed abstract class FormField[A] private[form] (
     def rebase(using Frame): Unit < Sync =
         valueRef.get.map(baselineRef.set)
 
-    /** Re-validate this field whenever any of `sigs` emits (cross-field dependency).
+    /** Re-validate this field whenever any of `sigs` changes (cross-field dependency).
       * Launches a scoped observer per signal; torn down with the enclosing mount.
+      *
+      * For a rule that reads another field, [[Validator.reading]] is the preferred shape: the rule carries what it reads,
+      * reruns or drops only itself on a change ([[Dep]]), and needs no call here. This is the general fallback, for a rule
+      * that reads a signal some other way.
+      *
+      * A change of a dependency runs EVERY rule of the chain, whatever its [[Rule.on]], as a submit
+      * does: this field's own value has not moved, so a rule not due for the event would keep the
+      * verdict it found for that value, which was about the dependency's OLD value. The fresh
+      * verdicts are remembered, so the events after it reuse them while the value stays. The run
+      * does not touch the field: whether its error shows is still up to its own events and the
+      * submit. The dependency's value at subscription is not a change and runs as the mount does.
       */
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) =
-        Kyo.foreach(sigs)(s => Fiber.init(s.observe(_ => revalidate)).unit).unit
+        Kyo.foreach(sigs) { s =>
+            AtomicInt.init(0).map { seen =>
+                Fiber.init(s.observe(_ => seen.getAndIncrement.map(n => if n == 0 then revalidate else revalidateAll))).unit
+            }
+        }.unit
 
     /** This field must equal the live value of `other` (the password-confirmation pattern):
-      * one call for what is otherwise two coupled statements: it appends
-      * [[Validator.matchesField]] AND wires [[dependsOn]]`(other)` so the field re-validates as
-      * soon as `other` changes. Forgetting the dependency (the common footgun) is impossible.
-      * For rules that read a sibling WITHOUT equality, use `addRule` + `dependsOn` directly.
+      * `addRule(Validator.matchesField(other, code))`. The rule carries its dependency, so the
+      * field subscribes to `other` when the form mounts (or at once, when called after it) and
+      * nothing else needs wiring. A change
+      * of `other` rechecks the rule at once, whatever its `on`, so a match held to the blur
+      * drops its error the moment `other` comes to match, and shows it at once on a touched
+      * field when `other` stops matching. The field's other rules are not rerun by it.
+      * For a rule that reads a sibling WITHOUT equality, use [[Validator.reading]]. Chainable.
       */
-    def matches(other: Signal[A], code: String = "must-match")(using CanEqual[A, A], Frame): Unit < (Async & Scope) =
-        discard(addRule(Validator.matchesField(other, code)))
-        dependsOn(other)
+    def matches(other: Signal[A], code: String = "must-match")(using
+        CanEqual[A, A],
+        Frame
+    ): (FormField[A] { type Valid = FormField.this.Valid }) < Sync =
+        addRule(Validator.matchesField(other, code))
 
     // --- internals -------------------------------------------------------------
 
-    /** True when this field validates on focus-loss; the `bind` extensions read it to
-      * decide whether to wire `onBlur`.
+    /** The field's OWN events: the ones it declared with `on`, else [[FieldSpec.defaultActivation]]. An event among them
+      * marks the field touched, which is what [[Reveal.WhenTouched]] waits for; whether a rule RUNS on an event is the
+      * rule's own matter ([[Rule.on]]), with this set as the fallback only where `on` was declared.
       */
-    private[form] def wantsBlur: Boolean = triggers(Activation.Blur)
+    private[form] def touchedBy(event: Activation.Field): Boolean = fieldOn.getOrElse(FieldSpec.defaultActivation).contains(event)
 
-    /** True when this field validates on every value change; [[wireChange]] launches the
-      * observer that drives it.
-      */
-    private[form] def wantsChange: Boolean = triggers(Activation.Change)
-
-    /** Wire the [[Activation.Change]] behaviour: observe the bound value and, on every change,
-      * validate. The FIRST emission is the current (mount) value: validate it SILENTLY (no
-      * reveal) so [[isValid]] is correct from the start without flagging an untouched field;
-      * every subsequent (real) change runs [[onEvent]], which marks the field touched so the
-      * error surfaces inline as the user types (RHF `onChange` mode). A no-op unless the
-      * field declared `Activation.Change`. Launched in the mount scope by `Form.mountedWith`,
-      * so the observer is torn down with the form. Field-array rows are added long after that
-      * mount body ran and have no ambient `Scope`, so they take [[wireChangeUnscoped]]
-      * instead; the trigger behaves identically there.
+    /** Wire the change events: subscribe to what the rules read ([[observeDependencies]]), then observe the bound value
+      * and, on every change, run the rules that are due for a change. The FIRST emission is the current (mount) value:
+      * validate it SILENTLY (no reveal) so [[isValid]] is correct from the start without flagging an untouched field;
+      * every subsequent (real) change runs [[onEvent]], which marks the field touched when [[Activation.Change]] is one of
+      * its own events, so the error surfaces inline as the user types (RHF `onChange` mode). Subscribing first leaves no
+      * gap between the mount's run and the subscription for a dependency to move in unheard.
+      *
+      * Every field is wired, whatever it declares: a rule may ask for changes in a field that does not, and a rule that
+      * does not run on a change still has to learn that the value it judged is gone. Launched in the mount scope by
+      * `Form.mountedWith`, so the observers are torn down with the form. Field-array rows are added long after that mount
+      * body ran and have no ambient `Scope`, so they take [[wireChangeUnscoped]] instead; the events behave identically
+      * there.
       */
     private[form] def wireChange(using Frame): Unit < (Async & Scope) =
-        if !wantsChange then Kyo.unit
-        else
-            for
-                seen <- AtomicInt.init(0)
-                _    <- Fiber.init(changeObserver(seen)).unit
-            yield ()
+        for
+            _    <- wireDependencies
+            seen <- AtomicInt.init(0)
+            _    <- Fiber.init(changeObserver(seen)).unit
+        yield ()
 
-    /** [[wireChange]] for a caller with no ambient `Scope`: the observer runs on an UNSCOPED
-      * fiber, handed back so the caller owns its lifetime. `FieldArray` is that caller: it
-      * cancels a row's fibers when the row is removed and when the form's mount scope closes,
-      * which is what makes `Activation.Change` behave on rows exactly as it does on the
-      * static tree. `Absent` for a field that did not declare the trigger.
+    /** [[wireChange]] for a caller with no ambient `Scope`: the change observer runs on an UNSCOPED fiber, handed back
+      * so the caller owns its lifetime, and the subscriptions to what the rules read end with [[unwire]]. `FieldArray` is
+      * that caller: it cancels a row's fiber and unwires its fields when the row is removed and when the form's mount
+      * scope closes, which is what makes the change events behave on rows exactly as they do on the static tree.
       */
-    private[form] def wireChangeUnscoped(using Frame): Maybe[Fiber[Unit, Any]] < Async =
-        if !wantsChange then (Absent: Maybe[Fiber[Unit, Any]])
+    private[form] def wireChangeUnscoped(using Frame): Fiber[Unit, Any] < Sync =
+        observeDependencies.andThen(AtomicInt.init(0).map(seen => Fiber.initUnscoped(changeObserver(seen))))
+
+    /** [[observeDependencies]] in the enclosing `Scope`, with no change observer and no run of its own: what a test that
+      * drives the field's events by hand wires.
+      */
+    private[form] def wireDependencies(using Frame): Unit < (Async & Scope) =
+        Scope.ensure(unwire).andThen(observeDependencies)
+
+    /** Subscribe to every signal the rule chain reads ([[Validator.reading]]), one observer per signal however many rules
+      * read it, but never to the field's own value, whose changes are its own events. From then on [[addRule]] subscribes
+      * to what an appended rule reads as it is appended.
+      */
+    private def observeDependencies(using Frame): Unit < Sync =
+        chain.wire.map(observe)
+
+    /** End every subscription to what the rules read: the mount or the row is over. */
+    private[form] def unwire(using Frame): Unit < Sync = chain.close
+
+    /** Start the observers of `signals`, which the chain has claimed for this field, and hand them to it. What each holds
+      * now is noted first ([[Rule.Store.subscribe]]), so a change after this call reaches a rule that has judged nothing
+      * yet, however soon it comes.
+      */
+    private def observe(signals: Chunk[Signal[?]])(using Frame): Unit < Sync =
+        if signals.isEmpty then Kyo.unit
         else
-            for
-                seen  <- AtomicInt.init(0)
-                fiber <- Fiber.initUnscoped(changeObserver(seen))
-            yield Present(fiber)
+            store.subscribe(signals).andThen(
+                Kyo.foreach(signals)(s => Fiber.initUnscoped(s.observe(_ => dependencyChanged(s)))).map(chain.keep)
+            )
+
+    /** `signal`, which the rules read, has news (every value its observer delivers, the one at subscription included): an event for the field ([[Rule.Ctx.of]]). Each rule decides for itself,
+      * against what it reads NOW: one that rechecks on `signal` runs against the field's current value when the value of
+      * `signal` it last judged is not the one it reads, unless it already judged exactly this input; the others keep or
+      * drop their verdicts. So a delivery behind the signal, or of a value some run has already judged, runs nothing, and
+      * a field event that read the new value first does not swallow the change for a rule it was not due for. The field is
+      * not touched.
+      */
+    private[form] def dependencyChanged(signal: Signal[?])(using Frame): Unit < Async =
+        valueRef.use(runAndSet(_, signal))
 
     /** The observer both wirings run: first emission validates SILENTLY (correct `isValid`
       * without flagging an untouched field), every later one goes through [[onEvent]].
@@ -273,7 +344,7 @@ sealed abstract class FormField[A] private[form] (
             // taken for a later edit; and only the value the reset wrote counts as the reset's.
             resetWrite.getAndSet(Absent).map { written =>
                 seen.getAndIncrement.map { n =>
-                    if n == 0 || written.contains(v) then revalidate else onEvent(v)
+                    if n == 0 || written.contains(v) then revalidate else onEvent(v, Activation.Change)
                 }
             }
         }
@@ -291,38 +362,94 @@ sealed abstract class FormField[A] private[form] (
         // report against itself.
         if previous != domId then idConflict = Present(previous)
 
-    /** A trigger fired: mark touched and validate. */
-    private[form] def onEvent(v: A)(using Frame): Unit < Async =
-        touchedRef.set(true).andThen(runAndSet(v))
+    /** `event` happened: mark the field touched if it is one of its own events, and run the rules due for it. */
+    private[form] def onEvent(v: A, event: Activation.Field)(using Frame): Unit < Async =
+        (if touchedBy(event) then touchedRef.set(true) else Kyo.unit).andThen(runAndSet(v, event))
 
-    /** Re-run the current rule chain against the latest value and publish the error,
-      * guarded against stale async runs by the epoch counter.
+    /** Re-run the rule chain against the latest value as a change event, without touching the field: the mount value and
+      * a value a reset wrote. Guarded against stale async runs by the epoch.
       */
     private[form] def revalidate(using Frame): Unit < Async =
-        valueRef.use(runAndSet)
+        valueRef.use(runAndSet(_, Activation.Change))
 
-    private def runAndSet(v: A)(using Frame): Unit < Async =
+    /** Re-run EVERY rule against the latest value, whatever it is due for, without touching the field: a field this one
+      * [[dependsOn]] changed, which changes what the rules would say about a value that did not move.
+      */
+    private def revalidateAll(using Frame): Unit < Async =
+        valueRef.use(runAndSet(_, Rule.Sweep.Every))
+
+    /** Run the rules `trigger` is due for on `v`, and publish what the chain says.
+      *
+      * Every trigger takes an epoch first, so a run learns that something happened while it ran. The first rule the run
+      * is due for makes it a due run ([[startDue]]): it records its epoch as the field's latest due run (`dueEpoch`),
+      * shows `validating` and waits out the debounce before that rule runs. A run no rule is due for only recalls
+      * verdicts (or finds rules not yet checked) and publishes at once, while the epoch is still its own, leaving
+      * `validating` to a run still in flight. A due run that finds the epoch still its own publishes its verdict and ends
+      * `validating`. One that finds a later due run leaves the field to it. One overtaken only by runs no rule was due for
+      * ends as the field's last due run, but cannot publish its own verdict, which may be about a value the field no
+      * longer holds: it settles instead ([[settle]]).
+      */
+    private def runAndSet(v: A, trigger: Rule.Trigger)(using Frame): Unit < Async =
+        epoch.incrementAndGet.map(mine => decide(v, trigger, mine, Absent))
+
+    /** Run the chain for `trigger` on `v` as the run whose epoch is `mine`, and publish. `settling` is the epoch of the
+      * due run a settle finishes: a settle no rule is due for publishes on its behalf, which ends that run and clears
+      * `validating`, and one overtaken in turn settles again.
+      */
+    private def decide(v: A, trigger: Rule.Trigger, mine: Int, settling: Maybe[Int])(using Frame): Unit < Async =
         for
-            mine <- epoch.incrementAndGet
-            _    <- validatingRef.set(true)
-            _    <- if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit
-            res  <- chain.run(v)
-            cur  <- epoch.get
-            _    <- if cur == mine then clientErrorRef.set(res.failure).andThen(validatingRef.set(false))
-            else Kyo.unit
+            res    <- chain.run(v, Rule.Ctx.of(trigger, fieldOn, store, mine, startDue(mine)))
+            latest <- dueEpoch.get
+            // `latest >= mine`: this run was due, or a later run is, and then the epoch has moved and nothing publishes.
+            _ <- finish(if latest >= mine then Present(mine) else settling, mine, ClientVerdict.of(res))
         yield ()
 
-    /** Validate unconditionally for submit (ignores triggers), publish the error, and hand back what the rules yielded
-      * for the value read here: ONE run, so submit decides validity and receives the validated value from the same
-      * verdict, and a value written after the read cannot reach the handler.
+    /** Before the first rule the run whose epoch is `mine` is due for: claim the field as its latest due run, show
+      * `validating` and wait out the debounce. A rule due after it in the same run, or a run a later due run has
+      * already overtaken, adds nothing.
+      */
+    private def startDue(mine: Int)(using Frame): Unit < Async =
+        dueEpoch.getAndUpdate(math.max(_, mine)).map { before =>
+            if before >= mine then Kyo.unit
+            else validatingRef.set(true).andThen(if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit)
+        }
+
+    /** The run whose epoch is `mine` found `published`, on behalf of `owner`: the due run it is, or the due run a settle
+      * finishes, or none for a run no rule was due for. Published if nothing happened since, which ends `owner` and so
+      * `validating`. Otherwise, while `owner` is still the field's last due run, only runs no rule was due for happened,
+      * and none of them could see what it stored: settle. A later due run leaves the field to that run.
+      */
+    private def finish(owner: Maybe[Int], mine: Int, published: ClientVerdict)(using Frame): Unit < Async =
+        epoch.get.map { cur =>
+            if cur == mine then clientRef.set(published).andThen(if owner.isDefined then validatingRef.set(false) else Kyo.unit)
+            else
+                owner match
+                    case Present(run) => dueEpoch.get.map(latest => if latest == run then settle(run) else Kyo.unit)
+                    case Absent       => Kyo.unit
+        }
+
+    /** Finish the run whose epoch is `run`, which runs no rule was due for overtook, on the value the field holds now.
+      * Those runs published what the rules had stored then, which this run's verdicts were not yet among, and a change of
+      * a dependency among them ran nothing for a rule this run was judging. So every signal counts as changed
+      * ([[Rule.Sweep.Settle]]): a rule rechecking on one that moved since it judged runs again, and the rest answer what
+      * they hold for the current input.
+      */
+    private def settle(run: Int)(using Frame): Unit < Async =
+        valueRef.use(v => epoch.incrementAndGet.map(mine => decide(v, Rule.Sweep.Settle, mine, Present(run))))
+
+    /** Validate unconditionally for submit (every rule runs, whatever its activation), publish the error, and hand back
+      * what the rules yielded for the value read here: ONE run, so submit decides validity and receives the validated
+      * value from the same verdict, and a value written after the read cannot reach the handler. Each rule remembers what
+      * it found, so the events after the submit keep its verdict while the value stays. It is a due run like any other
+      * ([[runAndSet]]), with no debounce and no `validating` of its own, so it also ends a `validating` an earlier run left.
       */
     private[form] def verdict(using Frame): Result.Partial[FieldError, Valid] < Async =
         for
             v    <- valueRef.get
             mine <- epoch.incrementAndGet
-            res  <- chain.run(v)
-            cur  <- epoch.get
-            _    <- if cur == mine then clientErrorRef.set(res.failure) else Kyo.unit
+            _    <- dueEpoch.updateAndGet(math.max(_, mine))
+            res  <- chain.run(v, Rule.Ctx.all(store, mine))
+            _    <- finish(Present(mine), mine, ClientVerdict.Checked(res.failure))
         yield res
 
     /** [[verdict]] reduced to the error it publishes. */
@@ -335,11 +462,12 @@ sealed abstract class FormField[A] private[form] (
     private[form] def visibleErrorChunk(using Frame): Signal[Chunk[FieldError]] =
         visibleError.map(e => e.map(Chunk(_)).getOrElse(Chunk.empty))
 
-    /** The UNGATED error as a (0-or-1) chunk: the raw client/server verdict regardless of
-      * touched/submit-reveal. Feeds `Form.isValid(onlyVisible = false)`.
+    /** True while the field is not valid, regardless of touched/submit-reveal: the raw client/server
+      * verdict holds an error, or a rule has not judged the current value ([[notChecked]]). Feeds
+      * `Form.isValid(onlyVisible = false)`.
       */
-    private[form] def errorChunk(using Frame): Signal[Chunk[FieldError]] =
-        error.map(e => e.map(Chunk(_)).getOrElse(Chunk.empty))
+    private[form] def invalid(using Frame): Signal[Boolean] =
+        clientRef.combineLatest(serverVisible).map((c, s) => c != ClientVerdict.Checked(Absent) || s.isDefined)
 
     /** The gated error as a (0-or-1) chunk of [[Form.ErrorEntry]], tagged with this field's
       * [[domId]] so a summary can jump focus to it. Feeds `Form.errorEntries`.
@@ -348,29 +476,64 @@ sealed abstract class FormField[A] private[form] (
         visibleError.map(e => e.map(err => Chunk(Form.ErrorEntry(err, Present(domId)))).getOrElse(Chunk.empty))
 
     /** Revert value to the live baseline (the last [[rebase]], else [[initialValue]]),
-      * and clear touched, error (client + server), validating, and the gate a submit naming
-      * this field opened (form reset).
+      * and clear touched, error (client + server), validating, the verdicts the rules remember,
+      * and the gate a submit naming this field opened (form reset). A run still in flight is
+      * dropped rather than published over the reset.
       *
       * The change observer would read the value the reset writes as the reader's edit and mark
       * the field touched, which shows the error of a field a successful submit just emptied. So
       * the reset records the value it writes, and the observer validates an emission of exactly
       * that value silently. Only a write that changes the value is recorded, since an unchanged
-      * value emits nothing, and only on a field that observes its changes at all.
+      * value emits nothing.
       */
     private[form] def resetField(using Frame): Unit < Sync =
         for
             base    <- baselineRef.get
             current <- valueRef.get
+            mine    <- epoch.incrementAndGet
+            _       <- dueEpoch.updateAndGet(math.max(_, mine))
+            _       <- store.clear
             _       <- if current == base then Kyo.unit
-            else (if wantsChange then resetWrite.set(Present(base)) else Kyo.unit).andThen(valueRef.set(base))
+            else resetWrite.set(Present(base)).andThen(valueRef.set(base))
             _ <- touchedRef.set(false)
             _ <- namedRef.set(false)
-            _ <- clientErrorRef.set(Absent)
+            _ <- clientRef.set(ClientVerdict.Checked(Absent))
             _ <- serverErrorRef.set(Absent)
             _ <- validatingRef.set(false)
         yield ()
 
 end FormField
+
+/** What a field's rule chain last said about its value, as the field publishes it.
+  *
+  * `Checked` is a verdict: an error, or none. `NotChecked` is the third state a rule's activation makes possible: a rule
+  * the last event was not due for has no verdict about the current value ([[Rule.on]]). It shows no error, because the
+  * one it had was about another value, and it is not valid either, so the ungated [[Form.isValid]] reads it as `false`
+  * (the gated view counts only what is shown). Kept apart from [[FieldError]] on purpose: it is not a failure a reader
+  * could be shown.
+  */
+private[form] enum ClientVerdict derives CanEqual:
+    case Checked(err: Maybe[FieldError])
+    case NotChecked
+
+    /** The error this verdict shows: none while not checked. */
+    def error: Maybe[FieldError] =
+        this match
+            case Checked(e) => e
+            case NotChecked => Absent
+end ClientVerdict
+
+private[form] object ClientVerdict:
+    /** What a field publishes for the result of a run on one of its events. */
+    def of(r: Result.Partial[FieldError | Rule.NotChecked, Any]): ClientVerdict =
+        r.foldPartial[ClientVerdict](
+            _ => Checked(Absent),
+            {
+                case e: FieldError => Checked(Present(e))
+                case _             => NotChecked
+            }
+        )
+end ClientVerdict
 
 /** A server-set error paired with the field value it was judged against. Kept as a
   * value so the display can hide it the moment the value changes ([[FormField.serverVisible]]).
@@ -390,12 +553,12 @@ object FormField:
         domId: String,
         touchedRef: SignalRef[Boolean],
         validatingRef: SignalRef[Boolean],
-        clientErrorRef: SignalRef[Maybe[FieldError]],
+        clientRef: SignalRef[ClientVerdict],
         serverErrorRef: SignalRef[Maybe[ServerError[A]]],
         epoch: AtomicInt,
         resetWrite: AtomicRef[Maybe[A]],
         rules: Rule[A, B],
-        triggers: Set[Activation.Field],
+        fieldOn: Maybe[Set[Activation.Field]],
         debounce: Duration,
         revealMode: Reveal,
         focusable: Boolean,
@@ -403,20 +566,25 @@ object FormField:
         submitCount: Signal[Int],
         namedRef: SignalRef[Boolean],
         owner: Form
-    )(using CanEqual[A, A]): FormField[A] { type Valid = B } =
-        val rulesChain = new RuleChain(rules)
-        new FormField[A](
+    )(using CanEqual[A, A], Frame): (FormField[A] { type Valid = B }) < Sync =
+        for
+            rulesChain <- RuleChain.init(rules, valueRef)
+            dueEpoch   <- AtomicInt.init(0)
+            store      <- Rule.Store.init
+        yield new FormField[A](
             valueRef,
             initial,
             baselineRef,
             domId,
             touchedRef,
             validatingRef,
-            clientErrorRef,
+            clientRef,
             serverErrorRef,
             epoch,
+            dueEpoch,
             resetWrite,
-            triggers,
+            store,
+            fieldOn,
             debounce,
             revealMode,
             focusable,
@@ -427,23 +595,98 @@ object FormField:
         ):
             type Valid = B
             private[form] def chain: RuleChain[A, B] = rulesChain
-        end new
     end declared
 end FormField
 
-/** A field's rule chain: what it was declared with, plus whatever [[FormField.addRule]] appended since. Typed by what the
-  * declared chain yields, which an appended check keeps (see [[Rule.andCheck]]).
+/** A field's rule chain: what it was declared with, plus whatever [[FormField.addRule]] appended since, together with the
+  * subscriptions the field holds to the signals its rules read. Typed by what the declared chain yields, which an
+  * appended check keeps (see [[Rule.andCheck]]).
   *
-  * A plain `var` for the reason `Form.checks` is one: rules are appended while the form is built, single-threaded,
-  * before any run reads them.
+  * The rules and the subscriptions share one atomic state because a rule may be appended at any time, from a handler
+  * after the mount as well as during the build, and the two must agree: wiring claims every signal the chain reads at
+  * that moment, and an append after it claims the signals of the new rule that are not observed yet, so a signal is
+  * observed exactly once and none is missed, whichever comes first. The field's own value is observed from the start:
+  * its change observer already reports every edit, and a rule reading it must not hear the edit twice.
   */
-final private[form] class RuleChain[A, B](initial: Rule[A, B]):
-    private var current: Rule[A, B] = initial
+final private[form] class RuleChain[A, B] private (own: Signal[?], state: AtomicRef[RuleChain.State[A, B]]):
+    import RuleChain.*
 
-    def run(a: A)(using Frame): Result.Partial[FieldError, B] < Async = current.run(a)
+    /** Run the chain under `ctx`. */
+    def run[S](a: A, ctx: Rule.Ctx[S])(using Frame): Result.Partial[FieldError | S, B] < Async =
+        state.get.map(_.rules.runIn(a, ctx))
 
-    def append(v: Rule[A, Any])(using Frame): Unit =
-        current = current.andCheck(v)
+    /** Append a check. Once the field is wired, hand back the signals the check reads that the field does not observe yet,
+      * now claimed: the caller starts their observers.
+      */
+    def append(v: Rule[A, Any])(using Frame): Chunk[Signal[?]] < Sync =
+        state.getAndUpdate(st =>
+            st.wiring match
+                case Wiring.Wired(observed, fibers) =>
+                    State(st.rules.andCheck(v), Wiring.Wired(observed ++ unobserved(observed, v.dependencies), fibers))
+                case _ => State(st.rules.andCheck(v), st.wiring)
+        ).map(old =>
+            old.wiring match
+                case Wiring.Wired(observed, _) => unobserved(observed, v.dependencies)
+                case _                         => Chunk.empty
+        )
+
+    /** Start observing: hand back, claimed, every signal the chain reads but the field's own value. Nothing while the
+      * field is wired already.
+      */
+    def wire(using Frame): Chunk[Signal[?]] < Sync =
+        state.getAndUpdate(st =>
+            st.wiring match
+                case Wiring.Unwired =>
+                    State(st.rules, Wiring.Wired(Chunk(own) ++ unobserved(Chunk(own), st.rules.dependencies), Chunk.empty))
+                case _ => st
+        ).map(old =>
+            old.wiring match
+                case Wiring.Unwired => unobserved(Chunk(own), old.rules.dependencies)
+                case _              => Chunk.empty
+        )
+
+    /** Keep the observers started for claimed signals, or interrupt them if the wiring ended meanwhile. */
+    def keep(fibers: Chunk[Fiber[Unit, Any]])(using Frame): Unit < Sync =
+        state.getAndUpdate(st =>
+            st.wiring match
+                case Wiring.Wired(observed, held) => State(st.rules, Wiring.Wired(observed, held ++ fibers))
+                case _                            => st
+        ).map(old =>
+            old.wiring match
+                case Wiring.Wired(_, _) => Kyo.unit
+                case _                  => Kyo.foreachDiscard(fibers)(_.interrupt)
+        )
+
+    /** End the wiring: interrupt every observer, and observe nothing appended later. */
+    def close(using Frame): Unit < Sync =
+        state.getAndUpdate(st => State(st.rules, Wiring.Unwired)).map(old =>
+            old.wiring match
+                case Wiring.Wired(_, fibers) => Kyo.foreachDiscard(fibers)(_.interrupt)
+                case _                       => Kyo.unit
+        )
+end RuleChain
+
+private[form] object RuleChain:
+
+    def init[A, B](rules: Rule[A, B], own: Signal[?])(using Frame): RuleChain[A, B] < Sync =
+        AtomicRef.init(State(rules, Wiring.Unwired)).map(new RuleChain(own, _))
+
+    /** The rules, and where the field stands with observing what they read. */
+    final case class State[A, B](rules: Rule[A, B], wiring: Wiring)
+
+    enum Wiring derives CanEqual:
+        /** Not observing: not wired yet, when the wiring will claim whatever the chain reads by then, or the mount or the
+          * row ended.
+          */
+        case Unwired
+
+        /** Observing `observed` (the field's own value among them) through `fibers`. */
+        case Wired(observed: Chunk[Signal[?]], fibers: Chunk[Fiber[Unit, Any]])
+    end Wiring
+
+    /** The signals of `signals` (distinct already) that `observed` does not hold. By identity, as [[Rule.dependencies]]. */
+    private def unobserved(observed: Chunk[Signal[?]], signals: Chunk[Signal[?]]): Chunk[Signal[?]] =
+        signals.filterNot(s => observed.exists(_ eq s))
 end RuleChain
 
 /** Stamps the field's id onto the control, and notices when that displaces one the caller
@@ -470,14 +713,14 @@ extension [C <: TextFormControl { type Self <: C }](control: C)
     def bind(field: FormField[String])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bind
 
     def bindControlOnly(field: FormField[String])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bindControlOnly
 end extension
@@ -486,14 +729,14 @@ extension [C <: BooleanFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Boolean])(using Frame): C =
         var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bind
 
     def bindControlOnly(field: FormField[Boolean])(using Frame): C =
         var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bindControlOnly
 end extension
@@ -504,14 +747,14 @@ end extension
 private[form] def wireNumber[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
     var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalidMessage(field.message)
-    if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+    b = b.onBlur(v => field.onEvent(v, Activation.Blur))
     b
 end wireNumber
 
 private[form] def wireNumberControlOnly[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
     var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalid(field.visibleError.map(_.isDefined))
-    if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+    b = b.onBlur(v => field.onEvent(v, Activation.Blur))
     b
 end wireNumberControlOnly
 
@@ -531,14 +774,14 @@ extension [C <: FileFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bind
 
     def bindControlOnly(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
         b
     end bindControlOnly
 end extension
@@ -551,14 +794,14 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[A])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bind
 
     def bindControlOnly(field: FormField[A])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bindControlOnly
 
@@ -566,7 +809,7 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bind
 
@@ -574,7 +817,7 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bindControlOnly
 end extension
@@ -584,7 +827,7 @@ extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Set[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent))
+        b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bind
 
@@ -592,7 +835,7 @@ extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Set[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent))
+        b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bindControlOnly
 end extension
@@ -606,7 +849,7 @@ extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bind
 
@@ -614,7 +857,7 @@ extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        if field.wantsBlur then b = b.onBlur(_ => field.valueRef.use(field.onEvent))
+        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
         b
     end bindControlOnly
 end extension

@@ -116,10 +116,10 @@ final class Form private[form] (
       * Note: a row `build` runs with `Async` only (no `Scope`). Everything that does not need
       * one works (fields, `addRule`, `bind`, `errorSummary`), and `Activation.Change` works
       * too: the array wires each row's observer on an unscoped fiber and cancels it when the
-      * row is removed or the form unmounts. `dependsOn` is the exception, and the type says
-      * so: it returns `Unit < (Async & Scope)`, so it cannot be called from a row at all.
-      * Cross-field re-validation within a row falls back to `addRule` evaluated at each
-      * field's own trigger / at submit.
+      * row is removed or the form unmounts. A rule that reads another field
+      * ([[Validator.reading]], [[FormField.matches]]) works the same way: the row subscribes to
+      * what its rules read on the same unscoped fibers. `dependsOn` is the exception, and the
+      * type says so: it returns `Unit < (Async & Scope)`, so it cannot be called from a row at all.
       */
     def fieldArray(initial: Int = 0)(build: (Form, FieldArray.Row) => UI < Async)(using Frame): FieldArray[Unit] < Async =
         fieldArrayOf(initial)((row, ctl) => build(row, ctl).map(ui => (ui, ())))
@@ -366,25 +366,34 @@ final class Form private[form] (
     def focus(fieldId: String)(using Frame): Unit < Async = focusField(fieldId)
 
     /** FIELD errors in this subtree (field errors + descendants' + array rows'), EXCLUDING
-      * form-level errors. `visible = true` uses the touched/submit-gated error (the
-      * [[submitDisabled]] view); `visible = false` uses the raw ungated error (the
-      * [[isValid]]`(onlyVisible = false)` view). A subtree with no fields yields the empty
-      * chunk.
+      * form-level errors, as the touched/submit gate shows them (the [[submitDisabled]] view).
+      * A subtree with no fields yields the empty chunk.
       */
-    private[form] def fieldErrorsAgg(visible: Boolean)(using Frame): Signal[Chunk[FieldError]] < Sync =
+    private[form] def fieldErrors(using Frame): Signal[Chunk[FieldError]] < Sync =
         for
             fields     <- fieldsRef.get
             kids       <- childrenRef.get
             arrays     <- arraysRef.get
-            kidSignals <- Kyo.foreach(kids)(_.fieldErrorsAgg(visible))
+            kidSignals <- Kyo.foreach(kids)(_.fieldErrors)
         yield
-            val fieldParts: Seq[Signal[Chunk[FieldError]]] =
-                fields.toSeq.map(f => if visible then f.visibleErrorChunk else f.errorChunk)
-            val parts = fieldParts ++ kidSignals.toSeq ++ arrays.toSeq.map(_.fieldErrorsSignal(visible))
+            val parts = fields.toSeq.map(_.visibleErrorChunk) ++ kidSignals.toSeq ++ arrays.toSeq.map(_.fieldErrorsSignal)
             if parts.isEmpty then Signal.initConst(Chunk.empty[FieldError])
             else Signal.combineLatestAll(parts).map(chunks => chunks.foldLeft(Chunk.empty[FieldError])(_ ++ _))
 
-    private[form] def fieldErrors(using Frame): Signal[Chunk[FieldError]] < Sync = fieldErrorsAgg(visible = true)
+    /** True while any field in this subtree (child scopes and array rows included) is not valid, whatever is shown: it
+      * holds an error, or a rule has not judged its current value ([[Rule.on]]). The [[isValid]]`(onlyVisible = false)`
+      * view.
+      */
+    private[form] def invalidAgg(using Frame): Signal[Boolean] < Sync =
+        for
+            fields     <- fieldsRef.get
+            kids       <- childrenRef.get
+            arrays     <- arraysRef.get
+            kidSignals <- Kyo.foreach(kids)(_.invalidAgg)
+        yield
+            val parts: Seq[Signal[Boolean]] = fields.toSeq.map(_.invalid) ++ kidSignals.toSeq ++ arrays.toSeq.map(_.invalidSignal)
+            if parts.isEmpty then Signal.initConst(false)
+            else Signal.combineLatestAll(parts).map(_.exists(identity))
 
     /** Whether every FIELD in this subtree currently holds valid data, as a reactive signal.
       *
@@ -392,6 +401,11 @@ final class Form private[form] (
       * verdict even for untouched fields, so a submit button can be enabled live the moment
       * the data becomes valid, before any field is touched. `onlyVisible = true` is the gated
       * view: valid unless an error is currently DISPLAYED (touched or after submit-reveal).
+      *
+      * A field with a rule that has not judged its current value yet (one waiting for the blur
+      * while the reader types, see [[Rule.on]]) shows no error and is NOT valid in the ungated
+      * view: nothing is known about the value until that rule has run. The gated view ignores
+      * it, as [[submitDisabled]] does, because there is nothing displayed to count.
       *
       * Form-level [[raise]] errors are excluded (they can't be fixed client-side and would
       * deadlock a button gated on this; see [[errors]] / [[hasVisibleErrors]]). Reactive
@@ -401,9 +415,9 @@ final class Form private[form] (
       */
     def isValid(onlyVisible: Boolean = false)(using Frame): Signal[Boolean] < Sync =
         for
-            fieldErrs <- fieldErrorsAgg(visible = onlyVisible)
-            invHold   <- invariantsHold
-        yield fieldErrs.combineLatest(invHold).map((errs, hold) => errs.isEmpty && hold)
+            invalid <- if onlyVisible then fieldErrors.map(_.map(_.nonEmpty)) else invalidAgg
+            invHold <- invariantsHold
+        yield invalid.combineLatest(invHold).map((bad, hold) => !bad && hold)
 
     /** Validate this subtree and, only if everything is valid, run `onValid` (which
       * may itself write server-side errors via `field.setError` / `raise`). Opens the
@@ -588,7 +602,7 @@ final class Form private[form] (
 
     // --- internals -------------------------------------------------------------
 
-    /** Launch the value observers for every `Activation.Change` field in this static subtree
+    /** Launch the value observer of every field in this static subtree
       * (own fields + nested children). Called once by `Form.mountedWith` after `build`, in
       * the mount scope, so the observers live for the form's lifetime.
       *
@@ -608,7 +622,7 @@ final class Form private[form] (
         yield ()
 
     /** Row-scope counterpart of [[wireChangeActivations]]: wires this scope's
-      * `Activation.Change` fields (and those of its children and nested arrays' rows)
+      * fields (and those of its children and nested arrays' rows)
       * WITHOUT an ambient `Scope`, retaining the observer fibers so [[cancelRowChangeActivations]]
       * can tear exactly this subtree down. Called by `FieldArray.add` for each new row.
       */
@@ -616,27 +630,30 @@ final class Form private[form] (
         for
             fields <- fieldsRef.get
             wired  <- Kyo.foreach(fields)(_.wireChangeUnscoped)
-            _      <- Sync.defer { rowChangeFibers = rowChangeFibers ++ wired.collect { case Present(f) => f } }
+            _      <- Sync.defer { rowChangeFibers = rowChangeFibers ++ wired }
             kids   <- childrenRef.get
             _      <- Kyo.foreach(kids)(_.wireRowChangeActivations)
             arrays <- arraysRef.get
             _      <- Kyo.foreach(arrays)(_.wireRowActivations)
         yield ()
 
-    /** Cancel every observer fiber [[wireRowChangeActivations]] started in this subtree:
-      * on row removal, on form reset of the array, and on unmount.
+    /** Cancel every observer fiber [[wireRowChangeActivations]] started in this subtree, and
+      * end its fields' subscriptions to what their rules read ([[FormField.unwire]]): on row
+      * removal, on form reset of the array, and on unmount.
       */
     private[form] def cancelRowChangeActivations(using Frame): Unit < Async =
         for
             fibers <- Sync.defer { val fs = rowChangeFibers; rowChangeFibers = Chunk.empty; fs }
             _      <- Kyo.foreach(fibers)(_.interrupt)
+            fields <- fieldsRef.get
+            _      <- Kyo.foreach(fields)(_.unwire)
             kids   <- childrenRef.get
             _      <- Kyo.foreach(kids)(_.cancelRowChangeActivations)
             arrays <- arraysRef.get
             _      <- Kyo.foreach(arrays)(_.cancelRowActivations)
         yield ()
 
-    /** Observer fibers of this scope's row-wired `Activation.Change` fields. A plain `var`
+    /** Observer fibers of this scope's row-wired fields. A plain `var`
       * for the same reason as `checks` / `invariants`: a row's wiring and teardown each run
       * single-threaded, once.
       */
@@ -755,7 +772,7 @@ object Form:
                 cmds <- UI.commands
                 form <- create(translator, focusInvalidOnSubmit, cmds)
                 ui   <- build(form)
-                _    <- form.wireChangeActivations // start Activation.Change observers for the declared tree
+                _    <- form.wireChangeActivations // start the change observers of the declared tree
                 // What the form can be certain is wrong about its own ids. Empty for every
                 // correct program, so this adds a node only where something is already broken.
                 cards <- FormDiagnostics.cards(form, ui)

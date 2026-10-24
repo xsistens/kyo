@@ -21,6 +21,10 @@ class DataTableTest extends UicTest:
       * so it can read back what a keystroke did. `focus` records instead of commanding.
       */
     private def wire(using Frame) =
+        wireWith(uic.CellType.int.validate(kyo.uic.form.Validator.min(1)))
+
+    /** [[wire]] with the Price column's cell type, rules included, chosen by the test. */
+    private def wireWith(priceType: CellType[Int])(using Frame) =
         for
             rows    <- Signal.initRef[Seq[Item]](items)
             editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
@@ -32,7 +36,7 @@ class DataTableTest extends UicTest:
             val table = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
                 uic.column("Price")(_.price.toString)
-                    .editableAs(uic.CellType.int.validate(kyo.uic.form.Validator.min(1)))(_.price)((i, v) => i.copy(price = v))
+                    .editableAs(priceType)(_.price)((i, v) => i.copy(price = v))
             ).editingCell(editing)
             val ui = table.wired(
                 "t",
@@ -115,6 +119,34 @@ class DataTableTest extends UicTest:
             // The cell reopened on the row the first commit wrote, so that is the row it holds.
             assert(stillOpen == Present(CellPath(Item("1", "A", 42), List("Price"))), "the refused cell stayed open")
             assert(refused.exists((_, e) => e.code == "min"), "with the rule's own error on it")
+    }
+
+    // A commit is the cell's submit: a rule that waits for a blur in a form field runs here like any other.
+    "a commit runs every rule of the cell type, whatever activation it waits for" in {
+        import kyo.uic.form.{Activation, Validator}
+        for
+            runs                        <- AtomicInt.init(0)
+            (ui, rows, _, _, _, err, _) <- wireWith(
+                uic.CellType.int.validate(
+                    Validator.async[Int](v =>
+                        runs.incrementAndGet.map(_ => (if v > 100 then Present(FieldError("too-dear")) else Absent): Maybe[FieldError])
+                    ).on(Activation.Blur) and Validator.min(1).on(Activation.Submit)
+                )
+            )
+            cell     <- elementWithId(ui, "t-c0-1")
+            _        <- press(cell, UI.Keyboard.Enter)
+            open     <- elementWithId(ui, "t-c0-1")
+            _        <- typeInto(open, "0")
+            reopened <- elementWithId(ui, "t-c0-1")
+            _        <- press(reopened, UI.Keyboard.Enter)
+            refused  <- err.get
+            n        <- runs.get
+            stored   <- rows.get
+        yield
+            assert(n == 1, s"the rule on(Blur) ran at the commit: $n")
+            assert(refused.exists((_, e) => e.code == "min"), s"and so did the one on(Submit), which refused: $refused")
+            assert(stored.head.price == 10, "so nothing was written")
+        end for
     }
 
     // Moving the editor is a commit like any other. Opening the next cell without one drops

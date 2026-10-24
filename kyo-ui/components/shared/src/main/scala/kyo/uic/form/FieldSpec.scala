@@ -31,7 +31,7 @@ import kyo.*
 sealed abstract class FieldSpec[A] private[form] (
     private[form] val form: Form,
     private[form] val initialV: A,
-    private[form] val onV: Set[Activation.Field],
+    private[form] val onV: Maybe[Set[Activation.Field]],
     private[form] val domIdV: Maybe[String],
     private[form] val debounceV: Duration,
     private[form] val revealV: Reveal,
@@ -46,7 +46,7 @@ sealed abstract class FieldSpec[A] private[form] (
     /** This spec with its rules and any slot replaced. One place builds a spec, so a new slot is added once. */
     private def rebuild[B](
         rules: Rule[A, B],
-        on: Set[Activation.Field] = this.onV,
+        on: Maybe[Set[Activation.Field]] = this.onV,
         domId: Maybe[String] = this.domIdV,
         debounce: Duration = this.debounceV,
         reveal: Reveal = this.revealV,
@@ -65,15 +65,22 @@ sealed abstract class FieldSpec[A] private[form] (
       */
     def rules[B](r: Rule[A, B]): FieldSpec[A] { type Valid = B } = rebuild(r)
 
-    /** When the rule chain is RE-COMPUTED (default: `Blur` + `Change`).
+    /** The field's own events, which do two things.
       *
-      * Combinable, and independent of when a failure is SHOWN; that is [[revealWhen]]. The
-      * default pairs with `Reveal.WhenTouched` to give the shape most forms want: silent while
-      * the reader first types, live once they have left the field. `on(Activation.Submit)` is
-      * how you opt out of both triggers; see [[Activation.Field]] for why that reads as a
-      * choice rather than as an empty set.
+      * They are the FALLBACK for when its rules run: a rule with its own [[Rule.on]] keeps it,
+      * every other rule runs on these instead of its default (every change and the blur, the
+      * blur alone for [[Validator.async]]). Without this, each rule runs on its own default.
+      *
+      * And they are what marks the field touched (default: `Blur` + `Change`), which is what
+      * [[Reveal.WhenTouched]] waits for. That pairing gives the shape most forms want: silent
+      * while the reader first types, live once they have left the field. When a failure is
+      * SHOWN is [[revealWhen]]'s question, not this one's.
+      *
+      * `on(Activation.Submit)` is how a field opts out of both: no event touches it, and its rules
+      * without an `on` of their own wait for the submit. See [[Activation.Field]] for why that
+      * reads as a choice rather than as an empty set.
       */
-    def on(ts: Activation.Field*): FieldSpec[A] { type Valid = FieldSpec.this.Valid } = rebuild(rulesV, on = ts.toSet)
+    def on(ts: Activation.Field*): FieldSpec[A] { type Valid = FieldSpec.this.Valid } = rebuild(rulesV, on = Present(ts.toSet))
 
     /** The control's DOM id (default: minted, `kyo-uic-N`).
       *
@@ -137,19 +144,19 @@ sealed abstract class FieldSpec[A] private[form] (
             baselineRef   <- Signal.initRef(initialV)
             touchedRef    <- Signal.initRef(false)
             validatingRef <- Signal.initRef(false)
-            clientErrRef  <- Signal.initRef(Absent: Maybe[FieldError])
+            clientRef     <- Signal.initRef(ClientVerdict.Checked(Absent): ClientVerdict)
             serverErrRef  <- Signal.initRef(Absent: Maybe[ServerError[A]])
             epoch         <- AtomicInt.init(0)
             resetWrite    <- AtomicRef.init(Maybe.empty[A])
             namedRef      <- Signal.initRef(false)
-            f = FormField.declared[A, Valid](
+            f             <- FormField.declared[A, Valid](
                 valueRef,
                 initialV,
                 baselineRef,
                 id,
                 touchedRef,
                 validatingRef,
-                clientErrRef,
+                clientRef,
                 serverErrRef,
                 epoch,
                 resetWrite,
@@ -171,20 +178,20 @@ end FieldSpec
 
 object FieldSpec:
 
-    /** The trigger set of a field that declares none: re-check on focus loss, and on every
-      * change after that. See [[Activation.Field]] for why this and `Reveal.WhenTouched`
-      * together are the shape most forms want.
+    /** The events that touch a field that declares none: focus loss, and every change. See
+      * [[Activation.Field]] for why this and `Reveal.WhenTouched` together are the shape most forms
+      * want. It is also every rule's default, except [[Validator.async]]'s.
       */
-    val defaultActivation: Set[Activation.Field] = Set(Activation.Blur, Activation.Change)
+    val defaultActivation: Set[Activation.Field] = Rule.defaultOn
 
     private[form] def init[A](form: Form, initial: A)(using CanEqual[A, A]): FieldSpec[A] { type Valid = A } =
-        of(form, initial, Validator.none[A], defaultActivation, Absent, Duration.Zero, Reveal.WhenTouched, true)
+        of(form, initial, Validator.none[A], Absent, Absent, Duration.Zero, Reveal.WhenTouched, true)
 
     private def of[A, B](
         form: Form,
         initial: A,
         chainRules: Rule[A, B],
-        on: Set[Activation.Field],
+        on: Maybe[Set[Activation.Field]],
         domId: Maybe[String],
         debounce: Duration,
         reveal: Reveal,
@@ -240,7 +247,7 @@ sealed abstract class NumberFieldSpec[A] private[form] (
 
     /** @see [[FieldSpec.declareIn]] */
     private[form] def declareIn(scope: Form)(using Frame): (NumberField[A] { type Valid = NumberFieldSpec.this.Valid }) < Sync =
-        under.rules(Rule[Double, Valid](d => rulesV.run(codec.fromDouble(d)))).declareIn(scope)
+        under.rules(rulesV.contramap(codec.fromDouble)).declareIn(scope)
             .map(f => NumberField.of(f, codec))
 end NumberFieldSpec
 
