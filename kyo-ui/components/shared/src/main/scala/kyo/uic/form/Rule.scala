@@ -368,9 +368,10 @@ object Rule:
                 def within(on: Set[Activation.Field]): Ctx[Nothing] = this
 
         /** A field's rules run for `trigger`. `epoch` is the run's place among the field's runs, so a slower, older run
-          * cannot overwrite what a newer one remembered, and `due` runs before each rule that does run: how the field
+          * cannot overwrite what a newer one remembered, and `due` runs before each rule that is due: how the field
           * learns that the run checks something (and so shows `validating` and waits out its debounce) without asking
-          * the chain twice.
+          * the chain twice. It answers whether the run still owns the field; one that does not (a later run that checks
+          * something claimed it meanwhile) runs no rule and answers [[NotChecked]], which nothing publishes.
           *
           *   - One of the field's own events: a rule runs if it is due for it, by its nearest `on`, else the field's `on`,
           *     else its own default. One that is not due answers its remembered verdict if it judged this input last, else
@@ -384,7 +385,7 @@ object Rule:
           *   - [[Sweep.Every]]: every rule runs.
           *   - [[Sweep.Settle]]: a change of every signal at once.
           */
-        def of(trigger: Trigger, fieldOn: Maybe[Set[Activation.Field]], store: Store, epoch: Int, due: Unit < Async)(using
+        def of(trigger: Trigger, fieldOn: Maybe[Set[Activation.Field]], store: Store, epoch: Int, due: Boolean < Async)(using
             Frame
         ): Ctx[NotChecked] =
             OnEvent(trigger, fieldOn, Absent, store, epoch, due)
@@ -396,13 +397,17 @@ object Rule:
             nearest: Maybe[Set[Activation.Field]],
             store: Store,
             epoch: Int,
-            due: Unit < Async
+            due: Boolean < Async
         )(using Frame) extends Ctx[NotChecked]:
             def gate[B](key: Key[B], default: Set[Activation.Field], reads: Chunk[Read], value: Any, read: Chunk[Any])(
                 check: => Result.Partial[FieldError, B] < Async
             ): Result.Partial[FieldError | NotChecked, B] < Async =
                 def run: Result.Partial[FieldError | NotChecked, B] < Async =
-                    due.andThen(check).map(r => store.record(key, value, read, r, epoch).andThen(r))
+                    due.map { owns =>
+                        if owns then
+                            check.map(r => store.record(key, value, read, r, epoch).andThen(r: Result.Partial[FieldError | NotChecked, B]))
+                        else unchecked
+                    }
                 // A change of `changed`, or of every signal when it is absent: compared with what the rule last judged, or
                 // with what the field first knew of the signals while it has judged nothing.
                 def onChange(changed: Maybe[Signal[?]]): Result.Partial[FieldError | NotChecked, B] < Async =

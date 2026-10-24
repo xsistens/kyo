@@ -557,6 +557,10 @@ final class Form private[form] (
       * a field a successful submit empties does not show its `required` error at once.
       * Reset on a sub-scope leaves the gate alone, since the rest of the form still
       * shows what the last submit found.
+      *
+      * Each field is then judged as at the mount, whether or not its value moved: its rules run
+      * once as for a change, on a fiber of their own, so a rule held to the blur or the submit is
+      * not yet checked again and [[isValid]] says what it said when the form loaded.
       */
     def reset(using Frame): Unit < Sync =
         for
