@@ -457,15 +457,16 @@ class FormValidationTest extends UicTest:
                     flds <- captured.get
                     fld = flds.head
                     e0 <- fld.error.current
+                    // The observer runs on its own fiber: wait until it listens, then until the edit's verdict lands.
+                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 1))
                     _  <- fld.valueRef.set("")
-                    // The observer runs on its own fiber; give it a tick to land.
-                    _  <- Async.sleep(50.millis)
+                    _  <- assertEventually(fld.error.current.map(_.isDefined))
                     e1 <- fld.error.current
                     _  <- arr.removeAt(0)
                     // A live observer would revalidate this back to VALID and clear the error;
                     // a cancelled one leaves the error exactly where the last edit put it.
+                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 0))
                     _  <- fld.valueRef.set("valid again")
-                    _  <- Async.sleep(50.millis)
                     e2 <- fld.error.current
                 yield (e0.isDefined, e1.isDefined, e2.isDefined)
         yield
