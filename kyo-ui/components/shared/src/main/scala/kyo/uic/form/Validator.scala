@@ -11,15 +11,19 @@ type Validator[A] = Rule[A, A]
 object Validator:
 
     /** A check from a function: `Absent` = valid, `Present(e)` = invalid. The value passes through unchanged; for a rule
-      * that yields another type, see [[Rule.apply]] and [[refine]].
+      * that yields another type, see [[Rule.apply]] and [[refine]]. Runs on every change and on the blur, like every
+      * built-in, unless [[Rule.on]] or its field says otherwise.
       */
-    def apply[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(f)
+    def apply[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(Rule.defaultOn)(f)
 
-    /** Async escape hatch (identical to [[apply]]; reads clearly at call sites where
-      * the body actually suspends, e.g. a mutation). The author folds any `Abort`
-      * into a `Maybe[FieldError]` here, keeping the core transport-agnostic.
+    /** A check whose body suspends for real (a mutation, a server round-trip): the author folds any `Abort` into a
+      * `Maybe[FieldError]` here, keeping the core transport-agnostic.
+      *
+      * Unlike [[apply]] it runs on the BLUR by default, not on every change, so typing does not send a request per
+      * keystroke: the reader hears about it when they leave the field, and the verdict stays while the value does.
+      * `.on(...)` on the rule, or `on` on its field, says otherwise; a submit runs it either way.
       */
-    def async[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(f)
+    def async[A](f: A => Maybe[FieldError] < Async)(using Frame): Validator[A] = Rule.check(Set(Activation.Blur))(f)
 
     /** No rules: every value passes. The default of a field that only holds a value:
       * `Form.field` starts every spec here, so a caller declaring no rules writes nothing.
@@ -27,8 +31,10 @@ object Validator:
       * It is also the identity of [[Rule.and]], which is what `all()` over an empty sequence
       * already returned; that spelling was the only way to say "no rules" and read as an
       * accident. Needs no `Frame`, so it can be the default of a PURE field spec.
+      *
+      * Having nothing to check, it runs on every event and is never "not yet checked" ([[Rule.on]]).
       */
-    def none[A]: Validator[A] = Rule.pure(a => Result.Success(a))
+    def none[A]: Validator[A] = Rule.identity
 
     /** Chains checks left-to-right with the ordered short-circuit of [[Rule.and]]. */
     def all[A](vs: Validator[A]*)(using Frame): Validator[A] =
@@ -102,11 +108,7 @@ object Validator:
       * field IS required, chain the rule after [[chosen]] instead, which hands it the value itself.
       */
     def ifPresent[A, B](r: Rule[A, B])(using Frame): Rule[Maybe[A], Maybe[B]] =
-        Rule[Maybe[A], Maybe[B]] {
-            case Present(a) =>
-                r.run(a).map(_.foldPartial[Result.Partial[FieldError, Maybe[B]]](b => Result.Success(Present(b)), e => Result.Failure(e)))
-            case Absent => Result.Success(Absent)
-        }
+        Rule.present(r)
 
     /** A choice of several must hold at least one option, again under the `required` code.
       *
@@ -128,12 +130,62 @@ object Validator:
     def max[A](bound: A, code: String = "max")(using ord: Ordering[A]): Validator[A] =
         satisfy(code, Map("max" -> bound.toString))(a => ord.lteq(a, bound))
 
+    // ---- rules that read another field ----------------------------------------
+
+    /** A check that reads `dep` too: `Validator.reading(password)((confirm: String, pw: String) => ...)`. The field it is
+      * declared on subscribes to `dep` when the form mounts (or the row is added) and lets it go with the mount, so a
+      * change of `dep` reaches the rule with nothing else to wire. A bare signal takes the reaction of the rule built:
+      * a change of `dep` reruns [[Reading.apply]] at once and drops the verdict of [[Reading.async]] (see [[Dep]]).
+      * The rule receives its own field's value as its first argument, so `dep` is another field's signal, never its own.
+      */
+    def reading[D](dep: Signal[D])(using Frame): Reading[D] = new Reading(Rule.Source.one(Dep.default(dep)))
+
+    /** [[reading]] with the dependency's reaction stated: `Validator.reading(Dep.discard(country)).async(...)`. */
+    def reading[D](dep: Dep[D])(using Frame): Reading[D] = new Reading(Rule.Source.one(dep))
+
+    /** A check that reads two signals, each with its own reaction; the function receives both values as a pair. */
+    def reading[D1, D2](d1: Dep[D1], d2: Dep[D2])(using Frame): Reading[(D1, D2)] = new Reading(Rule.Source.two(d1, d2))
+
+    /** A check that reads three signals, each with its own reaction; the function receives the values as a triple. */
+    def reading[D1, D2, D3](d1: Dep[D1], d2: Dep[D2], d3: Dep[D3])(using Frame): Reading[(D1, D2, D3)] =
+        new Reading(Rule.Source.three(d1, d2, d3))
+
+    /** What [[Validator.reading]] returns: the signals a check reads, waiting for its function. The preferred shape for a
+      * rule over another field, because the rule carries what it reads: no `dependsOn` to pair it with, and nothing to
+      * forget when the rule moves to another field.
+      *
+      * The function receives the field's value and the dependencies' values, read once at the start of each run. Those
+      * values belong to the input its verdict is kept for, so an event that does not run the rule reuses the verdict only
+      * while the field's value and every dependency are the ones it judged; otherwise the rule is not yet checked.
+      *
+      * A change of a dependency is an event for the field: a rule that reads it with [[Dep.recheck]] runs when the value it
+      * reads differs from the one it last judged, unless it has already judged exactly the input it now has, and every
+      * other rule keeps or drops its verdict as for any event it is not
+      * due for, and the field is not touched, so whether an error shows is still up to its own events and the submit. A rule's [[Rule.on]] governs only the field's own
+      * events; the dependency's reaction governs only its changes. A rule not yet checked still stops the chain, so a
+      * rule that discards belongs at the end, as every deferred rule does.
+      */
+    final class Reading[D] private[form] (source: Rule.Source[D]):
+
+        /** A sync check, `(value, read) => Absent` to pass or `Present(e)` to fail. It runs on every change and on the
+          * blur like [[Validator.apply]], and a dependency given as a bare signal rechecks it.
+          */
+        def apply[A](f: (A, D) => Maybe[FieldError])(using Frame): Validator[A] =
+            Rule.checkReading(Rule.defaultOn, source, Dep.Reaction.Recheck)((a: A, d: D) => f(a, d))
+
+        /** A check whose body suspends for real. Like [[Validator.async]] it runs on the blur by default, and a
+          * dependency given as a bare signal discards its verdict rather than sending a request nobody asked for.
+          */
+        def async[A](f: (A, D) => Maybe[FieldError] < Async)(using Frame): Validator[A] =
+            Rule.checkReading(Set(Activation.Blur), source, Dep.Reaction.Discard)(f)
+    end Reading
+
     // ---- built-in cross-field rule --------------------------------------------
 
-    /** The value must equal the current value of `other`: the password-confirmation
-      * pattern, generalized. Reads `other` live at validation time; pair the field with
-      * `field.dependsOn(other)` for as-you-type re-validation when the other field changes.
+    /** The value must equal the current value of `other`: the password-confirmation pattern, generalized. Built on
+      * [[reading]], so it carries its dependency: a change of `other` rechecks it at once, whatever its `on`, and the
+      * field needs no `dependsOn`. [[FormField.matches]] is the one-call form.
       */
     def matchesField[A](other: Signal[A], code: String = "must-match")(using CanEqual[A, A], Frame): Validator[A] =
-        Validator(a => other.currentWith(o => (if a == o then Absent else Present(FieldError(code))): Maybe[FieldError]))
+        reading(other)((a: A, o: A) => if a == o then Absent else Present(FieldError(code)))
 end Validator
