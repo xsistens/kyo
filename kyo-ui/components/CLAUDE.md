@@ -444,7 +444,7 @@ ids, pointer handlers, focus wiring).
   kyo's focus-seed calls `element.focus()` without `preventScroll`, so a seeded
   element gets scrolled into view by the browser before the measure lands: the
   panel stays on-screen but does not visibly flip. That is now the menu family
-  (whose LIST is seeded) and a filterable Select/MultiSelect (whose filter input
+  (whose LIST is seeded) and a Select/MultiSelect with its filter on (whose filter input
   is); the option panels themselves seed nothing. Verify flip on one of those
   near the viewport bottom.
 
@@ -452,7 +452,7 @@ ids, pointer handlers, focus wiring).
   attribute is read off the element with DOM focus or off nothing at all, so it
   belongs on the one element that holds focus while the popup is open: the trigger
   for Select/MultiSelect/CascadeSelect/TreeSelect, the input for AutoComplete and
-  for a filterable Select/MultiSelect, the LIST for the popup menus. A panel that
+  for a Select/MultiSelect with its filter on, the LIST for the popup menus. A panel that
   seeds focus takes the announcement away from whatever was carrying it, which is
   how the whole family ended up announcing nothing. `GoldenRenderTest`'s "a
   highlight names an element that says what it is" holds both halves: the target
@@ -598,6 +598,32 @@ rebuild replaced the textarea a reader was typing into at the very keystroke tha
   one message region. A new form control belongs in that sweep.
 - **A composite hands the slots on**: `InputMask` passes them to its `Input`; `Password` and `InputOtp`
   pass `validity.red` to their inner inputs and follow the whole with the one row.
+
+## Filtering: `filter`, `Filter`, `filterable`
+
+The pickers share three filtering words. `filterable(Boolean | Signal[Boolean])` switches the header filter
+(Select, MultiSelect, Listbox); `filterQuery(ref)` hands it an app-owned query (the same three);
+`filter((A, String) => Boolean)` says how an option matches the raw typed query (Select, MultiSelect,
+AutoComplete). `Filter` (`Filter.scala`) holds the ready-made matchers: `contains`, `startsWith`,
+`startsWithPerTerm` over any number of text projections (a match in any one is enough, both sides
+lowercased) and `all`. The defaults are `contains` on the label for Select/MultiSelect/Listbox and
+`startsWithPerTerm` on the label for AutoComplete, which always filters and has no switch.
+
+- **Precedence mirrors `invalid` in `FieldValidity.apply`.** Without an explicit `filterable`, a `filter` or a
+  `filterQuery` turns the header on; an explicit one, constant or signal, decides alone. Each component reads
+  that through one private `filterOn: BoolValue`; never test `filterF.isDefined` or the query ref anywhere else.
+- **Off means not applied, never cleared.** The header goes, every option shows, and neither the control's own
+  query nor an app `filterQuery` ref is written, not even by the open path's query reset, so switching back on
+  shows the old text and filters by it at once.
+- **The switch is not a region over the field.** A closed Select/MultiSelect reads the switch only in the
+  trigger's role, which is a `role` attribute channel, so a toggle re-renders nothing; the signal is subscribed
+  only inside the open branch of `wired`. Listbox renders its header as a region of its own inside the root and
+  subscribes its options to the query as the options see it (empty while off), so a toggle over an empty query
+  repaints nothing. `SelectTest`, `MultiSelectTest` and `ListboxTest` pin the region counts against the
+  constant render.
+- **Inference comes from the setter.** `filter` takes a plain function, so `Filter.contains(_.name, _.email)`
+  gets `A` from the picker's expected type; do not add an overload beside it, or the lambdas lose that
+  expected type (see "Typed builders" above). `FilterTest` holds the call site.
 
 ## An unbound ref is not a reason to disable a control
 

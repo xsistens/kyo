@@ -31,7 +31,7 @@ enum MultiSelectDisplay derives CanEqual:
   * and the panel stays open, exactly Prime's multiselect semantics.
   *
   * The header select-all checkbox follows PrimeVue: checked while every visible
-  * non-disabled option is selected (with `filterable(true)` "visible" means the
+  * non-disabled option is selected (with the filter on, "visible" means the
   * FILTERED options), unchecked otherwise (Prime renders no indeterminate
   * state here); checking selects exactly the visible enabled options (replacing
   * the whole value, like Prime), unchecking clears the selection entirely.
@@ -65,7 +65,8 @@ final case class MultiSelect[A] private (
     displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
     maxSelectedLabelsV: Maybe[Int] = Absent,
     selectedItemsLabelV: Maybe[TextValue] = Absent,
-    filterableFlag: Boolean = false,
+    filterableV: Maybe[BoolValue] = Absent,
+    filterF: Maybe[(A, String) => Boolean] = Absent,
     filterQueryRefV: Maybe[SignalRef[String]] = Absent,
     showToggleAllFlag: Boolean = true,
     highlightOnSelectFlag: Boolean = false,
@@ -160,17 +161,29 @@ final case class MultiSelect[A] private (
       */
     def selectedItemsLabel(v: String | Signal[String]): MultiSelect[A] = copy(selectedItemsLabelV = Present(ReactiveValue(v)))
 
-    /** Renders Prime's header filter (an IconField `.p-multiselect-filter-container`
-      * with the `input.p-multiselect-filter`) over a query the control allocates
-      * itself, filtering the options by a case-insensitive contains on the label
-      * projection; the query resets on every open. Select-all then applies to the
-      * FILTERED options (Prime). Same word and same meaning on
-      * [[Select.filterable]] and [[Listbox.filterable]].
+    /** Switches Prime's header filter (an IconField `.p-multiselect-filter-container` with the
+      * `input.p-multiselect-filter`), over a query the control allocates itself unless [[filterQuery]] hands it one;
+      * while it is on, the query starts fresh on every open. Select-all then applies to the FILTERED options (Prime).
+      *
+      * Without it, setting [[filter]] or [[filterQuery]] turns the filter on. Set, constant or signal, it decides
+      * alone, so `filterable(false)` keeps the filter off whatever else is set. Off, the filter input is gone and
+      * every option shows, but the query is left as it is: switched back on, the input shows it and filters by it
+      * again. A signal never rebuilds the field: closed, only the trigger's role follows it; open, the panel stays
+      * open and only the filter input comes and goes. Same word and same meaning on [[Select.filterable]] and
+      * [[Listbox.filterable]].
       */
-    def filterable(v: Boolean): MultiSelect[A] = copy(filterableFlag = v)
+    def filterable(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(filterableV = Present(ReactiveValue(v)))
+
+    /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query
+      * as typed. [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by
+      * either text. Without it the match is a case-insensitive contains on the label projection. Setting it turns the
+      * header filter on unless [[filterable]] says otherwise.
+      */
+    def filter(f: (A, String) => Boolean): MultiSelect[A] = copy(filterF = Present(f))
 
     /** Renders the same header filter over a query the APP owns: typing writes
-      * `ref`, external writes re-filter the panel. Implies [[filterable]].
+      * `ref`, external writes re-filter the panel. Turns the header filter on unless
+      * [[filterable]] says otherwise.
       */
     def filterQuery(ref: SignalRef[String]): MultiSelect[A] = copy(filterQueryRefV = Present(ref))
 
@@ -241,10 +254,32 @@ final case class MultiSelect[A] private (
 
     private def isOptionDisabled(a: A): Boolean = optionDisabledF.exists(_(a))
 
-    /** Whether the header filter renders: asked for by [[filterable]], or implied
-      * by an app-owned [[filterQuery]].
+    /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
+      * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
-    private def filtering: Boolean = filterableFlag || filterQueryRefV.isDefined
+    private def filterOn: BoolValue =
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQueryRefV.isDefined))
+
+    /** How an option matches the query: [[filter]], else a contains on the label projection. */
+    private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
+
+    /** Hands `f` whether the filter is on. A signal is subscribed only while the panel is open: a closed field reads
+      * the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching it re-renders nothing.
+      */
+    private def withFilterOn(isOpen: Boolean)(f: Boolean => UI)(using Frame): UI =
+        filterOn match
+            case BoolValue.Dyn(on) if isOpen => on.render(f)
+            case BoolValue.Const(on)         => f(on)
+            case _                           => f(false)
+
+    /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
+      * so switching the filter back on finds it as it was.
+      */
+    private def freshQuery(q: SignalRef[String])(using Frame): UI.Action =
+        filterOn match
+            case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then q.set("") else Kyo.unit)
+            case BoolValue.Const(true) => q.set("")
+            case _                     => Kyo.unit
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
@@ -254,6 +289,10 @@ final case class MultiSelect[A] private (
         hiV: Int,
         q: SignalRef[String],
         qV: String,
+        /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
+          * is not subscribed, and the trigger's role follows the switch itself.
+          */
+        filtering: Boolean,
         /** The id the highlight is announced through, as [[Select]] and [[Listbox]] carry it: a
           * caller's own `id` wins, and a minted one stands in where there is none.
           */
@@ -289,9 +328,11 @@ final case class MultiSelect[A] private (
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         open.render { o =>
-            hi.render { h =>
-                q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base)), validity))
+            withFilterOn(o) { f =>
+                hi.render { h =>
+                    q.render { qq =>
+                        withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, f, base)), validity))
+                    }
                 }
             }
         }
@@ -336,8 +377,10 @@ final case class MultiSelect[A] private (
         loading: Boolean,
         validity: FieldValidity
     )(using Frame): UI =
-        val isOpen  = st.exists(_.isOpen)
-        val current = held.map(key)
+        val isOpen = st.exists(_.isOpen)
+        // Whether the filter is on, as far as this render reads it: only an open panel subscribes a signal switch.
+        val filtering = st.fold(filterOn.const.getOrElse(false))(_.filtering)
+        val current   = held.map(key)
         // Held options no row carries: the trigger still shows them from the value itself, after the known ones.
         val strays                = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
         val selected              = items.filter(a => current.contains(key(a))) ++ strays
@@ -361,7 +404,7 @@ final case class MultiSelect[A] private (
         // Opens with a fresh query and the highlight on the first selected option.
         def openPanel(s: State): UI.Action =
             for
-                _ <- s.q.set("")
+                _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
@@ -482,7 +525,12 @@ final case class MultiSelect[A] private (
         // WHICH element is the combobox follows the filter header, and follows it for the same
         // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
         // because `aria-activedescendant` is read off the focused element or off nothing at all.
-        el = el.role(if filtering then "button" else "combobox")
+        // A signal switch is a `role` attribute CHANNEL rather than a read: a closed field subscribes nothing else
+        // of it, so switching the filter patches the role in place and rebuilds nothing.
+        el = filterOn match
+            case BoolValue.Dyn(on) => el.withReactiveAttr("role", on.map(isOn => if isOn then "button" else "combobox"))
+            case _                 => el.role(if filtering then "button" else "combobox")
+        el = el
             .aria("haspopup", "listbox")
             .aria("expanded", isOpen.toString)
         st.flatMap(_.idBase).foreach { b =>
@@ -510,7 +558,7 @@ final case class MultiSelect[A] private (
                         e.key match
                             case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
                             case _                                                    => ()
-                    else if filtering then ()
+                    else if s.filtering then ()
                     else panelKey(shown, navigable, hiEff, s, toggleOption, toggleAllOf(current, shown))(e)
                 }
             }
@@ -535,8 +583,9 @@ final case class MultiSelect[A] private (
       */
     private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
-            if filtering && s.qV.nonEmpty then
-                OptionItem.filter(optionsV, a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
+            if s.filtering && s.qV.nonEmpty then
+                val m = matcher
+                OptionItem.filter(optionsV, a => m(a, s.qV))
             else optionsV
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
@@ -629,7 +678,7 @@ final case class MultiSelect[A] private (
                  List(allBox.render)
              else Nil)
             ++
-                (if filtering then
+                (if s.filtering then
                      var filterEl = input
                          .cssClass("p-multiselect-filter")
                          .cssClass("p-inputtext")
@@ -715,7 +764,7 @@ final case class MultiSelect[A] private (
     )(
         e: KeyboardEvent
     )(using Frame): UI.Action =
-        val caretOwns     = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
+        val caretOwns     = s.filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         val fromToggleAll = s.idBase.exists(b => e.targetId.contains(toggleAllId(b)))
         val selectsAll    = showToggleAllFlag && (e.modifiers.ctrl || e.modifiers.meta) &&
             (e.key match
