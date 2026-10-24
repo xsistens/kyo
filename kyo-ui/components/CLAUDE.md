@@ -257,7 +257,7 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   `Rule.Sweep.Every`) run every rule: the field's own value did not move, so a not-due rule would keep the
   verdict it found against the dependency's old value. `dependsOn` is the general fallback; a rule that
   reads another field is a `reading` rule (below). `revalidate` (the mount value, a `dependsOn` signal's
-  value at subscription, a reset write) is a `Change`.
+  value at subscription, the value a reset leaves) is a `Change`.
 - **A rule that reads another field carries the dependency** (`Validator.reading` / `Rule.reading`, over a
   `Dep`). The leaf reads every dependency once per run (`Rule.Source.current`), hands the values to its
   function and keeps its stored verdict for the value AND what it read (`Store.Entry.holds`), so "reuse while the input is the one it judged"
@@ -291,15 +291,42 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   `matches` is `addRule(Validator.matchesField(other))` and `matchesField` is a `reading` rule. Unlike a
   `dependsOn` change, a dependency change does not rerun the rules that do not read it.
 - **`validating` and the debounce belong to a run that runs a rule.** Every trigger takes an epoch and
-  runs the chain once. The first leaf that actually runs calls the run's `due` action first (`startDue`,
-  passed to `Rule.Ctx.of`): it claims `dueEpoch`, shows `validating` and waits out the debounce, once per
-  run. A run no leaf ran for (recalled verdicts, or not yet checked) publishes at once, with no
-  `validating` and no debounce; whether a run was due is read back from `dueEpoch` (`>= mine`). A due run
-  that finds the epoch moved by runs no rule was due for (`dueEpoch` still its own) does not publish its own
+  runs the chain once. Before each leaf that is due, the run asks its `due` action (`startDue`, passed to
+  `Rule.Ctx.of`) whether it still owns the field. The first time, it claims the field as its latest due run,
+  shows `validating` and waits out the debounce; after the wait, and before every later leaf, it owns the
+  field only while no later due run (keystroke, submit, reset) has claimed it. A run that lost the field runs
+  no rule (the leaf answers `NotChecked`, unrecorded) and publishes nothing, so typing faster than the
+  debounce asks the rules ONCE, about the last value, and a submit during a blur's debounce stops that run's
+  request for the old value. A run no leaf ran for (recalled verdicts, or not yet checked) never claims, so it
+  publishes at once with no `validating` and no debounce, and it never takes the field from a due run: a due
+  run that finds the epoch moved only by such runs (`dueState` still its own) does not publish its own
   verdict, which may be about a value the field no longer holds: it settles (`Rule.Sweep.Settle`, every
-  signal counts as changed) on the current value and ends `validating`. A later due run (submit and reset
-  included) owns the field instead. So a blur during a change's debounce cannot strand the field not yet
-  checked, and a keystroke during a blur's request cannot let the old value's verdict through.
+  signal counts as changed) on the current value and ends `validating`. So a blur during a change's debounce
+  cannot strand the field not yet checked, and a keystroke during a blur's request cannot let the old value's
+  verdict through.
+- **`validating` is derived from `dueState`, never set by a run on its own say.** `dueState` (one
+  `AtomicLong`) packs the latest due run's epoch with whether that run shows `validating`. A claim is one
+  update of it (an event run: shown; submit and reset, `claimQuietly`: not shown), a published end is one
+  compare-and-set (shown to not shown, only while the run still owns the field), and whoever changed it then
+  calls `syncValidating`, which writes what the state says and writes again if the state moved meanwhile.
+  So the last write agrees with the last state whatever the interleaving: a run paused between its claim and
+  its write, overtaken by a run that started and ended in between, cannot leave `validating` true.
+  `FormField.afterClaim` (a `Local`, a no-op outside tests) is the seam a test pauses a run at there.
+- **A run that reads the value itself takes its epoch FIRST** (`onCurrent`: the mount, a reset, a
+  dependency, `dependsOn`, a settle, the bound blur; `verdict` the same way, epoch and quiet claim before
+  its one read). These run on fibers beside the change observer's, and read-then-epoch let an edit land
+  between the two: the edit took the earlier epoch, and the run on the old value, now the last, published its
+  verdict over the edit's (a submit even took the field from the edit, so the edit ran nothing). Epoch-then-read
+  makes every later write a later event. `FormField.startingRun` is the test seam between the two steps.
+  `bind`'s blur therefore calls `blurred`, which ignores the value the control hands its blur (every control
+  reads it from the field's ref anyway). `onEvent(v, event)` judges the value it is given: its one production
+  caller is the change observer, whose next emission handles any write after its read; tests use it too.
+- **A reset is judged like a mount.** `resetField` claims the field quietly, clears the store, touched,
+  the named gate, the client verdict and the server error, writes the baseline if the value differs, and
+  starts ONE change run (`revalidate`) on its own fiber, whether or not the value moved. The change
+  observer passes over the emission of the value the reset wrote (`resetWrite`), so a moved reset runs once,
+  not twice, and is not taken for an edit. Without that run an unmoved reset read valid while a moved one
+  read not yet checked (a rule not due on a change finds the cleared store), two answers for one state.
 - **The field wires both events whatever it declares**: the change observer and `onBlur` are always on,
   because a rule may ask for an event its field does not. `touched` stays bound to the field's OWN events
   (`touchedBy`: its `on`, else `Blur + Change`), so what makes a message visible did not move.

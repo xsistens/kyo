@@ -98,8 +98,10 @@ sealed abstract class FieldSpec[A] private[form] (
     /** Wait this long after a change before running the rules (default: none).
       *
       * For an expensive rule, such as a round-trip that asks a server whether a name is taken. Only
-      * the RUN is delayed; the value itself is not. A superseded run is dropped rather than
-      * published, so the last edit is what the reader is told about.
+      * the RUN is delayed; the value itself is not. A run that a later run with a rule to run
+      * (the next keystroke, a submit, a reset) overtakes during the wait runs no rule at all, so a
+      * reader typing faster than the debounce has the rules asked once, about the last value. An
+      * event no rule is due for (a blur the field's rules ignore) overtakes nothing.
       */
     def debounce(d: Duration): FieldSpec[A] { type Valid = FieldSpec.this.Valid } = rebuild(rulesV, debounce = d)
 

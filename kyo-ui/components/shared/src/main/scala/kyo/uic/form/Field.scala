@@ -47,8 +47,8 @@ end Validated
   *
   * `A` is the field's value type: `String` for text controls, `Boolean` for
   * checkbox/switch/radio, and so on. The gating, message, and aggregation logic is
-  * value-agnostic (it only ever handles `Maybe[FieldError]`); only value binding and the
-  * blur trigger are type-specific, which is why `bind` splits by control family below.
+  * value-agnostic (it only ever handles `Maybe[FieldError]`); only the value binding is
+  * type-specific, which is why `bind` splits by control family below.
   * `CanEqual[A, A]` is required because a server error is scoped to the value it judged
   * ([[serverVisible]]), and a `Signal[A]` demands it anyway. `Valid` (see [[Validated]]) is
   * what the rules yield, and so what [[Form.submit]] hands its handler for this field.
@@ -80,7 +80,7 @@ sealed abstract class FormField[A] private[form] (
     clientRef: SignalRef[ClientVerdict],
     serverErrorRef: SignalRef[Maybe[ServerError[A]]],
     epoch: AtomicInt,
-    dueEpoch: AtomicInt,
+    dueState: AtomicLong,
     resetWrite: AtomicRef[Maybe[A]],
     store: Rule.Store,
     fieldOn: Maybe[Set[Activation.Field]],
@@ -333,18 +333,22 @@ sealed abstract class FormField[A] private[form] (
       * not touched.
       */
     private[form] def dependencyChanged(signal: Signal[?])(using Frame): Unit < Async =
-        valueRef.use(runAndSet(_, signal))
+        onCurrent((v, mine) => decide(v, signal, mine, Absent))
 
     /** The observer both wirings run: first emission validates SILENTLY (correct `isValid`
-      * without flagging an untouched field), every later one goes through [[onEvent]].
+      * without flagging an untouched field), every later one goes through [[onEvent]], except the
+      * value a reset wrote, which the reset judges itself ([[resetField]]).
       */
     private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
         value.observe { v =>
             // Every emission spends a pending reset write, so one this observer never saw cannot be
-            // taken for a later edit; and only the value the reset wrote counts as the reset's.
+            // taken for a later edit; and only the value the reset wrote counts as the reset's, which
+            // the reset judges itself.
             resetWrite.getAndSet(Absent).map { written =>
                 seen.getAndIncrement.map { n =>
-                    if n == 0 || written.contains(v) then revalidate else onEvent(v, Activation.Change)
+                    if n == 0 then revalidate
+                    else if written.contains(v) then Kyo.unit
+                    else onEvent(v, Activation.Change)
                 }
             }
         }
@@ -362,32 +366,55 @@ sealed abstract class FormField[A] private[form] (
         // report against itself.
         if previous != domId then idConflict = Present(previous)
 
-    /** `event` happened: mark the field touched if it is one of its own events, and run the rules due for it. */
+    /** `event` happened on `v`: mark the field touched if it is one of its own events, and run the rules due for it on `v`.
+      * The change observer is its caller: `v` is the emission it handles, and a write after it is the observer's next
+      * emission, handled after this one with a later epoch. A test drives events through it too.
+      */
     private[form] def onEvent(v: A, event: Activation.Field)(using Frame): Unit < Async =
         (if touchedBy(event) then touchedRef.set(true) else Kyo.unit).andThen(runAndSet(v, event))
 
-    /** Re-run the rule chain against the latest value as a change event, without touching the field: the mount value and
-      * a value a reset wrote. Guarded against stale async runs by the epoch.
+    /** The bound control lost focus: mark the field touched if the blur is one of its own events, and run the rules due
+      * for it on the value the field holds once the run has its epoch ([[onCurrent]]), not on the value the control read
+      * for its blur. An edit landing between that read and the epoch would take the earlier epoch, and the blur's run on
+      * the old value, being the last, would publish its verdict. Every control reads its blur value from the field's own
+      * ref, so the value judged is the one it would have handed over.
+      */
+    private[form] def blurred(using Frame): Unit < Async =
+        (if touchedBy(Activation.Blur) then touchedRef.set(true) else Kyo.unit)
+            .andThen(onCurrent((v, mine) => decide(v, Activation.Blur, mine, Absent)))
+
+    /** Re-run the rule chain against the latest value as a change event, without touching the field: the mount value, and
+      * the value a reset leaves, judged as at the mount. Guarded against stale async runs by the epoch.
       */
     private[form] def revalidate(using Frame): Unit < Async =
-        valueRef.use(runAndSet(_, Activation.Change))
+        onCurrent((v, mine) => decide(v, Activation.Change, mine, Absent))
 
     /** Re-run EVERY rule against the latest value, whatever it is due for, without touching the field: a field this one
       * [[dependsOn]] changed, which changes what the rules would say about a value that did not move.
       */
     private def revalidateAll(using Frame): Unit < Async =
-        valueRef.use(runAndSet(_, Rule.Sweep.Every))
+        onCurrent((v, mine) => decide(v, Rule.Sweep.Every, mine, Absent))
+
+    /** Start a run on the value the field holds: take the run's epoch, THEN read the value. In this order a write after the
+      * read is a later event with a later epoch, so the field's last run always judges its last value. Read first, an edit
+      * landing between the read and the epoch took the earlier epoch, and the run on the old value, being the last, published
+      * its verdict over the edit's. Every run that is not handed its value (the mount, a reset, a dependency, a settle) starts
+      * here; a reset's and a dependency's run on fibers beside the change observer's, which is what lets an edit land.
+      */
+    private def onCurrent(run: (A, Int) => Unit < Async)(using Frame): Unit < Async =
+        epoch.incrementAndGet.map(mine => FormField.startingRun.use(hook => hook).andThen(valueRef.use(v => run(v, mine))))
 
     /** Run the rules `trigger` is due for on `v`, and publish what the chain says.
       *
       * Every trigger takes an epoch first, so a run learns that something happened while it ran. The first rule the run
-      * is due for makes it a due run ([[startDue]]): it records its epoch as the field's latest due run (`dueEpoch`),
-      * shows `validating` and waits out the debounce before that rule runs. A run no rule is due for only recalls
-      * verdicts (or finds rules not yet checked) and publishes at once, while the epoch is still its own, leaving
-      * `validating` to a run still in flight. A due run that finds the epoch still its own publishes its verdict and ends
-      * `validating`. One that finds a later due run leaves the field to it. One overtaken only by runs no rule was due for
-      * ends as the field's last due run, but cannot publish its own verdict, which may be about a value the field no
-      * longer holds: it settles instead ([[settle]]).
+      * is due for makes it a due run ([[startDue]]): it claims the field as its latest due run (`dueState`), shows
+      * `validating` and waits out the debounce before that rule runs. A run a later due run claimed the field from
+      * meanwhile runs no rule at all, so a reader typing faster than the debounce has the rules asked once, about the last
+      * value. A run no rule is due for only recalls verdicts (or finds rules not yet checked) and publishes at once, while
+      * the epoch is still its own, leaving `validating` to a run still in flight. A due run that finds the epoch still its
+      * own publishes its verdict and ends `validating`. One that finds a later due run leaves the field to it. One
+      * overtaken only by runs no rule was due for ends as the field's last due run, but cannot publish its own verdict,
+      * which may be about a value the field no longer holds: it settles instead ([[settle]]).
       */
     private def runAndSet(v: A, trigger: Rule.Trigger)(using Frame): Unit < Async =
         epoch.incrementAndGet.map(mine => decide(v, trigger, mine, Absent))
@@ -398,21 +425,48 @@ sealed abstract class FormField[A] private[form] (
       */
     private def decide(v: A, trigger: Rule.Trigger, mine: Int, settling: Maybe[Int])(using Frame): Unit < Async =
         for
-            res    <- chain.run(v, Rule.Ctx.of(trigger, fieldOn, store, mine, startDue(mine)))
-            latest <- dueEpoch.get
-            // `latest >= mine`: this run was due, or a later run is, and then the epoch has moved and nothing publishes.
-            _ <- finish(if latest >= mine then Present(mine) else settling, mine, ClientVerdict.of(res))
+            res   <- chain.run(v, Rule.Ctx.of(trigger, fieldOn, store, mine, startDue(mine)))
+            state <- dueState.get
+            // A due run at `mine` or later: this run was due, or a later one is, and then nothing publishes.
+            _ <- finish(if FormField.dueRun(state) >= mine then Present(mine) else settling, mine, ClientVerdict.of(res))
         yield ()
 
-    /** Before the first rule the run whose epoch is `mine` is due for: claim the field as its latest due run, show
-      * `validating` and wait out the debounce. A rule due after it in the same run, or a run a later due run has
-      * already overtaken, adds nothing.
+    /** Before each rule the run whose epoch is `mine` is due for: whether the run still owns the field. Before the first,
+      * it claims the field as its latest due run, showing `validating`, and waits out the debounce. A later due run (a
+      * keystroke after it, a submit, a reset) that claimed the field meanwhile, during the debounce included, owns it, and
+      * this run runs no rule: it would ask about a value the later run judges in its place. A run no rule is due for
+      * never claims anything, so it leaves an earlier due run its field.
       */
-    private def startDue(mine: Int)(using Frame): Unit < Async =
-        dueEpoch.getAndUpdate(math.max(_, mine)).map { before =>
-            if before >= mine then Kyo.unit
-            else validatingRef.set(true).andThen(if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit)
+    private def startDue(mine: Int)(using Frame): Boolean < Async =
+        dueState.getAndUpdate(s => if FormField.dueRun(s) < mine then FormField.dueShowing(mine) else s).map { before =>
+            val held                  = FormField.dueRun(before)
+            val owns: Boolean < Async =
+                if held > mine then false
+                else if held == mine then true
+                else
+                    FormField.afterClaim.use(hook => hook).andThen(syncValidating).andThen(
+                        if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit
+                    ).andThen(dueState.get.map(s => FormField.dueRun(s) == mine))
+            owns
         }
+
+    /** Bring `validating` in line with `dueState`: shown while the field's latest due run shows it. Whoever changes
+      * `dueState` calls this after, and it writes again when the state moved while it wrote, so the last write agrees with
+      * the last state in whatever order the writes land: a run paused between its claim and its write, overtaken by a run
+      * that started and ended meanwhile, writes what the state says by then, never a `true` no run stands behind.
+      */
+    private def syncValidating(using Frame): Unit < Sync =
+        dueState.get.map { s =>
+            validatingRef.set(FormField.dueShows(s)).andThen(
+                dueState.get.map(again => if FormField.dueShows(again) == FormField.dueShows(s) then Kyo.unit else syncValidating)
+            )
+        }
+
+    /** Claim the field for the run whose epoch is `mine` without showing `validating`: a submit or a reset. It owns the
+      * field from here, which ends a `validating` an earlier run showed, and that run, overtaken, publishes nothing.
+      */
+    private def claimQuietly(mine: Int)(using Frame): Unit < Sync =
+        dueState.updateAndGet(s => if FormField.dueRun(s) < mine then FormField.dueQuiet(mine) else s).andThen(syncValidating)
 
     /** The run whose epoch is `mine` found `published`, on behalf of `owner`: the due run it is, or the due run a settle
       * finishes, or none for a run no rule was due for. Published if nothing happened since, which ends `owner` and so
@@ -421,10 +475,15 @@ sealed abstract class FormField[A] private[form] (
       */
     private def finish(owner: Maybe[Int], mine: Int, published: ClientVerdict)(using Frame): Unit < Async =
         epoch.get.map { cur =>
-            if cur == mine then clientRef.set(published).andThen(if owner.isDefined then validatingRef.set(false) else Kyo.unit)
+            if cur == mine then
+                clientRef.set(published).andThen(owner match
+                    case Present(run) =>
+                        dueState.compareAndSet(FormField.dueShowing(run), FormField.dueQuiet(run))
+                            .map(ended => if ended then syncValidating else Kyo.unit)
+                    case Absent => Kyo.unit)
             else
                 owner match
-                    case Present(run) => dueEpoch.get.map(latest => if latest == run then settle(run) else Kyo.unit)
+                    case Present(run) => dueState.get.map(s => if FormField.dueRun(s) == run then settle(run) else Kyo.unit)
                     case Absent       => Kyo.unit
         }
 
@@ -435,19 +494,23 @@ sealed abstract class FormField[A] private[form] (
       * they hold for the current input.
       */
     private def settle(run: Int)(using Frame): Unit < Async =
-        valueRef.use(v => epoch.incrementAndGet.map(mine => decide(v, Rule.Sweep.Settle, mine, Present(run))))
+        onCurrent((v, mine) => decide(v, Rule.Sweep.Settle, mine, Present(run)))
 
     /** Validate unconditionally for submit (every rule runs, whatever its activation), publish the error, and hand back
       * what the rules yielded for the value read here: ONE run, so submit decides validity and receives the validated
       * value from the same verdict, and a value written after the read cannot reach the handler. Each rule remembers what
-      * it found, so the events after the submit keep its verdict while the value stays. It is a due run like any other
-      * ([[runAndSet]]), with no debounce and no `validating` of its own, so it also ends a `validating` an earlier run left.
+      * it found, so the events after the submit keep its verdict while the value stays. It owns the field as a due run
+      * does ([[runAndSet]]), with no debounce and no `validating` of its own ([[claimQuietly]]). It claims the field
+      * BEFORE it reads the value, as [[onCurrent]] does: an edit after the read is then a later run, which owns the field
+      * and publishes, where read first, the edit took the earlier epoch, lost the field to the submit and ran nothing,
+      * and the submit published the old value's verdict with nothing left to correct it.
       */
     private[form] def verdict(using Frame): Result.Partial[FieldError, Valid] < Async =
         for
-            v    <- valueRef.get
             mine <- epoch.incrementAndGet
-            _    <- dueEpoch.updateAndGet(math.max(_, mine))
+            _    <- claimQuietly(mine)
+            _    <- FormField.startingRun.use(hook => hook)
+            v    <- valueRef.get
             res  <- chain.run(v, Rule.Ctx.all(store, mine))
             _    <- finish(Present(mine), mine, ClientVerdict.Checked(res.failure))
         yield res
@@ -480,26 +543,29 @@ sealed abstract class FormField[A] private[form] (
       * and the gate a submit naming this field opened (form reset). A run still in flight is
       * dropped rather than published over the reset.
       *
-      * The change observer would read the value the reset writes as the reader's edit and mark
-      * the field touched, which shows the error of a field a successful submit just emptied. So
-      * the reset records the value it writes, and the observer validates an emission of exactly
-      * that value silently. Only a write that changes the value is recorded, since an unchanged
-      * value emits nothing.
+      * Then the field is judged as at the mount: one change run on the value it now holds
+      * ([[revalidate]]), started here, whether or not the reset moved the value, so a rule not
+      * due on a change is not yet checked after a reset as it is after the mount. It runs on its
+      * own fiber, as the mount's does, so the reset returns at once and a debounce or a request
+      * runs its normal course. The change observer would read a value the reset writes as the
+      * reader's edit, marking the field touched and running the rules a second time; so the
+      * reset records the value it writes, and the observer passes over an emission of exactly
+      * that value. Only a write that changes the value is recorded, since an unchanged value
+      * emits nothing.
       */
     private[form] def resetField(using Frame): Unit < Sync =
         for
             base    <- baselineRef.get
             current <- valueRef.get
             mine    <- epoch.incrementAndGet
-            _       <- dueEpoch.updateAndGet(math.max(_, mine))
+            _       <- claimQuietly(mine)
             _       <- store.clear
-            _       <- if current == base then Kyo.unit
-            else resetWrite.set(Present(base)).andThen(valueRef.set(base))
-            _ <- touchedRef.set(false)
-            _ <- namedRef.set(false)
-            _ <- clientRef.set(ClientVerdict.Checked(Absent))
-            _ <- serverErrorRef.set(Absent)
-            _ <- validatingRef.set(false)
+            _       <- touchedRef.set(false)
+            _       <- namedRef.set(false)
+            _       <- clientRef.set(ClientVerdict.Checked(Absent))
+            _       <- serverErrorRef.set(Absent)
+            _       <- if current == base then Kyo.unit else resetWrite.set(Present(base)).andThen(valueRef.set(base))
+            _       <- Fiber.initUnscoped(revalidate)
         yield ()
 
 end FormField
@@ -543,6 +609,24 @@ final private[form] case class ServerError[A](err: FieldError, value: A) derives
 
 object FormField:
 
+    /** What a run does right after it claimed its field as the latest due run, before it brings `validating` in line: nothing,
+      * except in a test that pauses a run there to let another one overtake it.
+      */
+    private[form] val afterClaim: Local[Unit < Async] = Local.init[Unit < Async](Kyo.unit)
+
+    /** What a run on the value the field holds does between the two steps that start it, taking its epoch and reading the
+      * value: nothing, except in a test that pauses a run there to let an edit land in between.
+      */
+    private[form] val startingRun: Local[Unit < Async] = Local.init[Unit < Async](Kyo.unit)
+
+    // A field's `dueState` holds its latest due run's epoch and whether that run shows `validating` in one atomic word (the
+    // epoch shifted left once, plus one while it shows), so claiming the field and deciding what `validating` should read
+    // are one step.
+    private inline def dueShowing(epoch: Int): Long   = (epoch.toLong << 1) | 1L
+    private inline def dueQuiet(epoch: Int): Long     = epoch.toLong << 1
+    private inline def dueRun(state: Long): Int       = (state >>> 1).toInt
+    private inline def dueShows(state: Long): Boolean = (state & 1L) == 1L
+
     /** A live field over `A` whose rules yield `B`. The one constructor [[FieldSpec.declare]] (and a test's hand-built
       * field) goes through, so the refinement is stated once.
       */
@@ -569,7 +653,7 @@ object FormField:
     )(using CanEqual[A, A], Frame): (FormField[A] { type Valid = B }) < Sync =
         for
             rulesChain <- RuleChain.init(rules, valueRef)
-            dueEpoch   <- AtomicInt.init(0)
+            dueState   <- AtomicLong.init(0L)
             store      <- Rule.Store.init
         yield new FormField[A](
             valueRef,
@@ -581,7 +665,7 @@ object FormField:
             clientRef,
             serverErrorRef,
             epoch,
-            dueEpoch,
+            dueState,
             resetWrite,
             store,
             fieldOn,
@@ -706,21 +790,22 @@ private def stampId[C <: FormControl { type Self <: C }](control: C, field: Form
 /** Postfix binding: `uic.Input()...bind(field)` returns the same concrete control
   * type (`C` is inferred from the receiver, so no type ascription is needed). The
   * extension is split by control family (a `String` field binds to a text control,
-  * a `Boolean` field to a checkbox or switch) because only the value binding and the
-  * blur trigger are value-typed; everything gated stays shared on [[FormField]].
+  * a `Boolean` field to a checkbox or switch) because only the value binding is
+  * value-typed. The blur trigger ignores the value the control hands it and judges what
+  * the field holds ([[FormField.blurred]]); everything gated stays shared on [[FormField]].
   */
 extension [C <: TextFormControl { type Self <: C }](control: C)
     def bind(field: FormField[String])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
     def bindControlOnly(field: FormField[String])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 end extension
@@ -729,14 +814,14 @@ extension [C <: BooleanFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Boolean])(using Frame): C =
         var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
     def bindControlOnly(field: FormField[Boolean])(using Frame): C =
         var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 end extension
@@ -747,14 +832,14 @@ end extension
 private[form] def wireNumber[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
     var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalidMessage(field.message)
-    b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+    b = b.onBlur(_ => field.blurred)
     b
 end wireNumber
 
 private[form] def wireNumberControlOnly[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
     var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalid(field.visibleError.map(_.isDefined))
-    b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+    b = b.onBlur(_ => field.blurred)
     b
 end wireNumberControlOnly
 
@@ -774,14 +859,14 @@ extension [C <: FileFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
     def bindControlOnly(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(v => field.onEvent(v, Activation.Blur))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 end extension
@@ -794,14 +879,14 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[A])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
     def bindControlOnly(field: FormField[A])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 
@@ -809,7 +894,7 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
@@ -817,7 +902,7 @@ extension [A, C <: ChoiceFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 end extension
@@ -827,7 +912,7 @@ extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Set[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur((_: Set[A]) => field.blurred)
         b
     end bind
 
@@ -835,7 +920,7 @@ extension [A, C <: MultiChoiceFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Set[A]])(using Frame): C =
         var b: C = stampId(control.selection(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur((_: Set[A]) => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur((_: Set[A]) => field.blurred)
         b
     end bindControlOnly
 end extension
@@ -849,7 +934,7 @@ extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
     def bind(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bind
 
@@ -857,7 +942,7 @@ extension [A, C <: OptionalFormControl[A] { type Self <: C }](control: C)
     def bindControlOnly(field: FormField[Maybe[A]])(using Frame): C =
         var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.valueRef.use(field.onEvent(_, Activation.Blur)))
+        b = b.onBlur(_ => field.blurred)
         b
     end bindControlOnly
 end extension
