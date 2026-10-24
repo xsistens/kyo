@@ -4,14 +4,6 @@ import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
 
-/** Suggestion filter variants: how the option list is matched against the typed
-  * text. `StartsWithPerTerm` (the default) matches the start of any word,
-  * `StartsWith` only the start of the whole text, `Contains` anywhere, and
-  * `None` disables filtering (the caller pre-filters, e.g. server-side).
-  */
-enum FilterMode derives CanEqual:
-    case StartsWithPerTerm, StartsWith, Contains, None
-
 /** AutoComplete: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * AutoComplete anatomy: `div.p-autocomplete.p-component[.p-invalid]
   * [.p-autocomplete-fluid]` > `input.p-autocomplete-input.p-inputtext.p-component`
@@ -53,7 +45,7 @@ final case class AutoComplete[A] private (
     keyF: Maybe[A => String] = Absent,
     itemTemplateF: Maybe[A => UI] = Absent,
     valueBinding: Maybe[Input.Value] = Absent,
-    filterV: FilterMode = FilterMode.StartsWithPerTerm,
+    filterF: Maybe[(A, String) => Boolean] = Absent,
     minQueryLengthV: Int = 1,
     emptyContentV: Maybe[EmptyContent] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
@@ -127,13 +119,14 @@ final case class AutoComplete[A] private (
       */
     def value(ref: SignalRef[String]): AutoComplete[A] = copy(valueBinding = Present(Input.Value.Ref(ref)))
 
-    /** How typed text is MATCHED against the option list (default:
-      * `StartsWithPerTerm`). This is the matching strategy, not an on/off switch
-      * and not a query binding: an AutoComplete filters by construction, so
-      * `filterable` and `filterQuery` (the other two pickers' words) have nothing
-      * to mean here. Pass `FilterMode.None` when the caller pre-filters.
+    /** How a suggestion matches the typed text, as `(option, text) => Boolean` with the text as typed. [[Filter]]
+      * holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` suggests an option by either text, and
+      * `Filter.all` suggests every option, for a caller that pre-filters (server-side, say). Without it the match is
+      * `Filter.startsWithPerTerm` on the label projection: the start of any word, ignoring case. This is the matching
+      * strategy alone: an AutoComplete filters by construction and its text is the query, so `filterable` and
+      * `filterQuery` (the other pickers' words) have nothing to mean here.
       */
-    def filterMode(v: FilterMode): AutoComplete[A] = copy(filterV = v)
+    def filter(f: (A, String) => Boolean): AutoComplete[A] = copy(filterF = Present(f))
 
     /** Minimum number of typed characters before typing opens the suggestion
       * panel (Prime's `minLength`; default 1). The dropdown trigger ignores it.
@@ -333,25 +326,17 @@ final case class AutoComplete[A] private (
             case Present(Input.Value.Const(v)) => f(v)
             case Absent                        => f("")
 
-    /** Applies the configured [[FilterMode]] to one option; matching is
-      * case-insensitive on the option label.
-      */
-    private def matchesFilter(a: A, q: String): Boolean =
-        val t = labelF(a).toLowerCase
-        filterV match
-            case FilterMode.StartsWithPerTerm => t.split("\\s+").exists(_.startsWith(q))
-            case FilterMode.StartsWith        => t.startsWith(q)
-            case FilterMode.Contains          => t.contains(q)
-            case FilterMode.None              => true
-        end match
-    end matchesFilter
+    /** How a suggestion matches the typed text: [[filter]], else the start of any word of the label. */
+    private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.startsWithPerTerm(labelF))
 
     private def body(query: String, st: Maybe[State], validity: FieldValidity)(using Frame): UI =
         // The suggestion list the panel and the field's keyboard share: the full
         // list on a dropdown-trigger open, the filtered list otherwise.
         val visibleGroups: List[OptionItem[A]] =
             if st.exists(_.allV) then optionsV
-            else OptionItem.filter(optionsV, a => matchesFilter(a, query.toLowerCase))
+            else
+                val m = matcher
+                OptionItem.filter(optionsV, a => m(a, query))
         val visible: List[A] = OptionItem.flatten(visibleGroups)
         // Typing gates on minQueryLength; the dropdown trigger shows the full list
         // regardless. The panel is suppressed with nothing to show and no message.

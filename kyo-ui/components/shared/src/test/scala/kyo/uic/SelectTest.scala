@@ -673,9 +673,166 @@ class SelectTest extends UicTest:
         """)
     }
 
+    // ---- filter and filterable ----
+
+    private val users = List(
+        SelectTest.User("Ada Lovelace", "ada@engine.org"),
+        SelectTest.User("Grace Hopper", "grace@navy.mil"),
+        SelectTest.User("Alan Turing", "alan@bletchley.uk")
+    )
+
+    private def people(using Frame) = uic.Select[SelectTest.User]().options(users)(_.name).id("sel")
+
+    /** `base` wired with its panel `open` over the query `query`, and the refs a test reads back. */
+    private def search(base: uic.Select[SelectTest.User], open: Boolean, query: String)(using
+        Frame
+    ): (SignalRef[Boolean], SignalRef[String], UI) < Async =
+        for
+            o <- Signal.initRef(open)
+            h <- Signal.initRef(-1)
+            q <- Signal.initRef(query)
+        yield (o, q, base.wired(o, h, q, Present("sel")))
+
+    private def shownNames(ui: UI)(using Frame): Chunk[String] < Sync = rows(ui).map(_.map(textOf))
+
+    private def hasHeader(ui: UI)(using Frame): Boolean < Sync = elementsWithClass(ui, "p-select-header").map(_.nonEmpty)
+
+    /** The role an element carries: its channel's current value where it has one, its static role otherwise. */
+    private def roleOf(e: UI.Ast.Element)(using Frame): String < Sync =
+        e.attrs.reactiveAttrs.get("role") match
+            case Some(sig) => sig.current
+            case None      => e.attrs.role.getOrElse("")
+
+    /** Whether `e` is a text input bound two-way to `ref`. */
+    private def boundTo(e: UI.Ast.Element, ref: SignalRef[String]): Boolean =
+        e match
+            case t: UI.Ast.TextInput =>
+                t.value match
+                    case Present(UI.Bound.Ref(r)) => r eq ref
+                    case _                        => false
+            case _ => false
+
+    "a filter searches every text it is given, so a user is found by email" in {
+        for
+            (_, _, ui) <- search(people.filter(uic.Filter.contains(_.name, _.email)), open = true, query = "NAVY.mil")
+            names      <- shownNames(ui)
+            header     <- hasHeader(ui)
+        yield
+            assert(header, "setting a filter turns the header filter on")
+            assert(names == Chunk("Grace Hopper"), s"the email is searched too: $names")
+    }
+
+    "without a filter the label alone is searched, by contains" in {
+        for
+            (_, _, byLabel) <- search(people.filterable(true), open = true, query = "OPP")
+            labels          <- shownNames(byLabel)
+            (_, _, byEmail) <- search(people.filterable(true), open = true, query = "navy")
+            emails          <- shownNames(byEmail)
+        yield
+            assert(labels == Chunk("Grace Hopper"))
+            assert(emails.isEmpty, s"the email is no part of the default match: $emails")
+    }
+
+    "an explicit filterable(false) decides alone, before or after filter" in {
+        val matcher = uic.Filter.contains[SelectTest.User](_.name, _.email)
+        for
+            (_, _, after)  <- search(people.filter(matcher).filterable(false), open = true, query = "navy")
+            (_, _, before) <- search(people.filterable(false).filter(matcher), open = true, query = "navy")
+            namesAfter     <- shownNames(after)
+            namesBefore    <- shownNames(before)
+            headerAfter    <- hasHeader(after)
+            headerBefore   <- hasHeader(before)
+            trigger        <- elementWithClass(after, "p-select")
+            role           <- roleOf(trigger)
+        yield
+            assert(!headerAfter && !headerBefore, "no header")
+            assert(namesAfter == Chunk("Ada Lovelace", "Grace Hopper", "Alan Turing"), s"every option: $namesAfter")
+            assert(namesBefore == namesAfter, s"in either order: $namesBefore")
+            assert(role == "combobox", "without a header the trigger stays the combobox")
+        end for
+    }
+
+    "an explicit filterable(false) wins over filterQuery too" in {
+        for
+            q          <- Signal.initRef("grace")
+            (_, _, ui) <- search(people.filterQuery(q).filterable(false), open = true, query = "grace")
+            names      <- shownNames(ui)
+            header     <- hasHeader(ui)
+        yield assert(!header && names.size == 3, s"header=$header shown=$names")
+    }
+
+    "a filterable signal shows and hides the header on the open panel, and the query outlives it" in {
+        for
+            on            <- Signal.initRef(true)
+            (open, q, ui) <- search(people.filterable(on), open = true, query = "grace")
+            headerOn      <- hasHeader(ui)
+            namesOn       <- shownNames(ui)
+            _             <- on.set(false)
+            headerOff     <- hasHeader(ui)
+            namesOff      <- shownNames(ui)
+            stillOpen     <- open.get
+            kept          <- q.get
+            _             <- on.set(true)
+            headerAgain   <- hasHeader(ui)
+            namesAgain    <- shownNames(ui)
+            input         <- elementWithClass(ui, "p-select-filter")
+        yield
+            assert(headerOn && namesOn == Chunk("Grace Hopper"), s"on: header=$headerOn shown=$namesOn")
+            assert(!headerOff && namesOff.size == 3, s"off: no header and every option, got header=$headerOff shown=$namesOff")
+            assert(stillOpen, "the panel stays open")
+            assert(kept == "grace", s"the query is kept, only not applied: $kept")
+            assert(headerAgain && namesAgain == Chunk("Grace Hopper"), s"back on, the old query filters at once: $namesAgain")
+            assert(boundTo(input, q), "and the header shows it, since it is bound to the same query")
+    }
+
+    "toggling filterable on a closed panel leaves the field alone, and only its role follows in place" in {
+        for
+            on              <- Signal.initRef(true)
+            (open, q, live) <- search(people.filterable(on), open = false, query = "grace")
+            (_, _, fixed)   <- search(people.filterable(true), open = false, query = "grace")
+            fixedRegions    <- regionsAbove(fixed, "p-select")
+            regionsOn       <- regionsAbove(live, "p-select")
+            roleOn          <- elementWithClass(live, "p-select").map(roleOf)
+            _               <- on.set(false)
+            regionsOff      <- regionsAbove(live, "p-select")
+            field           <- elementWithClass(live, "p-select")
+            roleOff         <- roleOf(field)
+            stillClosed     <- open.get
+            kept            <- q.get
+        yield
+            assert(
+                regionsOn == fixedRegions && regionsOff == fixedRegions,
+                s"no region of the switch over the closed field: $regionsOn / $regionsOff, a constant has $fixedRegions"
+            )
+            assert(field.attrs.reactiveAttrs.contains("role"), "the role is a channel on the field, patched in place")
+            assert(roleOn == "button" && roleOff == "combobox", s"the role follows the switch: $roleOn then $roleOff")
+            assert(!stillClosed && kept == "grace")
+        end for
+    }
+
+    "opening while the filter is off leaves the query alone; opening while it is on starts a fresh one" in {
+        for
+            off              <- Signal.initRef(false)
+            (open1, q1, ui1) <- search(people.filterable(off), open = false, query = "grace")
+            t1               <- elementWithClass(ui1, "p-select")
+            _                <- press(t1, UI.Keyboard.ArrowDown)
+            opened1          <- open1.get
+            kept             <- q1.get
+            (open2, q2, ui2) <- search(people.filterable(true), open = false, query = "grace")
+            t2               <- elementWithClass(ui2, "p-select")
+            _                <- press(t2, UI.Keyboard.ArrowDown)
+            opened2          <- open2.get
+            fresh            <- q2.get
+        yield
+            assert(opened1 && kept == "grace", s"off: the query is not the panel's to clear ($kept)")
+            assert(opened2 && fresh == "", s"on: a fresh query per open, as before ($fresh)")
+    }
+
 end SelectTest
 
 object SelectTest:
     enum Tone derives CanEqual:
         case Warm, Cool
+
+    final case class User(name: String, email: String) derives CanEqual
 end SelectTest

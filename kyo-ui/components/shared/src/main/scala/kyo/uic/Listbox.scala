@@ -129,7 +129,7 @@ end ListOptionScope
   * allocates itself (the same word and the same meaning as
   * [[Select.filterable]] / [[MultiSelect.filterable]]), and `filterQuery(ref)`
   * renders it over a query the app owns. Either way the options are filtered by
-  * a case-insensitive contains at render time.
+  * a case-insensitive contains on the label at render time.
   *
   * `id` lands on the `ul.p-listbox-list`, the listbox that holds the one tab stop, and each option derives
   * `$id-option-<n>` from it (a minted base stands in where none is given).
@@ -140,7 +140,7 @@ final case class Listbox[K] private (
     metaKeyFlag: Boolean = false,
     selectedRef: Maybe[SetBinding[K]] = Absent,
     filterQueryRef: Maybe[SignalRef[String]] = Absent,
-    filterableFlag: Boolean = false,
+    filterableV: Maybe[BoolValue] = Absent,
     onItemClickF: Maybe[K => UI.Action] = Absent,
     templateF: Maybe[ListItem[K] => UI] = Absent,
     checkmarkFlag: Boolean = false,
@@ -219,17 +219,21 @@ final case class Listbox[K] private (
     /** Package-internal: an embedding host's typed selection, read and written through its own keys. */
     private[uic] def selectionBinding(b: SetBinding[K]): Listbox[K] = copy(selectedRef = Present(b))
 
-    /** Renders Prime's header filter input (`div.p-listbox-header` >
-      * `input.p-listbox-filter.p-inputtext`) over a query the listbox allocates
-      * itself: the same word, and the same on/off meaning, as
-      * [[Select.filterable]] and [[MultiSelect.filterable]]. Use [[filterQuery]]
-      * when the app needs to read or write the query.
+    /** Switches Prime's header filter input (`div.p-listbox-header` > `input.p-listbox-filter.p-inputtext`), over a
+      * query the listbox allocates itself unless [[filterQuery]] hands it one: the same word, and the same meaning, as
+      * [[Select.filterable]] and [[MultiSelect.filterable]].
+      *
+      * Without it, [[filterQuery]] turns the header on. Set, constant or signal, it decides alone, so
+      * `filterable(false)` keeps the header off with a query bound. Off, the header is gone and every option shows,
+      * but the query is left as it is: switched back on, the header shows it and filters by it again. A signal shows
+      * and hides the header in a region of its own inside the listbox, and the list repaints only where the options
+      * it shows change.
       */
-    def filterable(v: Boolean): Listbox[K] = copy(filterableFlag = v)
+    def filterable(v: Boolean | Signal[Boolean]): Listbox[K] = copy(filterableV = Present(ReactiveValue(v)))
 
     /** Renders the same header filter, bound two-way to `ref`: typing writes the
       * query, external writes re-filter the options (a case-insensitive contains
-      * on the label).
+      * on the label). Turns the header filter on unless [[filterable]] says otherwise.
       */
     def filterQuery(ref: SignalRef[String]): Listbox[K] = copy(filterQueryRef = Present(ref))
 
@@ -266,6 +270,11 @@ final case class Listbox[K] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox[K] = copy(accessibleNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox[K] = copy(accessibleNameRefV = v)
 
+    /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
+      * [[FieldValidity]]; without one, an app-owned [[filterQuery]] turns it on.
+      */
+    private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQueryRef.isDefined))
+
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
         !disabledFlag && (selectionModeV != SelectionMode.None || onItemClickF.isDefined)
@@ -295,7 +304,8 @@ final case class Listbox[K] private (
       * where the list is already the one tab stop and carries the id, with no highlight yet.
       */
     private def renderQuery(validity: FieldValidity)(using Frame): UI =
-        val ownsQuery = filterQueryRef.isEmpty && filterableFlag
+        // A switch that may turn on (a signal, or `true`) needs a query to filter by; only a constant `false` does not.
+        val ownsQuery = filterQueryRef.isEmpty && !filterOn.const.exists(on => !on)
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -318,7 +328,7 @@ final case class Listbox[K] private (
         idBase: Maybe[String],
         validity: FieldValidity
     )(using Frame): UI = validity.follow(
-        (selectedRef, qRef, hiRef) match
+        (selectedRef, shownQuery(qRef), hiRef) match
             case (Present(s), Present(f), Present(h)) =>
                 s.render(sel => f.render(q => h.render(hi => body(sel, q, qRef, hiRef, idBase, hi)(validity))))
             case (Present(s), Present(f), Absent) => s.render(sel => f.render(q => body(sel, q, qRef, Absent, idBase)(validity)))
@@ -329,6 +339,18 @@ final case class Listbox[K] private (
             case (Absent, Absent, Present(h))     => h.render(hi => body(Set.empty, "", Absent, hiRef, idBase, hi)(validity))
             case _                                => body(Set.empty, "", Absent, Absent, idBase)(validity)
     )
+
+    /** The query as the options see it: the typed one while the filter is on, none while it is off, and nothing to
+      * subscribe where the switch is a constant `false`. A signal switch is folded in here rather than read in a region
+      * of its own, so switching it over an empty query emits nothing and repaints nothing.
+      */
+    private def shownQuery(qRef: Maybe[SignalRef[String]])(using Frame): Maybe[Signal[String]] =
+        qRef.flatMap { q =>
+            filterOn match
+                case BoolValue.Dyn(on)     => Present(q.combineLatest(on).map((typed, isOn) => if isOn then typed else ""))
+                case BoolValue.Const(true) => Present(q)
+                case _                     => Absent
+        }
 
     private def body(
         sel: Set[K],
@@ -438,20 +460,25 @@ final case class Listbox[K] private (
         accessibleNameRefV.foreach(v => list = list.aria("labelledby", v))
         val listUI: UI = list((rows ++ emptyRow).map(toChild)*)
 
+        def header: UI =
+            var field = input
+                .cssClass("p-listbox-filter")
+                .cssClass("p-inputtext")
+                .cssClass("p-component")
+                .role("searchbox")
+                .aria("label", "Filter")
+            // Absent only in the static projection of a listbox that owns its query, before
+            // the mount allocates it: the header still renders, it just does not filter yet.
+            qRef.foreach(r => field = field.value(r))
+            div.cssClass("p-listbox-header")(toChild(field))
+        end header
+
+        // A signal switch shows and hides the header in a region of its own, so the list beside it stays put.
         val headerSlot: List[UI] =
-            if !filterableFlag && filterQueryRef.isEmpty then Nil
-            else
-                var field = input
-                    .cssClass("p-listbox-filter")
-                    .cssClass("p-inputtext")
-                    .cssClass("p-component")
-                    .role("searchbox")
-                    .aria("label", "Filter")
-                // Absent only in the static projection of a `filterable` listbox, before
-                // the mount allocates the query: the header still renders, it just does
-                // not filter yet.
-                qRef.foreach(r => field = field.value(r))
-                List(div.cssClass("p-listbox-header")(toChild(field)))
+            filterOn match
+                case BoolValue.Dyn(on)     => List(on.render(isOn => if isOn then header else UI.empty))
+                case BoolValue.Const(true) => List(header)
+                case _                     => Nil
 
         var root = div.cssClass("p-listbox").cssClass("p-component")
         if disabledFlag then root = root.cssClass("p-disabled")

@@ -192,4 +192,59 @@ class AutoCompleteTest extends UicTest:
         yield assert(input.attrs.identifier.contains("ac"))
     }
 
+    // ---- filter ----
+
+    private val users = List(
+        AutoCompleteTest.User("Ada Lovelace", "ada@engine.org"),
+        AutoCompleteTest.User("Grace Hopper", "grace@navy.mil"),
+        AutoCompleteTest.User("Alan Turing", "alan@bletchley.uk")
+    )
+
+    /** The suggestions `base` shows for the typed `text`, with the panel open on the filtered list. */
+    private def suggestions(base: uic.AutoComplete[AutoCompleteTest.User], text: String)(using Frame): Chunk[String] < Async =
+        for
+            openRef <- Signal.initRef(true)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            typed   <- Signal.initRef(text)
+            ui = base.value(typed).wired(openRef, hi, all, Present("ac"))
+            rows <- elementsWithClass(ui, "p-autocomplete-option")
+        yield rows.map(_.attrs.dataAttrs.getOrElse("uic-option-key", "-"))
+
+    private def people(using Frame) = uic.AutoComplete[AutoCompleteTest.User]().options(users)(_.name)
+
+    "a filter searches every text it is given, so a user is found by email" in
+        suggestions(people.filter(uic.Filter.contains(_.name, _.email)), "NAVY").map(s =>
+            assert(s == Chunk("Grace Hopper"), s"the email is searched too: $s")
+        )
+
+    "without a filter the start of any word of the label matches, and nothing else does" in {
+        for
+            word   <- suggestions(people, "HOP")
+            inside <- suggestions(people, "opper")
+            email  <- suggestions(people, "grace@")
+        yield
+            assert(word == Chunk("Grace Hopper"), s"the start of a later word: $word")
+            assert(inside.isEmpty, s"not the inside of a word: $inside")
+            assert(email.isEmpty, s"and the label alone: $email")
+    }
+
+    "startsWith matches only the start of the whole text" in {
+        for
+            start <- suggestions(people.filter(uic.Filter.startsWith(_.name)), "al")
+            later <- suggestions(people.filter(uic.Filter.startsWith(_.name)), "turing")
+        yield
+            assert(start == Chunk("Alan Turing"), s"$start")
+            assert(later.isEmpty, s"$later")
+    }
+
+    "Filter.all shows every option whatever was typed, for an app that filters them itself" in
+        suggestions(people.filter(uic.Filter.all), "zzz").map(s =>
+            assert(s == Chunk("Ada Lovelace", "Grace Hopper", "Alan Turing"), s"$s")
+        )
+
+end AutoCompleteTest
+
+object AutoCompleteTest:
+    final case class User(name: String, email: String) derives CanEqual
 end AutoCompleteTest
