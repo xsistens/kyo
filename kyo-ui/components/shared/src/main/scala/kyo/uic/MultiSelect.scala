@@ -249,6 +249,9 @@ final case class MultiSelect[A] private (
       */
     private def items: List[A] = OptionItem.flatten(optionsV)
 
+    // Lets the one region skip a write that holds what it already showed; options are still matched by key.
+    private given CanEqual[A, A] = CanEqual.derived
+
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
@@ -263,14 +266,14 @@ final case class MultiSelect[A] private (
     /** How an option matches the query: [[filter]], else a contains on the label projection. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
 
-    /** Hands `f` whether the filter is on. A signal is subscribed only while the panel is open: a closed field reads
-      * the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching it re-renders nothing.
+    /** Whether the panel is open, paired with whether the filter is on. A signal switch is read only while the panel is
+      * open: a closed field reads the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching
+      * it re-renders nothing.
       */
-    private def withFilterOn(isOpen: Boolean)(f: Boolean => UI)(using Frame): UI =
+    private def openFiltering(open: Signal[Boolean])(using Frame): Signal[(Boolean, Boolean)] =
         filterOn match
-            case BoolValue.Dyn(on) if isOpen => on.render(f)
-            case BoolValue.Const(on)         => f(on)
-            case _                           => f(false)
+            case BoolValue.Dyn(on)   => open.switchMap(o => if o then on.map(f => (true, f)) else Signal.initConst((false, false)))
+            case BoolValue.Const(on) => open.map(o => (o, on))
 
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
@@ -304,7 +307,7 @@ final case class MultiSelect[A] private (
         // by this effectful mount; static projections render the same closed
         // anatomy inert (the Select precedent).
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = withValue(cur => body(cur, Absent, validity))
+        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, Absent, ph, ld, validity))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -327,21 +330,22 @@ final case class MultiSelect[A] private (
         using Frame
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        open.render { o =>
-            withFilterOn(o) { f =>
-                hi.render { h =>
-                    q.render { qq =>
-                        withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, f, base)), validity))
-                    }
-                }
-            }
+        val panel    = Reading.Live(openFiltering(open)).and(Reading.Live(hi)).and(Reading.Live(q))
+        panel.and(shown).render { case ((((o, f), h), qq), (held, ld, ph)) =>
+            bodyStatic(held, Present(State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wired
 
-    private def withValue(f: Set[A] => UI)(using Frame): UI =
-        choice match
-            case Present(c) => c.render(f)
-            case Absent     => f(Set.empty)
+    /** What the field shows whatever its panel does: the chosen options, whether the options are still loading, and the
+      * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * never read here.
+      */
+    private def shown(using Frame): Reading[(Set[A], Boolean, Maybe[String])] =
+        val held: Reading[Set[A]] = choice.fold(Reading.Fixed(Set.empty[A]))(c => Reading.Live(c.ref))
+        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
+            (h, ld.getOrElse(false), ph)
+        }
+    end shown
 
     /** Writes the options that carry the keys `next` into the bound set, and fires `onChange` with the set now held where
       * that changed it. Unbound, there is no set to keep, and the options `next` names are reported as they are.
@@ -359,16 +363,6 @@ final case class MultiSelect[A] private (
             case Absent => (): UI.Action
         }
     end write
-
-    private def body(held: Set[A], st: Maybe[State], validity: FieldValidity)(using Frame): UI =
-        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). `State` is a
-        // path-dependent inner type, so the re-render threads the resolved placeholder text into `bodyStatic` directly
-        // rather than through `copy(...)` (a copied instance's `State` would not match). The validity is stamped on the
-        // field, never re-rendered.
-        BoolValue.reactive(loadingV): ld =>
-            val loading = ld.constTrue
-            TextValue.reactive(placeholderV): ph =>
-                bodyStatic(held, st, ph, loading, validity)
 
     private def bodyStatic(
         held: Set[A],
