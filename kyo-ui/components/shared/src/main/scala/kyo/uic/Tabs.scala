@@ -125,7 +125,9 @@ end TabScope
   *
   * `id(...)` is the base each header derives from: `s"$id-${tab.id}"`, using the
   * tab's own logical id, so a strip's headers are addressable without `Tab`
-  * growing a second id slot beside the one it already has. Without a base the
+  * growing a second id slot beside the one it already has. Its panel is
+  * `s"${id}_panel-${tab.id}"`, which no header id can equal, whatever the tab ids are.
+  * Without a base the
   * mount mints one, which keeps the arrow wiring working unasked but leaves the
   * ids arbitrary, and absent entirely from a golden render or an SSG page,
   * since minting needs a mount. With a base they are the same in all three.
@@ -262,6 +264,7 @@ final case class Tabs[K] private (
         t: Tab[K],
         isActive: Boolean,
         i: Int,
+        base: Maybe[String],
         ids: List[String],
         focus: String => UI.Action,
         navigable: List[Int]
@@ -272,11 +275,11 @@ final case class Tabs[K] private (
         // only to move the arrow focus, giving one to a header the arrows skip was pointless;
         // a CHOSEN id is different: a caller who names a header may well be naming it to
         // assert that it is disabled.
-        if ids.isDefinedAt(i) then
-            out = out.id(ids(i))
+        for h <- headerId(base, t); pid <- panelId(base, t) do
+            out = out.id(h)
             // A lazy strip has only the active panel in the page, so only its header may point at one.
-            if !lazyPanelsFlag || isActive then out = out.aria("controls", panelId(ids(i)))
-        end if
+            if !lazyPanelsFlag || isActive then out = out.aria("controls", pid)
+        end for
         if t.disabled then out = out.cssClass("p-disabled")
         else
             out = out.tabIndex(if isActive then 0 else -1)
@@ -296,8 +299,11 @@ final case class Tabs[K] private (
         out
     end interactive
 
-    /** The id of the panel a header controls, derived from the header's own. */
-    private def panelId(headerId: String): String = s"$headerId-panel"
+    /** The id of tab `t`'s panel under `base`. It cannot be the header's id plus a suffix: a header is `s"$base-$id"` for
+      * any tab id, so a tab named "two-panel" would print the panel id of "two". The underscore after the base is what no
+      * header id has there.
+      */
+    private def panelId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"${b}_panel-${t.id}")
 
     /** The strip and the panels. Only the strip lives in the active-tab region: the panels sit
       * outside it, each hiding itself while another tab is active, so choosing a tab repaints
@@ -311,7 +317,7 @@ final case class Tabs[K] private (
     private def body(base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
         def panel(t: Tab[K]): UI.Ast.Div =
             var el = div.cssClass("p-tabpanel").role("tabpanel")
-            headerId(base, t).foreach(h => el = el.id(panelId(h)).aria("labelledby", h))
+            for h <- headerId(base, t); pid <- panelId(base, t) do el = el.id(pid).aria("labelledby", h)
             el
         end panel
         val listed     = entries.and(Reading.optional(selectedBinding))
@@ -336,12 +342,13 @@ final case class Tabs[K] private (
         var root = div.cssClass("p-tabs").cssClass("p-component")
         idV.foreach(v => root = root.id(v))
         val headers = listed.render { (ts, sel) =>
-            copy(tabList = ts).tablistWith(resolveIn(ts, sel), ts.flatMap(t => headerId(base, t).toList), focus)
+            copy(tabList = ts).tablistWith(resolveIn(ts, sel), base, focus)
         }
         root(toChild(headers), toChild(panels))
     end body
 
-    private def tablistWith(active: Maybe[K], ids: List[String], focus: String => UI.Action)(using Frame): UI =
+    private def tablistWith(active: Maybe[K], base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
+        val ids = tabList.flatMap(t => headerId(base, t).toList)
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
         val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
@@ -362,7 +369,7 @@ final case class Tabs[K] private (
                     // An anchor has no native `disabled`, so a disabled nav tab drops its
                     // href and says so through ARIA instead: Link's handling, for the same
                     // reason.
-                    var el = interactive(a.cssClass("p-tab"), t, isActive, i, ids, focus, navigable)
+                    var el = interactive(a.cssClass("p-tab"), t, isActive, i, base, ids, focus, navigable)
                     if t.disabled then el = el.aria("disabled", "true")
                     else el = el.href(Href.Path(u))
                     el(kids*)
@@ -372,6 +379,7 @@ final case class Tabs[K] private (
                         t,
                         isActive,
                         i,
+                        base,
                         ids,
                         focus,
                         navigable
