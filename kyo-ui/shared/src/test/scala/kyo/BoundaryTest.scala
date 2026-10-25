@@ -184,6 +184,50 @@ class BoundaryTest extends UIScreen:
             yield succeed
         }
 
+        s"${form.name}: a click on the placeholder a region just painted reaches it before the boundary is subscribed" in {
+            for
+                cancels <- AtomicInt.init(0)
+                outer   <- AtomicInt.init(0)
+                open    <- Signal.initRef(false)
+                gate    <- Promise.init[Unit, Any]
+                painted <- Promise.init[Unit, Any]
+                release <- Promise.init[Unit, Any]
+                content = UI.mounted(gate.get.andThen(span("ready")))
+                ui      = div.onClick(outer.incrementAndGet)(
+                    open.render(o =>
+                        if o then form.wrap(content, UI.boundary.placeholder(button("cancel").onClick(cancels.incrementAndGet)))
+                        else UI.empty
+                    )
+                )
+                // Holds the engine right after it painted the opened region, before it goes on to subscribe what the paint holds:
+                // the reader already sees the placeholder, and clicks it.
+                exchange = new UIExchange:
+                    def onChange(
+                        region: ReactiveRegion,
+                        path: Seq[String],
+                        context: ReactiveRegion.RegionIdentity,
+                        parentContext: ReactiveRegion.ParentContext,
+                        previous: Maybe[UI],
+                        changed: UI
+                    )(using Frame): Unit < Async =
+                        painted.done.map(first => if first then Kyo.unit else painted.completeUnitDiscard.andThen(release.get))
+                // The region and the placeholder it paints are each the root of the node's range at path 0.
+                target = Seq("0")
+                result <- Scope.run {
+                    for
+                        root <- ReactiveUI.normalize(ui, Seq.empty)
+                        sub  <- ReactiveUI.subscribe(root, exchange)
+                        _    <- open.set(true)
+                        _    <- painted.get
+                        _    <- sub.handle(target, UIEvent.Click(target, MouseEventData(UI.Modifiers.none, Absent)))
+                        _    <- release.completeUnitDiscard
+                        c    <- cancels.get
+                        o    <- outer.get
+                    yield (c, o)
+                }
+            yield assert(result == ((1, 1)), s"(placeholder, element around it) heard the click $result times")
+        }
+
         s"${form.name}: keyboard, focus, input and submit reach the placeholder while the mount loads, and the content after" in {
             for
                 log  <- AtomicRef.init(Chunk.empty[String])

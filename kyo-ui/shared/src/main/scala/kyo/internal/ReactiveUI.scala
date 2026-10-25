@@ -445,6 +445,18 @@ private[kyo] object ReactiveUI:
                 val contentParentContext = nestedParentContext(parentContext, b.child)
                 val (kids, childHandle)  =
                     walkStatic(b.child, path, svg, contentContext, contentParentContext, cells, rows, deepRows)
+                // What the render put on the page for this node, by the rule `HtmlRenderer` paints a boundary with. Until the boundary's
+                // subscription registers its gate that paint is all the reader has seen, so a click on the placeholder must reach the
+                // placeholder: the content it stands for has no instance yet, and the click would fall through to the elements around it.
+                val paintedPlaceholder: Maybe[UI] =
+                    if b.display.isEmpty && b.settings.waits && Boundaries.catchesNow(b.child) then b.settings.placeholderView
+                    else Absent
+                def toPlaceholder(ph: UI, targetPath: Seq[String], event: UIEvent): Boolean < (Async & Abort[Any]) =
+                    Sync.Unsafe.defer {
+                        val (_, placeholderHandle) =
+                            walkStatic(ph, path, svg, contentContext, nestedParentContext(parentContext, ph), cells, rows, deepRows)
+                        placeholderHandle(targetPath, event)
+                    }
                 // Content a boundary holds back is not on the page, so no event reaches it, while its placeholder is and takes them;
                 // and a range that keeps showing old content while its new content loads takes no event, which would otherwise land
                 // in the new content.
@@ -452,21 +464,9 @@ private[kyo] object ReactiveUI:
                     Failures.within(FailureFrame.Boundary(b.settings))(cells.boundary(contentContext).map {
                         case Present(gate) if !gate.isRevealed =>
                             gate.livePlaceholder match
-                                case Present(ph) =>
-                                    Sync.Unsafe.defer {
-                                        val (_, placeholderHandle) = walkStatic(
-                                            ph,
-                                            path,
-                                            svg,
-                                            contentContext,
-                                            nestedParentContext(parentContext, ph),
-                                            cells,
-                                            rows,
-                                            deepRows
-                                        )
-                                        placeholderHandle(targetPath, event)
-                                    }
-                                case Absent => true
+                                case Present(ph) => toPlaceholder(ph, targetPath, event)
+                                case Absent      => true
+                        case Absent if paintedPlaceholder.nonEmpty => toPlaceholder(paintedPlaceholder.get, targetPath, event)
                         case _ => cells.held(targetPath).map(held => if held then true else childHandle(targetPath, event))
                     })
                 ReactiveUI(
@@ -882,6 +882,8 @@ private[kyo] object ReactiveUI:
             end for
         else
             true
+        end if
+    end dispatchThrough
 
     /** Where a keydown records the element whose click it stands for, read by [[subscribe]]'s wrapper once
       * the keydown has finished bubbling.
