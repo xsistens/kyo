@@ -84,14 +84,15 @@ final case class TieredMenu private (
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
-        // See Menu.wired for why the resolution sits inside the mount's content.
-        MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items)
-            focus.render { f =>
-                MenuRender.renderAll(refs)(open =>
-                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
-                )
-            }
+        // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight, the submenus and
+        // a popup's open state are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus (and
+        // a popup's ref) together, and a nested region would repaint the values it closed over.
+        val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
+        MenuRender.readDisabled(itemsV).and(Reading.Live(focus)).and(MenuRender.readAll(refs)).and(popup).render {
+            case (((items, f), open), shown) =>
+                copy(itemsV =
+                    items
+                ).body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)), shown)
         }
     end wired
 
@@ -102,7 +103,9 @@ final case class TieredMenu private (
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
         // mint. Kept apart from `idV`, which is only ever the caller's; see Menu.wired.
-        partBase: Maybe[String]
+        partBase: Maybe[String],
+        // Whether a popup is open, where the host read it in its own region; `Absent` lets the Overlay gate itself.
+        popupShown: Maybe[Boolean] = Absent
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
             focusRef match
@@ -142,7 +145,7 @@ final case class TieredMenu private (
                     .preventScrollKeys
                     .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
                 val listUI: UI = list(rowsUI.map(toChild)*)
-                Overlay(openRef)
+                val overlay    = Overlay(openRef)
                     .matchWidth(false)
                     .animate(false)
                     .panelClass("p-tieredmenu")
@@ -150,7 +153,11 @@ final case class TieredMenu private (
                     .panelClass("p-tieredmenu-overlay")
                     .seedFocus(false)
                     .apply(listUI)
-                    .render
+                popupShown match
+                    case Present(true)  => overlay.renderShown
+                    case Present(false) => UI.empty
+                    case Absent         => overlay.render
+                end match
             case Absent =>
                 // One tab stop from the first render; the keys are wired once the mount has a focus to move.
                 list = list.tabIndex(0)

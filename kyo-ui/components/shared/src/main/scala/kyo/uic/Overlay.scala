@@ -433,6 +433,24 @@ final case class Overlay private (
       * duplicate the panel subtree; the host-gated form has exactly one
       * subscription. Escape/outside-click still write `false` into the ref.
       */
+    /** Package-internal: the open panel with the full placement of [[render]] (the measured flip, the portal, a pointer
+      * anchor), for a host that reads `openRef` in its own region and renders this only while it is open. That host is
+      * then ONE region over its open state and everything else it draws; [[render]]'s own `when(openRef)` inside it would
+      * be a second region, drawing a panel that closed over the host's older state. Escape and an outside click still
+      * write `false` into the ref, and the host's region takes the panel away.
+      */
+    private[uic] def renderShown(using Frame): UI = renderGated(true)
+
+    /** [[renderShown]] while `open`, and only the trigger (where there is one) otherwise: for a host whose one region
+      * reads the open state and always draws the trigger.
+      */
+    private[uic] def renderGated(open: Boolean)(using Frame): UI =
+        val content: List[UI] = if open then List(openContent) else Nil
+        triggerV match
+            case Present(t) => div.cssClass("p-uic-overlay-anchor")((t :: content).map(toChild)*)
+            case Absent     => if open then openContent else UI.empty
+    end renderGated
+
     private[uic] def renderOpen(using Frame): UI =
         (pointerAnchorV, panelIdV) match
             // The pointer placement survives here because nothing it needs is subscribed to the

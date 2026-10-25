@@ -105,6 +105,9 @@ final case class MenuItem private (
 end MenuItem
 
 object MenuItem:
+    // Lets a host's one region skip a resolution that pins the slots it already drew.
+    private[uic] given CanEqual[MenuItem, MenuItem] = CanEqual.derived
+
     /** An item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
@@ -207,13 +210,7 @@ private[uic] object MenuRender:
       * ones held when they built it.
       */
     def readAll(refs: List[(List[Int], SignalRef[Boolean])])(using Frame): Reading[Map[List[Int], Boolean]] =
-        if refs.isEmpty then Reading.Fixed(Map.empty)
-        else
-            val paths = refs.map(_._1)
-            Reading.Live(Signal.combineLatestAll(refs.map(_._2)).map(open => paths.zip(open).toMap))
-    end readAll
-
-    private given CanEqual[Map[List[Int], Boolean], Map[List[Int], Boolean]] = CanEqual.derived
+        Reading.keyed(refs)
 
     /** Paths (index chains from the root) of every item whose `disabled` is reactive,
       * in tree order.
@@ -239,34 +236,41 @@ private[uic] object MenuRender:
     end pinDisabled
 
     /** Resolves every reactive `disabled` in the tree before the host builds rows, and
-      * hands `f` a list whose slots are all `Const`.
-      *
-      * The value-level [[BoolValue.reactive]] over a LIST, and subscribed the same way
-      * [[renderAll]] subscribes submenu state: ONE chain around the whole component
-      * rather than a subscription per row. That is not a micro-optimisation: a per-row
-      * `Signal.render` interposes kyo's classless reactive `<span>` between the list and
-      * its rows, and Prime's direct-child selectors (`.p-menubar-root-list >
-      * .p-menubar-item > ...`) stop matching.
-      *
-      * With no reactive slot anywhere this adds no subscription at all and calls `f`
-      * directly, so a menu of constants renders exactly as it did.
+      * hands `f` a list whose slots are all `Const`: [[readDisabled]] rendered on its own.
       */
     def resolveDisabled(items: List[MenuItem])(f: List[MenuItem] => UI)(using Frame): UI =
-        chain(dynamicDisabled(items), items)(pinDisabled)(f)
+        readDisabled(items).render(f)
 
-    /** The subscription chain itself, shared by the two traversals: nest one
-      * `Signal.render` per reactive slot, pinning each value into the accumulator, and
-      * call `f` once at the bottom. With `dyns` empty it is `f(seed)` and adds no region.
+    /** Every reactive `disabled` in the tree as ONE [[Reading]] of the items, each slot pinned to `Const`, for a host that
+      * reads it beside its own state in one region.
+      *
+      * The value-level [[BoolValue.reactive]] over a LIST, read the same way [[readAll]]
+      * reads submenu state: ONE region around the whole component rather than a
+      * subscription per row. That is not a micro-optimisation: a per-row `Signal.render`
+      * interposes kyo's classless reactive `<span>` between the list and its rows, and
+      * Prime's direct-child selectors (`.p-menubar-root-list > .p-menubar-item > ...`)
+      * stop matching.
+      *
+      * With no reactive slot anywhere the reading is fixed and adds no subscription at
+      * all, so a menu of constants renders exactly as it did.
       */
-    private def chain[T](dyns: List[(List[Int], Signal[Boolean])], seed: T)(
+    def readDisabled(items: List[MenuItem])(using Frame): Reading[List[MenuItem]] =
+        pinned(dynamicDisabled(items), items)(pinDisabled)
+
+    /** The reading itself, shared by the two traversals: every reactive slot as one `combineLatestAll`, each value
+      * pinned into `seed`. With `dyns` empty it is `seed`, fixed.
+      */
+    private def pinned[T](dyns: List[(List[Int], Signal[Boolean])], seed: T)(
         pin: (T, List[Int], Boolean) => T
-    )(f: T => UI)(using Frame): UI =
-        def loop(rest: List[(List[Int], Signal[Boolean])], acc: T): UI =
-            rest match
-                case Nil            => f(acc)
-                case (p, s) :: tail => s.render(v => loop(tail, pin(acc, p, v)))
-        loop(dyns, seed)
-    end chain
+    )(using Frame): Reading[T] =
+        if dyns.isEmpty then Reading.Fixed(seed)
+        else
+            given CanEqual[T, T] = CanEqual.derived
+            val paths            = dyns.map(_._1)
+            Reading.Live(Signal.combineLatestAll(dyns.map(_._2)).map { values =>
+                paths.zip(values).foldLeft(seed) { case (acc, (p, v)) => pin(acc, p, v) }
+            })
+    end pinned
 
     /** [[resolveDisabled]] for MegaMenu, whose leaves sit two containers deeper:
       * `MegaMenuItem.columnsV : List[List[MenuGroup]]`, each group holding the
@@ -275,6 +279,10 @@ private[uic] object MenuRender:
       * `[root, column, group, item]`.
       */
     def resolveMegaDisabled(items: List[MegaMenuItem])(f: List[MegaMenuItem] => UI)(using Frame): UI =
+        readMegaDisabled(items).render(f)
+
+    /** [[readDisabled]] for MegaMenu's leaves (see [[resolveMegaDisabled]]). */
+    def readMegaDisabled(items: List[MegaMenuItem])(using Frame): Reading[List[MegaMenuItem]] =
         val dyns =
             for
                 (root, ri)  <- items.zipWithIndex
@@ -299,8 +307,8 @@ private[uic] object MenuRender:
                     )
                 case _ => acc
 
-        chain(dyns, items)(pin)(f)
-    end resolveMegaDisabled
+        pinned(dyns, items)(pin)
+    end readMegaDisabled
 
     /** Opens exactly the chain leading to `target` (every prefix of the path) and
       * closes everything else; this also flushes stale descendant state left

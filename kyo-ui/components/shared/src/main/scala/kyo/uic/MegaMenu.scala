@@ -47,6 +47,9 @@ final case class MegaMenuItem private (
 end MegaMenuItem
 
 object MegaMenuItem:
+    // Lets a host's one region skip a resolution that pins the slots it already drew.
+    private[uic] given CanEqual[MegaMenuItem, MegaMenuItem] = CanEqual.derived
+
     /** A root item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
@@ -151,14 +154,12 @@ final case class MegaMenu private (
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
-        // See Menu.wired for why the resolution sits inside the mount's content.
-        MenuRender.resolveMegaDisabled(itemsV) { items =>
-            val self = copy(itemsV = items)
-            focus.render { f =>
-                MenuRender.renderAll(refs)(open =>
-                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
-                )
-            }
+        // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
+        // are read as ONE region (see [[Reading]]): an activation writes the highlight and the submenus together, and a
+        // nested region would repaint the values it closed over.
+        MenuRender.readMegaDisabled(itemsV).and(Reading.Live(focus)).and(MenuRender.readAll(refs)).render {
+            case ((items, f), open) =>
+                copy(itemsV = items).body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
         }
     end wired
 

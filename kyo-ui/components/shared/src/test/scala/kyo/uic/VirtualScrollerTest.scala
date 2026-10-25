@@ -86,6 +86,16 @@ class VirtualScrollerTest extends UicTest:
         assert(e.attrs.dataAttrs.get("uic-vs-count").contains("6"))
     }
 
+    "the scroll, the window and the total are ONE region over the rows" in {
+        for
+            query  <- Signal.initRef("a")
+            source <- RowSource.init(query, pageSize = 6)((_, o, l) => (Seq.empty[String], Total.Known(0)))
+            scroll <- Signal.initRef(0.0)
+            ui = uic.VirtualScroller(source).itemSize(40).height(200).overscan(0)(s => span(s)).wired(scroll)
+            regions <- regionsAbove(ui, "p-virtualscroller-spacer")
+        yield assert(regions == 1, s"a feed writes the window and the total together; nested regions repaint older state: $regions")
+    }
+
     "a scroll asks the source for the range it is about to draw" in {
         for
             query  <- Signal.initRef("a")

@@ -96,13 +96,20 @@ final case class SplitButton private (
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], base: String)(using Frame): UI =
-        open.render(o => body(o, Present(open), Present(hi), base))
+        // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
+        // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
+        // nested in this one would repaint what it closed over.
+        MenuRender.readDisabled(itemsV).and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
+            body(o, Present(open), Present(hi), base, items, h)
+        }
 
     private def body(
         isOpen: Boolean,
         open: Maybe[SignalRef[Boolean]],
         hi: Maybe[SignalRef[Int]],
-        base: String
+        base: String,
+        items: List[MenuItem] = Nil,
+        h: Int = -1
     )(using Frame): UI =
         def styled(b: Button): Button =
             val withSev = severityV match
@@ -136,10 +143,10 @@ final case class SplitButton private (
         if !disabledFlag then dropdown = dropdown.onClick(toggle)
 
         val panel: List[UI] = (open, hi) match
-            case (Present(o), Present(h)) =>
+            case (Present(openRef), Present(hiRef)) =>
                 // The hosted menu announces its highlighted row off an id of its own, minted
                 // from this button's, since nothing outside knows the panel is there to name it.
-                List(Menu().items(itemsV*).popup(o).wired(h, s"$base-menu"))
+                List(Menu().items(items*).popup(openRef).hosted(h, hiRef, s"$base-menu", isOpen))
             case _ => Nil
 
         var el = div.cssClass("p-splitbutton").cssClass("p-component")

@@ -818,11 +818,12 @@ class SelectTest extends UicTest:
             value         <- Signal.initRef(Maybe.empty[SelectTest.User])
             (open, _, ui) <- search(people.filterable(on).loading(loading).placeholder(ph).selection(value), open = true, query = "")
             whenOpen      <- regionsAbove(ui, "p-select")
+            panel         <- regionsAbove(ui, "p-select-list")
             _             <- open.set(false)
             whenClosed    <- regionsAbove(ui, "p-select")
         yield assert(
-            whenOpen == 1 && whenClosed == 1,
-            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+            whenOpen == 1 && panel == 1 && whenClosed == 1,
+            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $panel / $whenClosed"
         )
     }
 

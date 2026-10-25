@@ -123,10 +123,10 @@ class MenuTest extends UicTest:
         yield assert(before.isEmpty && after == Seq(1), s"before=$before after=$after")
     }
 
-    "resolving costs a region only when there is something to resolve" in {
-        // Otherwise every menu in the library would grow a subscription it never needed.
-        // `regionsAbove` counts the reactive wrappers over a row: the highlight render is
-        // the one a constant menu already had.
+    "resolving a reactive disabled costs no region of its own: it is read in the menu's one region" in {
+        // A region per resolution nested around the highlight's would repaint rows it closed over, so the
+        // resolution is read beside the highlight. `regionsAbove` counts the reactive wrappers over a row: a
+        // constant menu and a reactive one both have the one region the highlight needs.
         for
             off      <- Signal.initRef(false)
             hi       <- Signal.initRef(0)
@@ -135,7 +135,7 @@ class MenuTest extends UicTest:
                 uic.Menu().items(rows(0), rows(1).disabled(off), rows(2)).wired(hi, "m"),
                 "p-menu-item"
             )
-        yield assert(constant == 1 && reactive == 2, s"constant=$constant reactive=$reactive")
+        yield assert(constant == 1 && reactive == 1, s"constant=$constant reactive=$reactive")
     }
 
     "a nav row says which page the reader is on, on the row AND on its link" in {

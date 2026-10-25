@@ -206,17 +206,28 @@ final case class Menu private (
                 // placed outside the mount would rebuild the mount on every emission, taking the
                 // open state with it. Inside the mount's content it re-renders the rows and nothing
                 // else.
-                MenuRender.resolveDisabled(itemsV) { items =>
-                    val self = copy(itemsV = items)
-                    hi.render(h => self.body(h, Present(hi), Present(idV.getOrElse(base))))
+                // The items, the highlight and a popup's open state are read as ONE region (see [[Reading]]): leaving
+                // writes the popup ref and the highlight together, and a nested region would repaint what it closed over.
+                val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
+                MenuRender.readDisabled(itemsV).and(Reading.Live(hi)).and(popup).render { case ((items, h), shown) =>
+                    copy(itemsV = items).body(h, Present(hi), Present(idV.getOrElse(base)), shown)
                 }
     end wired
+
+    /** The popup menu for a host that already reads its items (resolved through [[MenuRender.readDisabled]]), the
+      * highlight and the popup's open state in its own ONE region, and hands them over: the menu then adds no region of
+      * its own. `SplitButton` hosts its menu this way.
+      */
+    private[uic] def hosted(h: Int, hi: SignalRef[Int], base: String, shown: Boolean)(using Frame): UI =
+        body(h, Present(hi), Present(idV.getOrElse(base)), Present(shown))
 
     /** @param partBase what internal parts derive from (`s"$partBase-active"`): the caller's id
       *                 when there is one, else the id the mount minted. Distinct from `idV`,
       *                 which is only ever the caller's and is what lands on the element.
       */
-    private def body(h: Int, hiRef: Maybe[SignalRef[Int]], partBase: Maybe[String])(using Frame): UI =
+    private def body(h: Int, hiRef: Maybe[SignalRef[Int]], partBase: Maybe[String], popupShown: Maybe[Boolean] = Absent)(using
+        Frame
+    ): UI =
         val rows = flatRows
         // Positions (into `rows`) of the keyboard-navigable rows.
         val navigable: List[Int] = rows.zipWithIndex.collect {
@@ -317,14 +328,19 @@ final case class Menu private (
                         else if e.key == Keyboard.Tab then leave
                         else keyHandler(e)
                     )
-                Overlay(openRef)
+                val overlay = Overlay(openRef)
                     .matchWidth(false)
                     .animate(false)
                     .panelClass("p-menu")
                     .panelClass("p-component")
                     .panelClass("p-menu-overlay")
                     .seedFocus(false)(list(rowUIs.map(toChild)*))
-                    .render
+                // Where the host read the popup's open state in its own region it gates the panel itself.
+                popupShown match
+                    case Present(true)  => overlay.renderShown
+                    case Present(false) => UI.empty
+                    case Absent         => overlay.render
+                end match
             case Absent =>
                 // Arriving on the list highlights the first enabled row, and leaving drops the
                 // highlight again. Prime's sheet clears the list's outline and puts the only

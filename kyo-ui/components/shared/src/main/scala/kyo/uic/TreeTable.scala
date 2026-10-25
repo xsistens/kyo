@@ -198,19 +198,14 @@ final case class TreeTable[A] private (
     private def rowInteractive: Boolean =
         selectionModeV != SelectionMode.None || onRowClickF.isDefined
 
-    private def withRef[T](ref: Maybe[Signal[T]], fallback: T)(k: T => UI)(using Frame): UI =
-        ref match
-            case Present(r) => r.render(k)
-            case Absent     => k(fallback)
-
     private[uic] def render(using Frame): UI =
         UI.mounted {
             for
                 cmds   <- UI.commands
                 base   <- cmds.freshId
                 cursor <- Signal.initRef(Absent: Maybe[String])
-            yield withVisibleColumns(_.buildAll(base, Present(cursor), id => cmds.focusId(id)))
-        }.placeholder(withVisibleColumns(_.buildAll("", Absent, _ => ())))
+            yield buildAll(base, Present(cursor), id => cmds.focusId(id))
+        }.placeholder(buildAll("", Absent, _ => ()))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there.
       *
@@ -221,7 +216,7 @@ final case class TreeTable[A] private (
     private[uic] def wired(base: String, cursor: Maybe[SignalRef[Maybe[String]]], focus: String => UI.Action)(
         using Frame
     ): UI =
-        withVisibleColumns(_.buildAll(base, cursor, focus))
+        buildAll(base, cursor, focus)
 
     private def buildAll(base: String, cursorRef: Maybe[SignalRef[Maybe[String]]], focus: String => UI.Action)(
         using Frame
@@ -232,53 +227,33 @@ final case class TreeTable[A] private (
         val seed: String => UI.Action = cursorRef match
             case Present(r) => (k: String) => r.set(Present(k))
             case Absent     => (_: String) => ()
-        withSortableFlags { flags =>
-            withRef(expandedTyped.map(_.map(_.map(keyFor))), Set.empty[String]) { exp =>
-                withRef(selectedTyped.map(_.map(_.map(keyFor))), Set.empty[String]) { sel =>
-                    withRef(sortRef, List.empty[SortKey]) { sort =>
-                        withRef(cursorRef, Absent: Maybe[String]) { cursor =>
-                            body(exp, sel, sort, cursor, seed, flags, base, focus)
-                        }
-                    }
-                }
-            }
+        // Everything the table reads is ONE region (see [[Reading]]): a key writes the expansion, the cursor and the
+        // selection together, and a region nested per signal would repaint the rows against the values it closed over.
+        // The reactive `visible` and `sortable` flags are resolved here too, each to a plain boolean.
+        val visible  = Reading.keyed(cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig))))
+        val sortable = Reading.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig))))
+        val exp      = Reading.orElse(expandedTyped.map(_.map(_.map(keyFor))), Set.empty[String])
+        val sel      = Reading.orElse(selectedTyped.map(_.map(_.map(keyFor))), Set.empty[String])
+        val sort     = Reading.orElse(sortRef, List.empty[SortKey])
+        val cursor   = Reading.orElse(cursorRef, Absent: Maybe[String])
+        visible.and(sortable).and(exp).and(sel).and(sort).and(cursor).render { case (((((vis, flags), e), s), so), cu) =>
+            narrowed(vis).body(e, s, so, cu, seed, flags, base, focus)
         }
     end buildAll
 
-    /** Resolves every [[Column.visible]] flag and hands on the table without the columns
-      * they hide, as DataTable does. The hidden ones are kept rather than dropped, since
-      * the sort spec still sorts by them: hiding a column changes what the reader sees and
-      * not the order the rows are in.
+    /** The table without the columns their [[Column.visible]] flags hide (`vis` holds the reactive ones, resolved), as
+      * DataTable does. The hidden ones are kept rather than dropped, since the sort spec still sorts by them: hiding a
+      * column changes what the reader sees and not the order the rows are in.
       *
       * Hiding the first column moves the node toggler onto the one that takes its place,
       * which is what keeps the hierarchy readable however many columns are on the screen.
       */
-    private def withVisibleColumns(k: TreeTable[A] => UI)(using Frame): UI =
-        val reactive = cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig)))
-        if reactive.isEmpty && cols.forall(_.visibleConst) then k(this)
+    private def narrowed(vis: Map[Int, Boolean]): TreeTable[A] =
+        if vis.isEmpty && cols.forall(_.visibleConst) then this
         else
-            def narrow(keep: Int => Boolean): TreeTable[A] =
-                val (shown, hidden) = cols.zipWithIndex.partition((_, i) => keep(i))
-                copy(cols = shown.map(_._1), hiddenCols = hidden.map(_._1))
-            def loop(rest: List[(Int, Signal[Boolean])], acc: Map[Int, Boolean]): UI =
-                rest match
-                    case Nil              => k(narrow(i => acc.getOrElse(i, cols(i).visibleConst)))
-                    case (i, sig) :: tail => sig.render(b => loop(tail, acc + (i -> b)))
-            loop(reactive, Map.empty)
-        end if
-    end withVisibleColumns
-
-    /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
-      * builds, one nested subscription per signal-backed column, as DataTable does.
-      */
-    private def withSortableFlags(build: Map[String, Boolean] => UI)(using Frame): UI =
-        val reactive = cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig)))
-        def loop(rest: List[(String, Signal[Boolean])], acc: Map[String, Boolean]): UI =
-            rest match
-                case Nil              => build(acc)
-                case (h, sig) :: tail => sig.render(b => loop(tail, acc + (h -> b)))
-        loop(reactive, Map.empty)
-    end withSortableFlags
+            val (shown, hidden) = cols.zipWithIndex.partition((c, i) => vis.getOrElse(i, c.visibleConst))
+            copy(cols = shown.map(_._1), hiddenCols = hidden.map(_._1))
+    end narrowed
 
     private def body(
         exp: Set[String],

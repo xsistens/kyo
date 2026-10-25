@@ -212,23 +212,19 @@ final case class ContextMenu private (
         at: SignalRef[Maybe[UI.Point]],
         refs: List[(List[Int], SignalRef[Boolean])]
     )(using Frame): UI =
-        MenuRender.resolveDisabled(itemsV) { items =>
-            val resolved = copy(itemsV = items)
-            openRef.render { isOpen =>
-                focus.render { f =>
-                    MenuRender.renderAll(refs) { open =>
-                        UI.fragment(resolved.panelFor(
-                            isOpen,
-                            Present(openRef),
-                            f,
-                            Present(focus),
-                            open.withDefaultValue(false),
-                            Present(refs),
-                            Present(at)
-                        )*)
-                    }
-                }
-            }
+        // The items, the open state, the highlight and the submenus are read as ONE region (see [[Reading]]): opening at
+        // a point writes the open state and the highlight together, and a nested region would repaint what it closed over.
+        val read = MenuRender.readDisabled(itemsV).and(Reading.Live(openRef)).and(Reading.Live(focus)).and(MenuRender.readAll(refs))
+        read.render { case (((items, isOpen), f), open) =>
+            UI.fragment(copy(itemsV = items).panelFor(
+                isOpen,
+                Present(openRef),
+                f,
+                Present(focus),
+                open.withDefaultValue(false),
+                Present(refs),
+                Present(at)
+            )*)
         }
     end panelRegion
 
