@@ -154,7 +154,7 @@ final case class TieredMenu private (
                     .seedFocus(false)
                     .apply(listUI)
                 popupShown match
-                    case Present(true)  => overlay.renderShown
+                    case Present(true)  => overlay.renderShown(partBase.map(b => s"$b-panel"))
                     case Present(false) => UI.empty
                     case Absent         => overlay.render
                 end match

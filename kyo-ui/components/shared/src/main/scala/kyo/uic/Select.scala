@@ -799,7 +799,7 @@ final case class Select[A] private (
             .seedFocus(false)
             .dismissOnEscape(false)
             .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
-            .renderShown
+            .renderShown(s.idBase.map(b => s"$b-panel"))
     end overlayPanel
 
     /** The loud card shown at the top of the panel when the option keys collide, so

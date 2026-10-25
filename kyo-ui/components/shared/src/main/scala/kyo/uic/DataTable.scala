@@ -120,7 +120,8 @@ final private[uic] case class FilterState(
     // A menu edits a DRAFT and applies it, so a table of a hundred thousand rows is not
     // re-filtered on the way to the second rule. A row display has no draft: one input is
     // the whole filter, and the keystroke that changes it is the apply.
-    drafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty
+    drafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
+    idPrefix: String = ""
 ):
     private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]]       = Maybe.fromOption(open.get(path))
     private[uic] def draftOf(path: List[String]): Maybe[SignalRef[ColumnFilter]] = Maybe.fromOption(drafts.get(path))
@@ -1720,6 +1721,10 @@ final case class DataTable[A] private (
       */
     private def headId(prefix: String): String = s"$prefix-head"
 
+    /** The id of a column's filter popover, by the column's place among the filterable ones: a column key may hold spaces. */
+    private def filterPanelId(prefix: String, path: List[String]): String =
+        s"$prefix-filter${filterableLeaves.indexWhere(_._1 == path)}-panel"
+
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
       */
@@ -2293,7 +2298,7 @@ final case class DataTable[A] private (
             Wiring(
                 EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
                 NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                FilterState(open = menus, live = true, drafts = filterDrafts),
+                FilterState(open = menus, live = true, drafts = filterDrafts, idPrefix = idPrefix),
                 SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
                 OrderState(drag = moving, held = drag),
                 ScrollState(scroll, headTop),
@@ -3988,7 +3993,7 @@ final case class DataTable[A] private (
                                             .trigger(trigger(Present(draft), Present(openRef)))(
                                                 filterMenu(path, c, cf, d, draft, openRef)
                                             )
-                                            .renderGated(open)
+                                            .renderGated(open, Present(filterPanelId(filter.idPrefix, path)))
                                     })
                                 )
                             )

@@ -369,7 +369,7 @@ final case class TreeSelect[K] private (
             panel(
                 (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
             )
-                .renderShown
+                .renderShown(Present(s"${state.idBase}-panel"))
         }
 
         // === field root ==========================================================

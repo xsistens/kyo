@@ -79,4 +79,75 @@ class OverlayTest extends UicTest:
         }
     }
 
+    /** Opens `overlay` under a host that reads the open state and a highlight in ONE region and draws the panel with
+      * `renderGated`, as the pickers and menus do. Each round moves the highlight, waits for the host's repaint and clicks
+      * the option at once. Answers how many clicks the option heard and how often an element was observed: every start
+      * of the panel's mount or of a measuring trigger observes again, whether under a fresh id or the same one.
+      */
+    private def hostRepaints(overlay: SignalRef[Boolean] => Overlay, rounds: Int)(using Frame): (Int, Int) < Async =
+        Scope.run {
+            for
+                open     <- Signal.initRef(true)
+                hi       <- Signal.initRef(0)
+                picks    <- AtomicInt.init(0)
+                observed <- AtomicRef.init(Chunk.empty[String])
+                painted  <- Channel.init[Unit](64)
+                measured <- Promise.init[Unit, Any]
+                cmds     <- UI.Commands.init {
+                    case HtmlOp.ObserveViewportById(id) => observed.updateAndGet(_.append(id)).andThen(measured.completeUnitDiscard)
+                    case _                              => Kyo.unit
+                }
+                exchange = new kyo.internal.UIExchange:
+                    def onChange(
+                        region: kyo.internal.ReactiveRegion,
+                        path: Seq[String],
+                        contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
+                        parentContext: kyo.internal.ReactiveRegion.ParentContext,
+                        previous: Maybe[UI],
+                        changed: UI
+                    )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
+                ui = UI.div(Reading.Live(open).and(Reading.Live(hi)).render { (o, h) =>
+                    overlay(open)(UI.button.id("opt").onClick(picks.incrementAndGet)(s"row $h")).renderGated(o, Present("host-panel"))
+                })
+                html <- HtmlRenderer.render(ui, Seq.empty)
+                path = pathOf(html, "opt")
+                result <- UICommands.commands.let(Present(cmds)) {
+                    for
+                        root <- ReactiveUI.normalize(ui, Seq.empty)
+                        sub  <- ReactiveUI.subscribe(root, exchange)
+                        _    <- measured.get
+                        _    <- Kyo.foreach(1 to rounds) { i =>
+                            Abort.run[Closed](painted.drain).andThen(hi.set(i)).andThen(Abort.run[Closed](painted.take))
+                                .andThen(sub.handle(path, clickAt(path)))
+                        }
+                        p <- picks.get
+                        n <- observed.get
+                    yield (p, n.size)
+                }
+            yield result
+        }
+
+    "a host repainting around an open panel neither remounts it nor loses a click on it" in {
+        hostRepaints(open => Overlay(open).containClicks(true), rounds = 10).map { (picks, ids) =>
+            assert(picks == 10, s"the option heard $picks of 10 clicks sent right after the host repainted")
+            assert(ids == 1, s"the panel was observed $ids times, once per mount")
+        }
+    }
+
+    "the same holds for a portal panel under a repainting host" in {
+        // A portal mount observes two ids: the anchor probe and the panel.
+        hostRepaints(open => Overlay(open).containClicks(true).portal(true), rounds = 10).map { (picks, ids) =>
+            assert(picks == 10 && ids == 2, s"clicks heard $picks of 10, $ids observations")
+        }
+    }
+
+    "and for a panel placed at a point under a repainting host" in {
+        hostRepaints(
+            open => Overlay(open).containClicks(true).pointerAnchor(Signal.initConst(Present(UI.Point(10, 20)))),
+            rounds = 10
+        ).map { (picks, ids) =>
+            assert(picks == 10 && ids == 1, s"clicks heard $picks of 10, $ids observations")
+        }
+    }
+
 end OverlayTest
