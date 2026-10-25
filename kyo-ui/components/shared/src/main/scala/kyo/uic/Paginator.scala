@@ -69,6 +69,11 @@ final case class Paginator private (
       */
     def rows(ref: SignalRef[Int]): Paginator = copy(rowsRef = Present(ref))
 
+    /** Package-internal: a host that owns the page size hands a constant one, dropping any ref a caller bound, since a
+      * dropdown writing a ref the host does not page by would page a list nobody is looking at.
+      */
+    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = math.max(1, n), rowsRef = Absent)
+
     /** Binds the 0-based page index two-way to `ref` (clamped at render). */
     def page(ref: SignalRef[Int]): Paginator = copy(pageRef = Present(ref))
 
