@@ -37,6 +37,12 @@ private[uic] enum Reading[A]:
             case Fixed(a)  => Signal.initConst(a)
             case Live(sig) => sig
 
+    /** The reading as a slot value: a fixed one as the value, so the control it binds draws no region for it. */
+    def slot: A | Signal[A] =
+        this match
+            case Fixed(a)  => a
+            case Live(sig) => sig
+
     /** Renders `f` with the value: once for a fixed one, as one region for a live one. */
     def render(f: A => UI)(using Frame): UI =
         this match

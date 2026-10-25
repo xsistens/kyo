@@ -106,6 +106,26 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 }
         )
 
+    /** How many regions sit above the mount of the control drawn with `cls`. Unlike [[regionsAbove]] it stops at the
+      * mount, so the regions a control draws inside itself do not count: a region above the mount is one whose every
+      * repaint starts the control's mount again.
+      */
+    private[uic] def regionsAboveMount(node: UI, cls: String)(using Frame): Int < Sync =
+        def holds(n: UI): Boolean < Sync               = elementsWithClass(n, cls).map(_.nonEmpty)
+        def walk(n: UI, depth: Int): Chunk[Int] < Sync =
+            n match
+                case m: UI.Ast.Mounted =>
+                    m.placeholderUI match
+                        case Present(ui) => holds(ui).map(found => if found then Chunk(depth) else Chunk.empty)
+                        case Absent      => Chunk.empty
+                case e: UI.Ast.Element       => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
+                case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk(_, depth + 1))
+                case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
+                case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case _                       => Chunk.empty
+        walk(node, 0).map(ds => if ds.isEmpty then throw new AssertionError(s"no mount draws $cls") else ds.min)
+    end regionsAboveMount
+
     /** How many reactive regions sit between `node` and the nearest element carrying `cls`.
       *
       * One is what a control that reads several refs wants. Nesting a render inside another leaves
