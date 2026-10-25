@@ -494,11 +494,12 @@ class MultiSelectTest extends UicTest:
             ph               <- Signal.initRef("Pick some")
             (open, _, _, ui) <- search(people.filterable(on).loading(loading).placeholder(ph), open = true, query = "")
             whenOpen         <- regionsAbove(ui, "p-multiselect")
+            panel            <- regionsAbove(ui, "p-multiselect-list")
             _                <- open.set(false)
             whenClosed       <- regionsAbove(ui, "p-multiselect")
         yield assert(
-            whenOpen == 1 && whenClosed == 1,
-            s"a pick writes the value while the panel state moves; a nested region can repaint the older state: $whenOpen / $whenClosed"
+            whenOpen == 1 && panel == 1 && whenClosed == 1,
+            s"a pick writes the value while the panel state moves; a nested region can repaint the older state: $whenOpen / $panel / $whenClosed"
         )
     }
 

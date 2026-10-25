@@ -52,6 +52,19 @@ private[uic] object Reading:
             case ReactiveValue.Dyn(sig) => Live(sig)
             case ReactiveValue.Const(a) => Fixed(a)
 
+    /** A signal where one is bound, else `fallback`, fixed. */
+    def orElse[A](sig: Maybe[Signal[A]], fallback: A): Reading[A] =
+        sig.fold(Fixed(fallback))(Live(_))
+
+    /** Several signals, each under its key, as ONE reading of the map of their values; with none, an empty map, fixed. */
+    def keyed[K, V](entries: Seq[(K, Signal[V])])(using CanEqual[V, V], Frame): Reading[Map[K, V]] =
+        if entries.isEmpty then Fixed(Map.empty)
+        else
+            given CanEqual[Map[K, V], Map[K, V]] = CanEqual.derived
+            val keys                             = entries.map(_._1)
+            Live(Signal.combineLatestAll(entries.map(_._2)).map(values => keys.zip(values).toMap))
+    end keyed
+
     /** An optional slot as a reading of its value, `Absent` where it is unset. */
     def optional[A](v: Maybe[ReactiveValue[A]])(using CanEqual[A, A], Frame): Reading[Maybe[A]] =
         v match

@@ -89,14 +89,14 @@ object CellEditor:
       */
     def select(options: Seq[String]): CellEditor =
         p =>
-            p.draft.render { cur =>
-                Select[String]()
-                    .options(options)
-                    .id(p.id)
-                    .current(if cur.isEmpty then Absent else Present(cur))
-                    .onChange(v => p.draft.set(v.getOrElse("")).andThen(p.commit))
-                    .toUI
-            }
+            // The draft binds one way, read inside the Select's own region: a region here would sit around the Select's
+            // mount and rebuild it, open panel and all, on every write to the draft.
+            Select[String]()
+                .options(options)
+                .id(p.id)
+                .selection(p.draft.map(d => if d.isEmpty then Maybe.empty[String] else Present(d)))
+                .onChange(v => p.draft.set(v.getOrElse("")).andThen(p.commit))
+                .toUI
 
     /** Prime's checkbox. A toggle writes and commits at once, so a boolean cell needs no
       * second gesture to confirm what it already shows.

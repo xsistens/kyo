@@ -1502,23 +1502,6 @@ final case class DataTable[A] private (
     /** Whether the rows are a window onto a larger set prepared elsewhere ([[lazyRows]]). */
     private def lazyOn: Boolean = lazyTotalV.isDefined
 
-    /** Renders through whichever ui-state refs are bound (nested reactive nodes
-      * render through in SSR).
-      */
-    private def withRef[T](ref: Maybe[Signal[T]], fallback: T)(k: T => UI)(using Frame): UI =
-        ref match
-            case Present(r) => r.render(k)
-            case Absent     => k(fallback)
-
-    /** The same for a [[ReactiveValue]] slot. A constant needs no reactive region at all, which is
-      * what lets a constant selection paint under a pure render (no mount, no subscription).
-      */
-    private def withValue[T](v: Maybe[ReactiveValue[T]], fallback: T)(k: T => UI)(using Frame): UI =
-        v match
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(k)
-            case Present(ReactiveValue.Const(c)) => k(c)
-            case _                               => k(fallback)
-
     /** Whether the row bindings may be resolved BELOW the body rather than around it.
       *
       * They may whenever nothing outside the row stream reads them. Three features do read them
@@ -1575,41 +1558,22 @@ final case class DataTable[A] private (
         fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
     end rowInputsSignal
 
-    /** Resolves the row bindings, below the body where that is allowed and around it otherwise.
-      *
-      * On the signal path `k`'s first argument is the empty value and MUST NOT be read for anything
-      * outside the row stream: the four features that would read it there (a select-all header, a
-      * frozen row group, a windowed body, a column footer) are exactly what makes
-      * [[rowInputsBelow]] false. What legitimately needs the rows outside the stream, the
-      * diagnostic cards and the paginator, goes through `chrome`, which resolves them in a region
-      * of its own so a rows emission repaints those and reconciles the rows.
+    /** The row bindings where they are read around the body: the rows and where they start, the selection, the context
+      * row, the selected cells, the expansion, the groups and the total, as one reading. [[renderWith]] reads them below
+      * the body instead wherever [[rowInputsBelow]] allows it.
       */
-    private def withRowInputs(
-        k: (RowInputs[A], Total, Maybe[Signal[RowInputs[A]]], ((RowInputs[A], Total) => UI) => UI) => UI
-    )(using Frame): UI =
-        val live = if rowInputsBelow then rowInputsSignal else Absent
-        live match
-            case Present(sig) =>
-                k(RowInputs[A](), Total.Unknown(false), live, f => sig.render(in => withTotal(t => f(in, t))))
-            case Absent =>
-                withRows { (rows, offset) =>
-                    withValue(selectedBinding, Set.empty[String]) { sel =>
-                        withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
-                            withRef(selectedCellsRef, Set.empty[CellKey]) { cells =>
-                                withRef(expandedRef, Set.empty[String]) { exp =>
-                                    withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                        withTotal { total =>
-                                            val in = RowInputs(rows, offset, sel, ctx, cells, exp, groups)
-                                            k(in, total, Absent, f => f(in, total))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-        end match
-    end withRowInputs
+    private def rowInputsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[(RowInputs[A], Total)] =
+        given CanEqual[RowInputs[A], RowInputs[A]] = CanEqual.derived
+        val sel                                    = selectedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_))
+        rowsReading
+            .and(sel)
+            .and(Reading.orElse(contextRowRef, Absent: Maybe[String]))
+            .and(Reading.orElse(selectedCellsRef, Set.empty[CellKey]))
+            .and(Reading.orElse(expandedRef, Set.empty[String]))
+            .and(Reading.orElse(expandedGroupsRef, Set.empty[GroupPath]))
+            .map { case ((((((rows, offset), s), ctx), cells), exp), groups) => RowInputs(rows, offset, s, ctx, cells, exp, groups) }
+            .and(totalReading)
+    end rowInputsReading
 
     /** Whether anything can be edited at all, which is what decides whether the table
       * needs state of its own.
@@ -2170,18 +2134,20 @@ final case class DataTable[A] private (
       */
     private[uic] def render(using Frame): UI =
         def static: UI =
-            renderWith(
-                EditState(Set.empty, Absent),
-                NavState[A](),
-                FilterState(),
-                SizeState(),
-                OrderState(),
-                ScrollState(),
-                MoveState[A](),
-                // A caller-bound anchor works without a mount, which is the point of binding it:
-                // a table that ranges and owns nothing else stays a pure render.
-                SelectState(metaKey = metaKeyFlag, anchor = anchorRef)
-            )
+            renderWith(Reading.Fixed(())) { _ =>
+                Wiring(
+                    EditState(Set.empty, Absent),
+                    NavState[A](),
+                    FilterState(),
+                    SizeState(),
+                    OrderState(),
+                    ScrollState(),
+                    MoveState[A](),
+                    // A caller-bound anchor works without a mount, which is the point of binding it:
+                    // a table that ranges and owns nothing else stays a pure render.
+                    SelectState(metaKey = metaKeyFlag, anchor = anchorRef)
+                )
+            }
         if !ownsState then static
         else
             val mount = UI.mounted {
@@ -2313,34 +2279,38 @@ final case class DataTable[A] private (
         filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
         anchor: Maybe[SignalRef[Maybe[A]]] = Absent
     )(using Frame): UI =
-        errRef.render(e =>
-            withRef(editingRowsRef, Set.empty[String]) { editRows =>
-                withRef(editingCellRef, Absent: Maybe[CellKey]) { editCell =>
-                    withRef(moving, Absent: Maybe[ColumnDrag]) { drag =>
-                        withRef(rowDrag, Absent: Maybe[RowDrag]) { rowHeld =>
-                            renderWith(
-                                EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
-                                NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                                FilterState(open = menus, live = true, drafts = filterDrafts),
-                                SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
-                                OrderState(drag = moving, held = drag),
-                                ScrollState(scroll, headTop),
-                                MoveState[A](
-                                    drag = rowDrag,
-                                    held = rowHeld,
-                                    idPrefix = idPrefix,
-                                    live = true,
-                                    measure = measure
-                                ),
-                                SelectState(metaKey = metaKeyFlag, anchor = anchor)
-                            )
-                        }
-                    }
-                }
-            }
-        )
+        // The caller's state is read in the table's one region (see `renderWith`): starting an edit writes the error
+        // and the edited cell together.
+        given errEq: CanEqual[Maybe[(CellKey, FieldError)], Maybe[(CellKey, FieldError)]] = CanEqual.derived
+        given dragEq: CanEqual[Maybe[ColumnDrag], Maybe[ColumnDrag]]                      = CanEqual.derived
+        given rowDragEq: CanEqual[Maybe[RowDrag], Maybe[RowDrag]]                         = CanEqual.derived
+        val outer                                                                         = Reading.Live(errRef)
+            .and(Reading.orElse(editingRowsRef, Set.empty[String]))
+            .and(Reading.orElse(editingCellRef, Absent: Maybe[CellKey]))
+            .and(Reading.orElse(moving, Absent: Maybe[ColumnDrag]))
+            .and(Reading.orElse(rowDrag, Absent: Maybe[RowDrag]))
+        renderWith(outer) { case ((((e, editRows), editCell), drag), rowHeld) =>
+            Wiring(
+                EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
+                NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
+                FilterState(open = menus, live = true, drafts = filterDrafts),
+                SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
+                OrderState(drag = moving, held = drag),
+                ScrollState(scroll, headTop),
+                MoveState[A](
+                    drag = rowDrag,
+                    held = rowHeld,
+                    idPrefix = idPrefix,
+                    live = true,
+                    measure = measure
+                ),
+                SelectState(metaKey = metaKeyFlag, anchor = anchor)
+            )
+        }
+    end wired
 
-    private def renderWith(
+    /** The table's own state for one render, one value per concern, as the caller reads it. */
+    final private case class Wiring(
         edit: EditState,
         nav: NavState[A],
         filter: FilterState,
@@ -2349,33 +2319,84 @@ final case class DataTable[A] private (
         scroll: ScrollState,
         move: MoveState[A],
         select: SelectState[A] = SelectState[A]()
-    )(using Frame): UI =
-        withColumnOrder(order)((t, o) =>
-            t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll, move, select))
-        )
+    )
 
-    /** Resolves a bound [[columnOrder]] and hands on the table with its columns in that
-      * order, so the header, the body, the footer, the widths and the keyboard grid all
-      * move together and no builder below has to ask where a column went.
+    /** Renders the table as ONE region over everything around its body (see [[Reading]]): the caller's own state
+      * (`outer`, turned into the table's by `wiring`), the column order, the column flags, the frozen rows, the sort,
+      * the filters, the widths, the page and, where they are not read below the body, the row bindings.
       *
-      * It runs BEFORE the visibility pass, which is what keeps the hidden columns' places:
+      * An effect here writes several of them at once (starting an edit writes the error and the edited cell, a column
+      * drop writes the order and the drag), and a region nested per signal, which this was, repaints the table against
+      * the values the inner one closed over. Every one of them rebuilds the whole body anyway, so reading them together
+      * costs nothing. The row bindings read BELOW the body ([[rowInputsBelow]]) stay a stream of their own there.
+      */
+    private def renderWith[O](outer: Reading[O])(wiring: O => Wiring)(using CanEqual[O, O], Frame): UI =
+        // The rows compare by their own equality, whatever the element type does; the region only
+        // ever asks whether the values changed.
+        given rowsEq: CanEqual[Seq[A], Seq[A]]                                                    = CanEqual.derived
+        given specsEq: CanEqual[Map[List[String], ColumnFilter], Map[List[String], ColumnFilter]] = CanEqual.derived
+        given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]]            = CanEqual.derived
+        given inputsEq: CanEqual[RowInputs[A], RowInputs[A]]                                      = CanEqual.derived
+        val order: Reading[Maybe[List[List[String]]]]                                             =
+            columnOrderRef.fold(Reading.Fixed(Maybe.empty[List[List[String]]]))(r => Reading.Live(r.map(o => Present(o))))
+        val columns = order.and(visibleReading).and(sortableReading)
+        val view    = frozenRowsReading
+            .and(Reading.orElse(sortRef, List.empty[SortKey]))
+            .and(Reading.orElse(filterRef, ""))
+            .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
+            .and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
+            .and(Reading.orElse(pageRef, 0))
+        val live                                 = if rowInputsBelow then rowInputsSignal else Absent
+        val rows: Reading[(RowInputs[A], Total)] =
+            if live.isDefined then Reading.Fixed((RowInputs[A](), Total.Unknown(false)))
+            else rowInputsReading
+        // On the signal path the rows reach the diagnostic cards and the paginator through `chrome`, which reads them
+        // (and the total) in a region of its own, so a rows emission repaints those and reconciles the rows.
+        def chrome(inputs: RowInputs[A], total: Total): ((RowInputs[A], Total) => UI) => UI =
+            live match
+                case Present(sig) => f => Reading.Live(sig).and(totalReading).render((in, t) => f(in, t))
+                case Absent       => f => f(inputs, total)
+        outer.and(columns).and(view).and(rows).render {
+            case (((o, ((requested, vis), flags)), (((((held, sort), query), specs), widths), page)), (inputs, total)) =>
+                val w     = wiring(o)
+                val table = requested.fold(this)(reordered).shown(vis)
+                table.body(
+                    held,
+                    sort,
+                    query,
+                    page,
+                    total,
+                    inputs,
+                    live,
+                    chrome(inputs, total),
+                    flags,
+                    w.edit,
+                    w.nav,
+                    w.filter.copy(specs = specs),
+                    w.size.copy(widths = widths),
+                    requested.fold(w.order)(r => w.order.copy(requested = r)),
+                    w.scroll,
+                    w.move,
+                    w.select
+                )
+        }
+    end renderWith
+
+    /** This table with its columns in the bound [[columnOrder]], so the header, the body, the footer, the widths and the
+      * keyboard grid all move together and no builder below has to ask where a column went.
+      *
+      * It applies BEFORE the visibility pass, which is what keeps the hidden columns' places:
       * the order this resolves to is the whole authored list, and it is the list a drop
       * rewrites, so hiding a column and moving another one does not lose the first one's
       * place.
       */
-    private def withColumnOrder(order: OrderState)(k: (DataTable[A], OrderState) => UI)(using Frame): UI =
-        columnOrderRef match
-            case Absent       => k(this, order)
-            case Present(ref) =>
-                ref.render { o =>
-                    val tree = ColumnTree.reorder(cols, o)
-                    k(copy(cols = tree, orderedPaths = ColumnTree.leafPaths(tree).map(_._1)), order.copy(requested = o))
-                }
+    private def reordered(o: List[List[String]]): DataTable[A] =
+        val tree = ColumnTree.reorder(cols, o)
+        copy(cols = tree, orderedPaths = ColumnTree.leafPaths(tree).map(_._1))
 
-    /** Resolves every [[Column.visible]] flag and hands on the table WITHOUT the columns
-      * they hide, so the header spans, the body cells, the footer, the filter, the colspans
-      * and the keyboard grid all narrow at once and no builder below has to ask whether a
-      * column is on the screen.
+    /** This table WITHOUT the columns their [[Column.visible]] flags hide (`vis` holds the reactive ones, resolved), so
+      * the header spans, the body cells, the footer, the filter, the colspans and the keyboard grid all narrow at once and
+      * no builder below has to ask whether a column is on the screen.
       *
       * The columns pruning removes are kept in `hiddenPaths` rather than dropped, for the
       * two questions the answer to which must not change when a column is hidden: which
@@ -2383,20 +2404,12 @@ final case class DataTable[A] private (
       * about what the table was AUTHORED with, so a reader hiding a column neither
       * reshuffles the rows nor raises a diagnostic.
       *
-      * A table where no column carries the flag builds itself, so it renders exactly what
-      * it rendered before the setter existed.
+      * A table where no column carries the flag is itself, so it renders exactly what it
+      * rendered before the setter existed.
       */
-    private def withVisibleColumns(k: DataTable[A] => UI)(using Frame): UI =
-        val reactive = leafCols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig)))
-        if reactive.isEmpty && leafCols.forall(_.visibleConst) then k(this)
-        else
-            def loop(rest: List[(Int, Signal[Boolean])], acc: Map[Int, Boolean]): UI =
-                rest match
-                    case Nil              => k(pruned(i => acc.getOrElse(i, leafCols(i).visibleConst)))
-                    case (i, sig) :: tail => sig.render(b => loop(tail, acc + (i -> b)))
-            loop(reactive, Map.empty)
-        end if
-    end withVisibleColumns
+    private def shown(vis: Map[List[String], Boolean]): DataTable[A] =
+        if vis.isEmpty && leafCols.forall(_.visibleConst) then this
+        else pruned(i => vis.getOrElse(leafPaths(i)._1, leafCols(i).visibleConst))
 
     /** This table narrowed to the columns `keep` accepts, with the rest parked in
       * `hiddenPaths`.
@@ -2406,52 +2419,6 @@ final case class DataTable[A] private (
             cols = ColumnTree.prune(cols, keep),
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         )
-
-    private def buildAll(
-        edit: EditState,
-        nav: NavState[A],
-        filter: FilterState,
-        size: SizeState,
-        order: OrderState,
-        scroll: ScrollState,
-        move: MoveState[A],
-        select: SelectState[A]
-    )(using Frame): UI =
-        withSortableFlags { flags =>
-            withFrozenRows { held =>
-                withRef(sortRef, List.empty[SortKey]) { sort =>
-                    withRef(filterRef, "") { query =>
-                        withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
-                            withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
-                                withRef(pageRef, 0) { page =>
-                                    withRowInputs { (inputs, total, live, chrome) =>
-                                        body(
-                                            held,
-                                            sort,
-                                            query,
-                                            page,
-                                            total,
-                                            inputs,
-                                            live,
-                                            chrome,
-                                            flags,
-                                            edit,
-                                            nav,
-                                            filter.copy(specs = specs),
-                                            size.copy(widths = widths),
-                                            order,
-                                            scroll,
-                                            move,
-                                            select
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
     /** Which of the arranged rows are on the screen, and where that slice starts.
       *
@@ -2579,17 +2546,12 @@ final case class DataTable[A] private (
         end if
     end arranged
 
-    /** The rows that hold under the header, resolved before the table builds: the card that
+    /** The rows that hold under the header, read before the table builds: the card that
       * catches a row held and scrolling at once needs them beside the body's, and the group
       * that renders them needs them anyway.
       */
-    private def withFrozenRows(k: Seq[A] => UI)(using Frame): UI =
-        frozenRowsV match
-            case Absent      => k(Nil)
-            case Present(rv) =>
-                rv.dyn match
-                    case Present(sig) => sig.render(k)
-                    case Absent       => k(rv.const.getOrElse(Nil))
+    private def frozenRowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[Seq[A]] =
+        frozenRowsV.fold(Reading.Fixed(Seq.empty[A]))(Reading.of(_))
 
     /** The rows the table renders, and the row index the first of them sits at: the bound
       * list when there is one, the appended list otherwise. A bound list is what lets a
@@ -2600,27 +2562,20 @@ final case class DataTable[A] private (
       * the one they were asked for at is not the one they came back at while a fetch is in
       * flight.
       */
-    private def withRows(k: (Seq[A], Int) => UI)(using Frame): UI =
-        if windowedSource then sourceV.get.window.render(w => k(w.rows, w.offset))
+    private def rowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[(Seq[A], Int)] =
+        if windowedSource then Reading.Live(sourceV.get.window.map(w => (w.rows, w.offset)))
         else
-            rowsSigV match
-                case Present(sig) => sig.render(k(_, 0))
-                case Absent       =>
-                    rowsRefV match
-                        case Present(ref) => ref.render(k(_, 0))
-                        case Absent       => k(rowsV, 0)
+            rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
+                .fold(Reading.Fixed((rowsV, 0)))(sig => Reading.Live(sig.map(rows => (rows, 0))))
 
     /** How many rows the page the table was given came out of, zero where it was given no
-      * total and computes its own. It is resolved innermost, so a total that moves without
-      * its rows repaints the paginator and nothing above it.
+      * total and computes its own.
       */
-    private def withTotal(k: Total => UI)(using Frame): UI =
-        lazyTotalV.flatMap(_.dyn) match
-            case Present(sig) => sig.render(k)
-            case _            => k(lazyTotalV.flatMap(_.const).getOrElse(Total.Unknown(false)))
+    private def totalReading(using Frame): Reading[Total] =
+        lazyTotalV.fold(Reading.Fixed(Total.Unknown(false): Total))(Reading.of(_))
 
-    /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
-      * builds, one nested subscription per signal-backed column.
+    /** Every reactive [[Column.sortable]] flag, resolved to a plain boolean before the table
+      * builds, keyed by the column's path.
       *
       * The flag reaches the class, the tab stop, the icon and the click handler of one
       * header cell, so patching it in place would mean keeping four channels in step. The
@@ -2628,14 +2583,12 @@ final case class DataTable[A] private (
       * filter, page, selection, expansion, groups, and this is the seventh of those: the
       * cost is a sort click's worth of render, and the cell code reads a plain boolean.
       */
-    private def withSortableFlags(build: Map[List[String], Boolean] => UI)(using Frame): UI =
-        val reactive = leafPaths.flatMap((p, c) => c.sortableSig.toList.map(sig => (p, sig)))
-        def loop(rest: List[(List[String], Signal[Boolean])], acc: Map[List[String], Boolean]): UI =
-            rest match
-                case Nil              => build(acc)
-                case (p, sig) :: tail => sig.render(b => loop(tail, acc + (p -> b)))
-        loop(reactive, Map.empty)
-    end withSortableFlags
+    private def sortableReading(using Frame): Reading[Map[List[String], Boolean]] =
+        Reading.keyed(leafPaths.flatMap((p, c) => c.sortableSig.toList.map(sig => (p, sig))))
+
+    /** Every reactive [[Column.visible]] flag, keyed by the column's path, which a reorder leaves as it is. */
+    private def visibleReading(using Frame): Reading[Map[List[String], Boolean]] =
+        Reading.keyed(leafPaths.flatMap((p, c) => c.visibleSig.toList.map(sig => (p, sig))))
 
     /** Every bound filter with something in it, paired with the row test its column reads
       * it as, or `Absent` where the column cannot: a query that is not a value of its
@@ -4024,16 +3977,19 @@ final case class DataTable[A] private (
                         case (Present(openRef), Present(draft)) if filter.live =>
                             List(
                                 span.cssClass("p-datatable-popover-filter")(
-                                    toChild(
+                                    // The open state and the draft are read as ONE region (see [[Reading]]): opening
+                                    // writes the draft and the open state together, and a draft region nested in the
+                                    // Overlay's own would draw the menu from a draft it closed over.
+                                    toChild(Reading.Live(openRef).and(Reading.Live(draft)).render { (open, d) =>
                                         Overlay(openRef)
                                             .matchWidth(false)
                                             .panelClass("p-datatable-filter-overlay-popover")
                                             .panelClass("p-component")
                                             .trigger(trigger(Present(draft), Present(openRef)))(
-                                                draft.render(d => filterMenu(path, c, cf, d, draft, openRef))
+                                                filterMenu(path, c, cf, d, draft, openRef)
                                             )
-                                            .render
-                                    )
+                                            .renderGated(open)
+                                    })
                                 )
                             )
                         case _ => List(span.cssClass("p-datatable-popover-filter")(toChild(trigger(Absent, Absent))))

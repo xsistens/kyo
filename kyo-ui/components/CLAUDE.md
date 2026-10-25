@@ -532,7 +532,9 @@ ids, pointer handlers, focus wiring).
   host-gated `renderOpen` (menu-family nested submenus) keeps the declared anchor,
   because nesting a mount into an already-subscribed region would double-subscribe
   and duplicate the panel DOM (one subscription per ref chain; `renderOpen` is the
-  single-subscription form).
+  single-subscription form). `renderShown` is the host-gated form WITH the full placement
+  (autoFlip, portal, pointer anchor), for a host whose one region already reads the open state
+  (the pickers, a popup menu, DatePicker); see "A control that reads several refs is ONE region".
 - `autoFlip` only flips DECISIVELY where nothing inside the panel is focus-seeded.
   kyo's focus-seed calls `element.focus()` without `preventScroll`, so a seeded
   element gets scrolled into view by the browser before the measure lands: the
@@ -669,6 +671,17 @@ refs themselves held the correct result.
 - **Combine the signals instead**: `a.combineLatest(b).render { case (x, y) => ... }` reads every
   value on every emission, so there is one region and nothing to be stale. `Signal.initConst`
   stands in for an unbound slot, and is built for exactly this pairing.
+- **`Reading` is the module's way to do that** (`Reading.scala`): `Reading.Fixed` / `Reading.Live`,
+  combined with `and` and rendered once. A combination of fixed values renders with no region at
+  all, so a static projection stays free of subscriptions. `Reading.of` / `optional` / `orElse`
+  lift the slots, `Reading.keyed` reads a set of flags as one map, `MenuRender.readDisabled` and
+  `readAll` the menu state, `SingleChoice.reading` and `SetBinding.signal` the choices.
+- **A panel the host gates itself is part of its one region.** A host that reads the open state
+  renders the panel only while open and uses `Overlay.renderShown` (or `renderGated(open)` where
+  the trigger stays), never `render`, whose own `when(openRef)` would be a second region inside.
+- **A wrapper adds no region around a mount.** A state the wrapper needs from the control (FloatLabel's
+  `p-filled`) is stamped by the control inside its own region (`AutoComplete.stampFilled`), and an
+  embedding host binds a control one way (`CellEditor.select`) rather than rendering it per value.
 - `UicTest.regionsAbove` counts the subscriptions a control wraps its markup in, so the rule is
   checked rather than remembered.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of

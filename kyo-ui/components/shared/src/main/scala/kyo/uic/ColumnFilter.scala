@@ -79,6 +79,8 @@ final case class ColumnFilter(
 end ColumnFilter
 
 object ColumnFilter:
+    // Lets a region over a filter's draft skip a write that holds what it already drew.
+    private[uic] given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
 
     /** One rule, which is what a row display holds. */
     def apply(query: String, mode: MatchMode): ColumnFilter = ColumnFilter(List(FilterRule(query, mode)))

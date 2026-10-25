@@ -67,17 +67,17 @@ final case class AutoComplete[A] private (
     onInputF: Maybe[String => UI.Action] = Absent,
     onChangeF: Maybe[String => UI.Action] = Absent,
     onSelectF: Maybe[A => UI.Action] = Absent,
-    fieldExtraClassesV: List[String] = Nil,
+    stampFilledFlag: Boolean = false,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasEmptyContent, HasPlaceholder, HasAccessibleNameRef:
     type Self = AutoComplete[A]
 
-    /** Package-internal class hook: wrappers (FloatLabel) stamp Prime's state
-      * classes (`p-filled`) onto the inner text field.
+    /** Package-internal: a wrapper (FloatLabel) asks for Prime's `p-filled` on the inner text field while it holds text. It
+      * is stamped inside this control's own region, from the text it already reads, so the wrapper needs no region of its
+      * own around the mount (a region there rebuilds the mount, and the open panel with it, when the field fills).
       */
-    private[uic] def fieldExtraClass(cls: String): AutoComplete[A] =
-        copy(fieldExtraClassesV = fieldExtraClassesV :+ cls)
+    private[uic] def stampFilled: AutoComplete[A] = copy(stampFilledFlag = true)
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): AutoComplete[A] = copy(idV = v)
@@ -366,7 +366,7 @@ final case class AutoComplete[A] private (
 
         // === text field ==========================================================
         var f = input.cssClass("p-autocomplete-input").cssClass("p-inputtext").cssClass("p-component")
-        fieldExtraClassesV.foreach(c => f = f.cssClass(c))
+        if stampFilledFlag && query.nonEmpty then f = f.cssClass("p-filled")
         // The FIELD carries the base id. A caller's own `id` already landed here and is the base;
         // a minted one had nowhere to go, which left the dropdown trigger with nothing to hand
         // focus to.
@@ -543,7 +543,7 @@ final case class AutoComplete[A] private (
             .panelClass("p-component")
             .seedFocus(false)
             .dismissOnEscape(false)(listUI)
-            .render
+            .renderShown
     end overlayPanel
 end AutoComplete
 

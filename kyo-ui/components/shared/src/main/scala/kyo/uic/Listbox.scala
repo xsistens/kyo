@@ -273,6 +273,9 @@ final case class Listbox[K] private (
     /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
       * [[FieldValidity]]; without one, an app-owned [[filterQuery]] turns it on.
       */
+    // An id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
+    private given CanEqual[K, K] = CanEqual.derived
+
     private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQueryRef.isDefined))
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
@@ -327,18 +330,17 @@ final case class Listbox[K] private (
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         validity: FieldValidity
-    )(using Frame): UI = validity.follow(
-        (selectedRef, shownQuery(qRef), hiRef) match
-            case (Present(s), Present(f), Present(h)) =>
-                s.render(sel => f.render(q => h.render(hi => body(sel, q, qRef, hiRef, idBase, hi)(validity))))
-            case (Present(s), Present(f), Absent) => s.render(sel => f.render(q => body(sel, q, qRef, Absent, idBase)(validity)))
-            case (Present(s), Absent, Present(h)) => s.render(sel => h.render(hi => body(sel, "", Absent, hiRef, idBase, hi)(validity)))
-            case (Present(s), Absent, Absent)     => s.render(sel => body(sel, "", Absent, Absent, idBase)(validity))
-            case (Absent, Present(f), Present(h)) => f.render(q => h.render(hi => body(Set.empty, q, qRef, hiRef, idBase, hi)(validity)))
-            case (Absent, Present(f), Absent)     => f.render(q => body(Set.empty, q, qRef, Absent, idBase)(validity))
-            case (Absent, Absent, Present(h))     => h.render(hi => body(Set.empty, "", Absent, hiRef, idBase, hi)(validity))
-            case _                                => body(Set.empty, "", Absent, Absent, idBase)(validity)
-    )
+    )(using Frame): UI =
+        // The selection, the query and the highlight are read as ONE region (see [[Reading]]): a row click writes the
+        // highlight and the selection, and a nested region would repaint the values it closed over.
+        val shown = shownQuery(qRef)
+        val sel   = selectedRef.fold(Reading.Fixed(Set.empty[K]))(s => Reading.Live(s.signal))
+        val query = shown.fold(Reading.Fixed(""))(Reading.Live(_))
+        val hi    = hiRef.fold(Reading.Fixed(-1))(Reading.Live(_))
+        validity.follow(sel.and(query).and(hi).render { case ((s, q), h) =>
+            body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h)(validity)
+        })
+    end subscribed
 
     /** The query as the options see it: the typed one while the filter is on, none while it is off, and nothing to
       * subscribe where the switch is a constant `false`. A signal switch is folded in here rather than read in a region

@@ -6852,6 +6852,75 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "every host of MenuItem is ONE region over its rows: disabled, highlight, submenus and popup read together" in {
+        // A key or a leave writes the highlight, the submenus and a popup's ref together, so a region nested per
+        // signal repaints what it closed over (the module CLAUDE.md, "A control that reads several refs is ONE
+        // region"). Each host gets a reactive disabled, an open submenu and, where it has one, an open popup.
+        def item(s: Signal[Boolean])(using Frame) =
+            uic.MenuItem("A").disabled(s).items(uic.MenuItem("B").onSelect(()))
+        for
+            dis   <- Signal.initRef(false)
+            hi1   <- Signal.initRef(0)
+            hi2   <- Signal.initRef(0)
+            hi3   <- Signal.initRef(0)
+            foc1  <- Signal.initRef(List(0))
+            foc2  <- Signal.initRef(List(0))
+            foc3  <- Signal.initRef(List(0))
+            foc4  <- Signal.initRef(List(0))
+            sub1  <- Signal.initRef(true)
+            sub2  <- Signal.initRef(true)
+            sub3  <- Signal.initRef(true)
+            sub4  <- Signal.initRef(true)
+            pop1  <- Signal.initRef(true)
+            pop2  <- Signal.initRef(true)
+            pop3  <- Signal.initRef(true)
+            ctxOn <- Signal.initRef(true)
+            at    <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
+            fan   <- Signal.initRef(true)
+            foc5  <- Signal.initRef(List(0))
+            panel <- Signal.initRef(true)
+            mega = uic
+                .MegaMenu()
+                .items(uic.MegaMenuItem("Root").column(uic.MenuGroup("G").items(uic.MenuItem("A").disabled(dis).onSelect(()))))
+                .wired(List((List(0), panel)), foc5, "g")
+            hosts = List(
+                ("MegaMenu", mega, "p-megamenu-item"),
+                ("Menu", uic.Menu().items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(hi1, "m"), "p-menu-item"),
+                (
+                    "Menu popup",
+                    uic.Menu().popup(pop1).items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(hi2, "mp"),
+                    "p-menu-item"
+                ),
+                ("Menubar", uic.Menubar().items(item(dis)).wired(List((List(0), sub1)), foc1, "b"), "p-menubar-item"),
+                ("TieredMenu", uic.TieredMenu().items(item(dis)).wired(List((List(0), sub2)), foc2, "t"), "p-tieredmenu-item"),
+                (
+                    "TieredMenu popup",
+                    uic.TieredMenu().popup(pop2).items(item(dis)).wired(List((List(0), sub3)), foc3, "tp"),
+                    "p-tieredmenu-item"
+                ),
+                (
+                    "ContextMenu",
+                    uic.ContextMenu(Seq(item(dis)))(p("target")).wired(ctxOn, foc4, at, List((List(0), sub4)), "c"),
+                    "p-contextmenu-item"
+                ),
+                (
+                    "SplitButton",
+                    uic.SplitButton("Save").items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(pop3, hi3, "sb"),
+                    "p-menu-item"
+                ),
+                (
+                    "SpeedDial",
+                    uic.SpeedDial().items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(fan, "s", _ => ()),
+                    "p-speeddial-item"
+                )
+            )
+            counts <- Kyo.foreach(hosts)((name, ui, row) => regionsAbove(ui, row).map(n => (name, n)))
+        yield
+            val nested = counts.filter(_._2 != 1)
+            assert(nested.isEmpty, s"hosts whose rows sit under more than one region: $nested")
+        end for
+    }
+
     "every host of MenuItem resolves a reactive disabled" in {
         // `MenuItem` is ONE model type shared by six hosts, and a host that forgets to
         // resolve does not fail: it reads `constTrue` on an unresolved `Dyn` and quietly
