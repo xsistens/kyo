@@ -9,6 +9,7 @@ import kyo.*
 import kyo.UI.*
 import kyo.uic
 import kyo.uic.DateKind.given
+import kyo.uic.Submenus
 import kyo.uic.UicTest
 import scala.language.implicitConversions
 
@@ -4707,9 +4708,9 @@ class GoldenRenderTest extends UicTest:
             )
         def wiredHtml(openPaths: List[List[Int]], focus: List[Int] = Nil, setId: Boolean = false): String < Async =
             for
-                refs <- Kyo.foreach(mb.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Submenus.init(submenuPaths(mb.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs.toList, fref, "mint")).take(1).run
+                out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs, fref, "mint")).take(1).run
             yield out.mkString
         for
             closed      <- wiredHtml(Nil)
@@ -4763,9 +4764,9 @@ class GoldenRenderTest extends UicTest:
                     case Present(_) => tm.popup(oref)
                     case Absent     => tm
                 m = if setId then m0.id("tm1") else m0
-                refs <- Kyo.foreach(m.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Submenus.init(submenuPaths(m.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender(m.wired(refs.toList, fref, "mint")).take(1).run
+                out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
         for
             closed      <- wiredHtml(Nil)
@@ -4815,9 +4816,9 @@ class GoldenRenderTest extends UicTest:
             val m0 = if vertical then mm.orientation(uic.Orientation.Vertical) else mm
             val m  = if setId then m0.id("mg1") else m0
             for
-                refs <- Kyo.foreach(m.panelPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Submenus.init(panelPaths(m.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender(m.wired(refs.toList, fref, "mint")).take(1).run
+                out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
             end for
         end wiredHtml
@@ -5123,9 +5124,9 @@ class GoldenRenderTest extends UicTest:
             for
                 vref <- Signal.initRef(Maybe.empty[String])
                 oref <- Signal.initRef(true)
-                refs <- Kyo.foreach(cs.selection(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Submenus.init(groupPaths(cs.selection(vref)).filter(p => openPaths.contains(p)).toSet)
                 fref <- Signal.initRef(focusAt)
-                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs.toList, fref, Present("cs"))).take(1).run
+                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs, fref, Present("cs"))).take(1).run
             yield out.mkString
             end for
         end html
@@ -5156,9 +5157,9 @@ class GoldenRenderTest extends UicTest:
             for
                 vref <- Signal.initRef(if current.isEmpty then Maybe.empty[String] else Maybe(current))
                 oref <- Signal.initRef(rootOpen)
-                refs <- Kyo.foreach(cs.selection(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                refs <- Submenus.init(groupPaths(cs.selection(vref)).filter(p => openPaths.contains(p)).toSet)
                 fref <- Signal.initRef(List.empty[Int])
-                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs.toList, fref)).take(1).run
+                out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs, fref)).take(1).run
             yield out.mkString
         val base = uic.CascadeSelect[String]()
             .options(
@@ -5316,8 +5317,8 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(open)
                 fref <- Signal.initRef(focus)
                 at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
-                refs <- Kyo.foreach(cm.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
-                out  <- UI.runRender(cm.wired(oref, fref, at, refs.toList, "mint")).take(1).run
+                refs <- Submenus.init(submenuPaths(cm.entriesV).filter(p => openPaths.contains(p)).toSet)
+                out  <- UI.runRender(cm.wired(oref, fref, at, refs, "mint")).take(1).run
             yield out.mkString
         val base = uic.ContextMenu(
             Seq(
@@ -6702,20 +6703,19 @@ class GoldenRenderTest extends UicTest:
             uic.MegaMenuItem("Shop").column(uic.MenuGroup("Men").items(uic.MenuItem("Shirts").onSelect(())))
         )
         val ctx                                               = uic.ContextMenu().items(menuItems*)
-        def paths(ps: List[List[Int]], open: List[List[Int]]) =
-            Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
+        def paths(ps: List[List[Int]], open: List[List[Int]]) = Submenus.init(ps.filter(open.contains).toSet)
         for
             menuHi     <- Signal.initRef(0)
             menu       <- renderHtml(uic.Menu().items(menuItems*).wired(menuHi, "mint"))
-            tieredRefs <- paths(tiered.submenuPaths, Nil)
+            tieredRefs <- paths(submenuPaths(tiered.entriesV), Nil)
             tieredHi   <- Signal.initRef(List(0))
             tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
-            megaRefs   <- paths(mega.panelPaths, List(List(0)))
+            megaRefs   <- paths(panelPaths(mega.entriesV), List(List(0)))
             megaHi     <- Signal.initRef(List(0))
             megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen    <- Signal.initRef(true)
             ctxHi      <- Signal.initRef(List(0))
-            ctxRefs    <- paths(ctx.submenuPaths, Nil)
+            ctxRefs    <- paths(submenuPaths(ctx.entriesV), Nil)
             ctxAt      <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
         yield
@@ -6740,8 +6740,7 @@ class GoldenRenderTest extends UicTest:
         val ctx     = uic.ContextMenu().id("cm").items(menuItems*)
         val cascade = uic.CascadeSelect[String]()
             .options(Seq(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin"))))(identity)
-        def paths(ps: List[List[Int]], open: List[List[Int]]) =
-            Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
+        def paths(ps: List[List[Int]], open: List[List[Int]]) = Submenus.init(ps.filter(open.contains).toSet)
         for
             menuHi <- Signal.initRef(0)
             menu   <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi, "mint"))
@@ -6749,22 +6748,22 @@ class GoldenRenderTest extends UicTest:
             menuPopOpen <- Signal.initRef(true)
             menuPopHi   <- Signal.initRef(0)
             menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi, "mint"))
-            barRefs     <- paths(bar.submenuPaths, List(List(0)))
+            barRefs     <- paths(submenuPaths(bar.entriesV), List(List(0)))
             barHi       <- Signal.initRef(List(0, 0))
             menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi, "mint"))
-            tieredRefs  <- paths(tiered.submenuPaths, Nil)
+            tieredRefs  <- paths(submenuPaths(tiered.entriesV), Nil)
             tieredHi    <- Signal.initRef(List(0))
             tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
             tmPopOpen   <- Signal.initRef(true)
-            tmPopRefs   <- paths(tiered.submenuPaths, Nil)
+            tmPopRefs   <- paths(submenuPaths(tiered.entriesV), Nil)
             tmPopHi     <- Signal.initRef(List(0))
             tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi, "mint"))
-            megaRefs    <- paths(mega.panelPaths, List(List(0)))
+            megaRefs    <- paths(panelPaths(mega.entriesV), List(List(0)))
             megaHi      <- Signal.initRef(List(0))
             megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen     <- Signal.initRef(true)
             ctxHi       <- Signal.initRef(List(0))
-            ctxRefs     <- paths(ctx.submenuPaths, Nil)
+            ctxRefs     <- paths(submenuPaths(ctx.entriesV), Nil)
             ctxAt       <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
             tsOpen      <- Signal.initRef(true)
@@ -6814,7 +6813,7 @@ class GoldenRenderTest extends UicTest:
             )
             csValue <- Signal.initRef(Maybe.empty[String])
             csOpen  <- Signal.initRef(true)
-            csRefs  <- paths(cascade.selection(csValue).groupPaths, Nil)
+            csRefs  <- paths(groupPaths(cascade.selection(csValue)), Nil)
             csHi    <- Signal.initRef(List(0))
             csHtml  <- renderHtml(cascade.selection(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
         yield
@@ -6867,10 +6866,10 @@ class GoldenRenderTest extends UicTest:
             foc2  <- Signal.initRef(List(0))
             foc3  <- Signal.initRef(List(0))
             foc4  <- Signal.initRef(List(0))
-            sub1  <- Signal.initRef(true)
-            sub2  <- Signal.initRef(true)
-            sub3  <- Signal.initRef(true)
-            sub4  <- Signal.initRef(true)
+            sub1  <- Submenus.init(Set(List(0)))
+            sub2  <- Submenus.init(Set(List(0)))
+            sub3  <- Submenus.init(Set(List(0)))
+            sub4  <- Submenus.init(Set(List(0)))
             pop1  <- Signal.initRef(true)
             pop2  <- Signal.initRef(true)
             pop3  <- Signal.initRef(true)
@@ -6878,11 +6877,11 @@ class GoldenRenderTest extends UicTest:
             at    <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             fan   <- Signal.initRef(true)
             foc5  <- Signal.initRef(List(0))
-            panel <- Signal.initRef(true)
+            panel <- Submenus.init(Set(List(0)))
             mega = uic
                 .MegaMenu()
                 .items(uic.MegaMenuItem("Root").column(uic.MenuGroup("G").items(uic.MenuItem("A").disabled(dis).onSelect(()))))
-                .wired(List((List(0), panel)), foc5, "g")
+                .wired(panel, foc5, "g")
             hosts = List(
                 ("MegaMenu", mega, "p-megamenu-item"),
                 ("Menu", uic.Menu().items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(hi1, "m"), "p-menu-item"),
@@ -6891,16 +6890,16 @@ class GoldenRenderTest extends UicTest:
                     uic.Menu().popup(pop1).items(uic.MenuItem("A").disabled(dis).onSelect(())).wired(hi2, "mp"),
                     "p-menu-item"
                 ),
-                ("Menubar", uic.Menubar().items(item(dis)).wired(List((List(0), sub1)), foc1, "b"), "p-menubar-item"),
-                ("TieredMenu", uic.TieredMenu().items(item(dis)).wired(List((List(0), sub2)), foc2, "t"), "p-tieredmenu-item"),
+                ("Menubar", uic.Menubar().items(item(dis)).wired(sub1, foc1, "b"), "p-menubar-item"),
+                ("TieredMenu", uic.TieredMenu().items(item(dis)).wired(sub2, foc2, "t"), "p-tieredmenu-item"),
                 (
                     "TieredMenu popup",
-                    uic.TieredMenu().popup(pop2).items(item(dis)).wired(List((List(0), sub3)), foc3, "tp"),
+                    uic.TieredMenu().popup(pop2).items(item(dis)).wired(sub3, foc3, "tp"),
                     "p-tieredmenu-item"
                 ),
                 (
                     "ContextMenu",
-                    uic.ContextMenu(Seq(item(dis)))(p("target")).wired(ctxOn, foc4, at, List((List(0), sub4)), "c"),
+                    uic.ContextMenu(Seq(item(dis)))(p("target")).wired(ctxOn, foc4, at, sub4, "c"),
                     "p-contextmenu-item"
                 ),
                 (
@@ -6945,14 +6944,15 @@ class GoldenRenderTest extends UicTest:
             fan  <- Signal.initRef(true)
             // MegaMenu renders its panel only while the root is open, so without this ref
             // the leaf rows are not in the tree at all and the sweep would pass vacuously.
-            panel <- Signal.initRef(true)
+            emptySubs <- Submenus.init()
+            panel     <- Submenus.init(Set(List(0)))
 
             menu   = uic.Menu().items(uic.MenuItem("A").disabled(s1).onSelect(())).wired(hi, "m")
-            bar    = uic.Menubar().items(uic.MenuItem("A").disabled(s2).onSelect(())).wired(Nil, foc1, "b")
-            tiered = uic.TieredMenu().items(uic.MenuItem("A").disabled(s3).onSelect(())).wired(Nil, foc2, "t")
+            bar    = uic.Menubar().items(uic.MenuItem("A").disabled(s2).onSelect(())).wired(emptySubs, foc1, "b")
+            tiered = uic.TieredMenu().items(uic.MenuItem("A").disabled(s3).onSelect(())).wired(emptySubs, foc2, "t")
             ctx    = uic
                 .ContextMenu(Seq(uic.MenuItem("A").disabled(s4).onSelect(())))(p("target"))
-                .wired(open, foc3, at, Nil, "c")
+                .wired(open, foc3, at, emptySubs, "c")
             mega = uic
                 .MegaMenu()
                 .items(
@@ -6960,7 +6960,7 @@ class GoldenRenderTest extends UicTest:
                         uic.MenuGroup("G").items(uic.MenuItem("A").disabled(s5).onSelect(()))
                     )
                 )
-                .wired(List((List(0), panel)), foc4, "g")
+                .wired(panel, foc4, "g")
             dial = uic.SpeedDial().items(uic.MenuItem("A").disabled(s6).onSelect(())).wired(fan, "s", _ => ())
 
             // The marker differs by host because "disabled" does: a menu ROW is a link and
@@ -6984,6 +6984,65 @@ class GoldenRenderTest extends UicTest:
                 unresolved.isEmpty,
                 s"these hosts render a signal-disabled item as enabled: ${unresolved.mkString(", ")}"
             )
+        end for
+    }
+
+    "every host of MenuItem draws its rows from a signal of items, in place" in {
+        // A list a page changes while the menu is shown (the requests a server holds) is handed over as a signal, so the
+        // host is not built again around it. Each host gets one fixed row and one row from a signal, then the signal moves:
+        // the new row has to be there, in its place after the fixed one, and the old one gone. A host missing here is a host
+        // whose `items(signal)` would compile and be ignored.
+        def rows(using Frame) = Signal.initRef(Seq(uic.MenuItem("Live A").onSelect(())))
+        for
+            r1   <- rows
+            r2   <- rows
+            r3   <- rows
+            r4   <- rows
+            r5   <- rows
+            r6   <- rows
+            hi   <- Signal.initRef(0)
+            hi2  <- Signal.initRef(0)
+            open <- Signal.initRef(true)
+            fan  <- Signal.initRef(true)
+            foc1 <- Signal.initRef(List.empty[Int])
+            foc2 <- Signal.initRef(List.empty[Int])
+            foc3 <- Signal.initRef(List.empty[Int])
+            sub1 <- Submenus.init()
+            sub2 <- Submenus.init()
+            sub3 <- Submenus.init()
+            sub4 <- Submenus.init()
+            foc4 <- Signal.initRef(List.empty[Int])
+            r7   <- Signal.initRef(Seq(uic.MegaMenuItem("Live A")))
+            at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
+            menu   = uic.Menu().items(_.item("Fixed"), r1).wired(hi, "m")
+            dial   = uic.SpeedDial().items(_.item("Fixed"), r2).wired(fan, "s", _ => ())
+            split  = uic.SplitButton("Go").items(_.item("Fixed"), r3).wired(open, hi2, "x")
+            bar    = uic.Menubar().items(_.item("Fixed"), r4).wired(sub1, foc1, "b")
+            tiered = uic.TieredMenu().items(_.item("Fixed"), r5).wired(sub2, foc2, "t")
+            ctx    = uic.ContextMenu(Seq(_.item("Fixed"), r6))(p("target")).wired(open, foc3, at, sub3, "c")
+            mega   = uic.MegaMenu().items(_.item("Fixed"), r7).wired(sub4, foc4, "g")
+            hosts  = List(
+                ("Menu", menu),
+                ("SpeedDial", dial),
+                ("SplitButton", split),
+                ("Menubar", bar),
+                ("TieredMenu", tiered),
+                ("ContextMenu", ctx),
+                ("MegaMenu", mega)
+            )
+            before <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+            _      <- Kyo.foreach(List(r1, r2, r3, r4, r5, r6))(_.set(Seq(uic.MenuItem("Live B").onSelect(()))))
+            _      <- r7.set(Seq(uic.MegaMenuItem("Live B")))
+            after  <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+        yield
+            val unread = before.collect { case (name, html) if !html.contains("Live A") || !html.contains("Fixed") => name }
+            val stale  = after.collect {
+                case (name, html)
+                    if html.contains("Live A") || !html.contains("Live B") || html.indexOf("Fixed") > html.indexOf("Live B") =>
+                    name
+            }
+            assert(unread.isEmpty, s"these hosts do not draw the rows of a signal: ${unread.mkString(", ")}")
+            assert(stale.isEmpty, s"these hosts do not follow the signal, or draw it out of order: ${stale.mkString(", ")}")
         end for
     }
 

@@ -17,7 +17,7 @@ class SplitButtonTest extends UicTest:
             rows <- Signal.initRef(Seq(MenuItem("Projects"), MenuItem("Viewer")))
             open <- Signal.initRef(true)
             hi   <- Signal.initRef(-1)
-            ui = SplitButton("Release").itemsFrom(rows).wired(open, hi, "b")
+            ui = SplitButton("Release").items(rows).wired(open, hi, "b")
             before <- elementsWithClass(ui, "p-menu-item").map(_.map(textOf))
             _      <- rows.set(Seq(MenuItem("Projects")))
             after  <- elementsWithClass(ui, "p-menu-item").map(_.map(textOf))
@@ -31,7 +31,7 @@ class SplitButtonTest extends UicTest:
             rows <- Signal.initRef(Seq(MenuItem("Viewer")))
             open <- Signal.initRef(true)
             hi   <- Signal.initRef(-1)
-            ui = SplitButton("Release").items(MenuItem("All")).itemsFrom(rows).wired(open, hi, "b")
+            ui = SplitButton("Release").items(MenuItem("All")).items(rows).wired(open, hi, "b")
             shown <- elementsWithClass(ui, "p-menu-item").map(_.map(textOf))
         yield assert(shown == Chunk("All", "Viewer"), s"rows: $shown")
     }
@@ -42,7 +42,7 @@ class SplitButtonTest extends UicTest:
             rows <- Signal.initRef(Seq(MenuItem("Viewer").disabled(off)))
             open <- Signal.initRef(true)
             hi   <- Signal.initRef(-1)
-            ui = SplitButton("Release").itemsFrom(rows).wired(open, hi, "b")
+            ui = SplitButton("Release").items(rows).wired(open, hi, "b")
             before <- elementsWithClass(ui, "p-disabled").map(_.size)
             _      <- off.set(false)
             after  <- elementsWithClass(ui, "p-disabled").map(_.size)
@@ -72,7 +72,7 @@ class SplitButtonTest extends UicTest:
                         previous: Maybe[UI],
                         changed: UI
                     )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
-                ui = UI.div(SplitButton("Release").onClick(presses.incrementAndGet).open(open).itemsFrom(rows).render)
+                ui = UI.div(SplitButton("Release").onClick(presses.incrementAndGet).open(open).items(rows).render)
                 html <- HtmlRenderer.render(ui, Seq.empty)
                 // The primary segment, by the path the page shows it at: it is the same before and after the mount.
                 primary = """<button[^>]*p-splitbutton-button[^>]*>""".r.findFirstIn(html)

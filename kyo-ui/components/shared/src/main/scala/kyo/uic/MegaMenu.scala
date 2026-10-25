@@ -60,6 +60,9 @@ end MegaMenuItem
 /** A MegaMenu root item, built directly or as `_.item(...)` (see [[MegaMenuItemScope]]). */
 type MegaMenuItemEntry = Entry[MegaMenuItem, MegaMenuItemScope]
 
+/** A [[MegaMenuItemEntry]] or a signal of root items (see [[LiveEntry]]). */
+type MegaMenuItemLiveEntry = LiveEntry[MegaMenuItem, MegaMenuItemScope]
+
 /** What `_` stands for in [[MegaMenu.items]]: `_.item("Products")`, as [[MegaMenuItem.apply]]. */
 final class MegaMenuItemScope private ():
     /** A root item labelled `label`, as [[MegaMenuItem.apply]]. */
@@ -70,6 +73,14 @@ object MegaMenuItemScope:
     private val scope = new MegaMenuItemScope
 
     private[uic] def resolve(entries: Seq[MegaMenuItemEntry]): List[MegaMenuItem] = Entry.resolve(scope, entries)
+
+    /** The root items as ONE reading, every reactive `disabled` below them resolved. */
+    private[uic] def reading(entries: Seq[MegaMenuItemLiveEntry])(using Frame): Reading[List[MegaMenuItem]] =
+        given CanEqual[List[MegaMenuItem], List[MegaMenuItem]] = CanEqual.derived
+        Entry.reading(scope, entries) match
+            case Reading.Fixed(items) => MenuRender.readMegaDisabled(items)
+            case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => MenuRender.readMegaDisabled(items).signal))
+    end reading
 end MegaMenuItemScope
 
 /** MegaMenu: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -100,7 +111,9 @@ end MegaMenuItemScope
   * Honest deferrals: no mobile/hamburger mode; typeahead is not implemented.
   */
 final case class MegaMenu private (
+    // The root items `body` draws, resolved from `entriesV` by the render.
     itemsV: List[MegaMenuItem] = Nil,
+    entriesV: List[MegaMenuItemLiveEntry] = Nil,
     orientationV: Orientation = Orientation.Horizontal,
     startV: Maybe[UI] = Absent,
     endV: Maybe[UI] = Absent,
@@ -108,8 +121,10 @@ final case class MegaMenu private (
 ) extends Node, HasElementId:
     type Self = MegaMenu
 
-    /** Appends root items ([[MegaMenuItem]]), each built directly or from `_` (see [[MegaMenuItemScope]]). */
-    def items(is: MegaMenuItemEntry*): MegaMenu = copy(itemsV = itemsV ++ MegaMenuItemScope.resolve(is))
+    /** Appends root items ([[MegaMenuItem]]), each built directly or from `_` (see [[MegaMenuItemScope]]), or a signal of
+      * root items that change while the bar is shown (see [[LiveEntry]]).
+      */
+    def items(is: MegaMenuItemLiveEntry*): MegaMenu = copy(entriesV = entriesV ++ is)
 
     /** Bar orientation: `Horizontal` (default) or the sheet's `Vertical` variant. */
     def orientation(v: Orientation): MegaMenu = copy(orientationV = v)
@@ -126,19 +141,16 @@ final case class MegaMenu private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Root indices that open a panel (one open/closed ref each). */
-    private[uic] def panelPaths: List[List[Int]] =
-        itemsV.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
-
     private[uic] def render(using Frame): UI =
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
+        val stat: UI =
+            MegaMenuItemScope.reading(entriesV).render(items => copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
         UI.mounted {
             for
-                refs  <- Kyo.foreach(panelPaths)(p => Signal.initRef(false).map(p -> _))
+                subs  <- Submenus.init()
                 focus <- Signal.initRef(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
-            yield wired(refs.toList, focus, base)
+            yield wired(subs, focus, base)
         }.placeholder(stat)
     end render
 
@@ -150,16 +162,16 @@ final case class MegaMenu private (
       * row.
       */
     private[uic] def wired(
-        refs: List[(List[Int], SignalRef[Boolean])],
+        subs: Submenus,
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
         // are read as ONE region (see [[Reading]]): an activation writes the highlight and the submenus together, and a
         // nested region would repaint the values it closed over.
-        MenuRender.readMegaDisabled(itemsV).and(Reading.Live(focus)).and(MenuRender.readAll(refs)).render {
+        MegaMenuItemScope.reading(entriesV).and(Reading.Live(focus)).and(subs.reading).render {
             case ((items, f), open) =>
-                copy(itemsV = items).body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
+                copy(itemsV = items).body(open, Present(subs), f, Present(focus), Present(idV.getOrElse(base)))
         }
     end wired
 
@@ -175,8 +187,8 @@ final case class MegaMenu private (
     end colClass
 
     private def body(
-        open: Map[List[Int], Boolean],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        open: Set[List[Int]],
+        subs: Maybe[Submenus],
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
@@ -184,9 +196,9 @@ final case class MegaMenu private (
         partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: UI.Action =
-            refs match
-                case Present(rs) => MenuRender.openExactly(rs, Absent)
-                case Absent      => ()
+            subs match
+                case Present(s) => s.openExactly(Absent)
+                case Absent     => ()
 
         def resetFocus: UI.Action =
             focusRef match
@@ -203,9 +215,9 @@ final case class MegaMenu private (
                 case Present(fr) =>
                     val finish                                 = step.activate || step.dismiss
                     def openTo(t: Maybe[List[Int]]): UI.Action =
-                        refs match
-                            case Present(rs) => MenuRender.openExactly(rs, t)
-                            case Absent      => ()
+                        subs match
+                            case Present(s) => s.openExactly(t)
+                            case Absent     => ()
                     val action: Maybe[UI.Action] =
                         if !step.activate then Absent
                         else
@@ -266,7 +278,7 @@ final case class MegaMenu private (
                                 _ <- onActivated
                             yield ()
                         val act: Maybe[UI.Action] =
-                            if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
+                            if subs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                         row(toChild(MenuRender.itemContent("megamenu", it, act, Absent, roving = true)))
                 }
                 ul.cssClass("p-megamenu-submenu").role("menu")((heading :: rows).map(toChild)*)
@@ -278,10 +290,9 @@ final case class MegaMenu private (
             if it.columnsV.nonEmpty then
                 val isOpen            = open(p)
                 def toggle: UI.Action =
-                    refs match
-                        case Present(rs) =>
-                            MenuRender.openExactly(rs, if isOpen then Absent else Present(p))
-                        case Absent => ()
+                    subs match
+                        case Present(s) => s.openExactly(if isOpen then Absent else Present(p))
+                        case Absent     => ()
                 var row = li
                     .cssClass("p-megamenu-item")
                     .role("menuitem")
@@ -293,34 +304,31 @@ final case class MegaMenu private (
                     partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val act: Maybe[UI.Action] =
-                    if refs.isDefined && !it.disabledFlag then Present(toggle) else Absent
+                    if subs.isDefined && !it.disabledFlag then Present(toggle) else Absent
                 val subIcon = if orientationV == Orientation.Vertical then Icons.angleRight else Icons.angleDown
                 val content =
                     MenuRender.itemContent("megamenu", it.asMenuItem, act, Present(subIcon), roving = true)
-                // Host-gated overlay (renderOpen): the wired render already subscribes
-                // to every panel ref, so the overlay must not subscribe again. Roving
+                // Host-gated overlay (renderOpen): the wired render already reads the open
+                // panels, so the overlay must not subscribe again. Roving
                 // keeps focus on the root list, so the panel must NOT seed focus.
-                val panel: List[UI] = refs match
-                    case Present(rs) if isOpen =>
-                        rs.collectFirst { case (`p`, ref) => ref } match
-                            case Some(ref) =>
-                                val anchor =
-                                    if orientationV == Orientation.Vertical then OverlayAnchor.RightStart
-                                    else OverlayAnchor.BottomStart
-                                val cols: List[UI] = it.columnsV.zipWithIndex.map { (groups, c) =>
-                                    div.cssClass(colClass(it.columnsV.size))(columnGroups(i, c, groups).map(toChild)*)
-                                }
-                                List(
-                                    Overlay(ref)
-                                        .anchor(anchor)
-                                        .matchWidth(false)
-                                        .animate(false)
-                                        .seedFocus(false)
-                                        .panelClass("p-megamenu-overlay")
-                                        .apply(div.cssClass("p-megamenu-grid")(cols.map(toChild)*))
-                                        .renderOpen
-                                )
-                            case None => Nil
+                val panel: List[UI] = subs match
+                    case Present(s) if isOpen =>
+                        val anchor =
+                            if orientationV == Orientation.Vertical then OverlayAnchor.RightStart
+                            else OverlayAnchor.BottomStart
+                        val cols: List[UI] = it.columnsV.zipWithIndex.map { (groups, c) =>
+                            div.cssClass(colClass(it.columnsV.size))(columnGroups(i, c, groups).map(toChild)*)
+                        }
+                        List(
+                            Overlay.gated(s.close(p))
+                                .anchor(anchor)
+                                .matchWidth(false)
+                                .animate(false)
+                                .seedFocus(false)
+                                .panelClass("p-megamenu-overlay")
+                                .apply(div.cssClass("p-megamenu-grid")(cols.map(toChild)*))
+                                .renderOpen
+                        )
                     case _ => Nil
                 row((content :: panel).map(toChild)*)
             else
@@ -338,7 +346,7 @@ final case class MegaMenu private (
                         _ <- onActivated
                     yield ()
                 val act: Maybe[UI.Action] =
-                    if refs.isDefined && !it.disabledFlag then Present(activate) else Absent
+                    if subs.isDefined && !it.disabledFlag then Present(activate) else Absent
                 row(toChild(MenuRender.itemContent("megamenu", plain, act, Absent, roving = true)))
             end if
         }

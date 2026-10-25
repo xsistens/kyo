@@ -35,16 +35,19 @@ import kyo.UI.*
   * Honest deferrals as Menubar: no mobile mode; typeahead is not implemented.
   */
 final case class TieredMenu private (
+    // The root rows `body` draws, resolved from `entriesV` by the render.
     itemsV: List[MenuItem] = Nil,
+    entriesV: List[MenuItemLiveEntry] = Nil,
     popupRefV: Maybe[SignalRef[Boolean]] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, HasElementId:
     type Self = TieredMenu
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open side
-      * submenus), each built directly or from `_` (see [[MenuItemScope]]).
+      * submenus), each built directly or from `_` (see [[MenuItemScope]]), or a signal of items for a menu whose
+      * entries change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemEntry*): TieredMenu = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
+    def items(is: MenuItemLiveEntry*): TieredMenu = copy(entriesV = entriesV ++ is)
 
     /** Popup mode: the whole menu renders as a floating [[Overlay]] panel bound
       * two-way to `ref` (Prime's `.p-tieredmenu-overlay`).
@@ -57,18 +60,15 @@ final case class TieredMenu private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Paths of the items carrying submenus (one open/closed ref each). */
-    private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)
-
     private[uic] def render(using Frame): UI =
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
+        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
         UI.mounted {
             for
-                refs  <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
+                subs  <- Submenus.init()
                 focus <- Signal.initRef(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
-            yield wired(refs.toList, focus, base)
+            yield wired(subs, focus, base)
         }.placeholder(stat)
     end render
 
@@ -80,7 +80,7 @@ final case class TieredMenu private (
       * row.
       */
     private[uic] def wired(
-        refs: List[(List[Int], SignalRef[Boolean])],
+        subs: Submenus,
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
@@ -88,17 +88,15 @@ final case class TieredMenu private (
         // a popup's open state are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus (and
         // a popup's ref) together, and a nested region would repaint the values it closed over.
         val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
-        MenuRender.readDisabled(itemsV).and(Reading.Live(focus)).and(MenuRender.readAll(refs)).and(popup).render {
+        MenuRender.readItems(entriesV).and(Reading.Live(focus)).and(subs.reading).and(popup).render {
             case (((items, f), open), shown) =>
-                copy(itemsV =
-                    items
-                ).body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)), shown)
+                copy(itemsV = items).body(open, Present(subs), f, Present(focus), Present(idV.getOrElse(base)), shown)
         }
     end wired
 
     private def body(
-        open: Map[List[Int], Boolean],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        open: Set[List[Int]],
+        subs: Maybe[Submenus],
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
@@ -111,7 +109,7 @@ final case class TieredMenu private (
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Vertical, focus, e.key) match
-                        case Present(step) => MenuRender.applyStep(itemsV, refs, fr, popupRefV, step)
+                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, popupRefV, step)
                         case Absent        => ()
                 case Absent => ()
 
@@ -120,7 +118,7 @@ final case class TieredMenu private (
             itemsV,
             Nil,
             open,
-            refs,
+            subs,
             rootSubmenuIcon = Icons.angleRight,
             rootAnchor = OverlayAnchor.RightStart,
             focused = if focus.isEmpty then Absent else Present(focus),

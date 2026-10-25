@@ -38,7 +38,9 @@ import kyo.UI.*
   * implemented.
   */
 final case class Menubar private (
+    // The root rows `body` draws, resolved from `entriesV` by the render.
     itemsV: List[MenuItem] = Nil,
+    entriesV: List[MenuItemLiveEntry] = Nil,
     startV: Maybe[UI] = Absent,
     endV: Maybe[UI] = Absent,
     idV: Maybe[String] = Absent
@@ -46,9 +48,9 @@ final case class Menubar private (
     type Self = Menubar
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus), each built directly or from `_` (see
-      * [[MenuItemScope]]).
+      * [[MenuItemScope]]), or a signal of items for a bar whose entries change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemEntry*): Menubar = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
+    def items(is: MenuItemLiveEntry*): Menubar = copy(entriesV = entriesV ++ is)
 
     /** Content before the root list (`div.p-menubar-start`, the logo slot). */
     def start(ui: UI): Menubar = copy(startV = Present(ui))
@@ -64,20 +66,17 @@ final case class Menubar private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Paths of the items carrying submenus (one open/closed ref each). */
-    private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)
-
     private[uic] def render(using Frame): UI =
-        // One open/closed signal per submenu plus the keyboard focus path, allocated
-        // by this effectful mount; static projections render the closed anatomy inert.
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
+        // The open submenus and the keyboard focus path, allocated by this effectful mount; static projections render the
+        // closed anatomy inert.
+        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
         UI.mounted {
             for
-                refs  <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
+                subs  <- Submenus.init()
                 focus <- Signal.initRef(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
-            yield wired(refs.toList, focus, base)
+            yield wired(subs, focus, base)
         }.placeholder(stat)
     end render
 
@@ -89,21 +88,21 @@ final case class Menubar private (
       * row.
       */
     private[uic] def wired(
-        refs: List[(List[Int], SignalRef[Boolean])],
+        subs: Submenus,
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
         // are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus together, and a nested
         // region would repaint the values it closed over.
-        MenuRender.readDisabled(itemsV).and(Reading.Live(focus)).and(MenuRender.readAll(refs)).render { case ((items, f), open) =>
-            copy(itemsV = items).body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
+        MenuRender.readItems(entriesV).and(Reading.Live(focus)).and(subs.reading).render { case ((items, f), open) =>
+            copy(itemsV = items).body(open, Present(subs), f, Present(focus), Present(idV.getOrElse(base)))
         }
     end wired
 
     private def body(
-        open: Map[List[Int], Boolean],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        open: Set[List[Int]],
+        subs: Maybe[Submenus],
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
@@ -114,7 +113,7 @@ final case class Menubar private (
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Horizontal, focus, e.key) match
-                        case Present(step) => MenuRender.applyStep(itemsV, refs, fr, Absent, step)
+                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, Absent, step)
                         case Absent        => ()
                 case Absent => ()
 
@@ -123,7 +122,7 @@ final case class Menubar private (
             itemsV,
             Nil,
             open,
-            refs,
+            subs,
             rootSubmenuIcon = Icons.angleDown,
             rootAnchor = OverlayAnchor.BottomStart,
             focused = if focus.isEmpty then Absent else Present(focus),
@@ -155,7 +154,7 @@ object Menubar:
 private[uic] object MenuTree:
 
     /** Renders one level of items as `li.p-<prefix>-item` rows; items with
-      * children get the submenu glyph and, while their ref is open, a nested
+      * children get the submenu glyph and, while their path is open, a nested
       * Overlay panel stamped `p-<prefix>-submenu` (root level opens below for
       * the horizontal menubar, every other level to the side).
       *
@@ -168,8 +167,8 @@ private[uic] object MenuTree:
         prefix: String,
         its: List[MenuItem],
         path: List[Int],
-        open: Map[List[Int], Boolean],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        open: Set[List[Int]],
+        subs: Maybe[Submenus],
         rootSubmenuIcon: IconGlyph,
         rootAnchor: OverlayAnchor,
         focused: Maybe[List[Int]] = Absent,
@@ -180,9 +179,9 @@ private[uic] object MenuTree:
         val nested = path.nonEmpty
 
         def closeAll: UI.Action =
-            refs match
-                case Present(rs) => MenuRender.openExactly(rs, Absent)
-                case Absent      => ()
+            subs match
+                case Present(s) => s.openExactly(Absent)
+                case Absent     => ()
 
         its.zipWithIndex.map { (it, i) =>
             if it.separatorFlag then
@@ -192,12 +191,12 @@ private[uic] object MenuTree:
                 if it.itemsV.nonEmpty then
                     val isOpen            = open(p)
                     def toggle: UI.Action =
-                        refs match
-                            case Present(rs) =>
+                        subs match
+                            case Present(s) =>
                                 val target: Maybe[List[Int]] =
                                     if isOpen then (if p.size > 1 then Present(p.init) else Absent)
                                     else Present(p)
-                                MenuRender.openExactly(rs, target)
+                                s.openExactly(target)
                             case Absent => ()
                     val subIcon = if nested then Icons.angleRight else rootSubmenuIcon
                     // A row that opens a submenu can be current too: a section whose page is the
@@ -220,52 +219,49 @@ private[uic] object MenuTree:
                         idBase.foreach(b => row = row.id(s"$b-active"))
                     if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     val act: Maybe[UI.Action] =
-                        if refs.isDefined && !it.disabledFlag.constTrue then Present(toggle) else Absent
+                        if subs.isDefined && !it.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
-                    // The enclosing wired render already subscribes to every submenu ref
-                    // (MenuRender.renderAll), so the overlay is host-gated: rendered only
-                    // while open, via the single-subscription renderOpen form.
-                    val panel: List[UI] = refs match
-                        case Present(rs) if isOpen =>
-                            rs.collectFirst { case (`p`, ref) => ref } match
-                                case Some(ref) =>
-                                    val anchor = if nested then OverlayAnchor.RightStart else rootAnchor
-                                    // The rows ride inside a real <ul> (display:contents glue):
-                                    // an <li> start tag implicitly closes the open <li> when the
-                                    // HTML parser meets it inside the panel <div>, hoisting the
-                                    // rows out of the panel.
-                                    val rows = ul
-                                        .cssClass("p-uic-submenu-list")
-                                        .role("menu")(
-                                            items(
-                                                prefix,
-                                                it.itemsV,
-                                                p,
-                                                open,
-                                                refs,
-                                                rootSubmenuIcon,
-                                                rootAnchor,
-                                                focused,
-                                                onLeafActivate,
-                                                roving,
-                                                idBase
-                                            )
-                                                .map(toChild)*
-                                        )
-                                    List(
-                                        Overlay(ref)
-                                            .anchor(anchor)
-                                            .matchWidth(false)
-                                            .animate(false)
-                                            // Roving hosts keep focus on the root container and drive the
-                                            // highlight declaratively, so a submenu must NOT seed focus:
-                                            // that would pull focus off the host and stop its key handler.
-                                            .seedFocus(!roving)
-                                            .panelClass(s"p-$prefix-submenu")
-                                            .apply(rows)
-                                            .renderOpen
+                    // The enclosing wired render already reads the open submenus (Submenus.reading), so the overlay is
+                    // host-gated: rendered only while open, via the single-subscription renderOpen form, and closing its
+                    // own path when dismissed.
+                    val panel: List[UI] = subs match
+                        case Present(s) if isOpen =>
+                            val anchor = if nested then OverlayAnchor.RightStart else rootAnchor
+                            // The rows ride inside a real <ul> (display:contents glue):
+                            // an <li> start tag implicitly closes the open <li> when the
+                            // HTML parser meets it inside the panel <div>, hoisting the
+                            // rows out of the panel.
+                            val rows = ul
+                                .cssClass("p-uic-submenu-list")
+                                .role("menu")(
+                                    items(
+                                        prefix,
+                                        it.itemsV,
+                                        p,
+                                        open,
+                                        subs,
+                                        rootSubmenuIcon,
+                                        rootAnchor,
+                                        focused,
+                                        onLeafActivate,
+                                        roving,
+                                        idBase
                                     )
-                                case None => Nil
+                                        .map(toChild)*
+                                )
+                            List(
+                                Overlay.gated(s.close(p))
+                                    .anchor(anchor)
+                                    .matchWidth(false)
+                                    .animate(false)
+                                    // Roving hosts keep focus on the root container and drive the
+                                    // highlight declaratively, so a submenu must NOT seed focus:
+                                    // that would pull focus off the host and stop its key handler.
+                                    .seedFocus(!roving)
+                                    .panelClass(s"p-$prefix-submenu")
+                                    .apply(rows)
+                                    .renderOpen
+                            )
                         case _ => Nil
                     row((content :: panel).map(toChild)*)
                 else
@@ -285,7 +281,7 @@ private[uic] object MenuTree:
                                 case Absent       => (): UI.Action
                         yield ()
                     val act: Maybe[UI.Action] =
-                        if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
+                        if subs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                     row(toChild(MenuRender.itemContent(prefix, it, act, Absent, roving)))
                 end if
         }

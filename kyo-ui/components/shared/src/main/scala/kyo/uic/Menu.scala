@@ -63,7 +63,9 @@ end MenuAccessibleRole
   * Honest deferrals: no per-item templates; typeahead is not implemented.
   */
 final case class Menu private (
+    // The rows `body` draws: what a render resolved from `entriesV`, or what a host handed over through `rows`.
     itemsV: List[MenuItem] = Nil,
+    entriesV: List[MenuItemLiveEntry] = Nil,
     popupRefV: Maybe[SignalRef[Boolean]] = Absent,
     idV: Maybe[String] = Absent,
     roleV: MenuAccessibleRole = MenuAccessibleRole.Menu,
@@ -72,9 +74,13 @@ final case class Menu private (
     type Self = Menu
 
     /** Appends items ([[MenuItem]] rows, `MenuItem.separator` dividers, and
-      * grouped sections via nested `items`), each built directly or from `_` (see [[MenuItemScope]]).
+      * grouped sections via nested `items`), each built directly or from `_` (see [[MenuItemScope]]), or a signal of
+      * items for rows that change while the menu is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemEntry*): Menu = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
+    def items(is: MenuItemLiveEntry*): Menu = copy(entriesV = entriesV ++ is)
+
+    /** Package-internal: rows a host has already resolved in its own region, drawn as they are. */
+    private[uic] def rows(items: List[MenuItem]): Menu = copy(itemsV = items, entriesV = items)
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Menu = copy(idV = v)
@@ -124,7 +130,7 @@ final case class Menu private (
                 // The keyboard highlight lives in a signal allocated by this effectful
                 // mount; static projections (SSG, the SSR page HTML) render the same
                 // anatomy inert until the client transport attaches.
-                val stat: UI = body(-1, Absent, idV)
+                val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(-1, Absent, idV))
                 UI.mounted {
                     for
                         cmds <- UI.commands
@@ -139,7 +145,7 @@ final case class Menu private (
       * and takes its link out of the tab order.
       */
     private def navigation(using Frame): UI =
-        MenuRender.resolveDisabled(itemsV) { items =>
+        MenuRender.readItems(entriesV).render { items =>
             val rowUIs: List[UI] = copy(itemsV = items).flatRows.map {
                 case MenuRow.Sep           => li.cssClass("p-menu-separator").role("separator")
                 case MenuRow.Heading(text) =>
@@ -209,7 +215,7 @@ final case class Menu private (
                 // The items, the highlight and a popup's open state are read as ONE region (see [[Reading]]): leaving
                 // writes the popup ref and the highlight together, and a nested region would repaint what it closed over.
                 val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
-                MenuRender.readDisabled(itemsV).and(Reading.Live(hi)).and(popup).render { case ((items, h), shown) =>
+                MenuRender.readItems(entriesV).and(Reading.Live(hi)).and(popup).render { case ((items, h), shown) =>
                     copy(itemsV = items).body(h, Present(hi), Present(idV.getOrElse(base)), shown)
                 }
     end wired

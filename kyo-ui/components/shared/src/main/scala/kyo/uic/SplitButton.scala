@@ -31,8 +31,7 @@ final case class SplitButton private (
     fluidFlag: Boolean = false,
     disabledFlag: Boolean = false,
     dropdownIconV: Maybe[IconGlyph] = Absent,
-    itemsV: List[MenuItem] = Nil,
-    itemsSigV: Maybe[Signal[Seq[MenuItem]]] = Absent,
+    entriesV: List[MenuItemLiveEntry] = Nil,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     onClickEff: Maybe[UI.Action] = Absent
 ) extends Node:
@@ -67,17 +66,12 @@ final case class SplitButton private (
     /** Glyph of the dropdown segment (default chevron-down). */
     def dropdownIcon(glyph: IconGlyph): SplitButton = copy(dropdownIconV = Present(glyph))
 
-    /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]). */
-    def items(is: MenuItemEntry*): SplitButton = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
-
-    /** Popup menu rows that follow `rows`, after any given with [[items]].
-      *
-      * For a list that changes while the page shows it (the requests a server holds, say). Building the split button
-      * again inside a region over the list would start its mount again with every change, and with it its open state
-      * and highlight; while a mount starts, a click on it reaches nothing. Read here, the list is part of the button's
-      * one region instead.
+    /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]), or a
+      * signal of rows for a list that changes while the page shows it (the requests a server holds, say). Read here, the list is
+      * part of the button's one region: building the button again inside a region over the list would start its mount again with
+      * every change, and with it its open state and highlight, and a click landing while it starts reaches nothing.
       */
-    def itemsFrom(rows: Signal[Seq[MenuItem]]): SplitButton = copy(itemsSigV = Present(rows))
+    def items(is: MenuItemLiveEntry*): SplitButton = copy(entriesV = entriesV ++ is)
 
     /** Binds the panel visibility two-way to `ref` (optional; self-managed
       * otherwise).
@@ -109,10 +103,7 @@ final case class SplitButton private (
         // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
         // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
         // nested in this one would repaint what it closed over.
-        val rows: Reading[List[MenuItem]] = itemsSigV match
-            case Present(sig) => Reading.Live(sig.switchMap(more => MenuRender.readDisabled(itemsV ++ more).signal))
-            case Absent       => MenuRender.readDisabled(itemsV)
-        rows.and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
+        MenuRender.readItems(entriesV).and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
             body(o, Present(open), Present(hi), base, items, h)
         }
     end wired
@@ -160,7 +151,7 @@ final case class SplitButton private (
             case (Present(openRef), Present(hiRef)) =>
                 // The hosted menu announces its highlighted row off an id of its own, minted
                 // from this button's, since nothing outside knows the panel is there to name it.
-                List(Menu().items(items*).popup(openRef).hosted(h, hiRef, s"$base-menu", isOpen))
+                List(Menu().rows(items).popup(openRef).hosted(h, hiRef, s"$base-menu", isOpen))
             case _ => Nil
 
         var el = div.cssClass("p-splitbutton").cssClass("p-component")
