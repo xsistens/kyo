@@ -543,7 +543,7 @@ final case class AutoComplete[A] private (
             .panelClass("p-component")
             .seedFocus(false)
             .dismissOnEscape(false)(listUI)
-            .renderShown
+            .renderShown(s.idBase.map(b => s"$b-panel"))
     end overlayPanel
 end AutoComplete
 

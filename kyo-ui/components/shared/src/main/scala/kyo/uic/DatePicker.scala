@@ -305,7 +305,7 @@ final case class DatePicker[A] private (
                     val n    = nav(mv, cv, sd)
                     val grid =
                         panelUI(view, if mv.isEmpty then Absent else Present(mv), snap, Present(oref), Present(n), inline = inlineFlag)
-                    if inlineFlag then grid else Overlay(oref).seedFocus(false)(grid).renderShown
+                    if inlineFlag then grid else Overlay(oref).seedFocus(false)(grid).renderShown(Present(s"$base-panel"))
                 end if
             }
         assemble(Present(oref), Present(nav("", "", false)), floating = !inlineFlag, panel, openSignal = Present(oref))

@@ -719,7 +719,7 @@ final case class MultiSelect[A] private (
             .seedFocus(false)
             .dismissOnEscape(false)
             .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
-            .renderShown
+            .renderShown(s.idBase.map(b => s"$b-panel"))
     end overlayPanel
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"

@@ -186,8 +186,9 @@ final case class Overlay private (
       */
     def pointerAnchor(sig: Signal[Maybe[UI.Point]]): Overlay = copy(pointerAnchorV = Present(sig))
 
-    /** Package-internal: the DOM id to stamp on the panel, for the host-gated [[renderOpen]]
-      * path, which has no mount of its own to mint one in and cannot grow one: a mount that
+    /** Package-internal: the DOM id to stamp on the panel, for the host-gated [[renderOpen]],
+      * [[renderShown]] and [[renderGated]] paths (the last two take it as a parameter), which have
+      * no mount of their own to mint one in and cannot grow one: a mount that
       * PUBLISHED the panel would have to be keyed to survive the host's re-renders, and a keyed
       * mount freezes the content it published. Hosts derive it from their own element id
       * (`s"$id-panel"`), so it is stable across those re-renders and the measured placement
@@ -281,13 +282,40 @@ final case class Overlay private (
             case Absent     => gated
     end render
 
-    /** The open panel content for the standard (self-gated) `render` path: the
-      * continuous flip/shift reposition when `autoFlip`, else the declared-anchor
-      * render. Runs inside the `when(openRef)` region, so each open mints a fresh
-      * id and a fresh reposition lifecycle; close tears it down (and with it the
-      * scroll/resize observer, via the mount's Scope).
+    /** The open panel content: the continuous flip/shift reposition when `autoFlip`, else the declared-anchor render.
+      *
+      * With a [[panelId]] from the host, the panel is drawn directly under that id and only the measuring triggers are
+      * mounts, keyed by it. That is the form a host-gated panel needs: its host redraws the panel on every keystroke that
+      * moves a highlight, and a mount around the panel would start again each time, showing an inert snapshot that no
+      * click or key reaches while it does.
+      *
+      * Without one, which is the self-gated `render` path inside the `when(openRef)` region, each open mints a fresh id
+      * in a mount of its own and a fresh reposition lifecycle; close tears it down (and with it the scroll/resize
+      * observer, via the mount's Scope).
       */
     private def openContent(using Frame): UI =
+        panelIdV match
+            case Present(id) => placedOpenContent(id)
+            case Absent      => mintedOpenContent
+
+    /** The panel under the host's stable `id`, measured by keyed triggers that publish nothing. */
+    private def placedOpenContent(id: String)(using Frame): UI =
+        pointerAnchorV match
+            case Present(at) =>
+                renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
+            case Absent =>
+                if portalV then
+                    val anchorId = s"$id-anchor"
+                    renderOpenAt(
+                        anchorV,
+                        Present(id),
+                        portal = true,
+                        after = List(anchorProbe(anchorId), portalRepositionTrigger(anchorId, id))
+                    )
+                else if !autoFlipV then renderOpenAt(anchorV, Absent)
+                else renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(id)))
+
+    private def mintedOpenContent(using Frame): UI =
         pointerAnchorV match
             case Present(at) =>
                 // A point needs no anchor probe: the placement is the point plus the panel's own size,
@@ -320,7 +348,7 @@ final case class Overlay private (
                     anchorV,
                     Present(panelId),
                     portal = true,
-                    after = List(anchorProbe(anchorId), portalRepositionTrigger(cmds, anchorId, panelId))
+                    after = List(anchorProbe(anchorId), portalRepositionTrigger(anchorId, panelId))
                 )
                 // The placeholder must be portal-shaped too: a non-portal placeholder panel sits IN FLOW
                 // inside the anchor's scroll container for the frames before the effect content re-homes
@@ -340,7 +368,7 @@ final case class Overlay private (
                 for
                     cmds <- UI.commands
                     id   <- cmds.freshId
-                yield renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(cmds, id)))
+                yield renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(id)))
             }.placeholder(renderOpenAt(anchorV, Absent))
 
     /** An invisible sibling that wires the reposition AFTER the panel is in the
@@ -368,11 +396,13 @@ final case class Overlay private (
       * and the panel (the flip decision needs its size), combines the two measured streams and
       * binds the resolved fixed-position geometry onto the panel in place. `Style.empty` until both
       * have measured: the panel stays hidden (`opacity: 0` from `.p-uic-overlay-portal`) until the
-      * first geometry patch turns it visible, so it never flashes unpositioned at the body.
+      * first geometry patch turns it visible, so it never flashes unpositioned at the body. Keyed by
+      * the panel's id, for the reason [[pointerRepositionTrigger]] gives.
       */
-    private def portalRepositionTrigger(cmds: UI.Commands, anchorId: String, panelId: String)(using Frame): UI =
+    private def portalRepositionTrigger(anchorId: String, panelId: String)(using Frame): UI =
         UI.mounted {
             for
+                cmds      <- UI.commands
                 anchorSig <- cmds.observeViewportById(anchorId)
                 panelSig  <- cmds.observeViewportById(panelId)
                 _         <- cmds.bindStyleById(
@@ -383,7 +413,7 @@ final case class Overlay private (
                     }
                 )
             yield UI.empty
-        }.placeholder(UI.empty)
+        }.keyed(panelId).placeholder(UI.empty)
 
     /** The pointer-anchored twin of [[repositionTrigger]]: observes the panel (the placement needs
       * its size), combines that with the point, and binds the resolved fixed-position geometry onto
@@ -412,18 +442,21 @@ final case class Overlay private (
             yield UI.empty
         }.keyed(panelId).placeholder(UI.empty)
 
-    private def repositionTrigger(cmds: UI.Commands, panelId: String)(using Frame): UI =
+    /** Keyed by the panel's id, for the reason [[pointerRepositionTrigger]] gives. */
+    private def repositionTrigger(panelId: String)(using Frame): UI =
         UI.mounted {
-            cmds.observeViewportById(panelId).map { rectSig =>
-                cmds.bindStyleById(
-                    panelId,
-                    rectSig.map {
-                        case Present(rect) => Overlay.geometryFor(anchorV, rect)
-                        case Absent        => Style.empty
-                    }
-                )
+            UI.commands.map { cmds =>
+                cmds.observeViewportById(panelId).map { rectSig =>
+                    cmds.bindStyleById(
+                        panelId,
+                        rectSig.map {
+                            case Present(rect) => Overlay.geometryFor(anchorV, rect)
+                            case Absent        => Style.empty
+                        }
+                    )
+                }
             }.andThen(UI.empty)
-        }.placeholder(UI.empty)
+        }.keyed(panelId).placeholder(UI.empty)
 
     /** Package-internal: renders backdrop + panel UNCONDITIONALLY, for hosts
       * (Menubar/TieredMenu/MegaMenu) that already subscribe to `openRef` in an
@@ -438,17 +471,21 @@ final case class Overlay private (
       * then ONE region over its open state and everything else it draws; [[render]]'s own `when(openRef)` inside it would
       * be a second region, drawing a panel that closed over the host's older state. Escape and an outside click still
       * write `false` into the ref, and the host's region takes the panel away.
+      *
+      * `panelId` is the panel's id, which the host derives from its own (`s"$base-panel"`) so that it is the same on every
+      * redraw: the host redraws the panel with every change it reads, and only a stable id keeps the panel the same element
+      * (see [[openContent]]). `Absent` is for a static projection with no session behind it.
       */
-    private[uic] def renderShown(using Frame): UI = renderGated(true)
+    private[uic] def renderShown(panelId: Maybe[String])(using Frame): UI = renderGated(true, panelId)
 
     /** [[renderShown]] while `open`, and only the trigger (where there is one) otherwise: for a host whose one region
       * reads the open state and always draws the trigger.
       */
-    private[uic] def renderGated(open: Boolean)(using Frame): UI =
-        val content: List[UI] = if open then List(openContent) else Nil
+    private[uic] def renderGated(open: Boolean, panelId: Maybe[String])(using Frame): UI =
+        val content: List[UI] = if open then List(copy(panelIdV = panelId.orElse(panelIdV)).openContent) else Nil
         triggerV match
             case Present(t) => div.cssClass("p-uic-overlay-anchor")((t :: content).map(toChild)*)
-            case Absent     => if open then openContent else UI.empty
+            case Absent     => content.headOption.getOrElse(UI.empty)
     end renderGated
 
     private[uic] def renderOpen(using Frame): UI =
