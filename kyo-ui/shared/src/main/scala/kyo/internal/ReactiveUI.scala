@@ -759,8 +759,10 @@ private[kyo] object ReactiveUI:
                         if targetPath.size > basePath.size then
                             val segment = targetPath(basePath.size)
                             val idx     = Maybe.fromOption(keyMap.get(segment)).orElse(Maybe.fromOption(segment.toIntOption))
+                            // Every child has a handle, so a segment matching none names a child that has left the page
+                            // since the client sent the event; like a missing child of an element, it reaches nothing.
                             idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
-                                .fold(true: Boolean < (Async & Abort[Any]))(h => h(targetPath, event))
+                                .fold(false: Boolean < (Async & Abort[Any]))(h => h(targetPath, event))
                         else true
                     (allKids, handle)
                 }
