@@ -48,23 +48,12 @@ object OptionItem:
       * options draws no region for them.
       */
     private[uic] def reading[A](sources: List[OptionSource[A]])(using Frame): Reading[List[OptionItem[A]]] =
-        given CanEqual[List[OptionItem[A]], List[OptionItem[A]]] = CanEqual.derived
-        val parts: List[Reading[List[OptionItem[A]]]]            =
-            sources.foldLeft(List.empty[Reading[List[OptionItem[A]]]]) { (acc, src) =>
-                src match
-                    case OptionSource.Values(sig) => Reading.Live(sig.map(_.iterator.map(OptionItem.Item(_)).toList)) :: acc
-                    case OptionSource.Rows(sig)   => Reading.Live(sig.map(_.toList)) :: acc
-                    case OptionSource.Fixed(rows) =>
-                        acc match
-                            case Reading.Fixed(prev) :: rest => Reading.Fixed(prev ++ rows) :: rest
-                            case _                           => Reading.Fixed(rows) :: acc
-            }.reverse
-        // Neighbouring fixed sources were joined above, so two parts or more hold a signal.
-        parts match
-            case Nil        => Reading.Fixed(Nil)
-            case one :: Nil => one
-            case several    => Reading.Live(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
-        end match
+        given CanEqual[Seq[OptionItem[A]], Seq[OptionItem[A]]] = CanEqual.derived
+        Reading.concat(sources.map {
+            case OptionSource.Values(sig) => sig.map(_.map(OptionItem.Item(_)))
+            case OptionSource.Rows(sig)   => sig
+            case OptionSource.Fixed(rows) => rows
+        })
     end reading
 
     /** A single ungrouped option, rendered as a plain row beside the groups. */

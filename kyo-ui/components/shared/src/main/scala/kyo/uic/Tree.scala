@@ -17,7 +17,7 @@ final case class TreeNode[K](
     children: List[TreeNode[K]] = Nil,
     tooltip: Maybe[String] = Absent,
     accessibleName: Maybe[String] = Absent
-)
+) derives CanEqual
 
 /** A tree node, built directly or as `_.node(...)` (see [[TreeNodeScope]]). */
 type TreeNodeEntry[K] = Entry[TreeNode[K], TreeNodeScope[K]]
@@ -93,7 +93,9 @@ end TreeNodeScope
   * the current set.
   */
 final case class Tree[K] private (
+    // The roots `body` draws, resolved from `nodeSources` by the render.
     nodeList: List[TreeNode[K]] = Nil,
+    nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
     expandedRef: Maybe[SignalRef[Set[K]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[K]]] = Absent,
     onNodeToggleF: Maybe[K => UI.Action] = Absent,
@@ -105,8 +107,18 @@ final case class Tree[K] private (
 ) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = Tree[K]
 
-    /** Appends the given root nodes, each built directly or from `_` (see [[TreeNodeScope]]). */
-    def nodes(ns: TreeNodeEntry[K]*): Tree[K] = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
+    /** Appends the given root nodes, each built directly or from `_` (see [[TreeNodeScope]]), or a signal of roots that change
+      * while the tree is shown (see [[LiveEntry]]).
+      */
+    def nodes(ns: TreeNodeLiveEntry[K]*): Tree[K] = copy(nodeSources = nodeSources ++ ns)
+
+    /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[TreeNode[K]]] = TreeNodeScope.reading(nodeSources)
+
+    /** This tree with `ns` as its roots, already resolved: what a host that read the roots itself hands over, so every
+      * method (the key handler, the cascade) sees them, and not only a render that reads the sources again.
+      */
+    private[uic] def rooted(ns: List[TreeNode[K]]): Tree[K] = copy(nodeList = ns, nodeSources = ns)
 
     /** Binds expansion two-way to `ref`: toggles update the set, ref changes re-render `aria-expanded`. */
     def expanded(ref: SignalRef[Set[K]]): Tree[K] = copy(expandedRef = Present(ref))
@@ -166,7 +178,7 @@ final case class Tree[K] private (
       * handlers still write through the BOUND refs.
       */
     private[uic] def resolved(exp: Set[K], sel: Set[K], roving: Maybe[Roving] = Absent)(using Frame): UI =
-        body(exp, sel, roving)
+        entries.render(ns => rooted(ns).body(exp, sel, roving))
 
     private[uic] def render(using Frame): UI =
         // One mount for the keyboard highlight and the id it addresses rows by, allocated
@@ -184,16 +196,16 @@ final case class Tree[K] private (
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))
 
-    /** The expansion, the selection and the highlight around one [[body]] render, read as ONE region (see [[Reading]]): a
-      * key writes the highlight, the expansion and the selection together, and a nested region would repaint the values it
-      * closed over.
+    /** The roots, the expansion, the selection and the highlight around one [[body]] render, read as ONE region (see
+      * [[Reading]]): a key writes the highlight, the expansion and the selection together, and a nested region would
+      * repaint the values it closed over.
       */
     private def subscribed(keyboard: Maybe[(SignalRef[Int], String)])(using Frame): UI =
         val exp = expandedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
         val sel = selectedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
         val hi  = keyboard.fold(Reading.Fixed(-1))((ref, _) => Reading.Live(ref))
-        exp.and(sel).and(hi).render { case ((e, s), h) =>
-            body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
+        entries.and(exp).and(sel).and(hi).render { case (((ns, e), s), h) =>
+            rooted(ns).body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
         }
     end subscribed
 

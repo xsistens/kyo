@@ -46,7 +46,7 @@ end TimelineLayout
   * }}}
   */
 final case class Timeline[A] private (
-    eventsV: List[A] = Nil,
+    eventSources: List[List[A] | Signal[Seq[A]]] = Nil,
     contentF: Maybe[A => UI] = Absent,
     oppositeF: Maybe[A => UI] = Absent,
     markerF: Maybe[A => UI] = Absent,
@@ -55,8 +55,18 @@ final case class Timeline[A] private (
 ) extends Node:
     type Self = Timeline[A]
 
-    /** Appends events. */
-    def events(es: Seq[A]): Timeline[A] = copy(eventsV = eventsV ++ es.toList)
+    /** Appends events, or a signal of events that change while the timeline is shown (the history of a record that is
+      * still being written to). The events keep the order the calls gave them.
+      */
+    def events(es: Iterable[A] | Signal[Seq[A]]): Timeline[A] =
+        val source: List[A] | Signal[Seq[A]] = es match
+            case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
+            case is             => is.asInstanceOf[Iterable[A]].toList
+        copy(eventSources = eventSources :+ source)
+    end events
+
+    /** The events as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[A]] = Reading.concat(eventSources)
 
     /** Content template, rendered in `div.p-timeline-event-content`. */
     def content(f: A => UI): Timeline[A] = copy(contentF = Present(f))
@@ -78,8 +88,18 @@ final case class Timeline[A] private (
     def layout(v: TimelineLayout): Timeline[A] = copy(layoutV = v)
 
     private[uic] def render(using Frame): UI =
-        val n                  = eventsV.length
-        val eventEls: List[UI] = eventsV.zipWithIndex.map { (a, i) =>
+        // The events of a live timeline share one region, so the last-child and odd/even rules still see one run of them.
+        div
+            .cssClass("p-timeline")
+            .cssClass("p-component")
+            .cssClass(s"p-timeline-${alignV.token}")
+            .cssClass(s"p-timeline-${layoutV.token}")(entries.children(eventEls).map(toChild)*)
+    end render
+
+    /** One `div.p-timeline-event` per event; the last one draws no connector. */
+    private def eventEls(events: List[A])(using Frame): List[UI] =
+        val n = events.length
+        events.zipWithIndex.map { (a, i) =>
             val oppositeEl: UI = div.cssClass("p-timeline-event-opposite")(
                 oppositeF.toList.map(f => toChild(f(a)))*
             )
@@ -98,13 +118,7 @@ final case class Timeline[A] private (
             )
             div.cssClass("p-timeline-event")(toChild(oppositeEl), toChild(separatorEl), toChild(contentEl))
         }
-
-        div
-            .cssClass("p-timeline")
-            .cssClass("p-component")
-            .cssClass(s"p-timeline-${alignV.token}")
-            .cssClass(s"p-timeline-${layoutV.token}")(eventEls.map(toChild)*)
-    end render
+    end eventEls
 end Timeline
 
 object Timeline:

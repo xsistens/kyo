@@ -8,10 +8,13 @@ import kyo.UI.Ast.HtmlChildVal
   * `data` plus its `children` (empty for a leaf). Row identity comes from the
   * table's `rowKey` projection over `data`.
   */
-final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Nil)
+final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Nil) derives CanEqual
 
 /** A TreeTable row node, built directly or as `_.node(...)` (see [[TreeTableNodeScope]]). */
 type TreeTableNodeEntry[A] = Entry[TreeTableNode[A], TreeTableNodeScope[A]]
+
+/** A [[TreeTableNodeEntry]] or a signal of nodes, for a table whose roots change while it is shown (see [[LiveEntry]]). */
+type TreeTableNodeLiveEntry[A] = LiveEntry[TreeTableNode[A], TreeTableNodeScope[A]]
 
 /** What `_` stands for in [[TreeTable.nodes]]: `_.node(row, children = Seq(_.node(child)))`, as [[TreeTableNode.apply]], with the
   * children in the same two spellings.
@@ -25,6 +28,9 @@ end TreeTableNodeScope
 object TreeTableNodeScope:
     private[uic] def resolve[A](entries: Seq[TreeTableNodeEntry[A]]): List[TreeTableNode[A]] =
         Entry.resolve(new TreeTableNodeScope[A], entries)
+
+    private[uic] def reading[A](entries: Seq[TreeTableNodeLiveEntry[A]])(using CanEqual[A, A], Frame): Reading[List[TreeTableNode[A]]] =
+        Entry.reading(new TreeTableNodeScope[A], entries)
 end TreeTableNodeScope
 
 /** TreeTable: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -61,7 +67,9 @@ end TreeTableNodeScope
   * concrete need).
   */
 final case class TreeTable[A] private (
+    // The roots `body` draws, resolved from `nodeSources` by the render.
     nodeList: List[TreeTableNode[A]] = Nil,
+    nodeSources: List[TreeTableNodeLiveEntry[A]] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[Column[A, AnyTable]] = Nil,
     expandedTyped: Maybe[SignalRef[Set[A]]] = Absent,
@@ -80,9 +88,16 @@ final case class TreeTable[A] private (
 ) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = TreeTable[A]
 
-    /** Appends root nodes, each built directly or from `_` (see [[TreeTableNodeScope]]). */
-    def nodes(ns: TreeTableNodeEntry[A]*): TreeTable[A] =
-        copy(nodeList = nodeList ++ TreeTableNodeScope.resolve(ns))
+    // A bound row is matched by its own equality where no [[rowKey]] names it (see `keyFor`), so that equality decides.
+    private given CanEqual[A, A] = CanEqual.derived
+
+    /** Appends root nodes, each built directly or from `_` (see [[TreeTableNodeScope]]), or a signal of roots that change
+      * while the table is shown (see [[LiveEntry]]).
+      */
+    def nodes(ns: TreeTableNodeLiveEntry[A]*): TreeTable[A] = copy(nodeSources = nodeSources ++ ns)
+
+    /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[TreeTableNode[A]]] = TreeTableNodeScope.reading(nodeSources)
 
     /** Stable row identity: the expansion/selection key and the event payloads.
       * Required for reliable expansion/selection (the fallback is the row's
@@ -232,12 +247,16 @@ final case class TreeTable[A] private (
         // The reactive `visible` and `sortable` flags are resolved here too, each to a plain boolean.
         val visible  = Reading.keyed(cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig))))
         val sortable = Reading.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig))))
-        val exp      = Reading.orElse(expandedTyped.map(_.map(_.map(keyFor))), Set.empty[String])
-        val sel      = Reading.orElse(selectedTyped.map(_.map(_.map(keyFor))), Set.empty[String])
-        val sort     = Reading.orElse(sortRef, List.empty[SortKey])
-        val cursor   = Reading.orElse(cursorRef, Absent: Maybe[String])
-        visible.and(sortable).and(exp).and(sel).and(sort).and(cursor).render { case (((((vis, flags), e), s), so), cu) =>
-            narrowed(vis).body(e, s, so, cu, seed, flags, base, focus)
+        // The bound rows are matched to keys inside the region, against the roots it read: without a [[rowKey]] a row's
+        // key is its place in the tree, which a live list moves.
+        val exp    = Reading.orElse(expandedTyped, Set.empty[A])
+        val sel    = Reading.orElse(selectedTyped, Set.empty[A])
+        val sort   = Reading.orElse(sortRef, List.empty[SortKey])
+        val cursor = Reading.orElse(cursorRef, Absent: Maybe[String])
+        entries.and(visible).and(sortable).and(exp).and(sel).and(sort).and(cursor).render {
+            case ((((((ns, vis), flags), e), s), so), cu) =>
+                val table = copy(nodeList = ns)
+                table.narrowed(vis).body(e.map(table.keyFor), s.map(table.keyFor), so, cu, seed, flags, base, focus)
         }
     end buildAll
 

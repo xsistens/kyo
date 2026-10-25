@@ -117,7 +117,7 @@ class ElementIdTest extends UicTest:
             uic.Tab("Two", p("second"), "two")
         )
         for
-            ui = strip.id("mine").wired(List("mine-one", "mine-two"), _ => ())
+            ui = strip.id("mine").wired("mine", _ => ())
             root    <- idOf(ui, "p-tabs")
             headers <- elementsWithClass(ui, "p-tab")
         yield

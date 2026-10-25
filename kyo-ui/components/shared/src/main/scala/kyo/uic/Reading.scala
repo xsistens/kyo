@@ -48,6 +48,14 @@ private[uic] enum Reading[A]:
         this match
             case Fixed(a)  => f(a)
             case Live(sig) => sig.render(f)
+
+    /** Renders the children `f` draws for the value: as they are for a fixed one, inside one region for a live one. All of
+      * them share that region, so a rule over siblings (`:first-child`, `:nth-child`, `~`) still sees them as one run.
+      */
+    def children(f: A => List[UI])(using Frame): List[UI] =
+        this match
+            case Fixed(a)  => f(a)
+            case Live(sig) => List(sig.render(a => fragment(f(a)*)))
 end Reading
 
 private[uic] object Reading:
@@ -57,6 +65,29 @@ private[uic] object Reading:
         v match
             case ReactiveValue.Dyn(sig) => Live(sig)
             case ReactiveValue.Const(a) => Fixed(a)
+
+    /** Lists, each fixed or a signal, as ONE reading of them end to end, in order: fixed while none of them is a signal, so a
+      * component given plain lists draws no region for them. Neighbouring fixed lists are joined first, so two parts or more
+      * left over hold a signal.
+      */
+    def concat[A](parts: Seq[List[A] | Signal[Seq[A]]])(using Frame): Reading[List[A]] =
+        given CanEqual[List[A], List[A]]   = CanEqual.derived
+        val joined: List[Reading[List[A]]] =
+            parts.foldLeft(List.empty[Reading[List[A]]]) { (acc, part) =>
+                part match
+                    case sig: Signal[?] => Live(sig.asInstanceOf[Signal[Seq[A]]].map(_.toList)) :: acc
+                    case fixed          =>
+                        val as = fixed.asInstanceOf[List[A]]
+                        acc match
+                            case Fixed(prev) :: rest => Fixed(prev ++ as) :: rest
+                            case _                   => Fixed(as) :: acc
+            }.reverse
+        joined match
+            case Nil        => Fixed(Nil)
+            case one :: Nil => one
+            case several    => Live(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
+        end match
+    end concat
 
     /** A signal where one is bound, else `fallback`, fixed. */
     def orElse[A](sig: Maybe[Signal[A]], fallback: A): Reading[A] =

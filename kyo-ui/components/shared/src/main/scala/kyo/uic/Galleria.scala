@@ -21,10 +21,13 @@ final case class GalleriaItem(
     subtitle: Maybe[String] = Absent,
     titleDyn: Maybe[Signal[String]] = Absent,
     subtitleDyn: Maybe[Signal[String]] = Absent
-)
+) derives CanEqual
 
 /** A Galleria image, built directly or as `_.item(...)` (see [[GalleriaItemScope]]). */
 type GalleriaItemEntry = Entry[GalleriaItem, GalleriaItemScope]
+
+/** A [[GalleriaItemEntry]] or a signal of images, for a gallery whose images change while it is shown (see [[LiveEntry]]). */
+type GalleriaItemLiveEntry = LiveEntry[GalleriaItem, GalleriaItemScope]
 
 /** What `_` stands for in [[Galleria.items]]: `_.item("/img/1.jpg", alt = "Harbour")`, as [[GalleriaItem.apply]]. */
 final class GalleriaItemScope private ():
@@ -44,6 +47,9 @@ object GalleriaItemScope:
     private val scope = new GalleriaItemScope
 
     private[uic] def resolve(entries: Seq[GalleriaItemEntry]): List[GalleriaItem] = Entry.resolve(scope, entries)
+
+    private[uic] def reading(entries: Seq[GalleriaItemLiveEntry])(using Frame): Reading[List[GalleriaItem]] =
+        Entry.reading(scope, entries)
 end GalleriaItemScope
 
 /** Galleria: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -76,7 +82,9 @@ end GalleriaItemScope
   * matches the design system rather than a local convention.
   */
 final case class Galleria private (
+    // The images `body` draws, resolved from `itemSources` by the render.
     itemList: List[GalleriaItem] = Nil,
+    itemSources: List[GalleriaItemLiveEntry] = Nil,
     activeRef: Maybe[SignalRef[Int]] = Absent,
     itemTemplateF: Maybe[GalleriaItem => UI] = Absent,
     thumbnailTemplateF: Maybe[GalleriaItem => UI] = Absent,
@@ -89,8 +97,13 @@ final case class Galleria private (
 ) extends Node:
     type Self = Galleria
 
-    /** Appends the given images, each built directly or from `_` (see [[GalleriaItemScope]]). */
-    def items(is: GalleriaItemEntry*): Galleria = copy(itemList = itemList ++ GalleriaItemScope.resolve(is))
+    /** Appends the given images, each built directly or from `_` (see [[GalleriaItemScope]]), or a signal of images that
+      * change while the gallery is shown (see [[LiveEntry]]).
+      */
+    def items(is: GalleriaItemLiveEntry*): Galleria = copy(itemSources = itemSources ++ is)
+
+    /** The images as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[GalleriaItem]] = GalleriaItemScope.reading(itemSources)
 
     /** Binds the active image index two-way (0-based, clamped at render). */
     def activeIndex(ref: SignalRef[Int]): Galleria = copy(activeRef = Present(ref))
@@ -137,9 +150,8 @@ final case class Galleria private (
       * were, which is a gallery whose dots and thumbnails are reachable by clicking.
       */
     private def shown(base: String, focus: String => UI.Action)(using Frame): UI =
-        activeRef match
-            case Present(r) => r.render(i => body(i, base, focus))
-            case Absent     => body(0, base, focus)
+        // The images and the active index are ONE region (see [[Reading]]): a list that shrinks moves the clamp too.
+        entries.and(Reading.orElse(activeRef, 0)).render((items, i) => copy(itemList = items).body(i, base, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI = shown(base, focus)
