@@ -54,6 +54,7 @@ import scala.annotation.targetName
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
 final case class Select[A] private (
+    // The rows the body draws, resolved from `optionSources` by the region that draws them.
     optionsV: List[OptionItem[A]],
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
@@ -90,7 +91,8 @@ final case class Select[A] private (
     idV: Maybe[String] = Absent,
     inputwrapperFlag: Boolean = false,
     portalFlag: Boolean = false,
-    scrollV: Overlay.Scroll = Overlay.Scroll.Close
+    scrollV: Overlay.Scroll = Overlay.Scroll.Close,
+    optionSources: List[OptionSource[A]] = Nil
 ) extends Node, ChoiceFormControl[A], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = Select[A]
 
@@ -118,13 +120,18 @@ final case class Select[A] private (
       */
     private[uic] def current(v: Maybe[A]): Select[A] = copy(currentV = Present(v))
 
-    /** Appends typed options with their text projection. */
-    def options(is: Iterable[A])(label: A => String): Select[A] =
-        copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)
+    /** Appends typed options with their text projection: a collection, or a signal of options for a list that changes
+      * while the field is shown (read in the field's own region, so the field is not built again around it).
+      */
+    def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): Select[A] =
+        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
 
-    /** Convenience for plain string options (label = identity). */
-    def options(is: Iterable[String])(using ev: String =:= A): Select[A] =
-        copy(optionsV = optionsV ++ is.map(a => OptionItem.Item(ev(a))), labelF = a => ev.flip(a))
+    /** Convenience for plain string options (label = identity), a collection or a signal. */
+    def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): Select[A] =
+        copy(
+            optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
+            labelF = a => ev.flip(a)
+        )
 
     /** Appends grouped options: [[OptionItem.group]] rows render their options
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -134,8 +141,8 @@ final case class Select[A] private (
       * model, the key projection and the keyboard all address the same flat
       * option sequence they do without it.
       */
-    def optionGroups(is: Iterable[OptionItem[A]])(label: A => String): Select[A] =
-        copy(optionsV = optionsV ++ is.toList, labelF = label)
+    def optionGroups(is: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]])(label: A => String): Select[A] =
+        copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label)
 
     /** Stable per-option key: the value written into the bound ref.
       *
@@ -161,7 +168,10 @@ final case class Select[A] private (
       */
     def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): Select[A] =
         val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
-        copy(optionsV = optionsV ++ all.map(m => OptionItem.Item(ev(m))), labelF = a => ev.flip(a).fold(none)(label))
+        copy(
+            optionSources = optionSources :+ OptionSource.Fixed(all.map(m => OptionItem.Item(ev(m)))),
+            labelF = a => ev.flip(a).fold(none)(label)
+        )
     end optionsWithNone
 
     /** Custom option content: arbitrary UI drawn in each option row and, for the chosen option, in the trigger, in place of
@@ -372,7 +382,10 @@ final case class Select[A] private (
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, Absent, ph, ld, validity))
+        val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
+            val (held, ld, ph) = s
+            copy(optionsV = opts).bodyStatic(held, Absent, ph, ld, validity)
+        }
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -399,8 +412,9 @@ final case class Select[A] private (
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = Reading.Live(openFiltering(open)).and(Reading.Live(hi)).and(Reading.Live(q))
-        panel.and(shown).render { case ((((o, f), h), qq), (held, ld, ph)) =>
-            bodyStatic(held, Present(State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
+        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
+            val self = copy(optionsV = opts)
+            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wired
 

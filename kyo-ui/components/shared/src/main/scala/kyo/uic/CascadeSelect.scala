@@ -81,6 +81,7 @@ end CascadeItem
   * travelling highlight `$id-active` from it (a minted base stands in where none is given).
   */
 final case class CascadeSelect[A] private (
+    // The roots the body draws, resolved from `itemSources` by the region that draws them.
     items: List[CascadeItem[A]],
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
@@ -102,7 +103,9 @@ final case class CascadeSelect[A] private (
     onPickF: Maybe[A => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
-    loadingV: Maybe[BoolValue] = Absent
+    loadingV: Maybe[BoolValue] = Absent,
+    // A root is not a function, so each one is an entry of its own and a signal one list of them (see [[LiveEntry]]).
+    itemSources: List[LiveEntry[CascadeItem[A], Unit]] = Nil
 ) extends Node, ChoiceFormControl[A], HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = CascadeSelect[A]
 
@@ -112,9 +115,15 @@ final case class CascadeSelect[A] private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Appends typed option-tree roots with the leaf text projection. */
-    def options(is: Iterable[CascadeItem[A]])(label: A => String): CascadeSelect[A] =
-        copy(items = items ++ is.toList, labelF = label)
+    /** Appends typed option-tree roots with the leaf text projection: a collection, or a signal of roots for a tree
+      * that changes while the field is shown, read in the field's own region.
+      */
+    def options(is: Iterable[CascadeItem[A]] | Signal[Seq[CascadeItem[A]]])(label: A => String): CascadeSelect[A] =
+        val more: List[LiveEntry[CascadeItem[A], Unit]] = is match
+            case sig: Signal[?] => List(sig.asInstanceOf[Signal[Seq[CascadeItem[A]]]])
+            case roots          => roots.asInstanceOf[Iterable[CascadeItem[A]]].toList
+        copy(itemSources = itemSources ++ more, labelF = label)
+    end options
 
     /** Stable per-leaf key: the value written into the bound ref (defaults to
       * the label projection).
@@ -207,7 +216,10 @@ final case class CascadeSelect[A] private (
         // One open/closed signal for the root panel plus the open groups, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, false, Set.empty, Absent, ph, ld, validity))
+        val stat: UI = roots.and(shown).render { (rs, s) =>
+            val (held, ld, ph) = s
+            copy(items = rs).bodyStatic(held, false, Set.empty, Absent, ph, ld, validity)
+        }
         UI.mounted {
             for
                 open <- openRefV match
@@ -232,11 +244,14 @@ final case class CascadeSelect[A] private (
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = Reading.Live(open).and(subs.reading).and(Reading.Live(focus))
-        panel.and(shown).render { case (((o, openSet), f), (held, ld, ph)) =>
+        panel.and(shown).and(roots).render { case ((((o, openSet), f), (held, ld, ph)), rs) =>
             val st = CascadeSelect.State(open, subs, focus, f, base)
-            bodyStatic(held, o, openSet, Present(st), ph, ld, validity)
+            copy(items = rs).bodyStatic(held, o, openSet, Present(st), ph, ld, validity)
         }
     end wired
+
+    /** The roots as ONE reading: fixed while none of them came as a signal. */
+    private def roots(using Frame): Reading[List[CascadeItem[A]]] = Entry.reading((), itemSources)
 
     /** What the field shows whatever its panels do: the held leaf, whether the options are still loading, and the
       * placeholder. Read beside the panels' state as ONE region (see [[Reading]]); the validity is stamped on the field,

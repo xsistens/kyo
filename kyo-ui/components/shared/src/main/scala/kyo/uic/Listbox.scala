@@ -37,6 +37,9 @@ end ListItem
 /** A Listbox option, built directly or as `_.item(...)` (see [[ListItemScope]]). */
 type ListItemEntry[K] = Entry[ListItem[K], ListItemScope[K]]
 
+/** A [[ListItemEntry]] or a signal of options, for a list whose options change while it is shown (see [[LiveEntry]]). */
+type ListItemLiveEntry[K] = LiveEntry[ListItem[K], ListItemScope[K]]
+
 /** What `_` stands for in [[Listbox.items]] and inside a group of [[Listbox.optionGroups]]: `_.item("Paris", "par")`. The label
   * takes a `Signal[String]` too, as [[Listbox.item]] does.
   */
@@ -57,10 +60,20 @@ object ListItemScope:
 
     private[uic] def resolve[K](entries: Seq[ListItemEntry[K]]): List[ListItem[K]] =
         Entry.resolve(scope.asInstanceOf[ListItemScope[K]], entries)
+
+    /** The entries as option sources, in order: a signal stays one, everything else is a fixed row. */
+    private[uic] def sources[K](entries: Seq[ListItemLiveEntry[K]]): List[OptionSource[ListItem[K]]] =
+        entries.toList.map {
+            case sig: Signal[?] => OptionSource.Values(sig.asInstanceOf[Signal[Seq[ListItem[K]]]])
+            case entry          => OptionSource.Fixed(resolve(Seq(entry.asInstanceOf[ListItemEntry[K]])).map(OptionItem.Item(_)))
+        }
 end ListItemScope
 
 /** An option or a group of options, built directly or as `_.item(...)` or `_.group(...)(...)` (see [[ListOptionScope]]). */
 type ListOptionEntry[K] = Entry[OptionItem[ListItem[K]], ListOptionScope[K]]
+
+/** A [[ListOptionEntry]] or a signal of rows (see [[LiveEntry]]). */
+type ListOptionLiveEntry[K] = LiveEntry[OptionItem[ListItem[K]], ListOptionScope[K]]
 
 /** What `_` stands for in [[Listbox.optionGroups]]: `_.item(...)` for an option beside the groups and `_.group("Europe")(...)` for a
   * labelled group, whose own entries are built the way [[Listbox.items]] builds them.
@@ -86,6 +99,13 @@ object ListOptionScope:
 
     private[uic] def resolve[K](entries: Seq[ListOptionEntry[K]]): List[OptionItem[ListItem[K]]] =
         Entry.resolve(scope.asInstanceOf[ListOptionScope[K]], entries)
+
+    /** The entries as option sources, in order: a signal stays one, everything else is a fixed row. */
+    private[uic] def sources[K](entries: Seq[ListOptionLiveEntry[K]]): List[OptionSource[ListItem[K]]] =
+        entries.toList.map {
+            case sig: Signal[?] => OptionSource.Rows(sig.asInstanceOf[Signal[Seq[OptionItem[ListItem[K]]]]])
+            case entry          => OptionSource.Fixed(resolve(Seq(entry.asInstanceOf[ListOptionEntry[K]])))
+        }
 end ListOptionScope
 
 /** Listbox: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -135,7 +155,9 @@ end ListOptionScope
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
 final case class Listbox[K] private (
+    // The rows the body draws, resolved from `optionSources` by the region that draws them.
     optionsV: List[OptionItem[ListItem[K]]] = Nil,
+    optionSources: List[OptionSource[ListItem[K]]] = Nil,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     selectedRef: Maybe[SetBinding[K]] = Absent,
@@ -172,15 +194,17 @@ final case class Listbox[K] private (
       */
     private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox[K] = copy(hostKeyF = Present(f))
 
-    /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]). */
-    def items(is: ListItemEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListItemScope.resolve(is).map(OptionItem.Item(_)))
+    /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]), or a signal of options for a
+      * list whose options change while it is shown (see [[LiveEntry]]).
+      */
+    def items(is: ListItemLiveEntry[K]*): Listbox[K] = copy(optionSources = optionSources ++ ListItemScope.sources(is))
 
     /** Appends a single option (ergonomic builder; no need to construct [[ListItem]]). A
       * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
       * selection key either way, and `icon` keeps its default for both label shapes.
       */
     def item(text: String | Signal[String], id: K, icon: Maybe[IconGlyph] = Absent): Listbox[K] =
-        copy(optionsV = optionsV :+ OptionItem.Item(ListItem(ReactiveValue(text), id, icon)))
+        copy(optionSources = optionSources :+ OptionSource.Fixed(List(OptionItem.Item(ListItem(ReactiveValue(text), id, icon)))))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their items
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -189,7 +213,7 @@ final case class Listbox[K] private (
       * across the whole listbox, and the filter drops a group once it has
       * emptied it. Each entry is built directly or from `_` (see [[ListOptionScope]]).
       */
-    def optionGroups(is: ListOptionEntry[K]*): Listbox[K] = copy(optionsV = optionsV ++ ListOptionScope.resolve(is))
+    def optionGroups(is: ListOptionLiveEntry[K]*): Listbox[K] = copy(optionSources = optionSources ++ ListOptionScope.sources(is))
 
     /** Selection semantics: `None` (default: rows inert unless `onItemClick` is
       * set), `Single` (picking replaces the selection; re-picking clears it), or
@@ -274,7 +298,8 @@ final case class Listbox[K] private (
       * [[FieldValidity]]; without one, an app-owned [[filterQuery]] turns it on.
       */
     // An id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
-    private given CanEqual[K, K] = CanEqual.derived
+    private given CanEqual[K, K]                     = CanEqual.derived
+    private given CanEqual[ListItem[K], ListItem[K]] = CanEqual.derived
 
     private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQueryRef.isDefined))
 
@@ -292,7 +317,11 @@ final case class Listbox[K] private (
         using Frame
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(body(sel, query, Absent, hi, idV, focused)(validity))
+        // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
+        // signal among them is still read rather than dropped.
+        validity.follow(OptionItem.reading(optionSources).render(opts =>
+            copy(optionsV = opts).body(sel, query, Absent, hi, idV, focused)(validity)
+        ))
     end resolved
 
     private[uic] def render(using Frame): UI =
@@ -337,8 +366,8 @@ final case class Listbox[K] private (
         val sel   = selectedRef.fold(Reading.Fixed(Set.empty[K]))(s => Reading.Live(s.signal))
         val query = shown.fold(Reading.Fixed(""))(Reading.Live(_))
         val hi    = hiRef.fold(Reading.Fixed(-1))(Reading.Live(_))
-        validity.follow(sel.and(query).and(hi).render { case ((s, q), h) =>
-            body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h)(validity)
+        validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, q), h), opts) =>
+            copy(optionsV = opts).body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h)(validity)
         })
     end subscribed
 

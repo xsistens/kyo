@@ -127,15 +127,17 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case Reading.Live(_)      => throw new AssertionError("panel paths are read from fixed entries")
 
     /** Paths of every group of a CascadeSelect's options. */
-    private[uic] def groupPaths(c: CascadeSelect[?]): List[List[Int]] =
-        def loop(is: List[CascadeItem[?]], prefix: List[Int]): List[List[Int]] =
+    private[uic] def groupPaths[A](c: CascadeSelect[A])(using Frame): List[List[Int]] =
+        def loop(is: List[CascadeItem[A]], prefix: List[Int]): List[List[Int]] =
             is.zipWithIndex.flatMap {
                 case (CascadeItem.Group(_, children), i) =>
                     val p = prefix :+ i
                     p :: loop(children, p)
                 case _ => Nil
             }
-        loop(c.items, Nil)
+        Entry.reading((), c.itemSources) match
+            case Reading.Fixed(roots) => loop(roots, Nil)
+            case Reading.Live(_)      => throw new AssertionError("group paths are read from fixed roots")
     end groupPaths
 
     /** How many regions sit above the mount of the control drawn with `cls`. Unlike [[regionsAbove]] it stops at the

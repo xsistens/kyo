@@ -7046,6 +7046,62 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "every picker draws its options from a signal, in place" in {
+        // The picker counterpart of the menu sweep: options that change while the field is shown (the results of a
+        // search, the choices another field leaves) are handed over as a signal, so the field is not built again around
+        // them. Each picker gets one fixed option and one from a signal, opened, then the signal moves.
+        def opts(using Frame)                                      = Signal.initRef(Seq("Live A"))
+        given CanEqual[uic.ListItem[String], uic.ListItem[String]] = CanEqual.derived
+        for
+            o1   <- opts
+            o2   <- opts
+            o3   <- opts
+            o4   <- opts
+            o5   <- Signal.initRef(Seq(uic.ListItem.of[String]("Live A", "a")))
+            o6   <- Signal.initRef(Seq(uic.CascadeItem.leaf("Live A")))
+            subs <- Submenus.init()
+            foc  <- Signal.initRef(List.empty[Int])
+            o7   <- opts
+            exp  <- Signal.initRef(Set.empty[String])
+            open <- Signal.initRef(true)
+            hi   <- Signal.initRef(-1)
+            q    <- Signal.initRef("")
+            all  <- Signal.initRef(true)
+            select = uic.Select[String]().options(List("Fixed"))(identity).options(o1)(identity).wired(open, hi, q, Present("s"))
+            multi  = uic.MultiSelect[String]().options(List("Fixed"))(identity).options(o2)(identity).wired(open, hi, q, Present("m"))
+            auto   = uic.AutoComplete[String]().options(List("Fixed"))(identity).options(o3)(identity).wired(open, hi, all, Present("a"))
+            group  = uic.SelectButton[String]().options(List("Fixed"))(identity).options(o4)(identity).wired("b", _ => ())
+            list   = uic.Listbox[String]().items(_.item("Fixed", "f"), o5).render
+            casc   = uic.CascadeSelect[String]().options(List(uic.CascadeItem.leaf("Fixed")))(identity).options(o6)(identity)
+                .wired(open, subs, foc, Present("c"))
+            tree = uic.TreeSelect[String]().options(List("Fixed"))(identity)(_ => Nil).options(o7)(identity)(_ => Nil)
+                .wired(open, exp, hi, "t")
+            hosts = List(
+                ("Select", select),
+                ("MultiSelect", multi),
+                ("AutoComplete", auto),
+                ("SelectButton", group),
+                ("Listbox", list),
+                ("CascadeSelect", casc),
+                ("TreeSelect", tree)
+            )
+            before <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+            _      <- Kyo.foreach(List(o1, o2, o3, o4, o7))(_.set(Seq("Live B")))
+            _      <- o5.set(Seq(uic.ListItem.of("Live B", "b")))
+            _      <- o6.set(Seq(uic.CascadeItem.leaf("Live B")))
+            after  <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+        yield
+            val unread = before.collect { case (name, html) if !html.contains("Live A") || !html.contains("Fixed") => name }
+            val stale  = after.collect {
+                case (name, html)
+                    if html.contains("Live A") || !html.contains("Live B") || html.indexOf("Fixed") > html.indexOf("Live B") =>
+                    name
+            }
+            assert(unread.isEmpty, s"these pickers do not draw the options of a signal: ${unread.mkString(", ")}")
+            assert(stale.isEmpty, s"these pickers do not follow the signal, or draw it out of order: ${stale.mkString(", ")}")
+        end for
+    }
+
     "a chosen id lands on the component's own root, not on a wrapper" in {
         // Wrapping a component in a `div(...).id(...)` is ordinary composition and works for
         // the whole of it. What it cannot do is BE the component, which is what a walk that
