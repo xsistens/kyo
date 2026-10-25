@@ -81,6 +81,17 @@ object MegaMenuItemScope:
             case Reading.Fixed(items) => MenuRender.readMegaDisabled(items)
             case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => MenuRender.readMegaDisabled(items).signal))
     end reading
+
+    /** [[reading]] beside the RAW root items, which [[Anchored]] state is matched against (see
+      * [[MenuRender.readRooted]] for why the pinned items cannot be).
+      */
+    private[uic] def rooted(entries: Seq[MegaMenuItemLiveEntry])(using Frame): Reading[Rooted[MegaMenuItem]] =
+        Entry.reading(scope, entries) match
+            case Reading.Fixed(items) => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned))
+            case Reading.Live(sig)    =>
+                Reading.Live(sig.switchMap(items => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned)).signal))
+        end match
+    end rooted
 end MegaMenuItemScope
 
 /** MegaMenu: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -147,7 +158,7 @@ final case class MegaMenu private (
         UI.mounted {
             for
                 subs  <- Submenus.init()
-                focus <- Signal.initRef(List.empty[Int])
+                focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
             yield wired(subs, focus, base)
@@ -163,15 +174,18 @@ final case class MegaMenu private (
       */
     private[uic] def wired(
         subs: Submenus,
-        focus: SignalRef[List[Int]],
+        focus: Anchored[List[Int]],
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
         // are read as ONE region (see [[Reading]]): an activation writes the highlight and the submenus together, and a
         // nested region would repaint the values it closed over.
-        MegaMenuItemScope.reading(entriesV).and(Reading.Live(focus)).and(subs.reading).render {
-            case ((items, f), open) =>
-                copy(itemsV = items).body(open, Present(subs), f, Present(focus), Present(idV.getOrElse(base)))
+        MegaMenuItemScope.rooted(entriesV).and(focus.reading).and(subs.reading).render {
+            case ((Rooted(roots, items), f), open) =>
+                // Both follow their root items over the roots shown ([[Anchored]]).
+                val fv = focus.view(f, roots)
+                val sv = subs.view(open, roots)
+                copy(itemsV = items).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)))
         }
     end wired
 
@@ -188,9 +202,9 @@ final case class MegaMenu private (
 
     private def body(
         open: Set[List[Int]],
-        subs: Maybe[Submenus],
+        subs: Maybe[Submenus.View],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]],
+        focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
         // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]

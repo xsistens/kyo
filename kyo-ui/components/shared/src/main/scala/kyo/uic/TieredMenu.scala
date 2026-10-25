@@ -65,7 +65,7 @@ final case class TieredMenu private (
         UI.mounted {
             for
                 subs  <- Submenus.init()
-                focus <- Signal.initRef(List.empty[Int])
+                focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
             yield wired(subs, focus, base)
@@ -81,24 +81,27 @@ final case class TieredMenu private (
       */
     private[uic] def wired(
         subs: Submenus,
-        focus: SignalRef[List[Int]],
+        focus: Anchored[List[Int]],
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight, the submenus and
         // a popup's open state are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus (and
-        // a popup's ref) together, and a nested region would repaint the values it closed over.
+        // a popup's ref) together, and a nested region would repaint the values it closed over. Both follow their items
+        // over the roots shown ([[Anchored]]).
         val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
-        MenuRender.readItems(entriesV).and(Reading.Live(focus)).and(subs.reading).and(popup).render {
-            case (((items, f), open), shown) =>
-                copy(itemsV = items).body(open, Present(subs), f, Present(focus), Present(idV.getOrElse(base)), shown)
+        MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).and(popup).render {
+            case (((Rooted(roots, items), f), open), shown) =>
+                val fv = focus.view(f, roots)
+                val sv = subs.view(open, roots)
+                copy(itemsV = items).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)), shown)
         }
     end wired
 
     private def body(
         open: Set[List[Int]],
-        subs: Maybe[Submenus],
+        subs: Maybe[Submenus.View],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]],
+        focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
         // mint. Kept apart from `idV`, which is only ever the caller's; see Menu.wired.
         partBase: Maybe[String],
