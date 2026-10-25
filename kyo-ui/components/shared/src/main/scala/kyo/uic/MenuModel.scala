@@ -238,18 +238,29 @@ private[uic] object Anchored:
     trait Rebase[S]:
         def rebase(v: S, from: List[AnyRef], to: List[AnyRef]): S
 
-    /** Where root `i` of `from` sits in `to`: the same place if the same item is still there, else the first place the
-      * item is, else nowhere.
+    /** Where root `i` of `from` sits in `to`, by the strongest match there is:
+      *
+      *   1. the same item (`eq`), at the same place if it is still there, else at the first place it is;
+      *   2. an equal item (`equals`), the same way, since a signal may emit its items again as new values;
+      *   3. the same place, when the list kept its length and the item there now matches none of the old ones: an item
+      *      rebuilt where it stood, as a label that carries a count is on every emission.
+      *
+      * Else nowhere, and the state the item had goes with it.
       */
     def index(i: Int, from: List[AnyRef], to: List[AnyRef]): Maybe[Int] =
         if i < 0 || i >= from.size then Absent
         else
-            val item = from(i)
-            if i < to.size && (to(i) eq item) then Present(i)
-            else
-                val j = to.indexWhere(_ eq item)
-                if j >= 0 then Present(j) else Absent
-            end if
+            val item                                                = from(i)
+            def find(same: (AnyRef, AnyRef) => Boolean): Maybe[Int] =
+                if i < to.size && same(to(i), item) then Present(i)
+                else
+                    val j = to.indexWhere(same(_, item))
+                    if j >= 0 then Present(j) else Absent
+            def rebuiltInPlace: Maybe[Int] =
+                if from.size == to.size && !from.exists(f => (f eq to(i)) || f.equals(to(i))) then Present(i) else Absent
+            find(_ eq _).orElse(find(_.equals(_))).orElse(rebuiltInPlace)
+        end if
+    end index
 
     /** A path from the root, `Nil` for none; a path whose root item is gone becomes `Nil`. Only the head moves: below the
       * root the items are the root item's own, which a signal among the roots cannot reorder.
