@@ -124,63 +124,48 @@ final case class DataView[A] private (
       */
     def loading(v: Boolean | Signal[Boolean]): DataView[A] = copy(loadingV = Present(ReactiveValue(v)))
 
-    /** The paginated fallback for a reactive source.
-      *
-      * A page slice is arithmetic over the WHOLE list (`totalRecords`, the clamped page count, the
-      * `slice`), all of it build-time work the row region cannot do. So a paginated reactive DataView
-      * resolves its signal into a plain region and renders the build-time path underneath, an honest
-      * whole-component rebuild per emission rather than a keyed list that is not keyed. The paginator's own
-      * page region nests inside it, which is the one place in this component where two regions stack: the
-      * inner one is re-created by every emission of the outer, so it cannot outlive the list it sliced.
+    private given CanEqual[Chunk[A], Chunk[A]] = CanEqual.derived
+
+    /** Only the rows follow the page and the items. The header, the footer and the paginator are built once: each may
+      * hold a control with a mount of its own (a sort SelectButton in the header, the paginator's dropdowns), and a
+      * region around it would start that mount again on every page change. The paginator reads the page from the ref
+      * and the total from the items, both in place.
       */
     private[uic] def render(using Frame): UI =
-        (itemsSigV, pageSizeV) match
-            case (Present(sig), Present(_)) =>
-                sig.render(items => copy(itemsSigV = Absent, itemsV = items.toList).render)
-            case _ =>
-                pageRef match
-                    case Present(ref) => ref.render(body)
-                    case Absent       => body(0)
+        val page: Reading[Int] = pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
 
-    private def body(page: Int)(using Frame): UI =
-        val (paged, paginatorUI) = pageSizeV match
-            case Present(size) =>
-                val totalPages = math.max(1, (itemsV.size + size - 1) / size)
-                val cur        = math.min(math.max(page, 0), totalPages - 1)
-                var pag        = Paginator()
-                    .totalRecords(itemsV.size)
-                    .rows(size)
-                    .currentPage(cur)
-                    .hostClass("p-dataview-paginator-bottom")
-                pageRef.foreach(ref => pag = pag.page(ref))
-                (itemsV.slice(cur * size, cur * size + size), List(pag.render))
-            case Absent => (itemsV, Nil)
+        // A list region; the empty state gets its OWN region over the narrowest projection there is (`isEmpty`), so
+        // `emptyContent` survives without putting the rows behind a region that repaints them whenever the list changes
+        // length.
+        def listed(sig: Signal[Chunk[A]]): UI =
+            val rows: List[UI] = template.toList.map { f =>
+                itemKeyF match
+                    case Present(key) => sig.foreachKeyed(key)(f)
+                    case Absent       => sig.foreach(f)
+            }
+            div.cssClass("p-dataview-content")(
+                (rows :+ sig.map(_.isEmpty).render(isEmpty => if isEmpty then emptyMessage else UI.empty)).map(toChild)*
+            )
+        end listed
 
-        // Grid prefers its own template; both layouts fall back to the other's.
-        val template: Maybe[A => UI] = layoutV match
-            case DataViewLayout.Grid => gridItemF.orElse(itemF)
-            case DataViewLayout.List => itemF.orElse(gridItemF)
+        val content: UI = itemsSigV.fold(
+            pageSizeV.fold(contentEl(itemsV))(size => page.render(p => contentEl(slice(itemsV, p, size))))
+        ) { sig =>
+            pageSizeV.fold(listed(sig))(size =>
+                Reading.Live(sig).and(page).render((items, p) => contentEl(slice(items.toList, p, size)))
+            )
+        }
 
-        def emptyMessage: UI =
-            EmptyContent.render(emptyContentV, "No records found")(c => div.cssClass("p-dataview-empty-message")(c))
-
-        val contentChildren: List[UI] = itemsSigV match
-            case Present(sig) =>
-                // The rows are a list region; the empty state gets its OWN region over the narrowest
-                // projection there is (`isEmpty`), so `emptyContent` survives without putting the rows
-                // behind a region that repaints them whenever the list changes length.
-                val rows: List[UI] = template.toList.map { f =>
-                    itemKeyF match
-                        case Present(key) => sig.foreachKeyed(key)(f)
-                        case Absent       => sig.foreach(f)
-                }
-                rows :+ sig.map(_.isEmpty).render(isEmpty => if isEmpty then emptyMessage else UI.empty)
-            case Absent =>
-                if paged.isEmpty then List(emptyMessage)
-                else template.toList.flatMap(f => paged.map(f))
+        val paginatorUI: List[UI] = pageSizeV.toList.map { size =>
+            var pag = Paginator()
+                .totalRecords(itemsSigV.fold(itemsV.size: Int | Signal[Int])(_.map(_.size)))
+                .rows(size)
+                .hostClass("p-dataview-paginator-bottom")
+            pageRef.foreach(ref => pag = pag.page(ref))
+            pag.render
+        }
 
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(toChild(h)))
-        val contentEl: UI        = div.cssClass("p-dataview-content")(contentChildren.map(toChild)*)
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-dataview-footer")(toChild(f)))
 
         // PrimeReact's busy state: the sheet's absolute overlay composed with the
@@ -204,9 +189,31 @@ final case class DataView[A] private (
             .cssClass(s"p-dataview-${layoutV.token}")
         el = loadingV.foldFlag(el)(el.cssClass("p-dataview-loading", _))
         el(
-            (loadingOverlay ++ headerSlot ++ (contentEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            (loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot).map(toChild)*
         )
-    end body
+    end render
+
+    /** The rows of page `page` (clamped into the page count) of `items`, `size` to a page. */
+    private def slice(items: List[A], page: Int, size: Int): List[A] =
+        val totalPages = math.max(1, (items.size + size - 1) / size)
+        val cur        = math.min(math.max(page, 0), totalPages - 1)
+        items.slice(cur * size, cur * size + size)
+    end slice
+
+    // Grid prefers its own template; both layouts fall back to the other's.
+    private def template: Maybe[A => UI] = layoutV match
+        case DataViewLayout.Grid => gridItemF.orElse(itemF)
+        case DataViewLayout.List => itemF.orElse(gridItemF)
+
+    private def emptyMessage(using Frame): UI =
+        EmptyContent.render(emptyContentV, "No records found")(c => div.cssClass("p-dataview-empty-message")(c))
+
+    private def contentEl(rows: List[A])(using Frame): UI =
+        val children: List[UI] =
+            if rows.isEmpty then List(emptyMessage)
+            else template.toList.flatMap(f => rows.map(f))
+        div.cssClass("p-dataview-content")(children.map(toChild)*)
+    end contentEl
 end DataView
 
 object DataView:
