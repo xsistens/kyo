@@ -193,19 +193,27 @@ private[uic] object MenuRender:
         }
 
     /** Subscribes to every submenu ref and rebuilds the tree on any change: ONE
-      * reactive wrapper chain around the whole component, so Prime's direct-child
+      * reactive region around the whole component, so Prime's direct-child
       * selectors (`.p-menubar-root-list > .p-menubar-item > ...`) stay intact (a
       * per-item subscription would interpose kyo's classless reactive `<span>`).
       */
     def renderAll(refs: List[(List[Int], SignalRef[Boolean])])(
         f: Map[List[Int], Boolean] => UI
     )(using Frame): UI =
-        def loop(rest: List[(List[Int], SignalRef[Boolean])], acc: Map[List[Int], Boolean]): UI =
-            rest match
-                case Nil            => f(acc)
-                case (p, r) :: tail => r.render(v => loop(tail, acc + (p -> v)))
-        loop(refs, Map.empty)
-    end renderAll
+        readAll(refs).render(f)
+
+    /** Every submenu ref as ONE [[Reading]] of which paths are open, for a host that reads it beside its other state in
+      * one region. A chain of one `render` per ref would leave each inner region subscribed against the values the outer
+      * ones held when they built it.
+      */
+    def readAll(refs: List[(List[Int], SignalRef[Boolean])])(using Frame): Reading[Map[List[Int], Boolean]] =
+        if refs.isEmpty then Reading.Fixed(Map.empty)
+        else
+            val paths = refs.map(_._1)
+            Reading.Live(Signal.combineLatestAll(refs.map(_._2)).map(open => paths.zip(open).toMap))
+    end readAll
+
+    private given CanEqual[Map[List[Int], Boolean], Map[List[Int], Boolean]] = CanEqual.derived
 
     /** Paths (index chains from the root) of every item whose `disabled` is reactive,
       * in tree order.

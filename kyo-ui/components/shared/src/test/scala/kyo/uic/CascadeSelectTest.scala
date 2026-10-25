@@ -185,6 +185,24 @@ class CascadeSelectTest extends UicTest:
             value <- Signal.initRef(Maybe.empty[String])
         yield (o, refs, value, cascade.selection(value).wired(o, refs, focus, Present("cs")))
 
+    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+        for
+            loading <- Signal.initRef(false)
+            ph      <- Signal.initRef("Pick a city")
+            open    <- Signal.initRef(true)
+            refs    <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            focus   <- Signal.initRef(List(0))
+            value   <- Signal.initRef(Maybe.empty[String])
+            ui = cascade.loading(loading).placeholder(ph).selection(value).wired(open, refs, focus, Present("cs"))
+            whenOpen   <- regionsAbove(ui, "p-cascadeselect")
+            _          <- open.set(false)
+            whenClosed <- regionsAbove(ui, "p-cascadeselect")
+        yield assert(
+            whenOpen == 1 && whenClosed == 1,
+            s"a pick writes the value and closes the chain; a nested region can repaint the older state: $whenOpen / $whenClosed"
+        )
+    }
+
     "a click anywhere on the field opens it, the element carrying its id included" in {
         for
             (byId, _, _, ui1)   <- field(open = false)

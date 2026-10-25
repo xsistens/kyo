@@ -279,7 +279,7 @@ final case class AutoComplete[A] private (
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = validity.follow(withText(cur => body(cur, Absent, validity)))
+        val stat: UI = validity.follow(text.render(cur => body(cur, Absent, validity)))
         if !interactive then stat
         else
             UI.mounted {
@@ -308,23 +308,20 @@ final case class AutoComplete[A] private (
         using Frame
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(open.render { o =>
-            hi.render { h =>
-                all.render { a =>
-                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base, focus)), validity))
-                }
-            }
+        val panel    = Reading.Live(open).and(Reading.Live(hi)).and(Reading.Live(all))
+        validity.follow(panel.and(text).render { case (((o, h), a), cur) =>
+            body(cur, Present(State(open, o, hi, h, all, a, base, focus)), validity)
         })
     end wired
 
-    /** Renders through the text binding: a bound ref subscribes, constants and
-      * unbound fields render with a fixed query.
+    /** The typed text: a bound ref is read live, constants and unbound fields hold a fixed query. Read beside the
+      * panel's state as ONE region (see [[Reading]]).
       */
-    private def withText(f: String => UI)(using Frame): UI =
+    private def text(using Frame): Reading[String] =
         valueBinding match
-            case Present(Input.Value.Ref(ref)) => ref.render(f)
-            case Present(Input.Value.Const(v)) => f(v)
-            case Absent                        => f("")
+            case Present(Input.Value.Ref(ref)) => Reading.Live(ref)
+            case Present(Input.Value.Const(v)) => Reading.Fixed(v)
+            case Absent                        => Reading.Fixed("")
 
     /** How a suggestion matches the typed text: [[filter]], else the start of any word of the label. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.startsWithPerTerm(labelF))

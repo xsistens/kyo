@@ -23,13 +23,12 @@ private[uic] enum SingleChoice[A]:
     case Value(v: ReactiveValue[A])
     case Optional(v: ReactiveValue[Maybe[A]])
 
-    /** Renders `f` with the held option, `Absent` for none. */
-    def render(f: Maybe[A] => UI)(using Frame): UI =
+    /** The held option as a [[Reading]], `Absent` for none, for a host that reads it beside its other state in one region. */
+    def reading(using CanEqual[A, A], Frame): Reading[Maybe[A]] =
         this match
-            case Value(ReactiveValue.Dyn(sig))    => sig.render(a => f(Present(a)))
-            case Value(ReactiveValue.Const(a))    => f(Present(a))
-            case Optional(ReactiveValue.Dyn(sig)) => sig.render(f)
-            case Optional(ReactiveValue.Const(m)) => f(m)
+            case Value(ReactiveValue.Dyn(sig)) => Reading.Live(sig.map(a => Present(a)))
+            case Value(ReactiveValue.Const(a)) => Reading.Fixed(Present(a))
+            case Optional(v)                   => Reading.of(v)
 
     /** The held option as it is at this moment. */
     def current(using Frame): Maybe[A] < Sync =

@@ -125,6 +125,20 @@ class TreeSelectTest extends UicTest:
             value <- Signal.initRef(Set.empty[String])
         yield (o, exp, value, hi, base.selection(value).expanded(exp).wired(o, exp, hi, "ts"))
 
+    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+        for
+            loading             <- Signal.initRef(false)
+            ph                  <- Signal.initRef("Pick a node")
+            (open, _, _, _, ui) <- field(treeSelect.loading(loading).placeholder(ph), open = true)
+            whenOpen            <- regionsAbove(ui, "p-treeselect")
+            _                   <- open.set(false)
+            whenClosed          <- regionsAbove(ui, "p-treeselect")
+        yield assert(
+            whenOpen == 1 && whenClosed == 1,
+            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+        )
+    }
+
     "a click anywhere on the field opens it onto a row, the element carrying its id included" in {
         for
             (byId, _, _, hi, ui1)  <- field(treeSelect, open = false)

@@ -204,6 +204,9 @@ final case class CascadeSelect[A] private (
         loop(items, Nil)
     end groupPaths
 
+    // Lets the one region skip a write that holds what it already showed; leaves are still matched by key.
+    private given CanEqual[A, A] = CanEqual.derived
+
     /** Every leaf value of the tree, in tree order: the options a typed binding writes back. */
     private def leaves: List[A] =
         def loop(is: List[CascadeItem[A]]): List[A] =
@@ -218,7 +221,7 @@ final case class CascadeSelect[A] private (
         // One open/closed signal for the root panel plus one per group, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = withValue(cur => body(cur, false, Map.empty.withDefaultValue(false), Absent, validity))
+        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, false, Map.empty.withDefaultValue(false), Absent, ph, ld, validity))
         UI.mounted {
             for
                 open <- openRefV match
@@ -242,35 +245,23 @@ final case class CascadeSelect[A] private (
         base: Maybe[String] = Absent
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        open.render { o =>
-            MenuRender.renderAll(refs) { openMap =>
-                focus.render { f =>
-                    withValue(cur =>
-                        body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f, base)), validity)
-                    )
-                }
-            }
+        val panel    = Reading.Live(open).and(MenuRender.readAll(refs)).and(Reading.Live(focus))
+        panel.and(shown).render { case (((o, openMap), f), (held, ld, ph)) =>
+            val st = CascadeSelect.State(open, refs, focus, f, base)
+            bodyStatic(held, o, openMap.withDefaultValue(false), Present(st), ph, ld, validity)
         }
     end wired
 
-    private def withValue(f: Maybe[A] => UI)(using Frame): UI =
-        choice match
-            case Present(c) => c.render(f)
-            case Absent     => f(Absent)
-
-    private def body(
-        held: Maybe[A],
-        isOpen: Boolean,
-        openMap: Map[List[Int], Boolean],
-        st: Maybe[CascadeSelect.State],
-        validity: FieldValidity
-    )(using Frame): UI =
-        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). The
-        // resolved placeholder text threads through; the validity is stamped on the field, never re-rendered.
-        BoolValue.reactive(loadingV): ld =>
-            val loading = ld.constTrue
-            TextValue.reactive(placeholderV): ph =>
-                bodyStatic(held, isOpen, openMap, st, ph, loading, validity)
+    /** What the field shows whatever its panels do: the held leaf, whether the options are still loading, and the
+      * placeholder. Read beside the panels' state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * never read here.
+      */
+    private def shown(using Frame): Reading[(Maybe[A], Boolean, Maybe[String])] =
+        val held: Reading[Maybe[A]] = choice.fold(Reading.Fixed(Maybe.empty[A]))(_.reading)
+        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
+            (h, ld.getOrElse(false), ph)
+        }
+    end shown
 
     private def bodyStatic(
         held: Maybe[A],
