@@ -29,7 +29,7 @@ class ElementIdTest extends UicTest:
 
     "an inline Menu carries the id it was given, on its own root" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = menu.id("mine").wired(hi, "minted")
             root <- idOf(ui, "p-menu")
             list <- elementWithClass(ui, "p-menu-list")
@@ -42,7 +42,7 @@ class ElementIdTest extends UicTest:
 
     "a Menu given NO id puts no minted name in the document, and still announces" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = menu.wired(hi, "minted")
             root <- idOf(ui, "p-menu")
             list <- elementWithClass(ui, "p-menu-list")
@@ -57,7 +57,7 @@ class ElementIdTest extends UicTest:
         // The component's root in a popup is the overlay's panel, which the menu does not own.
         for
             open <- Signal.initRef(true)
-            hi   <- Signal.initRef(1)
+            hi   <- Anchored.init(1)
             ui = menu.id("mine").popup(open).wired(hi, "minted")
             list <- idOf(ui, "p-menu-list")
         yield assert(list == Present("mine"))
@@ -67,7 +67,7 @@ class ElementIdTest extends UicTest:
         val bar = uic.Menubar().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
             refs  <- Submenus.init(submenuPaths(bar.entriesV).filter(p => false).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             ui   = bar.id("mine").wired(refs, focus, "minted")
             bare = bar.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-menubar")
@@ -82,7 +82,7 @@ class ElementIdTest extends UicTest:
         val tm = uic.TieredMenu().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
             refs  <- Submenus.init(submenuPaths(tm.entriesV).filter(p => false).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             ui   = tm.id("mine").wired(refs, focus, "minted")
             bare = tm.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-tieredmenu")
@@ -100,7 +100,7 @@ class ElementIdTest extends UicTest:
         )
         for
             refs  <- Submenus.init(panelPaths(mm.entriesV).filter(p => false).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             ui   = mm.id("mine").wired(refs, focus, "minted")
             bare = mm.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-megamenu")
@@ -178,7 +178,7 @@ class ElementIdTest extends UicTest:
         val cs = uic.CascadeSelect[String]().options(List(uic.CascadeItem.leaf("Bern"), uic.CascadeItem.leaf("Rome")))(identity).id("mine")
         for
             open  <- Signal.initRef(false)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             subs  <- Submenus.init()
             live  <- owner(cs.wired(open, subs, focus, Present("mine")))
             stat  <- owner(cs.render)

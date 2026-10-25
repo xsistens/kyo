@@ -22,7 +22,7 @@ class ContextMenuTest extends UicTest:
     /** The wrapped region, with the state the mount would have allocated. */
     private def wired(open: SignalRef[Boolean], at: SignalRef[Maybe[UI.Point]])(using Frame) =
         for
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             subs  <- Submenus.init()
             ui = menu.wired(open, focus, at, subs, "cm")
             target <- elementWithClass(ui, "p-uic-contextmenu-target")
@@ -72,7 +72,7 @@ class ContextMenuTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             at    <- Signal.initRef(Present(UI.Point(240, 130)): Maybe[UI.Point])
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             subs  <- Submenus.init()
             ui = menu.wired(open, focus, at, subs, "cm")
             drop <- elementWithClass(ui, "p-uic-overlay-backdrop")
@@ -87,7 +87,7 @@ class ContextMenuTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             at    <- Signal.initRef(Present(UI.Point(240, 130)): Maybe[UI.Point])
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             subs  <- Submenus.init()
             ui = menu.wired(open, focus, at, subs, "cm")
             panel <- elementWithClass(ui, "p-uic-overlay-panel")
@@ -171,9 +171,9 @@ class ContextMenuTest extends UicTest:
     "openAt flushes the highlight and the submenu tree the last visit left open" in {
         for
             st     <- allocState(rows)
-            _      <- st.submenus.openExactly(Present(List(1)))
+            _      <- st.submenus.openUnanchored(List(1))
             before <- st.submenus.openPaths
-            _      <- st.focus.set(List(1, 0))
+            _      <- st.focus.reset(List(1, 0))
             _      <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
             f      <- st.focus.get
             os     <- st.submenus.openPaths
@@ -189,7 +189,7 @@ class ContextMenuTest extends UicTest:
         for
             st <- allocState(rows)
             _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
-            _  <- st.submenus.openExactly(Present(List(1)))
+            _  <- st.submenus.openUnanchored(List(1))
             _  <- st.close
             on <- st.open.get
             os <- st.submenus.openPaths
@@ -205,7 +205,7 @@ class ContextMenuTest extends UicTest:
         for
             st <- allocState(rows)
             _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
-            _  <- st.submenus.openExactly(Present(List(0)))
+            _  <- st.submenus.openUnanchored(List(0))
             ui = other.targetless(st).render
             deep <- elementsWithClass(ui, "p-contextmenu-submenu")
         yield assert(deep.nonEmpty, "the submenu of the other menu's first row is open")
@@ -220,6 +220,30 @@ class ContextMenuTest extends UicTest:
                 assert(x.key.map(_.toString) != y.key.map(_.toString))
             case other => fail(s"a ContextMenu renders as a mount; got: $other")
         end match
+    }
+
+    "an item the signal adds before an open submenu leaves that submenu open" in {
+        def html(ui: UI): String < Async = UI.runRender(ui).take(1).run.map(_.mkString)
+        for
+            live  <- Signal.initRef(Seq.empty[uic.MenuItem])
+            open  <- Signal.initRef(true)
+            at    <- Signal.initRef(Present(UI.Point(10, 10)): Maybe[UI.Point])
+            focus <- Anchored.init(List.empty[Int])
+            subs  <- Submenus.init()
+            ui = uic.ContextMenu()
+                .items(_.item("Copy").items(_.item("Plain").onSelect(())), live, _.item("Move").items(_.item("Archive").onSelect(())))(
+                    div("target")
+                )
+                .wired(open, focus, at, subs, "cm")
+            links  <- elementsWithClass(ui, "p-contextmenu-item-link")
+            _      <- click(links(1))
+            before <- html(ui)
+            _      <- live.set(Seq(uic.MenuItem("Share").onSelect(())))
+            after  <- html(ui)
+        yield
+            assert(before.contains("Archive") && !before.contains("Plain"), "Move's submenu is the open one")
+            assert(after.contains("Archive"), "and stays open once Share arrives before it")
+        end for
     }
 
 end ContextMenuTest

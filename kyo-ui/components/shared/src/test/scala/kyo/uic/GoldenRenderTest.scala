@@ -8,6 +8,7 @@ import java.time.YearMonth
 import kyo.*
 import kyo.UI.*
 import kyo.uic
+import kyo.uic.Anchored
 import kyo.uic.DateKind.given
 import kyo.uic.Submenus
 import kyo.uic.UicTest
@@ -4632,7 +4633,7 @@ class GoldenRenderTest extends UicTest:
     "Menu (inline + wired) renders Prime anatomy: list, rows, separator, section label, focus row" in {
         def wiredHtml(m: uic.Menu, hi: Int = -1): String < Async =
             for
-                href <- Signal.initRef(hi)
+                href <- Anchored.init(hi)
                 out  <- UI.runRender(m.wired(href, "mint")).take(1).run
             yield out.mkString
         val base = uic.Menu().items(menuItems*)
@@ -4677,7 +4678,7 @@ class GoldenRenderTest extends UicTest:
         def popupHtml(open: Boolean): String < Async =
             for
                 oref <- Signal.initRef(open)
-                href <- Signal.initRef(-1)
+                href <- Anchored.init(-1)
                 out  <- UI.runRender(uic.Menu().items(menuItems*).popup(oref).wired(href, "mint")).take(1).run
             yield out.mkString
         for
@@ -4710,7 +4711,7 @@ class GoldenRenderTest extends UicTest:
         def wiredHtml(openPaths: List[List[Int]], focus: List[Int] = Nil, setId: Boolean = false): String < Async =
             for
                 refs <- Submenus.init(submenuPaths(mb.entriesV).filter(p => openPaths.contains(p)).toSet)
-                fref <- Signal.initRef(focus)
+                fref <- Anchored.init(focus)
                 out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs, fref, "mint")).take(1).run
             yield out.mkString
         for
@@ -4766,7 +4767,7 @@ class GoldenRenderTest extends UicTest:
                     case Absent     => tm
                 m = if setId then m0.id("tm1") else m0
                 refs <- Submenus.init(submenuPaths(m.entriesV).filter(p => openPaths.contains(p)).toSet)
-                fref <- Signal.initRef(focus)
+                fref <- Anchored.init(focus)
                 out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
         for
@@ -4818,7 +4819,7 @@ class GoldenRenderTest extends UicTest:
             val m  = if setId then m0.id("mg1") else m0
             for
                 refs <- Submenus.init(panelPaths(m.entriesV).filter(p => openPaths.contains(p)).toSet)
-                fref <- Signal.initRef(focus)
+                fref <- Anchored.init(focus)
                 out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
             end for
@@ -4860,7 +4861,7 @@ class GoldenRenderTest extends UicTest:
         def wiredHtml(sb: uic.SplitButton, open: Boolean): String < Async =
             for
                 oref <- Signal.initRef(open)
-                href <- Signal.initRef(-1)
+                href <- Anchored.init(-1)
                 out  <- UI.runRender(sb.wired(oref, href, "mint")).take(1).run
             yield out.mkString
         val base = uic.SplitButton("Save").items(
@@ -5126,7 +5127,7 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(Maybe.empty[String])
                 oref <- Signal.initRef(true)
                 refs <- Submenus.init(groupPaths(cs.selection(vref)).filter(p => openPaths.contains(p)).toSet)
-                fref <- Signal.initRef(focusAt)
+                fref <- Anchored.init(focusAt)
                 out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs, fref, Present("cs"))).take(1).run
             yield out.mkString
             end for
@@ -5159,7 +5160,7 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(if current.isEmpty then Maybe.empty[String] else Maybe(current))
                 oref <- Signal.initRef(rootOpen)
                 refs <- Submenus.init(groupPaths(cs.selection(vref)).filter(p => openPaths.contains(p)).toSet)
-                fref <- Signal.initRef(List.empty[Int])
+                fref <- Anchored.init(List.empty[Int])
                 out  <- UI.runRender(cs.selection(vref).open(oref).wired(oref, refs, fref)).take(1).run
             yield out.mkString
         val base = uic.CascadeSelect[String]()
@@ -5316,7 +5317,7 @@ class GoldenRenderTest extends UicTest:
         def html(cm: uic.ContextMenu, open: Boolean, focus: List[Int], openPaths: List[List[Int]]): String < Async =
             for
                 oref <- Signal.initRef(open)
-                fref <- Signal.initRef(focus)
+                fref <- Anchored.init(focus)
                 at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
                 refs <- Submenus.init(submenuPaths(cm.entriesV).filter(p => openPaths.contains(p)).toSet)
                 out  <- UI.runRender(cm.wired(oref, fref, at, refs, "mint")).take(1).run
@@ -6727,16 +6728,16 @@ class GoldenRenderTest extends UicTest:
         val ctx                                               = uic.ContextMenu().items(menuItems*)
         def paths(ps: List[List[Int]], open: List[List[Int]]) = Submenus.init(ps.filter(open.contains).toSet)
         for
-            menuHi     <- Signal.initRef(0)
+            menuHi     <- Anchored.init(0)
             menu       <- renderHtml(uic.Menu().items(menuItems*).wired(menuHi, "mint"))
             tieredRefs <- paths(submenuPaths(tiered.entriesV), Nil)
-            tieredHi   <- Signal.initRef(List(0))
+            tieredHi   <- Anchored.init(List(0))
             tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
             megaRefs   <- paths(panelPaths(mega.entriesV), List(List(0)))
-            megaHi     <- Signal.initRef(List(0))
+            megaHi     <- Anchored.init(List(0))
             megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen    <- Signal.initRef(true)
-            ctxHi      <- Signal.initRef(List(0))
+            ctxHi      <- Anchored.init(List(0))
             ctxRefs    <- paths(submenuPaths(ctx.entriesV), Nil)
             ctxAt      <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
@@ -6764,27 +6765,27 @@ class GoldenRenderTest extends UicTest:
             .options(Seq(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin"))))(identity)
         def paths(ps: List[List[Int]], open: List[List[Int]]) = Submenus.init(ps.filter(open.contains).toSet)
         for
-            menuHi <- Signal.initRef(0)
+            menuHi <- Anchored.init(0)
             menu   <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi, "mint"))
             // The POPUP forms too: they are where the panel used to take the focus the list needed.
             menuPopOpen <- Signal.initRef(true)
-            menuPopHi   <- Signal.initRef(0)
+            menuPopHi   <- Anchored.init(0)
             menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi, "mint"))
             barRefs     <- paths(submenuPaths(bar.entriesV), List(List(0)))
-            barHi       <- Signal.initRef(List(0, 0))
+            barHi       <- Anchored.init(List(0, 0))
             menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi, "mint"))
             tieredRefs  <- paths(submenuPaths(tiered.entriesV), Nil)
-            tieredHi    <- Signal.initRef(List(0))
+            tieredHi    <- Anchored.init(List(0))
             tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
             tmPopOpen   <- Signal.initRef(true)
             tmPopRefs   <- paths(submenuPaths(tiered.entriesV), Nil)
-            tmPopHi     <- Signal.initRef(List(0))
+            tmPopHi     <- Anchored.init(List(0))
             tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi, "mint"))
             megaRefs    <- paths(panelPaths(mega.entriesV), List(List(0)))
-            megaHi      <- Signal.initRef(List(0))
+            megaHi      <- Anchored.init(List(0))
             megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen     <- Signal.initRef(true)
-            ctxHi       <- Signal.initRef(List(0))
+            ctxHi       <- Anchored.init(List(0))
             ctxRefs     <- paths(submenuPaths(ctx.entriesV), Nil)
             ctxAt       <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
@@ -6836,7 +6837,7 @@ class GoldenRenderTest extends UicTest:
             csValue <- Signal.initRef(Maybe.empty[String])
             csOpen  <- Signal.initRef(true)
             csRefs  <- paths(groupPaths(cascade.selection(csValue)), Nil)
-            csHi    <- Signal.initRef(List(0))
+            csHi    <- Anchored.init(List(0))
             csHtml  <- renderHtml(cascade.selection(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
         yield
             val named = List(
@@ -6881,13 +6882,13 @@ class GoldenRenderTest extends UicTest:
             uic.MenuItem("A").disabled(s).items(uic.MenuItem("B").onSelect(()))
         for
             dis   <- Signal.initRef(false)
-            hi1   <- Signal.initRef(0)
-            hi2   <- Signal.initRef(0)
-            hi3   <- Signal.initRef(0)
-            foc1  <- Signal.initRef(List(0))
-            foc2  <- Signal.initRef(List(0))
-            foc3  <- Signal.initRef(List(0))
-            foc4  <- Signal.initRef(List(0))
+            hi1   <- Anchored.init(0)
+            hi2   <- Anchored.init(0)
+            hi3   <- Anchored.init(0)
+            foc1  <- Anchored.init(List(0))
+            foc2  <- Anchored.init(List(0))
+            foc3  <- Anchored.init(List(0))
+            foc4  <- Anchored.init(List(0))
             sub1  <- Submenus.init(Set(List(0)))
             sub2  <- Submenus.init(Set(List(0)))
             sub3  <- Submenus.init(Set(List(0)))
@@ -6898,7 +6899,7 @@ class GoldenRenderTest extends UicTest:
             ctxOn <- Signal.initRef(true)
             at    <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             fan   <- Signal.initRef(true)
-            foc5  <- Signal.initRef(List(0))
+            foc5  <- Anchored.init(List(0))
             panel <- Submenus.init(Set(List(0)))
             mega = uic
                 .MegaMenu()
@@ -6956,11 +6957,11 @@ class GoldenRenderTest extends UicTest:
             s4   <- off
             s5   <- off
             s6   <- off
-            hi   <- Signal.initRef(0)
-            foc1 <- Signal.initRef(List.empty[Int])
-            foc2 <- Signal.initRef(List.empty[Int])
-            foc3 <- Signal.initRef(List.empty[Int])
-            foc4 <- Signal.initRef(List.empty[Int])
+            hi   <- Anchored.init(0)
+            foc1 <- Anchored.init(List.empty[Int])
+            foc2 <- Anchored.init(List.empty[Int])
+            foc3 <- Anchored.init(List.empty[Int])
+            foc4 <- Anchored.init(List.empty[Int])
             open <- Signal.initRef(true)
             at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             fan  <- Signal.initRef(true)
@@ -7022,18 +7023,18 @@ class GoldenRenderTest extends UicTest:
             r4   <- rows
             r5   <- rows
             r6   <- rows
-            hi   <- Signal.initRef(0)
-            hi2  <- Signal.initRef(0)
+            hi   <- Anchored.init(0)
+            hi2  <- Anchored.init(0)
             open <- Signal.initRef(true)
             fan  <- Signal.initRef(true)
-            foc1 <- Signal.initRef(List.empty[Int])
-            foc2 <- Signal.initRef(List.empty[Int])
-            foc3 <- Signal.initRef(List.empty[Int])
+            foc1 <- Anchored.init(List.empty[Int])
+            foc2 <- Anchored.init(List.empty[Int])
+            foc3 <- Anchored.init(List.empty[Int])
             sub1 <- Submenus.init()
             sub2 <- Submenus.init()
             sub3 <- Submenus.init()
             sub4 <- Submenus.init()
-            foc4 <- Signal.initRef(List.empty[Int])
+            foc4 <- Anchored.init(List.empty[Int])
             r7   <- Signal.initRef(Seq(uic.MegaMenuItem("Live A")))
             at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             menu   = uic.Menu().items(_.item("Fixed"), r1).wired(hi, "m")
@@ -7081,7 +7082,7 @@ class GoldenRenderTest extends UicTest:
             o5   <- Signal.initRef(Seq(uic.ListItem.of[String]("Live A", "a")))
             o6   <- Signal.initRef(Seq(uic.CascadeItem.leaf("Live A")))
             subs <- Submenus.init()
-            foc  <- Signal.initRef(List.empty[Int])
+            foc  <- Anchored.init(List.empty[Int])
             o7   <- opts
             exp  <- Signal.initRef(Set.empty[String])
             open <- Signal.initRef(true)

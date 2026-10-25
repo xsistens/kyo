@@ -226,7 +226,7 @@ final case class CascadeSelect[A] private (
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
                 subs  <- Submenus.init()
-                focus <- Signal.initRef(List.empty[Int])
+                focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
             yield wired(open, subs, focus, Present(base))
@@ -239,14 +239,17 @@ final case class CascadeSelect[A] private (
     private[uic] def wired(
         open: SignalRef[Boolean],
         subs: Submenus,
-        focus: SignalRef[List[Int]],
+        focus: Anchored[List[Int]],
         base: Maybe[String] = Absent
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(open).and(subs.reading).and(Reading.Live(focus))
+        val panel    = Reading.Live(open).and(subs.reading).and(focus.reading)
         panel.and(shown).and(roots).render { case ((((o, openSet), f), (held, ld, ph)), rs) =>
-            val st = CascadeSelect.State(open, subs, focus, f, base)
-            copy(items = rs).bodyStatic(held, o, openSet, Present(st), ph, ld, validity)
+            // The open groups and the highlight follow their root options over the roots shown ([[Anchored]]).
+            val sv = subs.view(openSet, rs)
+            val fv = focus.view(f, rs)
+            val st = CascadeSelect.State(open, sv, fv, fv.value, base)
+            copy(items = rs).bodyStatic(held, o, sv.open, Present(st), ph, ld, validity)
         }
     end wired
 
@@ -551,8 +554,8 @@ object CascadeSelect:
       */
     final private[uic] case class State(
         open: SignalRef[Boolean],
-        submenus: Submenus,
-        focusRef: SignalRef[List[Int]],
+        submenus: Submenus.View,
+        focusRef: Anchored.View[List[Int]],
         focus: List[Int],
         /** The id the highlight is announced through. ONE id that travels with the highlight,
           * which is how the menu family carries it: the rows live across nested panels, so a

@@ -32,7 +32,7 @@ class CascadeSelectTest extends UicTest:
         for
             open  <- Signal.initRef(false)
             refs  <- refsOf
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
@@ -54,8 +54,8 @@ class CascadeSelectTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             refs  <- refsOf
-            _     <- refs.openExactly(Present(List(0, 0)))
-            focus <- Signal.initRef(List(0, 0, 1))
+            _     <- refs.openUnanchored(List(0, 0))
+            focus <- Anchored.init(List(0, 0, 1))
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
@@ -64,7 +64,7 @@ class CascadeSelectTest extends UicTest:
             groups  <- refs.openPaths
             back    <- Signal.initRef(true)
             refs2   <- refsOf
-            focus2  <- Signal.initRef(List(0))
+            focus2  <- Anchored.init(List(0))
             ui2 = cascade.selection(value).wired(back, refs2, focus2, Present("cs"))
             trigger2  <- elementWithClass(ui2, "p-cascadeselect")
             _         <- press(trigger2, UI.Keyboard.Tab, shift)
@@ -80,7 +80,7 @@ class CascadeSelectTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             refs  <- refsOf
-            focus <- Signal.initRef(List(0))
+            focus <- Anchored.init(List(0))
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
@@ -94,7 +94,7 @@ class CascadeSelectTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             refs  <- Submenus.init(groupPaths(c).filter(p => true).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
         yield c.wired(open, refs, focus, Present("cs"))
 
     private def leaf(ui: UI, text: String)(using Frame): UI.Ast.Element < Sync =
@@ -181,7 +181,7 @@ class CascadeSelectTest extends UicTest:
         for
             o     <- Signal.initRef(open)
             refs  <- Submenus.init(groupPaths(cascade).filter(p => groupsOpen).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             value <- Signal.initRef(Maybe.empty[String])
         yield (o, refs, value, cascade.selection(value).wired(o, refs, focus, Present("cs")))
 
@@ -191,7 +191,7 @@ class CascadeSelectTest extends UicTest:
             ph      <- Signal.initRef("Pick a city")
             open    <- Signal.initRef(true)
             refs    <- Submenus.init(groupPaths(cascade).filter(p => true).toSet)
-            focus   <- Signal.initRef(List(0))
+            focus   <- Anchored.init(List(0))
             value   <- Signal.initRef(Maybe.empty[String])
             ui = cascade.loading(loading).placeholder(ph).selection(value).wired(open, refs, focus, Present("cs"))
             whenOpen   <- regionsAbove(ui, "p-cascadeselect")
@@ -225,7 +225,7 @@ class CascadeSelectTest extends UicTest:
             seen  <- Signal.initRef(0)
             open  <- Signal.initRef(true)
             refs  <- Submenus.init(groupPaths(cascade).filter(p => true).toSet)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).onChange(_ => seen.updateAndGet(_ + 1).unit).wired(open, refs, focus, Present("cs"))
             _       <- clickBubbling(ui)(saying("p-cascadeselect-option-text", "Hamburg"))
@@ -269,11 +269,34 @@ class CascadeSelectTest extends UicTest:
             live              <- listening(closed)
             open              <- Signal.initRef(false)
             refs              <- refsOf
-            focus             <- Signal.initRef(List.empty[Int])
+            focus             <- Anchored.init(List.empty[Int])
             disabled          <- listening(cascade.disabled(true).wired(open, refs, focus, Present("cs")))
         yield
             assert(live == Chunk("p-cascadeselect"), live.toString)
             assert(disabled.isEmpty, "a disabled field opens nothing")
+        end for
+    }
+
+    "an option the signal adds before an open group leaves that group open" in {
+        val europe =
+            uic.CascadeItem.group("Europe")(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin")), uic.CascadeItem.leaf("Bern"))
+        val sydney                       = uic.CascadeItem.leaf("Sydney")
+        def html(ui: UI): String < Async = UI.runRender(ui).take(1).run.map(_.mkString)
+        for
+            live  <- Signal.initRef(Seq(europe, sydney))
+            open  <- Signal.initRef(true)
+            refs  <- Submenus.init()
+            focus <- Anchored.init(List.empty[Int])
+            value <- Signal.initRef(Absent: Maybe[String])
+            ui = uic.CascadeSelect[String]().options(live)(identity).id("cs").selection(value).wired(open, refs, focus, Present("cs"))
+            group  <- leaf(ui, "Europe")
+            _      <- click(group)
+            before <- html(ui)
+            _      <- live.set(Seq(uic.CascadeItem.leaf("Asia"), europe, sydney))
+            after  <- html(ui)
+        yield
+            assert(before.contains("Germany"), "Europe's group is open")
+            assert(after.contains("Germany"), "and stays open once Asia arrives before it")
         end for
     }
 

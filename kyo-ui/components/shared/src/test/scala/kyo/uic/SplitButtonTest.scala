@@ -16,7 +16,7 @@ class SplitButtonTest extends UicTest:
         for
             rows <- Signal.initRef(Seq(MenuItem("Projects"), MenuItem("Viewer")))
             open <- Signal.initRef(true)
-            hi   <- Signal.initRef(-1)
+            hi   <- Anchored.init(-1)
             ui = SplitButton("Release").items(rows).wired(open, hi, "b")
             before <- elementsWithClass(ui, "p-menu-item").map(_.map(textOf))
             _      <- rows.set(Seq(MenuItem("Projects")))
@@ -30,7 +30,7 @@ class SplitButtonTest extends UicTest:
         for
             rows <- Signal.initRef(Seq(MenuItem("Viewer")))
             open <- Signal.initRef(true)
-            hi   <- Signal.initRef(-1)
+            hi   <- Anchored.init(-1)
             ui = SplitButton("Release").items(MenuItem("All")).items(rows).wired(open, hi, "b")
             shown <- elementsWithClass(ui, "p-menu-item").map(_.map(textOf))
         yield assert(shown == Chunk("All", "Viewer"), s"rows: $shown")
@@ -41,7 +41,7 @@ class SplitButtonTest extends UicTest:
             off  <- Signal.initRef(true)
             rows <- Signal.initRef(Seq(MenuItem("Viewer").disabled(off)))
             open <- Signal.initRef(true)
-            hi   <- Signal.initRef(-1)
+            hi   <- Anchored.init(-1)
             ui = SplitButton("Release").items(rows).wired(open, hi, "b")
             before <- elementsWithClass(ui, "p-disabled").map(_.size)
             _      <- off.set(false)

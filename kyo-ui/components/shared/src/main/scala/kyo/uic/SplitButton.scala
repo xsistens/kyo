@@ -91,7 +91,7 @@ final case class SplitButton private (
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
-                hi   <- Signal.initRef(-1)
+                hi   <- Anchored.init(-1)
                 cmds <- UI.commands
                 base <- cmds.freshId
             yield wired(open, hi, base)
@@ -99,19 +99,21 @@ final case class SplitButton private (
     end render
 
     /** The subscription tree the mount publishes (golden-test seam). */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], base: String)(using Frame): UI =
+    private[uic] def wired(open: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
         // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
         // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
         // nested in this one would repaint what it closed over.
-        MenuRender.readItems(entriesV).and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
-            body(o, Present(open), Present(hi), base, items, h)
+        // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
+        MenuRender.readRooted(entriesV).and(Reading.Live(open)).and(hi.reading).render { case ((Rooted(roots, items), o), h) =>
+            val hv = hi.view(h, roots)(using Menu.rowRebase)
+            body(o, Present(open), Present(hv), base, items, hv.value)
         }
     end wired
 
     private def body(
         isOpen: Boolean,
         open: Maybe[SignalRef[Boolean]],
-        hi: Maybe[SignalRef[Int]],
+        hi: Maybe[Anchored.View[Int]],
         base: String,
         items: List[MenuItem] = Nil,
         h: Int = -1

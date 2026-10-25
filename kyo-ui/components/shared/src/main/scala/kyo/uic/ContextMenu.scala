@@ -89,7 +89,7 @@ final case class ContextMenu private (
     def state(using Frame): ContextMenu.State < Sync =
         for
             open  <- Signal.initRef(false)
-            focus <- Signal.initRef(List.empty[Int])
+            focus <- Anchored.init(List.empty[Int])
             at    <- Signal.initRef(Absent: Maybe[UI.Point])
             subs  <- Submenus.init()
             cmds  <- UI.commands
@@ -136,11 +136,11 @@ final case class ContextMenu private (
         // Open state, keyboard focus path, and the open submenus are allocated
         // by this effectful mount; static projections (SSG, the SSR page HTML)
         // render the closed target region inert.
-        val stat: UI = body(false, Absent, Nil, Absent, Set.empty, Absent, Absent)
+        val stat: UI = targetShell(Absent)(Nil)
         val mount    = UI.mounted {
             for
                 openRef <- Signal.initRef(false)
-                focus   <- Signal.initRef(List.empty[Int])
+                focus   <- Anchored.init(List.empty[Int])
                 // Where the last right-click was. Not a render input: it is bound onto the open
                 // panel as a style, so the point can change without rebuilding the panel.
                 at   <- Signal.initRef(Absent: Maybe[UI.Point])
@@ -179,7 +179,7 @@ final case class ContextMenu private (
       */
     private[uic] def wired(
         openRef: SignalRef[Boolean],
-        focus: SignalRef[List[Int]],
+        focus: Anchored[List[Int]],
         at: SignalRef[Maybe[UI.Point]],
         subs: Submenus,
         base: String
@@ -207,21 +207,24 @@ final case class ContextMenu private (
       */
     private def panelRegion(
         openRef: SignalRef[Boolean],
-        focus: SignalRef[List[Int]],
+        focus: Anchored[List[Int]],
         at: SignalRef[Maybe[UI.Point]],
         subs: Submenus
     )(using Frame): UI =
         // The items, the open state, the highlight and the submenus are read as ONE region (see [[Reading]]): opening at
         // a point writes the open state and the highlight together, and a nested region would repaint what it closed over.
-        val read = MenuRender.readItems(entriesV).and(Reading.Live(openRef)).and(Reading.Live(focus)).and(subs.reading)
-        read.render { case (((items, isOpen), f), open) =>
+        // The highlight and the submenus follow their items over the roots shown ([[Anchored]]).
+        val read = MenuRender.readRooted(entriesV).and(Reading.Live(openRef)).and(focus.reading).and(subs.reading)
+        read.render { case (((Rooted(roots, items), isOpen), f), open) =>
+            val fv = focus.view(f, roots)
+            val sv = subs.view(open, roots)
             UI.fragment(copy(itemsV = items).panelFor(
                 isOpen,
                 Present(openRef),
-                f,
-                Present(focus),
-                open,
-                Present(subs),
+                fv.value,
+                Present(fv),
+                sv.open,
+                Present(sv),
                 Present(at)
             )*)
         }
@@ -250,15 +253,15 @@ final case class ContextMenu private (
     /** The right-click that opens the menu. Reads only refs, so it is built once. */
     private def openHandler(
         openRef: Maybe[SignalRef[Boolean]],
-        focusRef: Maybe[SignalRef[List[Int]]],
+        focusRef: Maybe[Anchored[List[Int]]],
         subs: Maybe[Submenus],
         at: Maybe[SignalRef[Maybe[UI.Point]]]
     )(using Frame): MouseEvent => UI.Action =
         val resetTree: UI.Action = subs match
-            case Present(s) => s.openExactly(Absent)
+            case Present(s) => s.closeAll
             case Absent     => ()
         val resetFocus: UI.Action = focusRef match
-            case Present(fr) => fr.set(Nil)
+            case Present(fr) => fr.reset(Nil)
             case Absent      => ()
         e =>
             // The point is written BEFORE the open, so the panel never exists without one to be at.
@@ -268,27 +271,14 @@ final case class ContextMenu private (
                 case _ => ()
     end openHandler
 
-    private def body(
-        isOpen: Boolean,
-        openRef: Maybe[SignalRef[Boolean]],
-        focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]],
-        open: Set[List[Int]],
-        subs: Maybe[Submenus],
-        at: Maybe[SignalRef[Maybe[UI.Point]]]
-    )(using Frame): UI =
-        targetShell(if openRef.isDefined then Present(openHandler(openRef, focusRef, subs, at)) else Absent)(
-            panelFor(isOpen, openRef, focus, focusRef, open, subs, at)
-        )
-
     /** The overlay panel, which is the only part of this component that any of its signals reach. */
     private def panelFor(
         isOpen: Boolean,
         openRef: Maybe[SignalRef[Boolean]],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]],
+        focusRef: Maybe[Anchored.View[List[Int]]],
         open: Set[List[Int]],
-        subs: Maybe[Submenus],
+        subs: Maybe[Submenus.View],
         at: Maybe[SignalRef[Maybe[UI.Point]]]
     )(using Frame): List[UI] =
         def resetTree: UI.Action =
@@ -402,7 +392,7 @@ object ContextMenu:
     final class State private[uic] (
         private[uic] val open: SignalRef[Boolean],
         private[uic] val at: SignalRef[Maybe[UI.Point]],
-        private[uic] val focus: SignalRef[List[Int]],
+        private[uic] val focus: Anchored[List[Int]],
         private[uic] val submenus: Submenus,
         private[uic] val base: String
     ):
@@ -414,8 +404,8 @@ object ContextMenu:
         def openAt(using Frame): MouseEvent => UI.Action =
             e =>
                 for
-                    _ <- submenus.openExactly(Absent)
-                    _ <- focus.set(Nil)
+                    _ <- submenus.closeAll
+                    _ <- focus.reset(Nil)
                     _ <- at.set(e.position)
                     _ <- open.set(true)
                 yield ()
@@ -427,8 +417,8 @@ object ContextMenu:
         def close(using Frame): UI.Action =
             for
                 _ <- open.set(false)
-                _ <- submenus.openExactly(Absent)
-                _ <- focus.set(Nil)
+                _ <- submenus.closeAll
+                _ <- focus.reset(Nil)
             yield ()
     end State
 end ContextMenu

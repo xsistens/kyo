@@ -60,7 +60,7 @@ class ContextMenuTargetReuseTest extends UicTest:
                 // `wired` rather than `render`: the mount's own state is what a menu is made of,
                 // and this harness has no session to mint it. This is the seam the goldens use.
                 openRef <- Signal.initRef(false)
-                focus   <- Signal.initRef(List.empty[Int])
+                focus   <- Anchored.init(List.empty[Int])
                 at      <- Signal.initRef(Absent: Maybe[UI.Point])
                 subs    <- Submenus.init()
                 root    <- ReactiveUI.normalize(menu(target).wired(openRef, focus, at, subs, "m"), Seq.empty)
