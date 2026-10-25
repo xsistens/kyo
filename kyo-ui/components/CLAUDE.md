@@ -154,8 +154,8 @@ Rules a new one follows:
   `LiveEntry` like a menu. `GoldenRenderTest` ("every picker draws its options from a signal ...") holds them.
   Ids that follow the options derive from ONE minted base (`$base-<n>`), never one mint per option, or a
   list that grows has rows without ids.
-- **Structural components take it too** (Tabs, Accordion, Breadcrumb, Galleria, Tree, TreeTable through
-  `LiveEntry`; Carousel and Timeline through `Iterable[A] | Signal[Seq[A]]`, read with `Reading.concat`). Each
+- **Structural components take it too** (Tabs, Accordion, Breadcrumb, Galleria, Tree, TreeTable, Stepper
+  through `LiveEntry`; Carousel and Timeline through `Iterable[A] | Signal[Seq[A]]`, read with `Reading.concat`). Each
   exposes its list as `entries` and keeps the resolved copy (`tabList`, `nodeList`) only for what a render
   hands its body; a host that builds one internally hands it resolved entries (`Tree.rooted`), or its methods
   see an empty list. Rows that carry content the reader works in (tab and accordion panels) are a list keyed
