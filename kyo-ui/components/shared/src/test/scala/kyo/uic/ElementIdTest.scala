@@ -66,10 +66,10 @@ class ElementIdTest extends UicTest:
     "a Menubar carries it on its root" in {
         val bar = uic.Menubar().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
-            refs  <- Kyo.foreach(bar.submenuPaths)(p => Signal.initRef(false).map(p -> _))
+            refs  <- Submenus.init(submenuPaths(bar.entriesV).filter(p => false).toSet)
             focus <- Signal.initRef(List.empty[Int])
-            ui   = bar.id("mine").wired(refs.toList, focus, "minted")
-            bare = bar.wired(refs.toList, focus, "minted")
+            ui   = bar.id("mine").wired(refs, focus, "minted")
+            bare = bar.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-menubar")
             unnamed <- idOf(bare, "p-menubar")
         yield
@@ -81,10 +81,10 @@ class ElementIdTest extends UicTest:
     "a TieredMenu carries it on its root" in {
         val tm = uic.TieredMenu().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
-            refs  <- Kyo.foreach(tm.submenuPaths)(p => Signal.initRef(false).map(p -> _))
+            refs  <- Submenus.init(submenuPaths(tm.entriesV).filter(p => false).toSet)
             focus <- Signal.initRef(List.empty[Int])
-            ui   = tm.id("mine").wired(refs.toList, focus, "minted")
-            bare = tm.wired(refs.toList, focus, "minted")
+            ui   = tm.id("mine").wired(refs, focus, "minted")
+            bare = tm.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-tieredmenu")
             unnamed <- idOf(bare, "p-tieredmenu")
         yield
@@ -99,10 +99,10 @@ class ElementIdTest extends UicTest:
             uic.MegaMenuItem("Contact")
         )
         for
-            refs  <- Kyo.foreach(mm.panelPaths)(p => Signal.initRef(false).map(p -> _))
+            refs  <- Submenus.init(panelPaths(mm.entriesV).filter(p => false).toSet)
             focus <- Signal.initRef(List.empty[Int])
-            ui   = mm.id("mine").wired(refs.toList, focus, "minted")
-            bare = mm.wired(refs.toList, focus, "minted")
+            ui   = mm.id("mine").wired(refs, focus, "minted")
+            bare = mm.wired(refs, focus, "minted")
             named   <- idOf(ui, "p-megamenu")
             unnamed <- idOf(bare, "p-megamenu")
         yield
@@ -179,7 +179,8 @@ class ElementIdTest extends UicTest:
         for
             open  <- Signal.initRef(false)
             focus <- Signal.initRef(List.empty[Int])
-            live  <- owner(cs.wired(open, Nil, focus, Present("mine")))
+            subs  <- Submenus.init()
+            live  <- owner(cs.wired(open, subs, focus, Present("mine")))
             stat  <- owner(cs.render)
         yield
             assert(live.attrs.role.contains("combobox") && live.attrs.cssClasses.contains("p-cascadeselect"))

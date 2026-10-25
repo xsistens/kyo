@@ -141,6 +141,15 @@ Rules a new one follows:
 - **Entries that nest take entries too** (`TreeNodeScope.node(children = Seq(_.node(...)))`), so a whole
   tree reads one way.
 - Not for enum-valued lists (`Paginator.template`, `FileUpload.accept`): there is nothing to build.
+- **A list that changes is a signal among the entries** (`LiveEntry[A, S] = Entry[A, S] | Signal[Seq[A]]`,
+  `items(_.item("All"), held)`), never a component built again inside a region over the list: that starts the
+  component's mount again with every change, and a click landing while it starts reaches nothing. The host
+  keeps the entries (`entriesV`) and resolves them in its one region (`Entry.reading`, for menus
+  `MenuRender.readItems`). A setter takes `LiveEntry` only once its host reads signals, or a signal would
+  compile and be ignored; `GoldenRenderTest` ("every host of MenuItem draws its rows from a signal ...") holds
+  the menu hosts to it.
+- **Which submenus are open is ONE set of paths** (`Submenus`), not a ref per path: refs could only be
+  allocated for the items the host was built with. A submenu panel is `Overlay.gated(subs.close(path))`.
 
 ## A choice binds the option, never a key
 

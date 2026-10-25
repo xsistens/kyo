@@ -19,6 +19,12 @@ class EntriesTest extends UicTest:
     // The entry models are plain case classes compared structurally; nothing here compares across types.
     private given [A]: CanEqual[A, A] = CanEqual.derived
 
+    /** The rows a host keeps as entries, resolved the way its render resolves them. */
+    private def rows(es: List[uic.MenuItemLiveEntry])(using Frame): List[uic.MenuItem] =
+        uic.MenuItemScope.reading(es) match
+            case uic.Reading.Fixed(items) => items
+            case _                        => throw new AssertionError("entries without a signal were read as live")
+
     "menu items: every host of MenuItem, and the nested items of an item and a group" in {
         val direct = List(uic.MenuItem("Update").icon(uic.Icons.refresh), uic.MenuItem.separator, uic.MenuItem("Homepage").url("/"))
         val scoped = Seq[uic.MenuItemEntry](
@@ -26,16 +32,20 @@ class EntriesTest extends UicTest:
             _.item.separator,
             _.item("Homepage").url("/")
         )
-        assert(uic.Menu().items(scoped*).itemsV == direct)
-        assert(uic.Menubar().items(scoped*).itemsV == direct)
-        assert(uic.TieredMenu().items(scoped*).itemsV == direct)
-        assert(uic.ContextMenu().items(scoped*).itemsV == direct)
-        assert(uic.SplitButton("Save").items(scoped*).itemsV == direct)
-        assert(uic.SpeedDial().items(scoped*).itemsV == direct)
+        assert(rows(uic.Menu().items(scoped*).entriesV) == direct)
+        assert(rows(uic.Menubar().items(scoped*).entriesV) == direct)
+        assert(rows(uic.TieredMenu().items(scoped*).entriesV) == direct)
+        assert(rows(uic.ContextMenu().items(scoped*).entriesV) == direct)
+        assert(rows(uic.SplitButton("Save").items(scoped*).entriesV) == direct)
+        assert(rows(uic.SpeedDial().items(scoped*).entriesV) == direct)
         assert(uic.MenuItem("File").items(scoped*).itemsV == direct)
         assert(uic.MenuGroup("File").items(scoped*).itemsV == direct)
-        assert(uic.ContextMenu(scoped).itemsV == direct)
-        assert(uic.ContextMenu(Seq(_.item("Update").icon(uic.Icons.refresh), _.item.separator, _.item("Homepage").url("/"))).itemsV ==
+        assert(rows(uic.ContextMenu(scoped).entriesV) == direct)
+        assert(rows(uic.ContextMenu(Seq(
+            _.item("Update").icon(uic.Icons.refresh),
+            _.item.separator,
+            _.item("Homepage").url("/")
+        )).entriesV) ==
             direct)
     }
 
@@ -47,15 +57,16 @@ class EntriesTest extends UicTest:
         )
         val prepared: Seq[uic.MenuItem] = Seq(uic.MenuItem("A"), uic.MenuItem("B"))
         val splat                       = uic.SplitButton("Save").items(prepared*)
-        assert(mixed.itemsV == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
-        assert(splat.itemsV == prepared.toList)
+        assert(rows(mixed.entriesV) == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
+        assert(rows(splat.entriesV) == prepared.toList)
     }
 
     "mega menu: root items and the groups of a column" in {
         val group = uic.MenuGroup("Laptops").items(_.item("Pro"))
         val item  = uic.MegaMenuItem("Products").column(_.group("Laptops").items(_.item("Pro")))
         assert(item == uic.MegaMenuItem("Products").column(group))
-        assert(uic.MegaMenu().items(_.item("Products")).itemsV == List(uic.MegaMenuItem("Products")))
+        assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).entriesV) ==
+            uic.Reading.Fixed(List(uic.MegaMenuItem("Products"))))
     }
 
     "breadcrumb crumbs" in {

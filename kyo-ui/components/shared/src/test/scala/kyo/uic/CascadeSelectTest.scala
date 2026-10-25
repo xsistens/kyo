@@ -22,8 +22,8 @@ class CascadeSelectTest extends UicTest:
 
     private def cascade(using Frame) = uic.CascadeSelect[String]().options(options)(identity).id("cs")
 
-    private def refsOf(using Frame): List[(List[Int], SignalRef[Boolean])] < Async =
-        Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(false).map(p -> _)).map(_.toList)
+    private def refsOf(using Frame): Submenus < Async =
+        Submenus.init(groupPaths(cascade).filter(p => false).toSet)
 
     /** Presses `key` on the CLOSED trigger and reports whether the chain opened and where the
       * highlight landed.
@@ -54,14 +54,14 @@ class CascadeSelectTest extends UicTest:
         for
             open  <- Signal.initRef(true)
             refs  <- refsOf
-            _     <- Kyo.foreach(refs)((_, r) => r.set(true))
+            _     <- refs.openExactly(Present(List(0, 0)))
             focus <- Signal.initRef(List(0, 0, 1))
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).wired(open, refs, focus, Present("cs"))
             trigger <- elementWithClass(ui, "p-cascadeselect")
             _       <- press(trigger, UI.Keyboard.Tab)
             still   <- open.get
-            groups  <- Kyo.foreach(refs)((_, r) => r.get)
+            groups  <- refs.openPaths
             back    <- Signal.initRef(true)
             refs2   <- refsOf
             focus2  <- Signal.initRef(List(0))
@@ -70,7 +70,7 @@ class CascadeSelectTest extends UicTest:
             _         <- press(trigger2, UI.Keyboard.Tab, shift)
             stillBack <- back.get
         yield assert(
-            !still && !stillBack && groups.forall(_ == false),
+            !still && !stillBack && groups.isEmpty,
             "the chain's keyboard lives on the trigger the Tab is leaving, so no panel outlives it"
         )
         end for
@@ -93,7 +93,7 @@ class CascadeSelectTest extends UicTest:
     private def allOpen(c: uic.CascadeSelect[String])(using Frame): UI < Async =
         for
             open  <- Signal.initRef(true)
-            refs  <- Kyo.foreach(c.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            refs  <- Submenus.init(groupPaths(c).filter(p => true).toSet)
             focus <- Signal.initRef(List.empty[Int])
         yield c.wired(open, refs, focus, Present("cs"))
 
@@ -177,10 +177,10 @@ class CascadeSelectTest extends UicTest:
     /** The cascade wired with its root panel `open` and every group `groupsOpen`. */
     private def field(open: Boolean, groupsOpen: Boolean = false)(using
         Frame
-    ): (SignalRef[Boolean], List[(List[Int], SignalRef[Boolean])], SignalRef[Maybe[String]], UI) < Async =
+    ): (SignalRef[Boolean], Submenus, SignalRef[Maybe[String]], UI) < Async =
         for
             o     <- Signal.initRef(open)
-            refs  <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(groupsOpen).map(p -> _)).map(_.toList)
+            refs  <- Submenus.init(groupPaths(cascade).filter(p => groupsOpen).toSet)
             focus <- Signal.initRef(List.empty[Int])
             value <- Signal.initRef(Maybe.empty[String])
         yield (o, refs, value, cascade.selection(value).wired(o, refs, focus, Present("cs")))
@@ -190,7 +190,7 @@ class CascadeSelectTest extends UicTest:
             loading <- Signal.initRef(false)
             ph      <- Signal.initRef("Pick a city")
             open    <- Signal.initRef(true)
-            refs    <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            refs    <- Submenus.init(groupPaths(cascade).filter(p => true).toSet)
             focus   <- Signal.initRef(List(0))
             value   <- Signal.initRef(Maybe.empty[String])
             ui = cascade.loading(loading).placeholder(ph).selection(value).wired(open, refs, focus, Present("cs"))
@@ -224,7 +224,7 @@ class CascadeSelectTest extends UicTest:
         for
             seen  <- Signal.initRef(0)
             open  <- Signal.initRef(true)
-            refs  <- Kyo.foreach(cascade.groupPaths)(p => Signal.initRef(true).map(p -> _)).map(_.toList)
+            refs  <- Submenus.init(groupPaths(cascade).filter(p => true).toSet)
             focus <- Signal.initRef(List.empty[Int])
             value <- Signal.initRef(Maybe.empty[String])
             ui = cascade.selection(value).onChange(_ => seen.updateAndGet(_ + 1).unit).wired(open, refs, focus, Present("cs"))
@@ -232,8 +232,8 @@ class CascadeSelectTest extends UicTest:
             got     <- value.get
             changes <- seen.get
             still   <- open.get
-            groups  <- Kyo.foreach(refs)((_, r) => r.get)
-        yield assert(got == Present("Hamburg") && changes == 1 && !still && groups.forall(!_))
+            groups  <- refs.openPaths
+        yield assert(got == Present("Hamburg") && changes == 1 && !still && groups.isEmpty)
     }
 
     "a click inside the open chain that lands on no leaf leaves it open and picks nothing" in {
@@ -257,7 +257,7 @@ class CascadeSelectTest extends UicTest:
             (open, refs, _, ui) <- field(open = true)
             _                   <- clickBubbling(ui)(saying("p-cascadeselect-option-text", "Europe"))
             still               <- open.get
-            europe              <- refs.collectFirst { case (List(0), r) => r }.get.get
+            europe              <- refs.openPaths.map(_.contains(List(0)))
         yield assert(still && europe)
     }
 

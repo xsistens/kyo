@@ -18,7 +18,7 @@ import kyo.UI.Keyboard
   * Root axis is parameterised: a [[Menubar]] navigates its roots horizontally
   * (Left/Right), every other menu navigates its top level vertically (Up/Down);
   * submenus are always vertical. The open/closed submenu tree is expressed as
-  * [[OpenOp]], matching [[MenuRender.openExactly]] (`Close` ⇒ `openExactly(Absent)`,
+  * [[OpenOp]], matching [[Submenus.openExactly]] (`Close` ⇒ `openExactly(Absent)`,
   * `OpenTo(p)` ⇒ `openExactly(Present(p))`).
   */
 private[uic] object MenuNav:
@@ -38,7 +38,7 @@ private[uic] object MenuNav:
     enum Orientation derives CanEqual:
         case Vertical, Horizontal
 
-    /** What a key does to the submenu-open tree (see [[MenuRender.openExactly]]). */
+    /** What a key does to the submenu-open tree (see [[Submenus.openExactly]]). */
     enum OpenOp derives CanEqual:
         case Keep
         case Close
