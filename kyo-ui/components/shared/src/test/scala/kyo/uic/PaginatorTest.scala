@@ -62,4 +62,40 @@ class PaginatorTest extends UicTest:
             assert(rpp == 0, s"the rows-per-page dropdown sits under $rpp region(s)")
     }
 
+    "a rows-per-page pick writes the rows and moves to the page that keeps the first record shown" in {
+        // Page 4 of 10 rows starts at record 31; a page of 20 that shows it is page 2.
+        for
+            page <- Signal.initRef(3)
+            rows <- Signal.initRef(10)
+            _    <- uic.Paginator().totalRecords(120).rows(rows).page(page).rowsPerPageOptions(Seq(10, 20)).rowsPicked(20)
+            r    <- rows.get
+            p    <- page.get
+        yield assert(r == 20 && p == 1, s"rows $r, page $p")
+    }
+
+    "the dropdowns run what a pick asks for, rather than handing it back unrun" in {
+        // A `fold(())(f)` handler infers a common type of Unit and the action, so the action came back as a value and the
+        // pick did nothing: the rows-per-page and the jump dropdowns were dead in the browser.
+        for
+            page <- Signal.initRef(3)
+            rows <- Signal.initRef(10)
+            pag = uic.Paginator().totalRecords(120).rows(rows).page(page).rowsPerPageOptions(Seq(10, 20))
+            _ <- pag.rowsChange(Present(20))
+            r <- rows.get
+            _ <- pag.jumpChange(Present(4))
+            p <- page.get
+        yield assert(r == 20 && p == 4, s"rows $r, page $p")
+    }
+
+    "and so it does with a total that follows a signal" in {
+        for
+            page  <- Signal.initRef(3)
+            rows  <- Signal.initRef(10)
+            total <- Signal.initRef(120)
+            _     <- uic.Paginator().totalRecords(total.map(identity)).rows(rows).page(page).rowsPerPageOptions(Seq(10, 20)).rowsPicked(20)
+            r     <- rows.get
+            p     <- page.get
+        yield assert(r == 20 && p == 1, s"rows $r, page $p")
+    }
+
 end PaginatorTest

@@ -4280,7 +4280,7 @@ final case class DataTable[A] private (
                         .current(Present(d.operator))
                         .accessibleName(s"Match mode for ${c.headerV}")
                         .extraClass("p-datatable-filter-operator-dropdown")
-                        .onChange(_.fold(())(op => draft.set(d.copy(operator = op))))
+                        .onChange(operatorPicked(draft, d))
                         .render
                 )
 
@@ -4290,7 +4290,7 @@ final case class DataTable[A] private (
                     .options(cf.modes)(_.label)
                     .current(Present(rule.mode))
                     .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
-                    .onChange(_.fold(())(mode => draft.set(setRule(d, i, _.copy(mode = mode)))))
+                    .onChange(modePicked(draft, d, i))
                     .render
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
@@ -4346,6 +4346,16 @@ final case class DataTable[A] private (
     end filterMenu
 
     /** One rule of a draft, rewritten in place. */
+    /** What the filter menu's operator dropdown runs on a pick: the draft takes the operator. Typed like
+      * [[Paginator.rowsChange]], for the same reason.
+      */
+    private[uic] def operatorPicked(draft: SignalRef[ColumnFilter], d: ColumnFilter)(using Frame): Maybe[FilterOperator] => UI.Action =
+        _.fold[UI.Action](())(op => draft.set(d.copy(operator = op)))
+
+    /** What the match-mode dropdown of rule `i` runs on a pick: the draft's rule takes the mode. */
+    private[uic] def modePicked(draft: SignalRef[ColumnFilter], d: ColumnFilter, i: Int)(using Frame): Maybe[MatchMode] => UI.Action =
+        _.fold[UI.Action](())(mode => draft.set(setRule(d, i, _.copy(mode = mode))))
+
     private def setRule(d: ColumnFilter, at: Int, f: FilterRule => FilterRule): ColumnFilter =
         d.copy(rules = d.rules.zipWithIndex.map((r, i) => if i == at then f(r) else r))
 
