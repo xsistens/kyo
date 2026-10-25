@@ -25,6 +25,12 @@ class EntriesTest extends UicTest:
             case uic.Reading.Fixed(items) => items
             case _                        => throw new AssertionError("entries without a signal were read as live")
 
+    /** The rows a listbox keeps as sources, resolved the way its region resolves them. */
+    private def options(lb: uic.Listbox[String])(using Frame): List[uic.OptionItem[uic.ListItem[String]]] =
+        uic.OptionItem.reading(lb.optionSources) match
+            case uic.Reading.Fixed(rows) => rows
+            case _                       => throw new AssertionError("sources without a signal were read as live")
+
     "menu items: every host of MenuItem, and the nested items of an item and a group" in {
         val direct = List(uic.MenuItem("Update").icon(uic.Icons.refresh), uic.MenuItem.separator, uic.MenuItem("Homepage").url("/"))
         val scoped = Seq[uic.MenuItemEntry](
@@ -76,14 +82,14 @@ class EntriesTest extends UicTest:
 
     "listbox options, and options with groups whose entries take the same spellings" in {
         val items = uic.Listbox[String]().items(_.item("Paris", "par"), _.item("Rome", "rom", additionalText = Present("IT")))
-        assert(items.optionsV == uic.Listbox[String]().item("Paris", "par").items(
+        assert(options(items) == options(uic.Listbox[String]().item("Paris", "par").items(
             uic.ListItem.of("Rome", "rom", additionalText = Present("IT"))
-        ).optionsV)
+        )))
         val groups = uic.Listbox[String]().optionGroups(
             _.item("Anywhere", "any"),
             _.group("Europe")(_.item("Paris", "par"), uic.ListItem.of("Rome", "rom"))
         )
-        assert(groups.optionsV == List(
+        assert(options(groups) == List(
             uic.OptionItem.item(uic.ListItem.of("Anywhere", "any")),
             uic.OptionItem.group("Europe")(uic.ListItem.of("Paris", "par"), uic.ListItem.of("Rome", "rom"))
         ))
@@ -92,7 +98,8 @@ class EntriesTest extends UicTest:
     "tree nodes, nested through their children" in {
         val direct = List(uic.TreeNode("Documents", "docs", children = List(uic.TreeNode("CV", "cv"))))
         assert(uic.Tree[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
-        assert(uic.TreeSelect[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+        assert(uic.TreeSelect[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).roots ==
+            uic.Reading.Fixed(direct))
     }
 
     "tree table nodes" in {

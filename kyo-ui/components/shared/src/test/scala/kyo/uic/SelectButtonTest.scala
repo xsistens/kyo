@@ -16,7 +16,7 @@ class SelectButtonTest extends UicTest:
 
     private def group(using Frame) = uic.SelectButton[String]().options(sizes)
 
-    private val ids = List("sb-0", "sb-1", "sb-2")
+    private val ids = "sb"
 
     /** The group wired the way its mount wires it, with the focus moves recorded. */
     private def wired(selected: String, disabled: String => Boolean = _ => false)(using
@@ -212,7 +212,7 @@ class SelectButtonTest extends UicTest:
                 .optionsWithNone("Any", Size.values.toSeq)(_.toString)
                 .itemTemplate(m => span(m.fold("any size")(s => s"size $s")))
                 .selection(ref)
-                .wired(ids :+ "sb-3", _ => ())
+                .wired(ids, _ => ())
             os  <- options(ui)
             _   <- click(os(2))
             got <- ref.get

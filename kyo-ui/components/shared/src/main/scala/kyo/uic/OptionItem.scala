@@ -17,7 +17,56 @@ enum OptionItem[A] derives CanEqual:
     case Item(value: A)
     case Group(label: String, items: List[A])
 
+/** Where some of a picker's options come from: rows given as they are, or a signal of values or of rows, for options that
+  * change while the picker is shown (the results of a search, the choices another field leaves). A picker keeps its
+  * sources in the order its setters received them and reads them as ONE reading in its own region
+  * ([[OptionItem.reading]]), so the picker is never built again around a list that moves.
+  */
+private[uic] enum OptionSource[A]:
+    case Fixed(rows: List[OptionItem[A]])
+    case Values(values: Signal[Seq[A]])
+    case Rows(rows: Signal[Seq[OptionItem[A]]])
+end OptionSource
+
+private[uic] object OptionSource:
+    /** The source a setter's `values` stand for: fixed while they are a collection, live while they are a signal. */
+    def of[A](values: Iterable[A] | Signal[Seq[A]]): OptionSource[A] =
+        values match
+            case sig: Signal[?] => Values(sig.asInstanceOf[Signal[Seq[A]]])
+            case is             => Fixed(is.asInstanceOf[Iterable[A]].iterator.map(OptionItem.Item(_)).toList)
+
+    /** The same for grouped rows. */
+    def rows[A](rows: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]]): OptionSource[A] =
+        rows match
+            case sig: Signal[?] => Rows(sig.asInstanceOf[Signal[Seq[OptionItem[A]]]])
+            case is             => Fixed(is.asInstanceOf[Iterable[OptionItem[A]]].toList)
+end OptionSource
+
 object OptionItem:
+
+    /** A picker's sources as ONE reading of its rows, in order: fixed while none of them is a signal, so a picker of plain
+      * options draws no region for them.
+      */
+    private[uic] def reading[A](sources: List[OptionSource[A]])(using Frame): Reading[List[OptionItem[A]]] =
+        given CanEqual[List[OptionItem[A]], List[OptionItem[A]]] = CanEqual.derived
+        val parts: List[Reading[List[OptionItem[A]]]]            =
+            sources.foldLeft(List.empty[Reading[List[OptionItem[A]]]]) { (acc, src) =>
+                src match
+                    case OptionSource.Values(sig) => Reading.Live(sig.map(_.iterator.map(OptionItem.Item(_)).toList)) :: acc
+                    case OptionSource.Rows(sig)   => Reading.Live(sig.map(_.toList)) :: acc
+                    case OptionSource.Fixed(rows) =>
+                        acc match
+                            case Reading.Fixed(prev) :: rest => Reading.Fixed(prev ++ rows) :: rest
+                            case _                           => Reading.Fixed(rows) :: acc
+            }.reverse
+        // Neighbouring fixed sources were joined above, so two parts or more hold a signal.
+        parts match
+            case Nil        => Reading.Fixed(Nil)
+            case one :: Nil => one
+            case several    => Reading.Live(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
+        end match
+    end reading
+
     /** A single ungrouped option, rendered as a plain row beside the groups. */
     def item[A](value: A): OptionItem[A] = OptionItem.Item(value)
 

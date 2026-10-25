@@ -301,7 +301,7 @@ class ElementIdTest extends UicTest:
 
     "a single SelectButton carries it on its tab stop, and arrows still reach every option" in {
         val sizes = Seq("Small", "Medium", "Large")
-        val ids   = List("sb-0", "sb-1", "sb-2")
+        val ids   = "sb"
         for
             value <- Signal.initRef(Maybe("Medium"))
             moved <- Signal.initRef(List.empty[String])

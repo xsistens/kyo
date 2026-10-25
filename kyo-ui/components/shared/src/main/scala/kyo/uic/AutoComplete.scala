@@ -40,6 +40,7 @@ import kyo.UI.Ast.HtmlChildVal
   * navigate; the caret still moves with Left/Right/Home/End).
   */
 final case class AutoComplete[A] private (
+    // The rows the body draws, resolved from `optionSources` by the region that draws them.
     optionsV: List[OptionItem[A]],
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
@@ -69,7 +70,8 @@ final case class AutoComplete[A] private (
     onSelectF: Maybe[A => UI.Action] = Absent,
     stampFilledFlag: Boolean = false,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent
+    onBlurF: Maybe[String => UI.Action] = Absent,
+    optionSources: List[OptionSource[A]] = Nil
 ) extends Node, TextFormControl, HasEmptyContent, HasPlaceholder, HasAccessibleNameRef:
     type Self = AutoComplete[A]
 
@@ -79,19 +81,27 @@ final case class AutoComplete[A] private (
       */
     private[uic] def stampFilled: AutoComplete[A] = copy(stampFilledFlag = true)
 
+    // The options are compared as a list where they are read as a signal; the rows are matched by key, never by `==`.
+    private given CanEqual[A, A] = CanEqual.derived
+
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): AutoComplete[A] = copy(idV = v)
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Appends typed options with their text projection. */
-    def options(is: Iterable[A])(label: A => String): AutoComplete[A] =
-        copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)
+    /** Appends typed options with their text projection: a collection, or a signal of suggestions for a list that
+      * changes while the field is shown (a server's answer to the query, say), read in the field's own region.
+      */
+    def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): AutoComplete[A] =
+        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
 
-    /** Convenience for plain string options (label = identity). */
-    def options(is: Iterable[String])(using ev: String =:= A): AutoComplete[A] =
-        copy(optionsV = optionsV ++ is.map(a => OptionItem.Item(ev(a))), labelF = a => ev.flip(a))
+    /** Convenience for plain string options (label = identity), a collection or a signal. */
+    def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): AutoComplete[A] =
+        copy(
+            optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
+            labelF = a => ev.flip(a)
+        )
 
     /** Appends grouped suggestions: [[OptionItem.group]] rows render their
       * options under a labelled header, [[OptionItem.item]] rows beside them.
@@ -100,8 +110,8 @@ final case class AutoComplete[A] private (
       * erase to the same signature. Grouping changes the panel only, and a query
       * that empties a group removes its header with it.
       */
-    def optionGroups(is: Iterable[OptionItem[A]])(label: A => String): AutoComplete[A] =
-        copy(optionsV = optionsV ++ is.toList, labelF = label)
+    def optionGroups(is: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]])(label: A => String): AutoComplete[A] =
+        copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label)
 
     /** Stable per-option key (defaults to the label projection). */
     def optionKey(f: A => String): AutoComplete[A] = copy(keyF = Present(f))
@@ -279,7 +289,9 @@ final case class AutoComplete[A] private (
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = validity.follow(text.render(cur => body(cur, Absent, validity)))
+        val stat: UI = validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
+            copy(optionsV = opts).body(cur, Absent, validity)
+        ))
         if !interactive then stat
         else
             UI.mounted {
@@ -309,8 +321,9 @@ final case class AutoComplete[A] private (
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = Reading.Live(open).and(Reading.Live(hi)).and(Reading.Live(all))
-        validity.follow(panel.and(text).render { case (((o, h), a), cur) =>
-            body(cur, Present(State(open, o, hi, h, all, a, base, focus)), validity)
+        validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).render { case ((((o, h), a), cur), opts) =>
+            val self = copy(optionsV = opts)
+            self.body(cur, Present(self.State(open, o, hi, h, all, a, base, focus)), validity)
         })
     end wired
 
