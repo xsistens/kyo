@@ -726,6 +726,21 @@ refs themselves held the correct result.
   checked rather than remembered.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of
   its own: the columns and their cursors are one state.
+- **One reading, sibling regions, and nothing that follows none of it under them.** `DataTable` reads its
+  state as one reading and draws its parts as SIBLING regions over it, never as one region around them all: a
+  region above a mount starts it again on every repaint, and siblings over one reading cannot repaint older state
+  over each other. Its root, the header and footer slots and the paginator follow none of the state (the
+  paginator takes the record count as a signal and the page and page size from their refs). The table container
+  is a region over the column layout alone (`tableContainer`): `table`, `thead` and `tbody` are built once per
+  layout; the header follows the sort, the widths and the column drag through class, attribute and inline-style
+  channels (`inlineStyle`, the kyo-ui style channel, carries widths and frozen offsets), a column's filter is a
+  region over its own filter and open state, and the rows (the body's, the frozen ones', a window's) are keyed
+  lists over one signal of the state and the row bindings (a window's with the scroll ref), their row group's
+  height or offset an inline-style channel. The `colgroup` and the footer are sibling regions over the state. A
+  bound layout is the one region allowed above a mount besides its own: a mount in a column that moves belongs to
+  the new layout. A handler that needs state the header no longer redraws for reads its ref when it fires (the
+  column drag in `headerClick`). `aria-sort` follows Prime's rule (every column a sort can name, `none` while
+  unsorted), so static and live agree. `UicTest.regionsAboveMount` counts it (`DataTableRegionsTest`).
 
 ## Validity is a channel, never a region
 

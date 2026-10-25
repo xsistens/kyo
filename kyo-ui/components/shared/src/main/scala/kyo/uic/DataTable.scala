@@ -564,6 +564,9 @@ final case class DataTable[A] private (
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
+    // A page size bound two-way: the paginator's rows-per-page dropdown writes it and the table pages by it. While it is
+    // bound, `pageSizeV` holds its value as of the render, written there by `renderWith`.
+    pageSizeRef: Maybe[SignalRef[Int]] = Absent,
     pageRef: Maybe[SignalRef[Int]] = Absent,
     paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
@@ -776,9 +779,19 @@ final case class DataTable[A] private (
 
     /** Slices the rows into pages of `size` and renders the embedded paginator;
       * `ref` holds the 0-based page index (clamped at render).
+      *
+      * A `SignalRef` size binds two way: the paginator's rows-per-page dropdown
+      * ([[Paginator.rowsPerPageOptions]]) writes the reader's pick into it, and the table
+      * pages by whatever it holds. A constant size is one the reader cannot change, so the
+      * dropdown, if the paginator shows one, is drawn disabled.
       */
-    def paginate(size: Int)(ref: SignalRef[Int]): DataTable[A] =
-        copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
+    def paginate(size: Int | SignalRef[Int])(ref: SignalRef[Int]): DataTable[A] =
+        size match
+            case n: Int =>
+                copy(pageSizeV = Present(math.max(1, n)), pageSizeRef = Absent, pageRef = Present(ref))
+            case r: SignalRef[Int] @unchecked =>
+                // The value is read with the rest of the table's state; one stands in until then, so that paging is on.
+                copy(pageSizeV = Present(1), pageSizeRef = Present(r), pageRef = Present(ref))
 
     /** Configures the [[Paginator]] the table renders below its rows: which elements it
       * shows and in which order ([[Paginator.template]]), the current-page report, the
@@ -791,8 +804,9 @@ final case class DataTable[A] private (
       * reachable through one name.
       *
       * The four the table owns are applied AFTER `f` and cannot be overridden from here:
-      * how many records there are, how many fit a page, which page is showing, and the
-      * ref the page is written to. Those are the table's own state, and a paginator
+      * how many records there are, how many fit a page (bound through [[paginate]], which a
+      * rows-per-page dropdown writes), which page is showing, and the ref the page is
+      * written to. Those are the table's own state, and a paginator
       * disagreeing with the rows above it would page a list nobody is looking at.
       */
     def paginator(f: Paginator => Paginator): DataTable[A] = copy(paginatorF = Present(f))
@@ -841,6 +855,7 @@ final case class DataTable[A] private (
             lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
             loadingV = Present(BoolValue.Dyn(src.loading)),
             pageSizeV = Present(src.pageSize),
+            pageSizeRef = Absent,
             pageRef = Present(src.page)
         )
 
@@ -1882,7 +1897,8 @@ final case class DataTable[A] private (
         until: Int,
         size: SizeState,
         order: OrderState,
-        sorts: Boolean
+        sorts: Boolean,
+        live: HeadLive
     )(using Frame): Ast.Th =
         val mine  = (from until until).toList
         val stops = if !reorderOn || !mine.forall(i => leafCols(i).reorderableFlag) then Nil else dropStops(path, from, until)
@@ -1903,13 +1919,16 @@ final case class DataTable[A] private (
                     .onPointerUp(_ => endReorder(order))
             end if
         end if
-        order.held match
-            case Present(d) if d.moved && !d.done =>
-                if d.from == from && d.until == until then c = c.cssClass("p-uic-dt-dragging")
-                if d.target == from then c = c.cssClass("p-uic-dt-drop-before")
-                else if d.target == until && until == leafCols.length then c = c.cssClass("p-uic-dt-drop-after")
-            case _ => ()
-        end match
+        // The drag marks follow the drag through class channels, so a move to another boundary patches two cells
+        // rather than drawing the header again.
+        def during(f: ColumnDrag => Boolean): Reading[Boolean] =
+            live.held.map {
+                case Present(d) if d.moved && !d.done => f(d)
+                case _                                => false
+            }
+        c = classWhen(c, "p-uic-dt-dragging", during(d => d.from == from && d.until == until))
+        c = classWhen(c, "p-uic-dt-drop-before", during(_.target == from))
+        c = classWhen(c, "p-uic-dt-drop-after", during(d => d.target != from && d.target == until && until == leafCols.length))
         c
     end reorderCell
 
@@ -2103,15 +2122,29 @@ final case class DataTable[A] private (
     private def headerClick(path: List[String], e: MouseEvent, interactive: Set[List[String]], order: OrderState)(using
         Frame
     ): UI.Action =
-        (order.drag, order.held) match
-            case (Present(ref), Present(d)) if d.done => ref.set(Absent)
-            case _                                    => toggleSort(path, e, interactive)
+        // The drag as it is when the click lands, read from its ref: the header is not drawn again for a drag, so a value
+        // closed over at render would be the one before it began.
+        order.drag match
+            case Present(ref) =>
+                ref.get.map { held =>
+                    val act: UI.Action = held match
+                        case Present(d) if d.done => ref.set(Absent)
+                        case _                    => toggleSort(path, e, interactive)
+                    act
+                }
+            case Absent => toggleSort(path, e, interactive)
 
     /** Swallows the click a finished drag left behind, and nothing else. */
     private def clearDrag(order: OrderState)(using Frame): UI.Action =
-        (order.drag, order.held) match
-            case (Present(ref), Present(d)) if d.done => ref.set(Absent)
-            case _                                    => ()
+        order.drag match
+            case Present(ref) =>
+                ref.get.map { held =>
+                    val act: UI.Action = held match
+                        case Present(d) if d.done => ref.set(Absent)
+                        case _                    => ()
+                    act
+                }
+            case Absent => ()
 
     /** Sticks one cell to its edge. Prime computes the same two properties in JavaScript,
       * measuring the cell before it on every render; here the widths are already known,
@@ -2127,6 +2160,47 @@ final case class DataTable[A] private (
         end match
     end freeze
 
+    /** [[freeze]] for a cell drawn outside the regions that read the widths (the header): where it holds and at which
+      * offset follow the widths through a class and an inline-style channel, so the cell and whatever it holds are not
+      * drawn again for a width. `slot` picks the cell's slot out of the plan the widths give.
+      */
+    private def freezeLive[E <: Ast.Element { type Self = E }](
+        cell: E,
+        widths: Reading[Map[List[String], Double]],
+        slot: FrozenPlan => Maybe[FrozenSlot]
+    )(using Frame): E =
+        if !frozenOn then cell
+        else
+            given CanEqual[Maybe[FrozenSlot], Maybe[FrozenSlot]] = CanEqual.derived
+            widths.map(w => slot(frozenPlan(SizeState(widths = w)))) match
+                case Reading.Fixed(s)  => freeze(cell, s).asInstanceOf[E]
+                case Reading.Live(sig) =>
+                    given CanEqual[Style, Style] = CanEqual.derived
+                    cell.cssClass("p-datatable-frozen-column", sig.map(_.isDefined)).inlineStyle(sig.map {
+                        case Present(s) => if s.edge == FrozenEdge.Start then Style.left(s.offset) else Style.right(s.offset)
+                        case Absent     => Style.empty
+                    })
+            end match
+        end if
+    end freezeLive
+
+    /** A class that follows a reading: set statically from a fixed one, a class channel over a live one. */
+    private def classWhen[E <: Ast.Element { type Self = E }](el: E, name: String, on: Reading[Boolean])(using Frame): E =
+        on match
+            case Reading.Fixed(b)  => if b then el.cssClass(name) else el
+            case Reading.Live(sig) => el.cssClass(name, sig)
+
+    /** What the header reads as it changes, once the header is no longer drawn again for every one of them: the sort,
+      * the column filters, the widths and the column drag. Each reaches the cells through a channel or a region of its
+      * own; fixed in a static projection.
+      */
+    final private case class HeadLive(
+        sort: Reading[List[SortKey]],
+        specs: Reading[Map[List[String], ColumnFilter]],
+        widths: Reading[Map[List[String], Double]],
+        held: Reading[Maybe[ColumnDrag]]
+    )
+
     /** A table that edits owns two things no caller supplies: one draft per editable
       * column, and the error a refused commit left standing; a table that filters owns a
       * third, the open state of each column's mode menu. All of them are allocated in a
@@ -2139,8 +2213,8 @@ final case class DataTable[A] private (
       */
     private[uic] def render(using Frame): UI =
         def static: UI =
-            renderWith(Reading.Fixed(())) { _ =>
-                Wiring(
+            renderWith(Reading.Fixed(()), (), navOn = false) { _ =>
+                DataTable.Wiring[A](
                     EditState(Set.empty, Absent),
                     NavState[A](),
                     FilterState(),
@@ -2294,48 +2368,49 @@ final case class DataTable[A] private (
             .and(Reading.orElse(editingCellRef, Absent: Maybe[CellKey]))
             .and(Reading.orElse(moving, Absent: Maybe[ColumnDrag]))
             .and(Reading.orElse(rowDrag, Absent: Maybe[RowDrag]))
-        renderWith(outer) { case ((((e, editRows), editCell), drag), rowHeld) =>
-            Wiring(
-                EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
-                NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                FilterState(open = menus, live = true, drafts = filterDrafts, idPrefix = idPrefix),
-                SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
-                OrderState(drag = moving, held = drag),
-                ScrollState(scroll, headTop),
-                MoveState[A](
-                    drag = rowDrag,
-                    held = rowHeld,
-                    idPrefix = idPrefix,
-                    live = true,
-                    measure = measure
-                ),
-                SelectState(metaKey = metaKeyFlag, anchor = anchor)
-            )
+        renderWith(outer, ((((Absent, Set.empty[String]), Absent), Absent), Absent), navOn) {
+            case ((((e, editRows), editCell), drag), rowHeld) =>
+                DataTable.Wiring[A](
+                    EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
+                    NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
+                    FilterState(open = menus, live = true, drafts = filterDrafts, idPrefix = idPrefix),
+                    SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
+                    OrderState(drag = moving, held = drag),
+                    ScrollState(scroll, headTop),
+                    MoveState[A](
+                        drag = rowDrag,
+                        held = rowHeld,
+                        idPrefix = idPrefix,
+                        live = true,
+                        measure = measure
+                    ),
+                    SelectState(metaKey = metaKeyFlag, anchor = anchor)
+                )
         }
     end wired
 
-    /** The table's own state for one render, one value per concern, as the caller reads it. */
-    final private case class Wiring(
-        edit: EditState,
-        nav: NavState[A],
-        filter: FilterState,
-        size: SizeState,
-        order: OrderState,
-        scroll: ScrollState,
-        move: MoveState[A],
-        select: SelectState[A] = SelectState[A]()
-    )
+    private type Drawn = DataTable.Drawn[A]
 
-    /** Renders the table as ONE region over everything around its body (see [[Reading]]): the caller's own state
-      * (`outer`, turned into the table's by `wiring`), the column order, the column flags, the frozen rows, the sort,
-      * the filters, the widths, the page and, where they are not read below the body, the row bindings.
+    /** The table's own state for one render, one value per concern, as the caller reads it. */
+    private type Wiring = DataTable.Wiring[A]
+
+    /** Renders the table: a root built once, holding the parts that follow the table's state as regions of their own,
+      * and the parts that follow none of it outside any region.
       *
-      * An effect here writes several of them at once (starting an edit writes the error and the edited cell, a column
-      * drop writes the order and the drag), and a region nested per signal, which this was, repaints the table against
-      * the values the inner one closed over. Every one of them rebuilds the whole body anyway, so reading them together
-      * costs nothing. The row bindings read BELOW the body ([[rowInputsBelow]]) stay a stream of their own there.
+      * What follows the state (the caller's own, `outer`, turned into the table's by `wiring`; the column order, the
+      * column flags, the frozen rows, the sort, the filters, the widths, the page and, where they are not read below the
+      * body, the row bindings) is read as ONE reading (see [[Reading]]): an effect here writes several of them at once
+      * (starting an edit writes the error and the edited cell, a column drop writes the order and the drag), and a
+      * region nested per signal repaints against the values the inner one closed over. Two sibling regions draw from that
+      * reading: the diagnostic cards and the table itself. Neither nests in the other, so neither can repaint an older
+      * state over the other's newer one. The row bindings read BELOW the body ([[rowInputsBelow]]) stay a stream of
+      * their own there.
+      *
+      * What follows none of it sits outside both: the header and footer slots, which are the page's own, and the
+      * paginator, which reads the record count as a signal and the page from its ref. Each of those may hold a mount, and
+      * a region above a mount starts it again on every repaint, which a sort, a search or an edit elsewhere is.
       */
-    private def renderWith[O](outer: Reading[O])(wiring: O => Wiring)(using CanEqual[O, O], Frame): UI =
+    private def renderWith[O](outer: Reading[O], base: O, navOn: Boolean)(wiring: O => Wiring)(using CanEqual[O, O], Frame): UI =
         // The rows compare by their own equality, whatever the element type does; the region only
         // ever asks whether the values changed.
         given rowsEq: CanEqual[Seq[A], Seq[A]]                                                    = CanEqual.derived
@@ -2361,31 +2436,419 @@ final case class DataTable[A] private (
             live match
                 case Present(sig) => f => Reading.Live(sig).and(totalReading).render((in, t) => f(in, t))
                 case Absent       => f => f(inputs, total)
-        outer.and(columns).and(view).and(rows).render {
-            case (((o, ((requested, vis), flags)), (((((held, sort), query), specs), widths), page)), (inputs, total)) =>
-                val w     = wiring(o)
-                val table = requested.fold(this)(reordered).shown(vis)
-                table.body(
-                    held,
-                    sort,
-                    query,
-                    page,
-                    total,
-                    inputs,
-                    live,
-                    chrome(inputs, total),
-                    flags,
-                    w.edit,
-                    w.nav,
-                    w.filter.copy(specs = specs),
-                    w.size.copy(widths = widths),
-                    requested.fold(w.order)(r => w.order.copy(requested = r)),
-                    w.scroll,
-                    w.move,
-                    w.select
-                )
+        val state = outer.and(columns).and(view).and(rows).and(pageSizeReading)
+        // What the parts below the column layout read: the state but the layout, which the table container draws over.
+        val inner = outer.and(view).and(rows).and(pageSizeReading)
+
+        /** One pass over the state for the table `laid` (the layout's columns): `f` picks the part to draw. */
+        def drawnAt(laid: DataTable[A], flags: Map[List[String], Boolean], requested: Maybe[List[List[String]]])(
+            v: (
+                (
+                    (O, (((((Seq[A], List[SortKey]), String), Map[List[String], ColumnFilter]), Map[List[String], Double]), Int)),
+                    (RowInputs[A], Total)
+                ),
+                Int
+            )
+        ): Drawn =
+            val (((o, (((((held, sort), query), specs), widths), page)), (inputs, total)), size) = v
+            val w                                                                                = wiring(o)
+            laid.sized(size).body(
+                held,
+                sort,
+                query,
+                page,
+                total,
+                inputs,
+                live,
+                chrome(inputs, total),
+                flags,
+                w.edit,
+                w.nav,
+                w.filter.copy(specs = specs),
+                w.size.copy(widths = widths),
+                requested.fold(w.order)(r => w.order.copy(requested = r)),
+                w.scroll,
+                w.move,
+                w.select
+            )
+        end drawnAt
+
+        val cards: UI = state.render { case ((((o, ((requested, vis), flags)), view), rowsNow), size) =>
+            drawnAt(requested.fold(this)(reordered).shown(vis), flags, requested)(((o, view), rowsNow), size).cards
         }
+        val tablePart: UI = columns.render { case ((requested, vis), flags) =>
+            val laid = requested.fold(this)(reordered).shown(vis)
+            // The header's handlers read the drag through its ref when they fire; the order state still carries the layout's
+            // requested order, as every other pass's does, so nothing below reads a default where the layout is bound.
+            val w0 = wiring(base)
+            val w  = requested.fold(w0)(r => w0.copy(order = w0.order.copy(requested = r)))
+            laid.tableContainer(inner, live, w, flags)(v => drawnAt(laid, flags, requested)(v))
+        }
+        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
+        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
+        rootElement(order, navOn)(
+            (List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot).map(toChild)*
+        )
     end renderWith
+
+    /** The page size as the table pages by it: the bound one's value, else the constant (one where nothing pages). */
+    private def pageSizeReading(using Frame): Reading[Int] =
+        pageSizeRef.fold(Reading.Fixed(pageSizeV.getOrElse(1)))(r => Reading.Live(r.map(math.max(1, _))))
+
+    /** This table paging by `size`, where it pages at all. */
+    private def sized(size: Int): DataTable[A] =
+        if pageSizeV.isEmpty || pageSizeV.contains(size) then this else copy(pageSizeV = Present(size))
+
+    /** The table's root. Its classes follow the table's configuration, and the one that also follows its state (whether
+      * an `Expand` table states its width, which depends on which columns are shown and how wide they are) is a class
+      * channel, so the root is built once and nothing under it is drawn again for it.
+      */
+    private def rootElement(order: Reading[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
+        var root = div.cssClass("p-datatable").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
+        // Prime: hoverable whenever a selection mode is set (checkbox included) or
+        // rows react to clicks.
+        if selectionModeV != SelectionMode.None || onRowClickF.isDefined then
+            root = root.cssClass("p-datatable-hoverable")
+        if stripedFlag then root = root.cssClass("p-datatable-striped")
+        if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
+        // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
+        // column held against an edge means nothing until something moves past it.
+        // An expanding table outgrows its container by design, which only means anything
+        // where the container scrolls.
+        if scrollingOn || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
+        else if resizeModeV == ColumnResizeMode.Expand then
+            given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]] = CanEqual.derived
+            val expanding = order.and(visibleReading).and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
+                .map { case ((requested, vis), widths) =>
+                    requested.fold(this)(reordered).shown(vis).resizeModeAt(SizeState(widths = widths)) == ColumnResizeMode.Expand
+                }
+            expanding match
+                case Reading.Fixed(on) => if on then root = root.cssClass("p-datatable-scrollable")
+                case Reading.Live(sig) => root = root.cssClass("p-datatable-scrollable", sig)
+        end if
+        if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
+        // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
+        // async and cannot decline the browser default in time, so the suppression is
+        // declarative: the client reads the attribute before it posts the event. The class
+        // is what gives the focused cell its ring.
+        if navOn then root = root.cssClass("p-uic-dt-nav").preventScrollKeys
+        sizeV match
+            case Size.Small  => root = root.cssClass("p-datatable-sm")
+            case Size.Large  => root = root.cssClass("p-datatable-lg")
+            case Size.Normal => ()
+        end match
+        root
+    end rootElement
+
+    /** The table container for one column layout: drawn again only when the columns change (their order, which are shown,
+      * which may sort), so the `table`, its `thead` and its `tbody` are built once per layout and every part that follows
+      * the rest of the state reaches them as a channel or as a region of its own, never as a region around them:
+      *
+      *   - the header cells follow the sort, the widths and the column drag through class, attribute and inline-style
+      *     channels, with the sort marks a region of their own; a column's filter is a region over its own filter and
+      *     its menu's open state, and nothing else;
+      *   - the rows are a list keyed by row over one signal of the state and the row bindings, so a row is drawn again
+      *     only when what it shows changes, and an editor open in one sits under that list alone; the frozen rows are a
+      *     second such list in a static group whose offset is a channel, and a windowed body one list over the state and
+      *     the scroll position together, its height a channel;
+      *   - the `colgroup` and the footer are regions over the state, siblings of the header and the body rather than
+      *     parents of them.
+      *
+      * The container itself is a region over the column layout (the order, which columns are shown, which may sort),
+      * and that is the contract rather than a leftover: a mount in a column that moves or hides belongs to the new
+      * layout, so where the layout is bound it is the one region a mount sits under besides its own
+      * (`DataTableRegionsTest` pins it). An unbound layout is fixed and adds none.
+      *
+      * `inner` is the state but the layout, and `drawn` the pass over one value of it. Siblings over one reading cannot
+      * repaint an older state over each other, and the regions nested here read refs disjoint from the layout around
+      * them, which is what keeps the one-region guarantee for state written together.
+      */
+    private def tableContainer[V](inner: Reading[V], live: Maybe[Signal[RowInputs[A]]], w0: Wiring, flags: Map[List[String], Boolean])(
+        drawn: V => Drawn
+    )(using CanEqual[V, V], Frame): UI =
+        given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]]            = CanEqual.derived
+        given specsEq: CanEqual[Map[List[String], ColumnFilter], Map[List[String], ColumnFilter]] = CanEqual.derived
+        given dragEq: CanEqual[Maybe[ColumnDrag], Maybe[ColumnDrag]]                              = CanEqual.derived
+        given specsListEq: CanEqual[List[RowSpec[A]], List[RowSpec[A]]]                           = CanEqual.derived
+        given styleEq: CanEqual[Style, Style]                                                     = CanEqual.derived
+        val head                                                                                  = HeadLive(
+            sort = Reading.orElse(sortRef, List.empty[SortKey]),
+            specs = Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]),
+            widths = Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]),
+            held = w0.order.drag.fold(Reading.Fixed(Absent: Maybe[ColumnDrag]))(Reading.Live(_))
+        )
+        def part(f: Drawn => UI): UI = inner.render(v => f(drawn(v)))
+        val size                     = w0.size
+
+        // The last pass drawn, kept for the value it was drawn from: a scroll of a windowed body asks the same pass for
+        // another window, and arranging the rows again for it would cost a sort per scroll tick.
+        // Unsafe: one container's cache of its own last pass, read and replaced by whichever emission runs next; it never
+        // leaves this container, and a stale entry is only ever a miss.
+        val last                   = new java.util.concurrent.atomic.AtomicReference[Maybe[(V, Drawn)]](Absent)
+        def drawnOnce(v: V): Drawn =
+            last.get match
+                case Present((at, d)) if at == v => d
+                case _                           =>
+                    val d = drawn(v)
+                    last.set(Present((v, d)))
+                    d
+
+        /** A keyed row list over the specs a value of the state (and the row bindings, where they drive the rows from below)
+          * gives, inside a static row group: the list is the one region above a row, so an editor in one sits under it
+          * alone. Nothing bound renders inline, exactly as before, and stays free of markers.
+          */
+        def rowList(group: Ast.Tbody, specsOf: (Drawn, Maybe[RowInputs[A]]) => List[RowSpec[A]]): UI =
+            val specs: Reading[List[RowSpec[A]]] = live match
+                case Present(sig) => Reading.Live(inner.signal.combineLatest(sig).map((v, in) => specsOf(drawnOnce(v), Present(in))))
+                case Absent       => inner.map(v => specsOf(drawnOnce(v), Absent))
+            specs match
+                case Reading.Fixed(ss) => group(ss.map(renderTr).map(toChild)*)
+                case Reading.Live(sig) => group(toChild(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr)))
+            end match
+        end rowList
+
+        // The paths whose headers the reader can actually click, which is what both click
+        // transitions may clear. Everything else in the spec is the caller's to keep.
+        val interactive: Set[List[String]] =
+            if sortRef.isEmpty then Set.empty
+            else leafPaths.collect { case (p, c) if sortsHere(c, p, flags) => p }.toSet
+
+        // One tr per header level. The leading expander and checkbox cells belong to the
+        // top row and reach down through every other one, so they line up with a column
+        // whatever depth the header has.
+        val headRows: List[UI] =
+            val matrix            = ColumnTree.spans(cols)
+            val depth             = math.max(matrix.length, 1)
+            val leading: List[UI] =
+                val expanderTh: List[Ast.Th] =
+                    if !expanderColumn then Nil
+                    else
+                        var cell = th.cssClass("p-datatable-header-cell")
+                        if depth > 1 then cell = cell.rowspan(depth)
+                        List(cell)
+                // The select-all box reads the arranged rows and the selection, as a region of its own in its cell.
+                val checkboxTh: List[Ast.Th] =
+                    if !checkboxColumn then Nil
+                    else
+                        var cell = th.cssClass("p-datatable-header-cell")
+                        if depth > 1 then cell = cell.rowspan(depth)
+                        List(cell(toChild(part(_.selectAll))))
+                (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freezeLive(cell, head.widths, _.leadAt(i)))
+            end leading
+            val rows = if matrix.isEmpty then List(Nil) else matrix
+            // The editor-button column has no header of its own, but it still needs a cell,
+            // and one that reaches down the header the way the leading ones do.
+            val trailing: List[UI] =
+                if !editorColumn then Nil
+                else
+                    var cell = th.cssClass("p-datatable-header-cell")
+                    if depth > 1 then cell = cell.rowspan(depth)
+                    List(freezeLive(cell, head.widths, _.trailAt(0)))
+            rows.zipWithIndex.map { (cells, i) =>
+                val ths = cells.map(sp => headerSpanCell(sp, head, flags, interactive, size, w0.order, w0.filter))
+                tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
+            }
+        end headRows
+
+        // Prime's row filter display: one more header row, an inline filter per column
+        // that carries a pipeline, an empty cell where a column carries none. The reader
+        // types into the input and picks the mode from the funnel beside it.
+        val filterRowUI: List[UI] =
+            if !filterRowOn then Nil
+            else
+                val leading: List[UI] =
+                    leadTerms.indices.toList.map(i => freezeLive(th.cssClass("p-datatable-header-cell"), head.widths, _.leadAt(i)))
+                val trailing: List[UI] =
+                    trailTerms.indices.toList.map(i => freezeLive(th.cssClass("p-datatable-header-cell"), head.widths, _.trailAt(i)))
+                val cells = leafPaths.zipWithIndex.map((entry, i) =>
+                    freezeLive(filterCell(entry._1, entry._2, w0.filter, head).asInstanceOf[Ast.Th], head.widths, _.at(i))
+                )
+                List(tr((leading ++ cells ++ trailing).map(toChild)*))
+            end if
+        end filterRowUI
+
+        val tbodyEl: UI =
+            if !windowOn then
+                // The row bindings and the state meet in one signal of row specs, keyed by row: a
+                // selection, a sort or an edit draws the rows whose spec it changed and no other.
+                rowList(tbody.cssClass("p-datatable-tbody"), (d, in) => in.fold(d.staticSpecs)(d.specsFor))
+            else
+                // A windowed body: its height is the whole list's, a channel over the state, and its rows are ONE keyed
+                // list over the window the scroll position and the state give, so a scroll of one row moves the two
+                // spacers and draws one row, and the rows that stayed keep their nodes, handlers and open editors.
+                // Over fixed rows the list maps the scroll ref alone, which binds without a fiber; over rows that move
+                // it reads both in one `combineLatest`, which observes refs exactly (no repair timer).
+                given CanEqual[Style, Style] = CanEqual.derived
+                var group                    = tbody.cssClass("p-datatable-tbody")
+                inner.map(v => Style.height(drawnOnce(v).windowHeight.px)) match
+                    case Reading.Fixed(st) => group = group.style(st)
+                    case Reading.Live(sig) => group = group.inlineStyle(sig)
+                val window: Reading[List[RowSpec[A]]] = w0.scroll.ref match
+                    case Present(r) =>
+                        inner match
+                            case Reading.Fixed(v)  => Reading.Live(r.map(top => drawnOnce(v).windowSpecs(top)))
+                            case Reading.Live(sig) => Reading.Live(sig.combineLatest(r).map((v, top) => drawnOnce(v).windowSpecs(top)))
+                    case Absent => inner.map(v => drawnOnce(v).windowSpecs(0.0))
+                window match
+                    case Reading.Fixed(ss) => group(ss.map(renderTr).map(toChild)*)
+                    case Reading.Live(sig) => group(toChild(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr)))
+                end match
+            end if
+        end tbodyEl
+
+        // The rows that hold under the header: a static row group whose offset (the measured header height) is an
+        // inline-style channel, and whose rows are a keyed list of their own, so an editor in one sits under that list
+        // alone. They are drawn like any other row minus the keyboard grid and the drag. The two bodies are separate
+        // lists, so a frozen row sharing a key with a body row is two keys in two namespaces rather than a duplicate.
+        val frozenBody: List[UI] =
+            if !frozenRowsOn then Nil
+            else
+                given CanEqual[Style, Style] = CanEqual.derived
+                var group                    = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
+                if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
+                w0.scroll.headTop.foreach(sig =>
+                    group = group.inlineStyle(sig.map(_.fold(Style.empty)(px => Style.top(px.px))))
+                )
+                List(rowList(group, (d, in) => in.fold(d.staticFrozenSpecs)(d.frozenSpecsFor)))
+            end if
+        end frozenBody
+
+        val expanding: Reading[Boolean] =
+            if resizeModeV != ColumnResizeMode.Expand then Reading.Fixed(false)
+            else head.widths.map(w => resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand)
+        var tbl = table.cssClass("p-datatable-table")
+        if scrollingOn || frozenOn || frozenRowsOn then tbl = tbl.cssClass("p-datatable-scrollable-table")
+        else tbl = classWhen(tbl, "p-datatable-scrollable-table", expanding)
+        // Prime's own classes carry the clipping a sized column needs (a value too long
+        // for its column is cut rather than widening it); the layout mode they leave to
+        // the host, which is what the `.p-uic-table-fixed` rule supplies.
+        if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
+        if resizeOn then
+            tbl = tbl.cssClass("p-datatable-resizable-table")
+            // Prime's `-fit` is what hides the last column's handle, which is the one thing
+            // that is true of fitting and not of expanding: under `Expand` the last column
+            // needs no neighbour to trade with, so it keeps its handle. Under `Expand` the table
+            // states its own width, or the browser hands what the columns leave over back to them
+            // and a drag lands where it started; both follow the widths in place.
+            tbl = classWhen(tbl, "p-datatable-resizable-table-fit", expanding.map(!_))
+            head.widths.map(w =>
+                if resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand then Style.width(statedWidth(SizeState(widths = w)))
+                else Style.empty
+            ) match
+                case Reading.Fixed(st) => tbl = tbl.style(st)
+                case Reading.Live(sig) => tbl = tbl.inlineStyle(sig)
+            end match
+        end if
+        accNameV match
+            case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
+            case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
+            case Absent                      => ()
+        end match
+        accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
+        // The header carries an id only where a frozen row needs to hold at its height,
+        // which is the one thing about this table nothing can be told and nothing can work
+        // out on its own.
+        var headEl = thead.cssClass("p-datatable-thead")
+        if frozenRowsOn && size.idPrefix.nonEmpty then headEl = headEl.id(headId(size.idPrefix))
+
+        val tableEl: UI = tbl(
+            ((if hasWidths then List(part(_.colgroup)) else Nil) ++ List[UI](headEl((headRows ++ filterRowUI).map(toChild)*)) ++
+                frozenBody ++ List[UI](tbodyEl) ++
+                (if leafCols.exists(_.hasFooter) then List(part(_.foot)) else Nil)).map(toChild)*
+        )
+
+        var container = div.cssClass("p-datatable-table-container")
+        // A windowed table hangs its height on the scroller instead, which is then the one
+        // element that scrolls: the container holds exactly it, so nothing overflows there
+        // and the sticky header and the frozen columns resolve against the same box in
+        // both directions.
+        if !windowOn then
+            scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
+            container(toChild(tableEl))
+        else
+            // Prime's own nesting for a virtually scrolled table, which the extracted
+            // sheet names beside the plain one: the scroller sits between the
+            // container and the table.
+            val px = viewportPx.getOrElse(1)
+            var vs = div
+                .cssClass("p-virtualscroller")
+                .cssClass("p-uic-vs-viewport")
+                .style(_.height(px.px).minHeight(px.px))
+            w0.scroll.ref.foreach { r =>
+                vs = vs.onScrollPosition { (e: ScrollPositionEvent) =>
+                    // The position drawn at and the range asked for come out of the
+                    // SAME reported number, so the window can never be drawn at a
+                    // scroll position it did not ask rows for.
+                    val top = math.max(0.0, e.scrollTop)
+                    (sourceV match
+                        case Present(src) => r.set(top).andThen(src.demand.set(viewport.demand(top)))
+                        case Absent       => r.set(top)
+                    ): Unit < Async
+                }
+            }
+            container(toChild(vs(toChild(tableEl))))
+        end if
+    end tableContainer
+
+    /** The paginator, outside every region of the table: it reads the record count as a signal (or a constant, where
+      * nothing it is counted from can change) and the page from the page ref, and clamps the page itself, so a sort, a
+      * search or an edit never draws it again and its two dropdowns never start their mounts again.
+      */
+    private def paginatorPart(order: Reading[Maybe[List[List[String]]]])(using Frame): List[UI] =
+        if pageSizeV.isEmpty || windowOn then Nil
+        else
+            given specsEq: CanEqual[Map[List[String], ColumnFilter], Map[List[String], ColumnFilter]] = CanEqual.derived
+            given inputsEq: CanEqual[RowInputs[A], RowInputs[A]]                                      = CanEqual.derived
+            given rowsEq: CanEqual[Seq[A], Seq[A]]                                                    = CanEqual.derived
+            val rowsAndTotal: Reading[(RowInputs[A], Total)]                                          =
+                rowInputsSignal match
+                    case Present(sig) if rowInputsBelow => Reading.Live(sig).and(totalReading)
+                    case _                              => rowInputsReading
+            val count: Reading[Int] =
+                order.and(visibleReading)
+                    .and(rowsAndTotal)
+                    .and(Reading.orElse(filterRef, ""))
+                    .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
+                    .and(Reading.orElse(pageRef, 0))
+                    .and(pageSizeReading)
+                    .map { case ((((((requested, vis), (in, total)), query), specs), page), size) =>
+                        requested.fold(this)(reordered).shown(vis).sized(size).countOf(in, query, specs, page, total)
+                    }
+            var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
+                .totalRecords(count.slot)
+                .hostClass("p-datatable-paginator-bottom")
+            // The table owns how many rows a page holds: a bound size is what the rows-per-page dropdown writes, and a
+            // constant one leaves the dropdown nothing to write, whatever the caller handed the paginator.
+            pag = pageSizeRef match
+                case Present(ref) => pag.rows(ref)
+                case Absent       => pag.fixedRows(pageSizeV.get)
+            pageRef match
+                case Present(ref) => pag = pag.page(ref)
+                case Absent       => pag = pag.currentPage(0)
+            List(pag.render)
+        end if
+    end paginatorPart
+
+    /** How many records the paginator counts over `in`: the rows a query and the column filters leave, or, for a
+      * prepared table, the total it was given. `body`'s arrangement counts the same way, through [[countFrom]].
+      */
+    private def countOf(in: RowInputs[A], query: String, specs: Map[List[String], ColumnFilter], page: Int, total: Total): Int =
+        val reads = if lazyOn then Nil else filterReads(specs)
+        countFrom(arranged(in.rows.toList, Nil, query, reads).size, page, total)
+
+    /** The record count from the number of rows arranged, the page and the total: an unknown total counts the furthest
+      * the source has reached, never less than what is on the screen, and adds one page while anything follows.
+      * Counting the screen alone would shrink the page list on the way back.
+      */
+    private def countFrom(arrangedSize: Int, page: Int, total: Total): Int =
+        pageSizeV match
+            case Present(size) if lazyOn =>
+                total match
+                    case Total.Known(n)               => n
+                    case Total.Unknown(more, atLeast) =>
+                        math.max(math.max(page, 0) * size + arrangedSize, atLeast) + (if more then 1 else 0)
+            case _ => arrangedSize
 
     /** This table with its columns in the bound [[columnOrder]], so the header, the body, the footer, the widths and the
       * keyboard grid all move together and no builder below has to ask where a column went.
@@ -2653,7 +3116,7 @@ final case class DataTable[A] private (
         scroll: ScrollState,
         moveIn: MoveState[A],
         selectIn: SelectState[A]
-    )(using Frame): UI =
+    )(using Frame): Drawn =
         // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
         // three passes below would filter a page, sort a page and slice a slice. It skips
         // all three and renders what it was given, in the order it was given.
@@ -2682,16 +3145,7 @@ final case class DataTable[A] private (
             //    thing it knows about the pages it was not given. A windowed table scrolls instead:
             //    the scrollbar answers the same question the page list does, and only one of them
             //    can be right about which rows are on the screen.
-            // An unknown total counts the furthest the source has reached, never less than what is
-            // on the screen, and adds one page while anything follows. Counting the screen alone
-            // would shrink the page list on the way back.
-            val count = pageSizeV match
-                case Present(size) if prepared =>
-                    forTotal match
-                        case Total.Known(n)               => n
-                        case Total.Unknown(more, atLeast) =>
-                            math.max(math.max(page, 0) * size + sorted.size, atLeast) + (if more then 1 else 0)
-                case _ => sorted.size
+            val count = countFrom(sorted.size, page, forTotal)
             Arranged(rows, sorted, paging(sorted, page, count), count)
         end arrange
 
@@ -2704,28 +3158,6 @@ final case class DataTable[A] private (
         val pg       = here.pg
         val paged    = pg.rows
         val pageBase = pg.base
-
-        /** The paginator, over the rows and the total as they are. */
-        val paginatorUI: List[UI] =
-            if pageSizeV.isEmpty || windowOn then Nil
-            else
-                List(chrome { (in, total) =>
-                    val ar   = arrange(in, total)
-                    val size = pageSizeV.get
-                    var pag  = paginatorF.getOrElse(identity[Paginator])(Paginator())
-                        .totalRecords(ar.count)
-                        .rows(size)
-                        .currentPage(ar.pg.current)
-                        .hostClass("p-datatable-paginator-bottom")
-                    pageRef.foreach(ref => pag = pag.page(ref))
-                    pag.render
-                })
-
-        // The paths whose headers the reader can actually click, which is what both click
-        // transitions may clear. Everything else in the spec is the caller's to keep.
-        val interactive: Set[List[String]] =
-            if sortRef.isEmpty then Set.empty
-            else leafPaths.collect { case (p, c) if sortsHere(c, p, flags) => p }.toSet
 
         val colCount =
             leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0) +
@@ -2742,56 +3174,6 @@ final case class DataTable[A] private (
         def moveFor(view: BodyView[A]): MoveState[A] =
             if moveOffered then moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
             else moveIn.copy(live = false, held = Absent)
-
-        // One tr per header level. The leading expander and checkbox cells belong to the
-        // top row and reach down through every other one, so they line up with a column
-        // whatever depth the header has.
-        val headRows: List[UI] =
-            val matrix            = ColumnTree.spans(cols)
-            val depth             = math.max(matrix.length, 1)
-            val leading: List[UI] =
-                val expanderTh: List[Ast.Element] =
-                    if !expanderColumn then Nil
-                    else
-                        var cell = th.cssClass("p-datatable-header-cell")
-                        if depth > 1 then cell = cell.rowspan(depth)
-                        List(cell)
-                // A select-all header reads the whole selection, which is why a table that has one
-                // resolves the row bindings above the body (see `rowInputsBelow`) and this value
-                // is the real one rather than the empty stand-in.
-                val checkboxTh: List[Ast.Element] =
-                    if checkboxColumn then List(selectAllCell(sorted, staticInputs.sel, depth)) else Nil
-                (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freeze(cell, frozen.leadAt(i)))
-            end leading
-            val rows = if matrix.isEmpty then List(Nil) else matrix
-            // The editor-button column has no header of its own, but it still needs a cell,
-            // and one that reaches down the header the way the leading ones do.
-            val trailing: List[UI] =
-                if !editorColumn then Nil
-                else
-                    var cell = th.cssClass("p-datatable-header-cell")
-                    if depth > 1 then cell = cell.rowspan(depth)
-                    List(freeze(cell, frozen.trailAt(0)))
-            rows.zipWithIndex.map { (cells, i) =>
-                val ths = cells.map(sp => headerSpanCell(sp, sort, flags, interactive, size, frozen, order, filter))
-                tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
-            }
-        end headRows
-
-        // Prime's row filter display: one more header row, an inline filter per column
-        // that carries a pipeline, an empty cell where a column carries none. The reader
-        // types into the input and picks the mode from the funnel beside it.
-        val filterRowUI: List[UI] =
-            if !filterRowOn then Nil
-            else
-                val leading: List[UI] =
-                    leadTerms.indices.toList.map(i => freeze(th.cssClass("p-datatable-header-cell"), frozen.leadAt(i)))
-                val trailing: List[UI] =
-                    trailTerms.indices.toList.map(i => freeze(th.cssClass("p-datatable-header-cell"), frozen.trailAt(i)))
-                val cells = leafPaths.zipWithIndex.map((entry, i) => freeze(filterCell(entry._1, entry._2, filter), frozen.at(i)))
-                List(tr((leading ++ cells ++ trailing).map(toChild)*))
-            end if
-        end filterRowUI
 
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group
         // renders none of its own, so stepping by the paged index would land on a row
@@ -2945,63 +3327,9 @@ final case class DataTable[A] private (
                 if isExpanded(a, in.exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
             }
 
-        def frozenGroup(rows: Seq[A], top: Maybe[Int])(using Frame): UI =
-            var group = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
-            if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
-            top.foreach(px => group = group.style(_.top(px.px)))
-            liveInputs match
-                // Its own keyed list, in its own tbody. The two bodies are separate regions, so a
-                // frozen row sharing a key with a body row is two keys in two namespaces rather
-                // than a duplicate, which is a diagnosed state, not a silent one, and stays that.
-                case Present(sig) =>
-                    group(toChild(sig.map(in => Chunk.from(frozenSpecs(rows, in))).foreachKeyed(rowSpecKey)(renderTr)))
-                case Absent => group(frozenSpecs(rows, staticInputs).map(renderTr).map(toChild)*)
-            end match
-        end frozenGroup
-
-        val frozenBody: List[UI] =
-            if !frozenRowsOn then Nil
-            else
-                // The offset is a measurement and lands as a style, which is not a channel, so it
-                // stays a region: a scroll rebuilds these rows. A row binding moving does not,
-                // which is the emission that repeats.
-                List(scroll.headTop match
-                    case Present(sig) => sig.render(top => frozenGroup(held, top))
-                    case Absent       => frozenGroup(held, Absent))
-
-        val tbodyEl: UI =
-            if !windowOn then
-                val group = tbody.cssClass("p-datatable-tbody")
-                liveInputs match
-                    // The row bindings drive the ROWS: a keyed list inside the authored tbody, so a
-                    // selection or an expansion costs the rows it changed rather than all of them.
-                    case Present(sig) =>
-                        group(toChild(sig.map(in => Chunk.from(specsFor(in))).foreachKeyed(rowSpecKey)(renderTr)))
-                    // Nothing bound, or something outside the rows reads them: rendered inline,
-                    // exactly as before, and a table bound to nothing stays free of markers.
-                    case Absent => group(specsFor(staticInputs).map(renderTr).map(toChild)*)
-                end match
-            else
-                val group = tbody
-                    .cssClass("p-datatable-tbody")
-                    .style(_.height((windowCount * viewport.itemSize).px))
-                scroll.ref match
-                    case Present(r) =>
-                        // A KEYED list rather than a re-render: a scroll of one row moves the two
-                        // spacers and draws one row, and the rows that stayed on the screen keep
-                        // their nodes, their handlers and their open editors. `map` is what carries
-                        // the scroll ref's projection through, so this region still binds without a
-                        // fiber; `zip` or `combineLatest` would fall back to the repair loop.
-                        val specs = r.map(top => Chunk.from(windowSpecs(top)))
-                        group(toChild(specs.foreachKeyed(rowSpecKey)(renderTr)))
-                    case Absent => group(windowSpecs(0.0).map(renderTr).map(toChild)*)
-                end match
-            end if
-        end tbodyEl
-
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
-        val footGroup: List[UI] =
+        lazy val footGroup: List[UI] =
             if !leafCols.exists(_.hasFooter) then Nil
             else
                 val leadingTds: List[UI]  = leadTerms.indices.toList.map(i => freeze(td, frozen.leadAt(i)))
@@ -3011,128 +3339,41 @@ final case class DataTable[A] private (
                 val footRow: UI = tr((leadingTds ++ footTds ++ trailingTds).map(toChild)*)
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
-        var tbl = table.cssClass("p-datatable-table")
-        if scrollingOn || frozenOn || frozenRowsOn || resizeModeAt(size) == ColumnResizeMode.Expand then
-            tbl = tbl.cssClass("p-datatable-scrollable-table")
-        // Prime's own classes carry the clipping a sized column needs (a value too long
-        // for its column is cut rather than widening it); the layout mode they leave to
-        // the host, which is what the `.p-uic-table-fixed` rule supplies.
-        if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
-        if resizeOn then
-            tbl = tbl.cssClass("p-datatable-resizable-table")
-            // Prime's `-fit` is what hides the last column's handle, which is the one thing
-            // that is true of fitting and not of expanding: under `Expand` the last column
-            // needs no neighbour to trade with, so it keeps its handle.
-            if resizeModeAt(size) == ColumnResizeMode.Fit then
-                tbl = tbl.cssClass("p-datatable-resizable-table-fit")
-            else
-                // Under `Expand` the table states its own width, or the browser hands what
-                // the columns leave over back to them and a drag lands where it started.
-                tbl = tbl.style(_.width(statedWidth(size)))
-            end if
-        end if
-        accNameV match
-            case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
-            case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
-            case Absent                      => ()
-        end match
-        accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
-        // The header carries an id only where a frozen row needs to hold at its height,
-        // which is the one thing about this table nothing can be told and nothing can work
-        // out on its own.
-        val headEl: UI =
-            var h = thead.cssClass("p-datatable-thead")
-            if frozenRowsOn && size.idPrefix.nonEmpty then h = h.id(headId(size.idPrefix))
-            h((headRows ++ filterRowUI).map(toChild)*)
-        end headEl
-
-        val tableEl: UI = tbl(
-            (colGroup(size) ++ List[UI](
-                headEl
-            ) ++ frozenBody ++ List[UI](tbodyEl) ++ footGroup).map(toChild)*
-        )
-
-        var container = div.cssClass("p-datatable-table-container")
-        // A windowed table hangs its height on the scroller instead, which is then the one
-        // element that scrolls: the container holds exactly it, so nothing overflows there
-        // and the sticky header and the frozen columns resolve against the same box in
-        // both directions.
-        if !windowOn then scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
-        val containerEl: UI =
-            if !windowOn then container(toChild(tableEl))
-            else
-                // Prime's own nesting for a virtually scrolled table, which the extracted
-                // sheet names beside the plain one: the scroller sits between the
-                // container and the table.
-                val px = viewportPx.getOrElse(1)
-                var vs = div
-                    .cssClass("p-virtualscroller")
-                    .cssClass("p-uic-vs-viewport")
-                    .style(_.height(px.px).minHeight(px.px))
-                scroll.ref.foreach { r =>
-                    vs = vs.onScrollPosition { (e: ScrollPositionEvent) =>
-                        // The position drawn at and the range asked for come out of the
-                        // SAME reported number, so the window can never be drawn at a
-                        // scroll position it did not ask rows for.
-                        val top = math.max(0.0, e.scrollTop)
-                        (sourceV match
-                            case Present(src) => r.set(top).andThen(src.demand.set(viewport.demand(top)))
-                            case Absent       => r.set(top)
-                        ): Unit < Async
-                    }
-                }
-                container(toChild(vs(toChild(tableEl))))
-        end containerEl
-
-        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
-        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
-
-        var root = div.cssClass("p-datatable").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
-        // Prime: hoverable whenever a selection mode is set (checkbox included) or
-        // rows react to clicks.
-        if selectionModeV != SelectionMode.None || onRowClickF.isDefined then
-            root = root.cssClass("p-datatable-hoverable")
-        if stripedFlag then root = root.cssClass("p-datatable-striped")
-        if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
-        // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
-        // column held against an edge means nothing until something moves past it.
-        // An expanding table outgrows its container by design, which only means anything
-        // where the container scrolls.
-        if scrollingOn || frozenOn || frozenRowsOn || resizeModeAt(size) == ColumnResizeMode.Expand then
-            root = root.cssClass("p-datatable-scrollable")
-        if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
-        // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
-        // async and cannot decline the browser default in time, so the suppression is
-        // declarative: the client reads the attribute before it posts the event. The class
-        // is what gives the focused cell its ring.
-        if nav.on then root = root.cssClass("p-uic-dt-nav").preventScrollKeys
-        sizeV match
-            case Size.Small  => root = root.cssClass("p-datatable-sm")
-            case Size.Large  => root = root.cssClass("p-datatable-lg")
-            case Size.Normal => ()
-        end match
-        root(
+        DataTable.Drawn[A](
             // Three of the cards read the rows (a repeated rowKey, a frozen group taller than the
             // page, a lazy total that does not add up), so they answer for the rows the reader is
             // looking at and go through `chrome`, which is transparent unless the rows drive the
             // body themselves. Two calls rather than one, so the cards keep the order they had.
             // The rest are about the table's declaration and never move.
-            (List(chrome((in, t) => UI.fragment(rowKeyCard(arrange(in, t).pg.rows)*))) ++ headerCards(
-                sort,
-                flags
-            ) ++ editCards ++ filterCards(filter) ++ sizeCards(
-                size
-            ) ++ frozenCards(size) ++ orderCards(
-                order
-            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(
-                sort,
-                query,
-                filter.specs
-            ) ++ windowCards ++ List(chrome { (in, t) =>
-                val ar = arrange(in, t)
-                UI.fragment((frozenRowCards(ar.pg.rows, held) ++ lazyCards(ar.rows, t))*)
-            }) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            cards0 = UI.fragment(
+                (List(chrome((in, t) => UI.fragment(rowKeyCard(arrange(in, t).pg.rows)*))) ++ headerCards(
+                    sort,
+                    flags
+                ) ++ editCards ++ filterCards(filter) ++ sizeCards(
+                    size
+                ) ++ frozenCards(size) ++ orderCards(
+                    order
+                ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(
+                    sort,
+                    query,
+                    filter.specs
+                ) ++ windowCards ++ List(chrome { (in, t) =>
+                    val ar = arrange(in, t)
+                    UI.fragment((frozenRowCards(ar.pg.rows, held) ++ lazyCards(ar.rows, t))*)
+                }))*
+            ),
+            colgroup0 = UI.fragment(colGroup(size)*),
+            foot0 = UI.fragment(footGroup*),
+            // A select-all header reads the whole selection, which is why a table that has one
+            // resolves the row bindings above the body (see `rowInputsBelow`) and this value
+            // is the real one rather than the empty stand-in.
+            selectAll0 = selectAllBox(sorted, staticInputs.sel),
+            staticSpecs0 = specsFor(staticInputs),
+            specsFor = specsFor,
+            staticFrozenSpecs0 = frozenSpecs(held, staticInputs),
+            frozenSpecsFor = frozenSpecs(held, _),
+            windowSpecs = windowSpecs,
+            windowHeight0 = windowCount * viewport.itemSize
         )
     end body
 
@@ -3799,42 +4040,35 @@ final case class DataTable[A] private (
       * narrowing the filter, select-alling, then widening it again must not silently
       * drop what was selected before.
       */
-    private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
+    private def selectAllBox(inFilter: List[A], sel: Set[String])(using Frame): UI =
         val keys              = inFilter.filter(selectableAt).map(keyOf)
         val allSelected       = keys.nonEmpty && keys.forall(sel.contains)
         val toggle: UI.Action =
             currentValue(selectedBinding, Set.empty[String])
                 .map(cur => applySelection(if allSelected then cur -- keys else cur ++ keys))
-        var cell = th.cssClass("p-datatable-header-cell")
-        if rows > 1 then cell = cell.rowspan(rows)
-        cell(
-            toChild(
-                CheckBox()
-                    .checked(allSelected)
-                    .accessibleName("Select All")
-                    .onChange(_ => toggle)
-                    .render
-            )
-        )
-    end selectAllCell
+        CheckBox()
+            .checked(allSelected)
+            .accessibleName("Select All")
+            .onChange(_ => toggle)
+            .render
+    end selectAllBox
 
     /** One cell of the header matrix: a leaf renders its column header, a group a plain
       * title cell as wide as the leaves beneath it.
       */
     private def headerSpanCell(
         sp: ColumnTree.HeaderSpan[A],
-        sort: List[SortKey],
+        live: HeadLive,
         flags: Map[List[String], Boolean],
         interactive: Set[List[String]],
         size: SizeState,
-        frozen: FrozenPlan,
         order: OrderState,
         filter: FilterState
     )(using Frame): UI =
         val at = sp.at
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(c, sp.path, sort, sp.rowspan, sortsHere(c, sp.path, flags), interactive, at, size, frozen, order, filter)
+                headerCell(c, sp.path, live, sp.rowspan, sortsHere(c, sp.path, flags), interactive, at, size, order, filter)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
@@ -3844,9 +4078,10 @@ final case class DataTable[A] private (
                         toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
                     )
                 )
-                freeze(
-                    reorderCell(built, sp.path, at, at + sp.colspan, size, order, sorts = false),
-                    frozen.span(at, at + sp.colspan)
+                freezeLive(
+                    reorderCell(built, sp.path, at, at + sp.colspan, size, order, sorts = false, live),
+                    live.widths,
+                    _.span(at, at + sp.colspan)
                 )
         end match
     end headerSpanCell
@@ -3860,20 +4095,33 @@ final case class DataTable[A] private (
       * a filter it cannot apply is not a filter, and hiding the rows behind a typo would
       * take away the data the reader is looking at.
       */
-    private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): Ast.Element =
+    private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState, live: HeadLive)(using
+        Frame
+    ): Ast.Element =
         val cell = th.cssClass("p-datatable-header-cell")
         c.filterV match
             case Absent      => cell
             case Present(cf) =>
-                val cur   = filter.specs.getOrElse(path, ColumnFilter("", cf.default))
-                val input = Input()
-                    .value(cur.query)
-                    .fluid(true)
-                    .invalid(filter.unusable.contains(path))
-                    .accessibleName(s"Filter by ${c.headerV}")
-                    .onInput(t => writeFilter(path, cur.mode, t))
-                val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
-                cell(div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter)).map(toChild)*))
+                given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
+                val spec: Reading[ColumnFilter]            = live.specs.map(_.getOrElse(path, ColumnFilter("", cf.default)))
+                // The input, the funnel and an open constraint list are ONE region over this column's filter and its menu's
+                // open state, and nothing else: a pick writes both, and the column's own cell is all either changes.
+                val open: Reading[Boolean] =
+                    filter.openOf(path) match
+                        case Present(openRef) if filter.live && cf.modes.sizeIs > 1 => Reading.Live(openRef)
+                        case _                                                      => Reading.Fixed(false)
+                cell(toChild(spec.and(open).render { (cur, isOpen) =>
+                    // A query this table cannot read as a value of its column's type is marked on its own input.
+                    val unusable = !lazyOn && cur.active.nonEmpty && cf.predicate(cur).isEmpty
+                    val input    = Input()
+                        .value(cur.query)
+                        .fluid(true)
+                        .invalid(unusable)
+                        .accessibleName(s"Filter by ${c.headerV}")
+                        .onInput(t => writeFilter(path, cur.mode, t))
+                    val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
+                    div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter, isOpen)).map(toChild)*)
+                }))
         end match
     end filterCell
 
@@ -3889,7 +4137,8 @@ final case class DataTable[A] private (
         c: Column[A, FlatOnly],
         cf: CellFilter[A],
         cur: ColumnFilter,
-        filter: FilterState
+        filter: FilterState,
+        isOpen: Boolean
     )(using Frame): List[UI] =
         if cf.modes.sizeIs <= 1 then Nil
         else
@@ -3913,13 +4162,15 @@ final case class DataTable[A] private (
             end trigger
             filter.openOf(path) match
                 case Present(openRef) if filter.live =>
+                    // Host-gated: the cell's region already reads the open state, so the list is drawn in it under
+                    // the column's panel id, never in a mount of its own that the region would start again.
                     List(
                         Overlay(openRef)
                             .matchWidth(false)
                             .panelClass("p-datatable-filter-overlay")
                             .panelClass("p-component")
                             .trigger(trigger(Present(openRef)))(constraintList(path, cur, cf, openRef))
-                            .render
+                            .renderGated(isOpen, Present(filterPanelId(filter.idPrefix, path)))
                     )
                 case _ => List(trigger(Absent))
             end match
@@ -3952,19 +4203,22 @@ final case class DataTable[A] private (
       * class rather than the select one the row display's constraint list uses: they are
       * two different boxes in the sheet, one a list and one a form.
       */
-    private def filterFunnel(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): List[UI] =
+    private def filterFunnel(path: List[String], c: Column[A, FlatOnly], filter: FilterState, live: HeadLive)(using
+        Frame
+    ): List[UI] =
         if !filterMenuOn then Nil
         else
             c.filterV match
                 case Absent      => Nil
                 case Present(cf) =>
-                    val cur = filter.specs.getOrElse(path, ColumnFilter.empty(cf.default))
-                    // Filled while the column is filtering, hollow while it is not: which
-                    // columns are narrowing the table has to be readable without opening
-                    // anything.
-                    val glyph = if cur.active.isEmpty then Icons.filter else Icons.filterFill
-                    def trigger(open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): UI =
-                        var b = Button()
+                    given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
+                    val spec: Reading[ColumnFilter]            = live.specs.map(_.getOrElse(path, ColumnFilter.empty(cf.default)))
+                    def trigger(cur: ColumnFilter, open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): UI =
+                        // Filled while the column is filtering, hollow while it is not: which
+                        // columns are narrowing the table has to be readable without opening
+                        // anything.
+                        val glyph = if cur.active.isEmpty then Icons.filter else Icons.filterFill
+                        var b     = Button()
                             .icon(glyph)
                             .variant(ButtonVariant.Text)
                             .severity(Severity.Secondary)
@@ -3982,22 +4236,24 @@ final case class DataTable[A] private (
                         case (Present(openRef), Present(draft)) if filter.live =>
                             List(
                                 span.cssClass("p-datatable-popover-filter")(
-                                    // The open state and the draft are read as ONE region (see [[Reading]]): opening
-                                    // writes the draft and the open state together, and a draft region nested in the
-                                    // Overlay's own would draw the menu from a draft it closed over.
-                                    toChild(Reading.Live(openRef).and(Reading.Live(draft)).render { (open, d) =>
+                                    // The open state, the draft and the column's filter are read as ONE region (see
+                                    // [[Reading]]): opening writes the draft and the open state together, and applying writes
+                                    // the filter and closes. It is the only region above the menu: the header around it
+                                    // follows the sort, the widths and the drag through channels.
+                                    toChild(Reading.Live(openRef).and(Reading.Live(draft)).and(spec).render { case ((open, d), cur) =>
                                         Overlay(openRef)
                                             .matchWidth(false)
                                             .panelClass("p-datatable-filter-overlay-popover")
                                             .panelClass("p-component")
-                                            .trigger(trigger(Present(draft), Present(openRef)))(
+                                            .trigger(trigger(cur, Present(draft), Present(openRef)))(
                                                 filterMenu(path, c, cf, d, draft, openRef)
                                             )
                                             .renderGated(open, Present(filterPanelId(filter.idPrefix, path)))
                                     })
                                 )
                             )
-                        case _ => List(span.cssClass("p-datatable-popover-filter")(toChild(trigger(Absent, Absent))))
+                        case _ =>
+                            List(span.cssClass("p-datatable-popover-filter")(toChild(spec.render(cur => trigger(cur, Absent, Absent)))))
                     end match
             end match
         end if
@@ -4264,27 +4520,33 @@ final case class DataTable[A] private (
     private def headerCell(
         c: Column[A, FlatOnly],
         path: List[String],
-        sort: List[SortKey],
+        live: HeadLive,
         rows: Int,
         sorts: Boolean,
         interactive: Set[List[String]],
         index: Int,
         size: SizeState,
-        frozen: FrozenPlan,
         order: OrderState,
         filter: FilterState
     )(using Frame): UI =
-        val sortable  = sorts && sortRef.isDefined
-        val sortingKs = SortKey.sorting(sort)
-        val rank      = sortingKs.indexWhere(_.path == path)
-        val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
+        given CanEqual[SortDirection, SortDirection] = CanEqual.derived
+        val sortable                                 = sorts && sortRef.isDefined
+        val direction: Reading[SortDirection]        =
+            live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
         var cell = th.cssClass("p-datatable-header-cell")
         if rows > 1 then cell = cell.rowspan(rows)
         // Only once the mount has run: the id exists to be measured, and stamping it in the
         // static projection would put the same one on every table of a page.
         if size.live && (columnWidthsRef.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
-        if index >= 0 && resizableAt(index, size) then cell = cell.cssClass("p-datatable-resizable-column")
+        // Whether this boundary takes a grip follows the widths where they decide it: under `Expand` the table expands
+        // only once every column is sized, which a drag may be what completes, so the class is a channel and the grip a
+        // region over the widths alone. Under `Fit` the widths decide nothing here.
+        val resizable: Reading[Boolean] =
+            if index < 0 then Reading.Fixed(false)
+            else if resizeModeV == ColumnResizeMode.Expand then live.widths.map(w => resizableAt(index, size.copy(widths = w)))
+            else Reading.Fixed(resizableAt(index, size))
+        cell = classWhen(cell, "p-datatable-resizable-column", resizable)
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
@@ -4300,44 +4562,62 @@ final case class DataTable[A] private (
                 // Ctrl+Enter adding a column to the sort exactly as Ctrl+click does.
                 .onKeyDown(e => activationOf(e).map(m => headerClick(path, m, interactive, order)).getOrElse(()))
         end if
-        if direction.isSorting then
-            cell = cell
-                .cssClass("p-datatable-column-sorted")
-                .aria("sort", if direction == SortDirection.Ascending then "ascending" else "descending")
+        // Which way the column sorts reaches the cell through a class and an attribute channel, so a sort click
+        // patches the header rather than drawing it, and the column's filter menu in it, again. Prime's rule
+        // (HeaderCell.ariaSort): every column a sort can name says how it sorts, `none` while it does not, and no other
+        // column carries the attribute. One rule for the static page and the live one, so the attribute never has to
+        // leave the cell. A column locked against the reader's clicks is still one a sort can name.
+        cell = classWhen(cell, "p-datatable-column-sorted", direction.map(_.isSorting))
+        if sortRef.isDefined && canSortBy(c) then
+            given CanEqual[String, String] = CanEqual.derived
+            direction.map {
+                case SortDirection.Ascending  => "ascending"
+                case SortDirection.Descending => "descending"
+                case SortDirection.Unsorted   => "none"
+            } match
+                case Reading.Fixed(v)  => cell = cell.aria("sort", v)
+                case Reading.Live(sig) => cell = cell.aria("sort", sig)
+            end match
         end if
 
         // The neutral icon is the affordance and the directional one is state, so a column
-        // the reader may not re-sort still says which way it currently sorts.
-        val sortIcon: List[UI] =
-            if !sortable && !direction.isSorting then Nil
-            else
-                val glyph = direction match
-                    case SortDirection.Ascending  => Icons.sortAmountUpAlt
-                    case SortDirection.Descending => Icons.sortAmountDown
-                    case SortDirection.Unsorted   => Icons.sortAlt
-                List(GlyphSvg(glyph, "p-datatable-sort-icon"))
-
-        // Sorting by one column needs no ordinal; sorting by several does, because the
-        // spec is ordered and the icons alone cannot say which key is primary.
-        val sortBadge: List[UI] =
-            if rank < 0 || sortingKs.length < 2 then Nil
-            else
-                List(
-                    Badge((rank + 1).toString)
-                        .size(Size.Small)
-                        .hostClass("p-datatable-sort-badge")
-                        .render
-                )
+        // the reader may not re-sort still says which way it currently sorts. Sorting by one column
+        // needs no ordinal; sorting by several does, because the spec is ordered and the icons alone
+        // cannot say which key is primary. Both follow the sort as a region of their own, which holds
+        // nothing but an icon and a badge.
+        val sortMarks: UI = live.sort.render { sort =>
+            val sortingKs      = SortKey.sorting(sort)
+            val rank           = sortingKs.indexWhere(_.path == path)
+            val dir            = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
+            val icon: List[UI] =
+                if !sortable && !dir.isSorting then Nil
+                else
+                    val glyph = dir match
+                        case SortDirection.Ascending  => Icons.sortAmountUpAlt
+                        case SortDirection.Descending => Icons.sortAmountDown
+                        case SortDirection.Unsorted   => Icons.sortAlt
+                    List(GlyphSvg(glyph, "p-datatable-sort-icon"))
+            val badge: List[UI] =
+                if rank < 0 || sortingKs.length < 2 then Nil
+                else List(Badge((rank + 1).toString).size(Size.Small).hostClass("p-datatable-sort-badge").render)
+            UI.fragment((icon ++ badge)*)
+        }
 
         val content: UI =
             div.cssClass("p-datatable-column-header-content")(
                 ((span.cssClass("p-datatable-column-title")(c.headerV): UI) ::
-                    (sortIcon ++ sortBadge ++ filterFunnel(path, c, filter))).map(toChild)*
+                    sortMarks :: filterFunnel(path, c, filter, live)).map(toChild)*
             )
-        val built = cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*)
-        freeze(
-            if index < 0 then built else reorderCell(built, path, index, index + 1, size, order, sortable),
-            frozen.at(index)
+        val grip: List[UI] =
+            if index < 0 then Nil
+            else if resizeModeV == ColumnResizeMode.Expand then
+                List(live.widths.render(w => UI.fragment(resizer(index, size.copy(widths = w))*)))
+            else resizer(index, size)
+        val built = cell((content :: grip).map(toChild)*)
+        freezeLive(
+            if index < 0 then built else reorderCell(built, path, index, index + 1, size, order, sortable, live),
+            live.widths,
+            _.at(index)
         )
     end headerCell
 
@@ -5411,6 +5691,46 @@ final case class DataTable[A] private (
 end DataTable
 
 object DataTable:
+
+    /** A table's own state for one render, one value per concern, as the caller reads it. */
+    final private[uic] case class Wiring[A](
+        edit: EditState,
+        nav: NavState[A],
+        filter: FilterState,
+        size: SizeState,
+        order: OrderState,
+        scroll: ScrollState,
+        move: MoveState[A],
+        select: SelectState[A] = SelectState[A]()
+    )
+
+    /** What one pass over the table's state draws, each part built only when asked for: the parts that follow the state
+      * are regions of their own over it (see [[renderWith]]), and each region asks for its part alone.
+      */
+    final private[uic] class Drawn[A](
+        cards0: => UI,
+        colgroup0: => UI,
+        foot0: => UI,
+        selectAll0: => UI,
+        staticSpecs0: => List[RowSpec[A]],
+        val specsFor: RowInputs[A] => List[RowSpec[A]],
+        staticFrozenSpecs0: => List[RowSpec[A]],
+        val frozenSpecsFor: RowInputs[A] => List[RowSpec[A]],
+        val windowSpecs: Double => List[RowSpec[A]],
+        windowHeight0: => Int
+    ):
+        lazy val cards: UI     = cards0
+        lazy val colgroup: UI  = colgroup0
+        lazy val foot: UI      = foot0
+        lazy val selectAll: UI = selectAll0
+        // The frozen rows of the bindings read with the state, where nothing drives them from below.
+        lazy val staticFrozenSpecs: List[RowSpec[A]] = staticFrozenSpecs0
+        // How tall a windowed body is: the whole list's height, which the spacers add up to.
+        lazy val windowHeight: Int = windowHeight0
+        // The rows of the bindings read with the state, where nothing drives them from below.
+        lazy val staticSpecs: List[RowSpec[A]] = staticSpecs0
+    end Drawn
+
     def apply[A](): DataTable[A] = new DataTable[A]()
 
     /** The keys from `from` to `to` inclusive, in either direction: what a shift-click picks.

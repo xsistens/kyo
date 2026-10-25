@@ -467,9 +467,11 @@ class DataTableTest extends UicTest:
 
     // A column that is not on the screen is not in the grid either: the cursor addresses
     // cells by position, so the position has to mean what the reader sees.
-    "everything around the body is ONE region: edit state, column order, flags, sort, filter and widths" in {
+    "the table is ONE region over edit state, column order, flags, sort, filter and widths, and its root none" in {
         // Starting an edit writes the error and the edited cell, a column drop the order and the drag: a region
-        // nested per signal repaints the table against the values the inner one closed over.
+        // nested per signal repaints the table against the values the inner one closed over. The root used to sit
+        // under that region too, with the paginator and the header and footer slots in it; those follow none of the
+        // state and may hold mounts, so the root is built once and the table container is the one region.
         for
             rows    <- Signal.initRef[Seq[Item]](items)
             editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
@@ -486,8 +488,12 @@ class DataTableTest extends UicTest:
                 uic.column("Price")(_.price.toString).visible(shown)
             ).editingCell(editing).sort(sort).globalFilter(query).columnWidths(widths).columnOrder(order)
                 .wired("t", Map(List("Name") -> name), err, _ => ())
-            regions <- regionsAbove(ui, "p-datatable")
-        yield assert(regions == 1, s"the table sits under $regions regions; nested ones repaint older state")
+            regions <- regionsAbove(ui, "p-datatable-table-container")
+            root    <- regionsAbove(ui, "p-datatable")
+        yield
+            assert(regions == 1, s"the table sits under $regions regions; nested ones repaint older state")
+            assert(root == 0, s"the root sits under $root regions")
+        end for
     }
 
     "hiding a column renumbers the grid the keyboard moves over" in {
@@ -918,6 +924,21 @@ class DataTableTest extends UicTest:
             _              <- dragHeader(ui, "t-h0", 50, 210)
             moved          <- order.get
         yield assert(moved == List(List("Price"), List("Name"), List("Id")), "the grabbed column lands where it was dropped")
+    }
+
+    // The header is drawn once per column layout, and a drop computes the new order from the order that layout shows
+    // (`effectiveOrder`), so a second drop builds on the first rather than on the authored order.
+    "a second drop keeps the first" in {
+        for
+            (ui, order, _) <- movable()
+            _              <- dragHeader(ui, "t-h0", 50, 210)
+            first          <- order.get
+            _              <- dragHeader(ui, "t-h2", 250, 10)
+            second         <- order.get
+        yield
+            assert(first == List(List("Price"), List("Name"), List("Id")), s"the first drop: $first")
+            assert(second == List(List("Id"), List("Price"), List("Name")), s"the second, on top of it: $second")
+        end for
     }
 
     // A header that sorts is also a header that can be dragged, so what tells the two
@@ -1354,6 +1375,14 @@ class DataTableTest extends UicTest:
     private def heightOf(e: UI.Ast.Element): Maybe[Length] =
         Maybe.fromOption(e.attrs.uiStyle.props.collect { case Style.Prop.Height(v) => v }.headOption)
 
+    /** The style `e` shows now: its static style, then its inline-style channel's value. A row group's height and a frozen
+      * group's offset follow the state through that channel, since the group itself is not drawn again for them.
+      */
+    private def styleNow(e: UI.Ast.Element)(using Frame): Style < Sync =
+        e.attrs.reactiveStyle match
+            case Present(sig) => sig.current.map(e.attrs.uiStyle ++ _)
+            case Absent       => Kyo.lift(e.attrs.uiStyle)
+
     /** The two spacers, ahead of the window and behind it, by the height each holds. */
     private def spacers(node: UI)(using Frame): List[Maybe[Length]] < Sync =
         bodyTrs(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer")).map(heightOf))
@@ -1381,6 +1410,7 @@ class DataTableTest extends UicTest:
             pad     <- spacers(ui)
             attrs   <- windowAttrs(ui)
             body    <- bodyEl(ui)
+            tall    <- styleNow(body).map(_.props.collect { case Style.Prop.Height(v) => v })
             offered <- pages(ui).map(_._1)
         yield
             assert(names == Chunk("R1", "R2", "R3", "R4", "R5", "R6"), "the six rows the arithmetic reaches")
@@ -1388,7 +1418,7 @@ class DataTableTest extends UicTest:
             // A floor under the table while its rows are rewritten: they go in document
             // order, so a leading spacer shrinking before the trailing one grows would
             // collapse it under the scroll position for an instant.
-            assert(heightOf(body) == Present(4000.px), "the body is as tall as the whole list")
+            assert(tall == Seq(4000.px), s"the body is as tall as the whole list: $tall")
             assert(attrs == (Present("0"), Present("6")))
             assert(offered.isEmpty, "a windowed table scrolls instead of paginating")
     }
@@ -1550,8 +1580,10 @@ class DataTableTest extends UicTest:
                 .wired("t", Map.empty, err, _ => (), headTop = Present(top))
             before <- groups(ui)
             atRest <- namesIn(before.head)
+            restAt <- styleNow(before.head).map(_.props.collect { case Style.Prop.Top(v) => v })
             _      <- top.set(Present(41))
             after  <- groups(ui)
+            heldAt <- styleNow(after.head).map(_.props.collect { case Style.Prop.Top(v) => v })
         yield
             assert(before.size == 2, "the pinned rows are a row group of their own")
             assert(before.head.attrs.cssClasses.contains("p-datatable-frozen-tbody"), "and it comes first")
@@ -1560,11 +1592,8 @@ class DataTableTest extends UicTest:
                 "carrying the body class too, or the cells lose their styling"
             )
             assert(atRest == List("Total"), "holding the rows it was given")
-            assert(heightOf(before.head).isEmpty, "before the header is measured it sits in flow")
-            assert(
-                after.head.attrs.uiStyle.props.collect { case Style.Prop.Top(v) => v } == List(41.px),
-                "and once it is measured, it holds at that height"
-            )
+            assert(heightOf(before.head).isEmpty && restAt.isEmpty, "before the header is measured it sits in flow")
+            assert(heldAt == List(41.px), s"and once it is measured, it holds at that height: $heldAt")
     }
 
     "the body rows keep their own group, and the cursor does not step into the frozen one" in {
@@ -2057,6 +2086,22 @@ class DataTableTest extends UicTest:
     // ---- a drag that moves a column instead of a boundary ----
 
     /** The same three columns, each with a width of its own, resizing in `Expand`. */
+    /** Whether `el` carries `name` now: statically, or through a class channel whose signal holds true. Whether a table
+      * fits or expands follows its widths, so where the widths are bound the table says so through a channel.
+      */
+    private def classNow(el: UI.Ast.Element, name: String)(using Frame): Boolean < Sync =
+        el.attrs.reactiveClasses.get(name) match
+            case Some(sig) => sig.current
+            case None      => Kyo.lift(el.attrs.cssClasses.contains(name))
+
+    /** The widths `el` states now: its static style's, then its inline-style channel's, which wins where both have one. */
+    private def widthsNow(el: UI.Ast.Element)(using Frame): Seq[Length] < Sync =
+        val static = el.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }
+        el.attrs.reactiveStyle match
+            case Present(sig) => sig.current.map(st => static ++ st.props.collect { case Style.Prop.Width(v) => v })
+            case Absent       => Kyo.lift(static)
+    end widthsNow
+
     private def expanding(mode: uic.ColumnResizeMode, lastWidth: Maybe[Double] = Present(100.0))(using Frame) =
         for
             cols <- Signal.initRef(Map.empty[List[String], Double])
@@ -2111,17 +2156,66 @@ class DataTableTest extends UicTest:
             tbl         <- elementWithClass(expand, "p-datatable-resizable-table")
             fitted      <- elementWithClass(fit, "p-datatable-resizable-table")
             root        <- elements(expand).map(_.head)
+            tblFit      <- classNow(tbl, "p-datatable-resizable-table-fit")
+            fittedFit   <- classNow(fitted, "p-datatable-resizable-table-fit")
+            tblWidths   <- widthsNow(tbl)
+            fitWidths   <- widthsNow(fitted)
+            // The class follows the widths in place (a class channel on the root), since whether an expanding table
+            // states its width depends on them; it is on while its signal says so.
+            scrolls <- root.attrs.reactiveClasses.get("p-datatable-scrollable") match
+                case Some(sig) => sig.current
+                case None      => Kyo.lift(root.attrs.cssClasses.contains("p-datatable-scrollable"))
         yield
             assert(wide.size == 3, "every resizable column, the last one included")
             assert(paired.size == 2, "against the two boundaries fitting has")
-            assert(!tbl.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
-            assert(fitted.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
-            assert(
-                tbl.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v } == Seq(300.0.px),
-                "and the table states the width its columns add up to"
+            assert(!tblFit)
+            assert(fittedFit)
+            assert(tblWidths == Seq(300.0.px), s"and the table states the width its columns add up to: $tblWidths")
+            assert(fitWidths.isEmpty)
+            assert(scrolls, "a table that outgrows its container scrolls")
+        end for
+    }
+
+    "a column the reader has sized gives an expanding table the last column's grip back" in {
+        // Expanding needs every column sized; one sized only by a drag counts as soon as its width is in the bound map, and
+        // the header has to follow the map for it, since the header is no longer drawn again for every width.
+        for
+            (ui, cols) <- expanding(uic.ColumnResizeMode.Expand, lastWidth = Absent)
+            before     <- resizers(ui)
+            _          <- cols.set(Map(List("Id") -> 120.0))
+            after      <- resizers(ui)
+            last       <- elementWithId(ui, "t-h2")
+            lastOn     <- classNow(last, "p-datatable-resizable-column")
+        yield
+            assert(before.size == 2, s"fitting, while the last column has no width: ${before.size}")
+            assert(after.size == 3, s"expanding once the map sizes it, the last column's grip included: ${after.size}")
+            assert(lastOn, "and its header says it resizes")
+        end for
+    }
+
+    "a column the spec can sort by says how it sorts, none included, statically and live alike" in {
+        // Prime (HeaderCell.ariaSort) puts aria-sort on every sortable column, `none` while it does not sort, and on no
+        // other. A column locked against the reader's clicks still says how the spec sorts it.
+        for
+            sort <- Signal.initRef(List.empty[uic.SortKey])
+            err  <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            t = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name).sortBy(_.name),
+                uic.column("Price")(_.price.toString),
+                uic.column("Id")(_.id).sortBy(_.id).sortable(false)
+            ).sort(sort)
+            html <- UI.runRender(t.render).take(1).run.map(_.mkString)
+            wired = t.wired("t", Map.empty, err, _ => ())
+            live    <- elementsWithClass(wired, "p-datatable-header-cell")
+            liveNow <- Kyo.foreach(live)(c =>
+                c.attrs.reactiveAttrs.get("aria-sort") match
+                    case Some(sig) => sig.current.map(Some(_))
+                    case None      => Kyo.lift(c.attrs.ariaAttrs.get("sort"))
             )
-            assert(fitted.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }.isEmpty)
-            assert(root.attrs.cssClasses.contains("p-datatable-scrollable"), "a table that outgrows its container scrolls")
+        yield
+            assert("""aria-sort="none"""".r.findAllMatchIn(html).size == 2, "the static page: none on Name and Id, nothing on Price")
+            assert(liveNow.toList == List(Some("none"), None, Some("none")), s"live: $liveNow")
+        end for
     }
 
     "a column with no width sends an expanding table back to fitting" in {
@@ -2130,10 +2224,12 @@ class DataTableTest extends UicTest:
             handles  <- resizers(ui)
             tbl      <- elementWithClass(ui, "p-datatable-resizable-table")
             reported <- cards(ui)
+            fits     <- classNow(tbl, "p-datatable-resizable-table-fit")
+            widths   <- widthsNow(tbl)
         yield
             assert(handles.size == 2, "the boundaries fitting has, and no handle on the last column")
-            assert(tbl.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
-            assert(tbl.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }.isEmpty, "no width it cannot add up")
+            assert(fits)
+            assert(widths.isEmpty, "no width it cannot add up")
             assert(reported.contains("every column") && reported.contains("Id"), "and the column with none is named")
     }
 
