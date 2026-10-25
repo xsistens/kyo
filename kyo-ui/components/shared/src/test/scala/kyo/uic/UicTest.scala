@@ -106,6 +106,38 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 }
         )
 
+    /** Paths (index chains from the root) of every item carrying a submenu, for a test that opens some of them in a
+      * [[Submenus]]. Only the fixed entries count: a test that opens a submenu knows the tree it built.
+      */
+    private[uic] def submenuPaths(entries: List[MenuItemLiveEntry])(using Frame): List[List[Int]] =
+        def loop(items: List[MenuItem], prefix: List[Int]): List[List[Int]] =
+            items.zipWithIndex.flatMap { (it, i) =>
+                val p = prefix :+ i
+                if it.itemsV.nonEmpty then p :: loop(it.itemsV, p) else Nil
+            }
+        MenuItemScope.reading(entries) match
+            case Reading.Fixed(items) => loop(items, Nil)
+            case Reading.Live(_)      => throw new AssertionError("submenu paths are read from fixed entries")
+    end submenuPaths
+
+    /** The root indices of a MegaMenu that open a panel. */
+    private[uic] def panelPaths(entries: List[MegaMenuItemLiveEntry])(using Frame): List[List[Int]] =
+        MegaMenuItemScope.reading(entries) match
+            case Reading.Fixed(items) => items.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
+            case Reading.Live(_)      => throw new AssertionError("panel paths are read from fixed entries")
+
+    /** Paths of every group of a CascadeSelect's options. */
+    private[uic] def groupPaths(c: CascadeSelect[?]): List[List[Int]] =
+        def loop(is: List[CascadeItem[?]], prefix: List[Int]): List[List[Int]] =
+            is.zipWithIndex.flatMap {
+                case (CascadeItem.Group(_, children), i) =>
+                    val p = prefix :+ i
+                    p :: loop(children, p)
+                case _ => Nil
+            }
+        loop(c.items, Nil)
+    end groupPaths
+
     /** How many regions sit above the mount of the control drawn with `cls`. Unlike [[regionsAbove]] it stops at the
       * mount, so the regions a control draws inside itself do not count: a region above the mount is one whose every
       * repaint starts the control's mount again.

@@ -62,7 +62,8 @@ class ContextMenuTargetReuseTest extends UicTest:
                 openRef <- Signal.initRef(false)
                 focus   <- Signal.initRef(List.empty[Int])
                 at      <- Signal.initRef(Absent: Maybe[UI.Point])
-                root    <- ReactiveUI.normalize(menu(target).wired(openRef, focus, at, Nil, "m"), Seq.empty)
+                subs    <- Submenus.init()
+                root    <- ReactiveUI.normalize(menu(target).wired(openRef, focus, at, subs, "m"), Seq.empty)
                 _       <- ReactiveUI.subscribe(root, quiet)
                 _       <- Async.sleep(150.millis)
                 first = counted.get

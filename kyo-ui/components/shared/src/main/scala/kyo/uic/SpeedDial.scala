@@ -63,7 +63,9 @@ end SpeedDialDirection
   * by toggling).
   */
 final case class SpeedDial private (
+    // The actions `body` draws, resolved from `entriesV` by the render.
     itemsV: List[MenuItem] = Nil,
+    entriesV: List[MenuItemLiveEntry] = Nil,
     directionV: SpeedDialDirection = SpeedDialDirection.Up,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     disabledFlag: Boolean = false,
@@ -71,8 +73,10 @@ final case class SpeedDial private (
 ) extends Node:
     type Self = SpeedDial
 
-    /** Appends actions ([[MenuItem]]: `icon` + `label` + `onSelect`), each built directly or from `_` (see [[MenuItemScope]]). */
-    def items(is: MenuItemEntry*): SpeedDial = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
+    /** Appends actions ([[MenuItem]]: `icon` + `label` + `onSelect`), each built directly or from `_` (see [[MenuItemScope]]), or a
+      * signal of actions that change while the dial is shown (see [[LiveEntry]]).
+      */
+    def items(is: MenuItemLiveEntry*): SpeedDial = copy(entriesV = entriesV ++ is)
 
     /** Fan direction (default `Up`). */
     def direction(v: SpeedDialDirection): SpeedDial = copy(directionV = v)
@@ -89,7 +93,7 @@ final case class SpeedDial private (
     def accessibleName(v: String): SpeedDial = copy(accNameV = Present(v))
 
     private[uic] def render(using Frame): UI =
-        val stat: UI = body(false, Absent, "", _ => ())
+        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(false, Absent, "", _ => ()))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -105,7 +109,7 @@ final case class SpeedDial private (
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
         // ONE region (see [[Reading]]).
-        MenuRender.readDisabled(itemsV).and(Reading.Live(open)).render((items, o) =>
+        MenuRender.readItems(entriesV).and(Reading.Live(open)).render((items, o) =>
             copy(itemsV = items).body(o, Present(open), base, focus)
         )
 

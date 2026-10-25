@@ -1,5 +1,7 @@
 package kyo.uic
 
+import kyo.*
+
 /** One entry of a list setter (`items`, `nodes`, `panels`, `tabs`): the entry itself, or a function of the setter's scope that
   * builds it.
   *
@@ -22,6 +24,19 @@ package kyo.uic
   */
 type Entry[A, S] = A | (S => A)
 
+/** An [[Entry]] or a signal of entries, for a list that changes while the page shows it (the requests a server holds, the
+  * results of a search):
+  *
+  * {{{
+  * uic.SplitButton("Release").items(_.item("All"), held.map(_.map(r => uic.MenuItem(r.label))))
+  * }}}
+  *
+  * The entries keep their order, the signal's rows taking its place among them. A component built again inside a region over
+  * such a list would start its mount again with every change, and with it its open state and highlight; given the signal, it
+  * reads the list in its own region instead.
+  */
+type LiveEntry[A, S] = Entry[A, S] | Signal[Seq[A]]
+
 private[uic] object Entry:
 
     /** The entries as values, each function applied to `scope`.
@@ -34,4 +49,29 @@ private[uic] object Entry:
             case build: Function1[?, ?] => build.asInstanceOf[S => A](scope)
             case value                  => value.asInstanceOf[A]
         }.toList
+
+    /** The entries as ONE reading of the list, in order: fixed while none of them is a signal, so a list of plain entries draws
+      * no region.
+      *
+      * A signal is matched before a function, since neither an entry type nor a builder is a `Signal`.
+      */
+    def reading[A, S](scope: S, entries: Seq[LiveEntry[A, S]])(using Frame): Reading[List[A]] =
+        given CanEqual[List[A], List[A]]  = CanEqual.derived
+        val parts: List[Reading[List[A]]] =
+            entries.foldLeft(List.empty[Reading[List[A]]]) { (acc, e) =>
+                e match
+                    case sig: Signal[?] => Reading.Live(sig.asInstanceOf[Signal[Seq[A]]].map(_.toList)) :: acc
+                    case entry          =>
+                        val one = resolve[A, S](scope, Seq(entry.asInstanceOf[Entry[A, S]]))
+                        acc match
+                            case Reading.Fixed(prev) :: rest => Reading.Fixed(prev ++ one) :: rest
+                            case _                           => Reading.Fixed(one) :: acc
+            }.reverse
+        // Neighbouring fixed entries were joined above, so two parts or more hold a signal.
+        parts match
+            case Nil        => Reading.Fixed(Nil)
+            case one :: Nil => one
+            case several    => Reading.Live(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
+        end match
+    end reading
 end Entry

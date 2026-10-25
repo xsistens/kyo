@@ -23,7 +23,8 @@ class ContextMenuTest extends UicTest:
     private def wired(open: SignalRef[Boolean], at: SignalRef[Maybe[UI.Point]])(using Frame) =
         for
             focus <- Signal.initRef(List.empty[Int])
-            ui = menu.wired(open, focus, at, Nil, "cm")
+            subs  <- Submenus.init()
+            ui = menu.wired(open, focus, at, subs, "cm")
             target <- elementWithClass(ui, "p-uic-contextmenu-target")
         yield target
 
@@ -72,7 +73,8 @@ class ContextMenuTest extends UicTest:
             open  <- Signal.initRef(true)
             at    <- Signal.initRef(Present(UI.Point(240, 130)): Maybe[UI.Point])
             focus <- Signal.initRef(List.empty[Int])
-            ui = menu.wired(open, focus, at, Nil, "cm")
+            subs  <- Submenus.init()
+            ui = menu.wired(open, focus, at, subs, "cm")
             drop <- elementWithClass(ui, "p-uic-overlay-backdrop")
             _    <- drop.attrs.onContextMenuEvt match
                 case Present(f) => f(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
@@ -86,7 +88,8 @@ class ContextMenuTest extends UicTest:
             open  <- Signal.initRef(true)
             at    <- Signal.initRef(Present(UI.Point(240, 130)): Maybe[UI.Point])
             focus <- Signal.initRef(List.empty[Int])
-            ui = menu.wired(open, focus, at, Nil, "cm")
+            subs  <- Submenus.init()
+            ui = menu.wired(open, focus, at, subs, "cm")
             panel <- elementWithClass(ui, "p-uic-overlay-panel")
         yield
             assert(panel.attrs.identifier.contains("cm-panel"), "derived from the component's own id")
@@ -167,17 +170,18 @@ class ContextMenuTest extends UicTest:
     // where that lives once the right-click is the caller's.
     "openAt flushes the highlight and the submenu tree the last visit left open" in {
         for
-            st <- allocState(rows)
-            _  <- Kyo.foreachDiscard(st.submenus)((_, r) => r.set(true))
-            _  <- st.focus.set(List(1, 0))
-            _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
-            f  <- st.focus.get
-            os <- Kyo.foreach(st.submenus)((_, r) => r.get)
-            on <- st.open.get
+            st     <- allocState(rows)
+            _      <- st.submenus.openExactly(Present(List(1)))
+            before <- st.submenus.openPaths
+            _      <- st.focus.set(List(1, 0))
+            _      <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
+            f      <- st.focus.get
+            os     <- st.submenus.openPaths
+            on     <- st.open.get
         yield
-            assert(st.submenus.nonEmpty, "the menu has a submenu to leave open in the first place")
+            assert(before == Set(List(1)), "the menu has a submenu to leave open in the first place")
             assert(f.isEmpty, "the highlight starts at the top")
-            assert(os.forall(!_), "and no submenu is carried over from where the reader last was")
+            assert(os.isEmpty, "and no submenu is carried over from where the reader last was")
             assert(on, "and the menu is open")
     }
 
@@ -185,18 +189,27 @@ class ContextMenuTest extends UicTest:
         for
             st <- allocState(rows)
             _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
-            _  <- Kyo.foreachDiscard(st.submenus)((_, r) => r.set(true))
+            _  <- st.submenus.openExactly(Present(List(1)))
             _  <- st.close
             on <- st.open.get
-            os <- Kyo.foreach(st.submenus)((_, r) => r.get)
+            os <- st.submenus.openPaths
         yield
             assert(!on)
-            assert(os.forall(!_), "and it leaves nothing for the next open to inherit")
+            assert(os.isEmpty, "and it leaves nothing for the next open to inherit")
     }
 
-    "the state carries one open/closed slot per submenu of the menu it was built from" in {
-        for st <- allocState(rows)
-        yield assert(st.submenus.map(_._1) == rows.submenuPaths)
+    "the state does not depend on the items: a submenu opened through it shows in a menu other than the one it came from" in {
+        // The open submenus are one set of paths rather than a slot per submenu of the tree the state was built from, so a
+        // menu whose items arrive later, or through a signal, still has somewhere to keep them.
+        val other = uic.ContextMenu(Seq(uic.MenuItem("More").items(uic.MenuItem("Deep").onSelect(()))))
+        for
+            st <- allocState(rows)
+            _  <- st.openAt(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
+            _  <- st.submenus.openExactly(Present(List(0)))
+            ui = other.targetless(st).render
+            deep <- elementsWithClass(ui, "p-contextmenu-submenu")
+        yield assert(deep.nonEmpty, "the submenu of the other menu's first row is open")
+        end for
     }
 
     "two named menus on one page take two distinct keys" in {

@@ -190,20 +190,6 @@ final case class CascadeSelect[A] private (
     /** The stable leaf key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
-    /** Paths (index chains from the root) of every GROUP item, in tree order;
-      * one open/closed ref is allocated per path (the Menubar machinery).
-      */
-    private[uic] def groupPaths: List[List[Int]] =
-        def loop(is: List[CascadeItem[A]], prefix: List[Int]): List[List[Int]] =
-            is.zipWithIndex.flatMap {
-                case (CascadeItem.Group(_, children), i) =>
-                    val p = prefix :+ i
-                    p :: loop(children, p)
-                case _ => Nil
-            }
-        loop(items, Nil)
-    end groupPaths
-
     // Lets the one region skip a write that holds what it already showed; leaves are still matched by key.
     private given CanEqual[A, A] = CanEqual.derived
 
@@ -218,37 +204,37 @@ final case class CascadeSelect[A] private (
     end leaves
 
     private[uic] def render(using Frame): UI =
-        // One open/closed signal for the root panel plus one per group, allocated
+        // One open/closed signal for the root panel plus the open groups, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, false, Map.empty.withDefaultValue(false), Absent, ph, ld, validity))
+        val stat: UI = shown.render((held, ld, ph) => bodyStatic(held, false, Set.empty, Absent, ph, ld, validity))
         UI.mounted {
             for
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
-                refs  <- Kyo.foreach(groupPaths)(p => Signal.initRef(false).map(p -> _))
+                subs  <- Submenus.init()
                 focus <- Signal.initRef(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-            yield wired(open, refs.toList, focus, Present(base))
+            yield wired(open, subs, focus, Present(base))
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes (golden-test seam): ONE reactive
-      * chain over the root ref plus every group ref (MenuRender precedent).
+      * region over the root ref and the open groups (see [[Submenus]]).
       */
     private[uic] def wired(
         open: SignalRef[Boolean],
-        refs: List[(List[Int], SignalRef[Boolean])],
+        subs: Submenus,
         focus: SignalRef[List[Int]],
         base: Maybe[String] = Absent
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(open).and(MenuRender.readAll(refs)).and(Reading.Live(focus))
-        panel.and(shown).render { case (((o, openMap), f), (held, ld, ph)) =>
-            val st = CascadeSelect.State(open, refs, focus, f, base)
-            bodyStatic(held, o, openMap.withDefaultValue(false), Present(st), ph, ld, validity)
+        val panel    = Reading.Live(open).and(subs.reading).and(Reading.Live(focus))
+        panel.and(shown).render { case (((o, openSet), f), (held, ld, ph)) =>
+            val st = CascadeSelect.State(open, subs, focus, f, base)
+            bodyStatic(held, o, openSet, Present(st), ph, ld, validity)
         }
     end wired
 
@@ -266,7 +252,7 @@ final case class CascadeSelect[A] private (
     private def bodyStatic(
         held: Maybe[A],
         isOpen: Boolean,
-        openMap: Map[List[Int], Boolean],
+        openMap: Set[List[Int]],
         st: Maybe[CascadeSelect.State],
         placeholder: Maybe[String],
         loading: Boolean,
@@ -284,7 +270,7 @@ final case class CascadeSelect[A] private (
             st match
                 case Present(state) =>
                     for
-                        _ <- MenuRender.openExactly(state.refs, Absent)
+                        _ <- state.submenus.openExactly(Absent)
                         _ <- state.focusRef.set(Nil)
                         _ <- state.open.set(false)
                     yield ()
@@ -297,7 +283,7 @@ final case class CascadeSelect[A] private (
             st match
                 case Present(state) =>
                     for
-                        _ <- MenuRender.openExactly(state.refs, Absent)
+                        _ <- state.submenus.openExactly(Absent)
                         _ <- state.focusRef.set(MenuNav.firstFocus(items).getOrElse(Nil))
                         _ <- state.open.set(true)
                     yield ()
@@ -351,8 +337,8 @@ final case class CascadeSelect[A] private (
                     case Present(step) =>
                         val reopen: UI.Action = step.open match
                             case MenuNav.OpenOp.Keep      => ()
-                            case MenuNav.OpenOp.Close     => MenuRender.openExactly(state.refs, Absent)
-                            case MenuNav.OpenOp.OpenTo(p) => MenuRender.openExactly(state.refs, Present(p))
+                            case MenuNav.OpenOp.Close     => state.submenus.openExactly(Absent)
+                            case MenuNav.OpenOp.OpenTo(p) => state.submenus.openExactly(Present(p))
                         val chosen: UI.Action =
                             if step.activate then
                                 MenuNav.itemAt(items, step.focus) match
@@ -463,7 +449,7 @@ final case class CascadeSelect[A] private (
         its: List[CascadeItem[A]],
         path: List[Int],
         current: String,
-        openMap: Map[List[Int], Boolean],
+        openMap: Set[List[Int]],
         st: Maybe[CascadeSelect.State],
         pick: A => UI.Action
     )(using Frame): UI =
@@ -485,11 +471,10 @@ final case class CascadeSelect[A] private (
                 def toggleGroup: UI.Action =
                     st match
                         case Present(state) =>
-                            val refs                     = state.refs
                             val target: Maybe[List[Int]] =
                                 if groupOpen then (if p.size > 1 then Present(p.init) else Absent)
                                 else Present(p)
-                            MenuRender.openExactly(refs, target)
+                            state.submenus.openExactly(target)
                         case Absent => ()
                 var row = li
                     .cssClass("p-cascadeselect-option")
@@ -516,27 +501,22 @@ final case class CascadeSelect[A] private (
                 // (RightStart = the sheet's `inset-inline-start: 100%; inset-block-start: 0`).
                 val panel: List[UI] = st match
                     case Present(state) if groupOpen =>
-                        val refs = state.refs
-                        refs.collectFirst { case (`p`, ref) => ref } match
-                            case Some(ref) =>
-                                List(
-                                    Overlay(ref)
-                                        .anchor(OverlayAnchor.RightStart)
-                                        .matchWidth(false)
-                                        .animate(false)
-                                        .panelClass("p-cascadeselect-overlay")
-                                        .panelClass("p-cascadeselect-option-list")
-                                        // No panel in the chain seeds focus, so none of them ever
-                                        // receives a key: the trigger keeps focus and wears the
-                                        // whole cascade keyboard, however deep the chain goes.
-                                        .seedFocus(false)
-                                        .dismissOnEscape(false)(
-                                            list(children, p, current, openMap, st, pick)
-                                        )
-                                        .renderOpen
+                        List(
+                            Overlay.gated(state.submenus.close(p))
+                                .anchor(OverlayAnchor.RightStart)
+                                .matchWidth(false)
+                                .animate(false)
+                                .panelClass("p-cascadeselect-overlay")
+                                .panelClass("p-cascadeselect-option-list")
+                                // No panel in the chain seeds focus, so none of them ever
+                                // receives a key: the trigger keeps focus and wears the
+                                // whole cascade keyboard, however deep the chain goes.
+                                .seedFocus(false)
+                                .dismissOnEscape(false)(
+                                    list(children, p, current, openMap, st, pick)
                                 )
-                            case None => Nil
-                        end match
+                                .renderOpen
+                        )
                     case _ => Nil
                 row((contentUI :: panel).map(toChild)*)
         }
@@ -552,11 +532,11 @@ object CascadeSelect:
     def apply[A](): CascadeSelect[A] = new CascadeSelect[A](Nil, _.toString)
 
     /** The wired interaction state, allocated per mount: the root panel's open flag, the
-      * per-group open refs the nested panels ride on, and the keyboard focus path.
+      * open groups the nested panels ride on, and the keyboard focus path.
       */
     final private[uic] case class State(
         open: SignalRef[Boolean],
-        refs: List[(List[Int], SignalRef[Boolean])],
+        submenus: Submenus,
         focusRef: SignalRef[List[Int]],
         focus: List[Int],
         /** The id the highlight is announced through. ONE id that travels with the highlight,

@@ -110,7 +110,8 @@ end OverlayAnchor
   * (menu-family hosts that gate the panel's presence themselves do so).
   */
 final case class Overlay private (
-    openRef: SignalRef[Boolean],
+    // Absent for a panel its host gates and closes itself (see [[Overlay.gated]]).
+    openRef: Maybe[SignalRef[Boolean]],
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     matchWidthV: Boolean = true,
     maxHeightV: Maybe[String] = Absent,
@@ -128,7 +129,8 @@ final case class Overlay private (
     backdropCtxV: Maybe[MouseEvent => UI.Action] = Absent,
     containClicksV: Boolean = false,
     triggerV: Maybe[UI] = Absent,
-    kids: List[UI] = Nil
+    kids: List[UI] = Nil,
+    closeV: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = Overlay
 
@@ -276,7 +278,7 @@ final case class Overlay private (
     def apply(cs: UI*): Overlay = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        val gated: UI = when(openRef)(openContent)
+        val gated: UI = openRef.fold(openContent)(ref => when(ref)(openContent))
         triggerV match
             case Present(t) => div.cssClass("p-uic-overlay-anchor")(toChild(t), toChild(gated))
             case Absent     => gated
@@ -516,7 +518,13 @@ final case class Overlay private (
         portal: Boolean = false,
         after: List[UI] = Nil
     )(using Frame): UI =
-        val close: UI.Action = openRef.set(false)
+        // Typed branch by branch: a `fold` over `()` and the ref write infers `Any`, and the write would land inert.
+        val close: UI.Action = closeV match
+            case Present(action) => action
+            case Absent          =>
+                openRef match
+                    case Present(ref) => ref.set(false)
+                    case Absent       => ()
 
         val backdrop: List[UI] =
             if dismissOnOutsideClickV then
@@ -588,7 +596,12 @@ object Overlay:
     /** An overlay whose visibility binds two-way to `open`: writes to the ref
       * open and close the panel; Escape and outside clicks write `false` back.
       */
-    def apply(open: SignalRef[Boolean]): Overlay = new Overlay(open)
+    def apply(open: SignalRef[Boolean]): Overlay = new Overlay(Present(open))
+
+    /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
+      * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
+      */
+    private[uic] def gated(close: UI.Action): Overlay = new Overlay(Absent, closeV = Present(close))
 
     /** How an OPEN overlay responds to scroll input outside its panel. The invisible outside-click
       * backdrop covers the whole viewport, so page scrolling necessarily runs through it; the mode

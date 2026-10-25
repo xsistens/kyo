@@ -147,6 +147,9 @@ end MenuGroup
 /** A menu item, built directly or as `_.item(...)` or `_.item.separator` (see [[MenuItemScope]]). */
 type MenuItemEntry = Entry[MenuItem, MenuItemScope]
 
+/** A [[MenuItemEntry]] or a signal of items, for a menu whose rows change while it is shown (see [[LiveEntry]]). */
+type MenuItemLiveEntry = LiveEntry[MenuItem, MenuItemScope]
+
 /** What `_` stands for in a setter that takes menu items: `_.item("Save")` and `_.item.separator`, the same as [[MenuItem]]'s own
   * constructors. Taken by every host of [[MenuItem]] (Menu, Menubar, TieredMenu, ContextMenu, SplitButton, SpeedDial) and by the
   * nested `items` of an item or a [[MenuGroup]].
@@ -166,6 +169,8 @@ object MenuItemScope:
     private val scope = new MenuItemScope
 
     private[uic] def resolve(entries: Seq[MenuItemEntry]): List[MenuItem] = Entry.resolve(scope, entries)
+
+    private[uic] def reading(entries: Seq[MenuItemLiveEntry])(using Frame): Reading[List[MenuItem]] = Entry.reading(scope, entries)
 end MenuItemScope
 
 /** A titled group of a MegaMenu column, built directly or as `_.group(...)` (see [[MenuGroupScope]]). */
@@ -183,34 +188,37 @@ object MenuGroupScope:
     private[uic] def resolve(entries: Seq[MenuGroupEntry]): List[MenuGroup] = Entry.resolve(scope, entries)
 end MenuGroupScope
 
+/** Which submenus of a host are open: ONE ref over the set of open paths (index chains from the root), however the items
+  * change. A ref per path could only be allocated for the paths of the items the host was built with, so rows that arrive
+  * through a signal would have none.
+  *
+  * A host reads [[reading]] in its one region beside its other state; a `Set` is a `List[Int] => Boolean`, so a row asks
+  * `open(path)`. A submenu panel closes its own path, and with it everything below, through [[close]].
+  */
+final private[uic] class Submenus private (ref: SignalRef[Set[List[Int]]]):
+
+    /** The open paths, for the host's one region. */
+    def reading: Reading[Set[List[Int]]] = Reading.Live(ref)
+
+    /** The open paths now. */
+    def openPaths(using Frame): Set[List[Int]] < Sync = ref.get
+
+    /** Opens exactly the chain leading to `target` (every prefix of the path) and closes everything else; `Absent` closes
+      * the whole tree.
+      */
+    def openExactly(target: Maybe[List[Int]])(using Frame): UI.Action =
+        ref.set(target.fold(Set.empty[List[Int]])(t => (1 to t.size).map(t.take).toSet))
+
+    /** Closes `path` and every submenu below it, as an Escape or an outside click on that submenu does. */
+    def close(path: List[Int])(using Frame): UI.Action =
+        ref.updateAndGet(_.filterNot(_.startsWith(path))).unit
+end Submenus
+
+private[uic] object Submenus:
+    def init(open: Set[List[Int]] = Set.empty)(using Frame): Submenus < Sync = Signal.initRef(open).map(new Submenus(_))
+
 /** Package-internal machinery shared by the menu family. */
 private[uic] object MenuRender:
-
-    /** Paths (index chains from the root) of every item carrying a submenu, in
-      * tree order; one open/closed `SignalRef[Boolean]` is allocated per path.
-      */
-    def submenuPaths(items: List[MenuItem], prefix: List[Int] = Nil): List[List[Int]] =
-        items.zipWithIndex.flatMap { (it, i) =>
-            val p = prefix :+ i
-            if it.itemsV.nonEmpty then p :: submenuPaths(it.itemsV, p) else Nil
-        }
-
-    /** Subscribes to every submenu ref and rebuilds the tree on any change: ONE
-      * reactive region around the whole component, so Prime's direct-child
-      * selectors (`.p-menubar-root-list > .p-menubar-item > ...`) stay intact (a
-      * per-item subscription would interpose kyo's classless reactive `<span>`).
-      */
-    def renderAll(refs: List[(List[Int], SignalRef[Boolean])])(
-        f: Map[List[Int], Boolean] => UI
-    )(using Frame): UI =
-        readAll(refs).render(f)
-
-    /** Every submenu ref as ONE [[Reading]] of which paths are open, for a host that reads it beside its other state in
-      * one region. A chain of one `render` per ref would leave each inner region subscribed against the values the outer
-      * ones held when they built it.
-      */
-    def readAll(refs: List[(List[Int], SignalRef[Boolean])])(using Frame): Reading[Map[List[Int], Boolean]] =
-        Reading.keyed(refs)
 
     /** Paths (index chains from the root) of every item whose `disabled` is reactive,
       * in tree order.
@@ -244,7 +252,7 @@ private[uic] object MenuRender:
     /** Every reactive `disabled` in the tree as ONE [[Reading]] of the items, each slot pinned to `Const`, for a host that
       * reads it beside its own state in one region.
       *
-      * The value-level [[BoolValue.reactive]] over a LIST, read the same way [[readAll]]
+      * The value-level [[BoolValue.reactive]] over a LIST, read the same way [[Submenus.reading]]
       * reads submenu state: ONE region around the whole component rather than a
       * subscription per row. That is not a micro-optimisation: a per-row `Signal.render`
       * interposes kyo's classless reactive `<span>` between the list and its rows, and
@@ -256,6 +264,14 @@ private[uic] object MenuRender:
       */
     def readDisabled(items: List[MenuItem])(using Frame): Reading[List[MenuItem]] =
         pinned(dynamicDisabled(items), items)(pinDisabled)
+
+    /** A host's rows as ONE [[Reading]]: the entries a setter took, signals among them read in place, and every reactive
+      * `disabled` resolved as [[readDisabled]] does. Fixed while nothing in it is reactive.
+      */
+    def readItems(entries: List[MenuItemLiveEntry])(using Frame): Reading[List[MenuItem]] =
+        MenuItemScope.reading(entries) match
+            case Reading.Fixed(items) => readDisabled(items)
+            case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => readDisabled(items).signal))
 
     /** The reading itself, shared by the two traversals: every reactive slot as one `combineLatestAll`, each value
       * pinned into `seed`. With `dyns` empty it is `seed`, fixed.
@@ -310,21 +326,8 @@ private[uic] object MenuRender:
         pinned(dyns, items)(pin)
     end readMegaDisabled
 
-    /** Opens exactly the chain leading to `target` (every prefix of the path) and
-      * closes everything else; this also flushes stale descendant state left
-      * behind by per-level backdrop dismissal (the Overlay backdrop only writes
-      * its own level's ref). `Absent` closes the whole tree.
-      */
-    def openExactly(
-        refs: List[(List[Int], SignalRef[Boolean])],
-        target: Maybe[List[Int]]
-    )(using Frame): Unit < Async =
-        Kyo.foreachDiscard(refs) { (p, r) =>
-            r.set(target.exists(t => t.startsWith(p)))
-        }
-
     /** Applies a [[MenuNav.Step]] to a keyboard host's signals: threads the
-      * `OpenOp` through [[openExactly]], and, on `activate` (run the focused
+      * `OpenOp` through [[Submenus.openExactly]], and, on `activate` (run the focused
       * leaf's action) or `dismiss`, collapses the submenu tree, closes the popup
       * if any, and clears the highlight. Plain movement just writes the new focus
       * path. Shared by every nested menu host (TieredMenu, ContextMenu, Menubar,
@@ -332,16 +335,16 @@ private[uic] object MenuRender:
       */
     def applyStep(
         items: List[MenuItem],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        submenus: Maybe[Submenus],
         focusRef: SignalRef[List[Int]],
         popupRef: Maybe[SignalRef[Boolean]],
         step: MenuNav.Step
     )(using Frame): UI.Action =
         val finish                                 = step.activate || step.dismiss
         def openTo(t: Maybe[List[Int]]): UI.Action =
-            refs match
-                case Present(rs) => openExactly(rs, t)
-                case Absent      => ()
+            submenus match
+                case Present(subs) => subs.openExactly(t)
+                case Absent        => ()
         val applyOpen: UI.Action =
             step.open match
                 case MenuNav.OpenOp.Keep      => ()
