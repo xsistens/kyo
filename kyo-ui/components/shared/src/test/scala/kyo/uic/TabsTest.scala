@@ -329,12 +329,33 @@ class TabsTest extends UicTest:
             panels  <- elementsWithClass(strip.id("library").render, "p-tabpanel")
         yield
             assert(panels.map(_.attrs.identifier).toList == List(
-                Present("library-one-panel"),
-                Present("library-two-panel"),
-                Present("library-three-panel")
+                Present("library_panel-one"),
+                Present("library_panel-two"),
+                Present("library_panel-three")
             ))
             assert(panels(2).attrs.ariaAttrs.get("labelledby").contains("library-three"))
-            assert(headers(2).attrs.ariaAttrs.get("controls").contains("library-three-panel"))
+            assert(headers(2).attrs.ariaAttrs.get("controls").contains("library_panel-three"))
+    }
+
+    "header and panel ids stay distinct for any tab ids, and each header names its own panel" in {
+        // "two-panel" would print as the panel of "two" if a panel id were its header's plus a suffix.
+        val clash = uic.Tabs[String]().id("lib").tabs(
+            uic.Tab("Two", p("second"), "two"),
+            uic.Tab("Two panel", p("other"), "two-panel")
+        )
+        for
+            headers <- elementsWithClass(clash.render, "p-tab")
+            panels  <- elementsWithClass(clash.render, "p-tabpanel")
+        yield
+            val ids = (headers ++ panels).flatMap(_.attrs.identifier.toList).toList
+            assert(ids.size == 4, "every header and every panel carries an id")
+            assert(ids.distinct == ids, s"no two elements share an id: $ids")
+            headers.zip(panels).foreach { (h, pnl) =>
+                assert(h.attrs.ariaAttrs.get("controls") == pnl.attrs.identifier.toOption)
+                assert(pnl.attrs.ariaAttrs.get("labelledby") == h.attrs.identifier.toOption)
+            }
+            succeed
+        end for
     }
 
 end TabsTest
