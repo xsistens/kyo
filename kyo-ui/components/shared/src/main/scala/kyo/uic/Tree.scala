@@ -140,6 +140,9 @@ final case class Tree[K] private (
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree[K] = copy(accessibleNameV = v)
 
+    // A node id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
+    private given CanEqual[K, K] = CanEqual.derived
+
     /** Whether nodes respond to content clicks (selecting or an explicit handler). */
     private def selectable: Boolean =
         selectionModeV != SelectionMode.None || onItemClickF.isDefined
@@ -169,17 +172,24 @@ final case class Tree[K] private (
                 cmds <- UI.commands
                 base <- cmds.freshId
                 hi   <- Signal.initRef(-1)
-            yield hi.render(focus => subscribed(Present(Roving(hi, focus, base))))
+            yield wired(hi, base)
         }.placeholder(subscribed(Absent))
 
-    /** The expansion/selection subscriptions around one [[body]] render. */
-    private def subscribed(roving: Maybe[Roving])(using Frame): UI =
-        // React to whichever refs are bound; nested reactive nodes render through in SSR.
-        (expandedRef, selectedRef) match
-            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp, sel, roving)))
-            case (Present(e), Absent)     => e.render(exp => body(exp, Set.empty, roving))
-            case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel, roving))
-            case _                        => body(Set.empty, Set.empty, roving)
+    /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
+    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))
+
+    /** The expansion, the selection and the highlight around one [[body]] render, read as ONE region (see [[Reading]]): a
+      * key writes the highlight, the expansion and the selection together, and a nested region would repaint the values it
+      * closed over.
+      */
+    private def subscribed(keyboard: Maybe[(SignalRef[Int], String)])(using Frame): UI =
+        val exp = expandedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
+        val sel = selectedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
+        val hi  = keyboard.fold(Reading.Fixed(-1))((ref, _) => Reading.Live(ref))
+        exp.and(sel).and(hi).render { case ((e, s), h) =>
+            body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
+        }
+    end subscribed
 
     private def body(exp: Set[K], sel: Set[K], roving: Maybe[Roving])(using Frame): UI =
         val rows     = Tree.visibleRows(nodeList, exp)

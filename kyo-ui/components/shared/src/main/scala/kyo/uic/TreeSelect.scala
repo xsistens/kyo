@@ -343,7 +343,7 @@ final case class TreeSelect[K] private (
                     t
                 }
 
-        val panelUI: List[UI] = st.toList.map { state =>
+        val panelUI: List[UI] = st.toList.filter(_ => isOpen).map { state =>
             val roving     = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
             val treeUI: UI = hosted match
                 case Absent =>
@@ -369,7 +369,7 @@ final case class TreeSelect[K] private (
             panel(
                 (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
             )
-                .render
+                .renderShown
         }
 
         // === field root ==========================================================

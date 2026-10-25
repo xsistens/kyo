@@ -103,10 +103,11 @@ final case class SpeedDial private (
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
-        // See Menu.wired for why the resolution sits inside the mount's content.
-        MenuRender.resolveDisabled(itemsV) { items =>
-            open.render(o => copy(itemsV = items).body(o, Present(open), base, focus))
-        }
+        // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
+        // ONE region (see [[Reading]]).
+        MenuRender.readDisabled(itemsV).and(Reading.Live(open)).render((items, o) =>
+            copy(itemsV = items).body(o, Present(open), base, focus)
+        )
 
     /** The actions the fan actually fans out: a separator has no place in a row of round icon
       * buttons, the extracted sheet has no `.p-speeddial-separator` to style one, and rendering

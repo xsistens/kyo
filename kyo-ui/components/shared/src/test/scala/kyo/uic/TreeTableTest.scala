@@ -241,4 +241,23 @@ class TreeTableTest extends UicTest:
             assert(s.attrs.ariaAttrs.get("multiselectable").isEmpty, "one row at a time is the default and says nothing")
     }
 
+    "everything the table reads is ONE region: flags, expansion, selection, sort and cursor" in {
+        for
+            shown    <- Signal.initRef(true)
+            sortable <- Signal.initRef(true)
+            exp      <- Signal.initRef(Set(ada))
+            sel      <- Signal.initRef(Set(grace))
+            sort     <- Signal.initRef(List.empty[uic.SortKey])
+            cursor   <- Signal.initRef(Maybe("ada"))
+            ui = uic.TreeTable[Row]().nodes(family*).rowKey(_.id)
+                .columns(uic.column("Name")(_.name).visible(shown).sortable(sortable).sortBy(_.name))
+                .expanded(exp).selection(sel).sort(sort)
+                .wired("tt", Present(cursor), _ => ())
+            regions <- regionsAbove(ui, "p-treetable")
+        yield assert(
+            regions == 1,
+            s"a key writes the expansion, the cursor and the selection together; nested regions repaint older rows: $regions"
+        )
+    }
+
 end TreeTableTest

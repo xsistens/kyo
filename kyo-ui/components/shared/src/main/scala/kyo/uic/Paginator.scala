@@ -130,16 +130,14 @@ final case class Paginator private (
     private def totalPages(rows: Int): Int = math.max(1, (totalRecordsV + rows - 1) / rows)
 
     private[uic] def render(using Frame): UI =
-        def withPage(rows: Int): UI =
+        // The page and the rows per page are read as ONE region (see [[Reading]]): changing the rows writes both, and a
+        // nested region would repaint the page it closed over.
+        val page: Reading[Int] =
             currentPageV match
-                case Present(cur) => body(cur, rows)
-                case Absent       =>
-                    pageRef match
-                        case Present(ref) => ref.render(body(_, rows))
-                        case Absent       => body(0, rows)
-        rowsRef match
-            case Present(ref) => ref.render(r => withPage(math.max(1, r)))
-            case Absent       => withPage(rowsV)
+                case Present(cur) => Reading.Fixed(cur)
+                case Absent       => pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
+        val rows = rowsRef.fold(Reading.Fixed(rowsV))(ref => Reading.Live(ref))
+        page.and(rows).render((p, r) => body(p, if rowsRef.isDefined then math.max(1, r) else r))
     end render
 
     private def body(page: Int, rows: Int)(using Frame): UI =

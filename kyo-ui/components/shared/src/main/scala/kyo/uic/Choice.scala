@@ -140,6 +140,9 @@ end MultiChoice
   */
 private[uic] trait SetBinding[K]:
     def render(f: Set[K] => UI)(using Frame): UI
+
+    /** The held set as a signal, for a host that reads it beside its other state in one region. */
+    def signal(using Frame): Signal[Set[K]]
     def read(f: Set[K] => UI.Action)(using Frame): UI.Action
     def update(f: Set[K] => Set[K])(using Frame): UI.Action
 end SetBinding
@@ -150,6 +153,7 @@ private[uic] object SetBinding:
     def of[K](ref: SignalRef[Set[K]]): SetBinding[K] =
         new SetBinding[K]:
             def render(f: Set[K] => UI)(using Frame): UI             = ref.render(f)
+            def signal(using Frame): Signal[Set[K]]                  = ref
             def read(f: Set[K] => UI.Action)(using Frame): UI.Action = ref.use(f)
             def update(f: Set[K] => Set[K])(using Frame): UI.Action  = ref.getAndUpdate(f).unit
 
@@ -157,6 +161,7 @@ private[uic] object SetBinding:
     def keyed[A](choice: MultiChoice[A], options: => Seq[A], key: A => String): SetBinding[String] =
         new SetBinding[String]:
             def render(f: Set[String] => UI)(using Frame): UI                 = choice.render(as => f(as.map(key)))
+            def signal(using Frame): Signal[Set[String]]                      = choice.ref.map(_.map(key))
             def read(f: Set[String] => UI.Action)(using Frame): UI.Action     = choice.read(as => f(as.map(key)))
             def update(f: Set[String] => Set[String])(using Frame): UI.Action =
                 choice.update(options, key)(f).unit

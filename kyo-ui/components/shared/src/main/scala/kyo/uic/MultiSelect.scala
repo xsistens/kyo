@@ -485,7 +485,7 @@ final case class MultiSelect[A] private (
             }
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.map(s => overlayPanel(current, s, toggleOption))
+        val panelUI: List[UI] = st.toList.filter(_.isOpen).map(s => overlayPanel(current, s, toggleOption))
 
         // === field root ==========================================================
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
@@ -719,7 +719,7 @@ final case class MultiSelect[A] private (
             .seedFocus(false)
             .dismissOnEscape(false)
             .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
-            .render
+            .renderShown
     end overlayPanel
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"

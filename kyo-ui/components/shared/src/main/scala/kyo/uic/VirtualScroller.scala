@@ -81,6 +81,9 @@ final case class VirtualScroller[A] private (
     private def totalHeight: Int               = items.length * itemSizeV
     private def clampScroll(v: Double): Double = viewport.clamp(v, items.length)
 
+    // Lets the one region skip a window that holds what it already drew.
+    private given CanEqual[A, A] = CanEqual.derived
+
     private[uic] def render(using Frame): UI =
         // The scroll position lives in a signal allocated by this effectful mount. The VIEWPORT shell is stable (only
         // its inner window is reactive), so the browser-owned `scrollTop` survives every window re-render. This matters
@@ -103,9 +106,10 @@ final case class VirtualScroller[A] private (
     private[uic] def wired(scroll: SignalRef[Double])(using Frame): UI =
         sourceV match
             case Present(src) =>
-                shell(Present(scroll))(
-                    scroll.render(top => src.window.render(w => src.total.render(t => sourceWindow(top, w, t))))
-                )
+                // The scroll, the window and the total are read as ONE region (see [[Reading]]): a feed writes the window and
+                // the total together, and a nested region would draw the rows against a total it closed over.
+                val read = Reading.Live(scroll).and(Reading.Live(src.window)).and(Reading.Live(src.total))
+                shell(Present(scroll))(read.render { case ((top, w), t) => sourceWindow(top, w, t) })
             case Absent => shell(Present(scroll))(scroll.render(top => window(top)))
 
     /** What a static projection of a source-backed list shows: one screen of slots with

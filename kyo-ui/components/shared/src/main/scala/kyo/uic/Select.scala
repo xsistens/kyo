@@ -512,7 +512,7 @@ final case class Select[A] private (
             nameV.toList.map(n => hiddenInput.jsProp("name", n).value(current))
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.map(s => overlayPanel(current, s, pick))
+        val panelUI: List[UI] = st.toList.filter(_.isOpen).map(s => overlayPanel(current, s, pick))
 
         // === field root ==========================================================
         var el = div.cssClass("p-select").cssClass("p-component")
@@ -799,7 +799,7 @@ final case class Select[A] private (
             .seedFocus(false)
             .dismissOnEscape(false)
             .containClicks(true)((header ++ keyCollisionCard ++ List(listUI))*)
-            .render
+            .renderShown
     end overlayPanel
 
     /** The loud card shown at the top of the panel when the option keys collide, so

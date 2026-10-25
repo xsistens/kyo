@@ -293,17 +293,21 @@ final case class DatePicker[A] private (
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
             DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
-        // The month, the cursor, the seed flag, the view and the selection are read as ONE region (see [[Reading]]): a pick
-        // writes several of them, and a nested region would draw the grid against the values it closed over.
-        val calendar = Reading.Live(mref.signal).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
-        val body: UI =
-            calendar.render { case (((mv, cv), sd), (view, snap)) =>
-                val n = nav(mv, cv, sd)
-                panelUI(view, if mv.isEmpty then Absent else Present(mv), snap, Present(oref), Present(n), inline = inlineFlag)
-            }
+        // Whether it is open, the month, the cursor, the seed flag, the view and the selection are read as ONE region (see
+        // [[Reading]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
+        // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
+        val calendar =
+            Reading.Live(oref).and(Reading.Live(mref.signal)).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
         val panel: UI =
-            if inlineFlag then when(oref)(body)
-            else Overlay(oref).seedFocus(false)(body).render
+            calendar.render { case ((((open, mv), cv), sd), (view, snap)) =>
+                if !open then UI.empty
+                else
+                    val n    = nav(mv, cv, sd)
+                    val grid =
+                        panelUI(view, if mv.isEmpty then Absent else Present(mv), snap, Present(oref), Present(n), inline = inlineFlag)
+                    if inlineFlag then grid else Overlay(oref).seedFocus(false)(grid).renderShown
+                end if
+            }
         assemble(Present(oref), Present(nav("", "", false)), floating = !inlineFlag, panel, openSignal = Present(oref))
     end wiredWith
 

@@ -128,13 +128,9 @@ object FloatLabel:
                 end match
 
             case Host.Ac(auto) =>
-                def body(filled: Boolean): UI =
-                    labelled((if filled then auto.fieldExtraClass("p-filled") else auto).render)
-                auto.valueBinding match
-                    case Present(Input.Value.Ref(ref)) => ref.render(v => body(v.nonEmpty))
-                    case Present(Input.Value.Const(v)) => body(v.nonEmpty)
-                    case Absent                        => body(false)
-                end match
+                // The AutoComplete stamps p-filled INSIDE its own region, from the text it reads there: a region here would
+                // sit around its mount and rebuild it when the field fills.
+                labelled(auto.stampFilled.render)
 
             case Host.Sel(select) =>
                 // The Select stamps p-inputwrapper/-filled INSIDE its own subscription

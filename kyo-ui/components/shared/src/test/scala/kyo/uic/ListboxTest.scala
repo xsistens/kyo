@@ -72,4 +72,16 @@ class ListboxTest extends UicTest:
             assert(header == root + 1, s"the header is one region below the listbox root: $header vs $root")
     }
 
+    "the selection and the query are ONE region over the list" in {
+        for
+            q   <- Signal.initRef("")
+            sel <- Signal.initRef(Set("a"))
+            ui = fruit.filterQuery(q).selection(sel).render
+            regions <- regionsAbove(ui, "p-listbox")
+        yield assert(
+            regions == 1,
+            s"a row click writes the highlight and the selection; nested regions can repaint the older state: $regions"
+        )
+    }
+
 end ListboxTest

@@ -45,11 +45,12 @@ class AutoCompleteTest extends UicTest:
         for
             (_, _, open, ui) <- state(hiAt = 0)
             whenOpen         <- regionsAbove(ui, "p-autocomplete")
+            panel            <- regionsAbove(ui, "p-autocomplete-list")
             _                <- open.set(false)
             whenClosed       <- regionsAbove(ui, "p-autocomplete")
         yield assert(
-            whenOpen == 1 && whenClosed == 1,
-            s"a pick writes the text and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+            whenOpen == 1 && panel == 1 && whenClosed == 1,
+            s"a pick writes the text and closes the panel; a nested region can repaint the older state: $whenOpen / $panel / $whenClosed"
         )
     }
 

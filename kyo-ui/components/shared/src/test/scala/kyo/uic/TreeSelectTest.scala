@@ -131,11 +131,12 @@ class TreeSelectTest extends UicTest:
             ph                  <- Signal.initRef("Pick a node")
             (open, _, _, _, ui) <- field(treeSelect.loading(loading).placeholder(ph), open = true)
             whenOpen            <- regionsAbove(ui, "p-treeselect")
+            panel               <- regionsAbove(ui, "p-treeselect-tree-container")
             _                   <- open.set(false)
             whenClosed          <- regionsAbove(ui, "p-treeselect")
         yield assert(
-            whenOpen == 1 && whenClosed == 1,
-            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+            whenOpen == 1 && panel == 1 && whenClosed == 1,
+            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $panel / $whenClosed"
         )
     }
 

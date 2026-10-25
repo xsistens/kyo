@@ -467,6 +467,29 @@ class DataTableTest extends UicTest:
 
     // A column that is not on the screen is not in the grid either: the cursor addresses
     // cells by position, so the position has to mean what the reader sees.
+    "everything around the body is ONE region: edit state, column order, flags, sort, filter and widths" in {
+        // Starting an edit writes the error and the edited cell, a column drop the order and the drag: a region
+        // nested per signal repaints the table against the values the inner one closed over.
+        for
+            rows    <- Signal.initRef[Seq[Item]](items)
+            editing <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            name    <- Signal.initRef("")
+            err     <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            shown   <- Signal.initRef(true)
+            canSort <- Signal.initRef(true)
+            sort    <- Signal.initRef(List.empty[uic.SortKey])
+            query   <- Signal.initRef("")
+            widths  <- Signal.initRef(Map.empty[List[String], Double])
+            order   <- Signal.initRef(List(List("Price"), List("Name")))
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)).sortable(canSort),
+                uic.column("Price")(_.price.toString).visible(shown)
+            ).editingCell(editing).sort(sort).globalFilter(query).columnWidths(widths).columnOrder(order)
+                .wired("t", Map(List("Name") -> name), err, _ => ())
+            regions <- regionsAbove(ui, "p-datatable")
+        yield assert(regions == 1, s"the table sits under $regions regions; nested ones repaint older state")
+    }
+
     "hiding a column renumbers the grid the keyboard moves over" in {
         for
             rows    <- Signal.initRef[Seq[Item]](items)
@@ -2537,6 +2560,17 @@ class DataTableTest extends UicTest:
             case _                  => ""
         e.children.map(walk).mkString
     end textOf
+
+    "the open filter menu is ONE region over the open state and the draft" in {
+        // Opening writes the draft and the open state together; a draft region nested in the Overlay's own drew
+        // the menu from a draft it closed over.
+        for
+            (ui, _, open, _) <- filterMenu
+            _                <- open.set(true)
+            funnel           <- regionsAbove(ui, "p-datatable-popover-filter")
+            menu             <- regionsAbove(ui, "p-datatable-filter-buttonbar")
+        yield assert(menu == funnel + 1, s"the menu sits ${menu - funnel} regions below the funnel's span; one reads both")
+    }
 
     "the funnel is in the header cell and there is no filter row" in {
         for
