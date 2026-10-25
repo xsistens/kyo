@@ -490,6 +490,21 @@ class SelectTest extends UicTest:
         end for
     }
 
+    "a selection over a signal derived from a ref reports a pick through onChange, as a paginator's page size does" in {
+        for
+            size <- Signal.initRef(10)
+            seen <- Signal.initRef(List.empty[Maybe[Int]])
+            ui   <- opened(
+                uic.Select[Int]().options(Seq(10, 20, 50))(_.toString).selection(size.map(math.max(1, _)))
+                    .onChange(v => seen.updateAndGet(_ :+ v).unit)
+            )
+            rs  <- rows(ui)
+            _   <- click(rs(1))
+            got <- seen.get
+        yield assert(got == List(Present(20)), s"onChange saw $got")
+        end for
+    }
+
     "a one-way selection reports no change for the option it already shows" in {
         for
             route <- Signal.initRef(Maybe(fruit(2)))

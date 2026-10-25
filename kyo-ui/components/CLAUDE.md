@@ -882,5 +882,10 @@ carried through.
 An untyped `match` with `Unit < Async` and `Unit` branches infers `Any`: the
 effect lands inert in a by-name handler and silently does nothing (a "dead"
 button). Type handler-effect branches explicitly (`val eff: UI.Action = ...`).
+`maybe.fold(())(f)` is the same trap in one line, even where the expected type is
+`UI.Action`: it handed the action back as a value, so the paginator's two dropdowns
+and the filter menu's operator and mode dropdowns did nothing on a pick. Write
+`fold[UI.Action](())(f)`, and test a handler by running it (`PaginatorTest`,
+`DataTableTest`), since a test that writes the ref itself never notices.
 The build runs `-Werror`, so a stray `@nowarn` that no longer suppresses anything
 fails it.
