@@ -32,6 +32,7 @@ final case class SplitButton private (
     disabledFlag: Boolean = false,
     dropdownIconV: Maybe[IconGlyph] = Absent,
     itemsV: List[MenuItem] = Nil,
+    itemsSigV: Maybe[Signal[Seq[MenuItem]]] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     onClickEff: Maybe[UI.Action] = Absent
 ) extends Node:
@@ -69,6 +70,15 @@ final case class SplitButton private (
     /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]). */
     def items(is: MenuItemEntry*): SplitButton = copy(itemsV = itemsV ++ MenuItemScope.resolve(is))
 
+    /** Popup menu rows that follow `rows`, after any given with [[items]].
+      *
+      * For a list that changes while the page shows it (the requests a server holds, say). Building the split button
+      * again inside a region over the list would start its mount again with every change, and with it its open state
+      * and highlight; while a mount starts, a click on it reaches nothing. Read here, the list is part of the button's
+      * one region instead.
+      */
+    def itemsFrom(rows: Signal[Seq[MenuItem]]): SplitButton = copy(itemsSigV = Present(rows))
+
     /** Binds the panel visibility two-way to `ref` (optional; self-managed
       * otherwise).
       */
@@ -99,9 +109,13 @@ final case class SplitButton private (
         // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
         // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
         // nested in this one would repaint what it closed over.
-        MenuRender.readDisabled(itemsV).and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
+        val rows: Reading[List[MenuItem]] = itemsSigV match
+            case Present(sig) => Reading.Live(sig.switchMap(more => MenuRender.readDisabled(itemsV ++ more).signal))
+            case Absent       => MenuRender.readDisabled(itemsV)
+        rows.and(Reading.Live(open)).and(Reading.Live(hi)).render { case ((items, o), h) =>
             body(o, Present(open), Present(hi), base, items, h)
         }
+    end wired
 
     private def body(
         isOpen: Boolean,
