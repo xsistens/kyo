@@ -25,11 +25,15 @@ import kyo.UI.*
   * invariant: a replaced strip drops the CSS `transition` mid-flight), so the
   * nav buttons (disabled at the ends), the indicator dots (active dot), and each
   * item's `p-carousel-item-active` class (all of which DO change per page) live
-  * OUTSIDE the strip: the nav row and indicator list are small `pageRef.render`
-  * regions that are SIBLINGS of the strip, and the per-item active class is
-  * toggled IN PLACE via `bindClassById` per item (its id minted alongside the
-  * strip's). A page write therefore only re-styles the strip and re-renders the
-  * sibling regions; the strip's transition animates the turn.
+  * OUTSIDE the strip: the nav row and indicator list are small regions over the
+  * items and the page that are SIBLINGS of the strip, and the per-item active
+  * class is a reactive class toggled IN PLACE on the item. A page write therefore
+  * only re-styles the strip and re-renders the sibling regions; the strip's
+  * transition animates the turn.
+  *
+  * Items from a signal ([[items]] takes one) render inside the strip as a list
+  * region, so the strip itself survives a change to them: its width, its
+  * translate, the page count and the dots all follow the items as they are.
   *
   * Placeholder / golden (server-honest, no runtime): the SSR/no-runtime
   * `.placeholder` keeps the ORIGINAL window render (only the `numVisible` visible
@@ -59,7 +63,9 @@ import kyo.UI.*
   * surface is not detached mid-flight.
   */
 final case class Carousel[A] private (
+    // The items the placeholder draws, resolved from `itemSources` by the render.
     itemList: List[A] = Nil,
+    itemSources: List[List[A] | Signal[Seq[A]]] = Nil,
     templateF: Maybe[A => UI] = Absent,
     pageRef: Maybe[SignalRef[Int]] = Absent,
     numVisibleV: Int = 1,
@@ -74,9 +80,30 @@ final case class Carousel[A] private (
 ) extends Node:
     type Self = Carousel[A]
 
-    /** Appends items; `template` renders one item's slide content. */
-    def items(is: Seq[A])(template: A => UI): Carousel[A] =
-        copy(itemList = itemList ++ is.toList, templateF = Present(template))
+    // Items compare by `equals`, which is how a list of them read from a signal tells a change from a repeat.
+    private given CanEqual[A, A] = CanEqual.derived
+
+    /** Appends items, or a signal of items that change while the carousel is shown; `template` renders one item's slide
+      * content. The items keep the order the calls gave them.
+      */
+    def items(is: Iterable[A] | Signal[Seq[A]])(template: A => UI): Carousel[A] =
+        val source: List[A] | Signal[Seq[A]] = is match
+            case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
+            case as             => as.asInstanceOf[Iterable[A]].toList
+        copy(itemSources = itemSources :+ source, templateF = Present(template))
+    end items
+
+    /** The items as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[A]] = Reading.concat(itemSources)
+
+    /** The items and the page, read as ONE region (see [[Reading]]): the page count and so the clamp follow the items. */
+    private def shown(r: SignalRef[Int])(using Frame): Reading[(List[A], Int)] = entries.and(Reading.Live(r))
+
+    /** The items as they are now, read when an autoplay step or a swipe needs their count. */
+    private def current(using Frame): List[A] < Sync =
+        entries match
+            case Reading.Fixed(as) => as
+            case Reading.Live(sig) => sig.current
 
     /** Binds the 0-based page two-way (clamped into range at render). */
     def page(ref: SignalRef[Int]): Carousel[A] = copy(pageRef = Present(ref))
@@ -123,29 +150,27 @@ final case class Carousel[A] private (
     /** Fired with the new page after a nav/indicator/swipe/autoplay write. */
     def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = copy(onPageChangeF = Present(Callback.of(f)))
 
-    /** Prime's page count: one page per `numScroll` step over the overhang. */
-    private def totalPages: Int = Carousel.pageCount(numScrollV, numVisibleV, itemList.size)
+    /** Prime's page count over `n` items: one page per `numScroll` step over the overhang. */
+    private def pagesOf(n: Int): Int = Carousel.pageCount(numScrollV, numVisibleV, n)
 
     private[uic] def render(using Frame): UI =
         pageRef match
             case Present(r) =>
-                // The stable strip needs a session id (bindStyleById target), one id per
-                // item (bindClassById targets for the active class), and a swipe start-x
-                // ref, all minted once in the mount. The autoplay fiber is spawned here
-                // too, so its Scope is this mount, which cancels it on unmount.
+                // The stable strip needs a session id (bindStyleById target, and the base every item and dot id
+                // derives from) and a swipe start-x ref, both minted once in the mount. The autoplay fiber is spawned
+                // here too, so its Scope is this mount, which cancels it on unmount.
                 UI.mounted {
                     for
                         cmds     <- UI.commands
                         stripId  <- cmds.freshId
-                        itemIds  <- Kyo.foreach(itemList.indices.toList)(_ => cmds.freshId)
                         startPos <- Signal.initRef(0.0)
                         _        <- autoplayLoop(r)
                     yield fragment(
-                        slideTrigger(cmds, stripId, itemIds, r),
-                        interactive(r, stripId, itemIds, startPos, id => cmds.focusId(id))
+                        slideTrigger(cmds, stripId, r),
+                        interactive(r, stripId, startPos, id => cmds.focusId(id))
                     )
-                }.placeholder(r.render(p => body(p)))
-            case Absent => body(0)
+                }.placeholder(shown(r).render((as, p) => copy(itemList = as).body(p)))
+            case Absent => entries.render(as => copy(itemList = as).body(0))
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
       * cancels it on unmount, so it never leaks and never busy-blocks: it sleeps
@@ -155,15 +180,22 @@ final case class Carousel[A] private (
       * and autoplay goes on.
       */
     private def autoplayLoop(r: SignalRef[Int])(using Frame): Unit < (Async & Scope) =
-        val pages = totalPages
-        if autoplayMsV <= 0 || pages <= 1 then ()
+        // Fixed items that make one page have nothing to cycle; a live list may grow into more, so it always gets the
+        // fiber, and each step counts the pages it holds then.
+        val idle = entries match
+            case Reading.Fixed(as) => pagesOf(as.size) <= 1
+            case Reading.Live(_)   => false
+        if autoplayMsV <= 0 || idle then ()
         else
             Fiber.init {
                 Loop.forever {
                     for
                         _   <- Async.sleep(autoplayMsV.millis)
+                        as  <- current
                         cur <- r.get
-                        _   <- advance((cur + 1) % pages) // always wrap, even when not circular
+                        pages = pagesOf(as.size)
+                        // always wrap, even when not circular
+                        _ <- (if pages > 1 then advance((cur + 1) % pages) else (): UI.Action)
                     yield Loop.continue(())
                 }
             }.unit
@@ -177,29 +209,24 @@ final case class Carousel[A] private (
       * each item's `p-carousel-item-active` to the current window. Both detach when
       * the mount's Scope closes. Captures `cmds` so the inner effect needs no Env.
       */
-    private def slideTrigger(cmds: UI.Commands, stripId: String, itemIds: Seq[String], r: SignalRef[Int])(using Frame): UI =
+    private def slideTrigger(cmds: UI.Commands, stripId: String, r: SignalRef[Int])(using Frame): UI =
         UI.mounted {
-            val bindTransform: Unit < (Async & Scope) =
-                cmds.bindStyleById(stripId, r.map(p => stripTransform(p)))
-            val bindActive: Unit < (Async & Scope) =
-                Kyo.foreach(itemList.indices.toList) { i =>
-                    cmds.bindClassById(itemIds(i), "p-carousel-item-active", r.map(p => inWindow(i, p)))
-                }.unit
-            bindTransform.andThen(bindActive).andThen(UI.empty)
+            cmds.bindStyleById(stripId, shown(r).signal.map((as, p) => stripStyle(p, as.size))).andThen(UI.empty)
         }.placeholder(UI.empty)
 
-    /** The strip's translate for a page: the fraction is negative of the window's
-      * lead index over the item count (the strip spans `itemCount/numVisible`
-      * viewports, so this % of the strip's own width is exactly `clampedStart`
-      * item-widths). Vertical orientation slides on Y instead.
+    /** The strip's size and translate for a page over `n` items. The size spans `n/numVisible` viewports; the translate's
+      * fraction is negative of the window's lead index over `n`, so this % of the strip's own size is exactly
+      * `clampedStart` item-sizes. Vertical orientation sizes and slides on Y instead.
       */
-    private def stripTransform(rawPage: Int): Style =
-        val frac = Carousel.translateFraction(rawPage, numScrollV, numVisibleV, itemList.size)
-        if verticalFlag then Style.translate(0.pct, frac.pct) else Style.translate(frac.pct, 0.pct)
+    private def stripStyle(rawPage: Int, n: Int): Style =
+        val frac = Carousel.translateFraction(rawPage, numScrollV, numVisibleV, n)
+        if verticalFlag then Style.height(stripSpan(n)).translate(0.pct, frac.pct)
+        else Style.width(stripSpan(n)).translate(frac.pct, 0.pct)
+    end stripStyle
 
-    /** Whether item `i` sits in the visible window at `rawPage`. */
-    private def inWindow(i: Int, rawPage: Int): Boolean =
-        val cs = Carousel.clampedStart(rawPage, numScrollV, numVisibleV, itemList.size)
+    /** Whether item `i` of `n` sits in the visible window at `rawPage`. */
+    private def inWindow(i: Int, rawPage: Int, n: Int): Boolean =
+        val cs = Carousel.clampedStart(rawPage, numScrollV, numVisibleV, n)
         i >= cs && i < cs + numVisibleV
 
     /** The interactive (stable-strip + reactive siblings) subtree the mount
@@ -212,34 +239,37 @@ final case class Carousel[A] private (
         startPos: SignalRef[Double],
         focus: String => UI.Action = _ => ()
     )(using Frame): UI =
-        interactive(ref, stripId, itemList.indices.map(i => s"$stripId-i$i"), startPos, focus)
+        interactive(ref, stripId, startPos, focus)
 
     /** The runtime render: reactive nav/indicator siblings around the STABLE strip
       * of ALL items. Only the siblings re-render on a page turn; the strip is built
-      * once so `bindStyleById` can slide it in place.
+      * once so `bindStyleById` can slide it in place. Its items are a list region
+      * when they come from a signal, which a change to them repaints without
+      * replacing the strip.
       */
     private def interactive(
         r: SignalRef[Int],
         stripId: String,
-        itemIds: Seq[String],
         startPos: SignalRef[Double],
         focus: String => UI.Action
     )(using Frame): UI =
-        val pages     = totalPages
+        val state     = shown(r)
         val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
         val nextGlyph = if verticalFlag then Icons.chevronDown else Icons.chevronRight
 
         val prev: List[UI] =
             if showItemNavigatorsFlag then
-                List(r.render { p =>
-                    val page = Carousel.clampPage(p, pages)
+                List(state.render { (as, p) =>
+                    val pages = pagesOf(as.size)
+                    val page  = Carousel.clampPage(p, pages)
                     navButton("p-carousel-prev-button", prevGlyph, "Previous Page", !circularFlag && page == 0, page - 1, pages)
                 })
             else Nil
         val next: List[UI] =
             if showItemNavigatorsFlag then
-                List(r.render { p =>
-                    val page = Carousel.clampPage(p, pages)
+                List(state.render { (as, p) =>
+                    val pages = pagesOf(as.size)
+                    val page  = Carousel.clampPage(p, pages)
                     navButton(
                         "p-carousel-next-button",
                         nextGlyph,
@@ -253,36 +283,53 @@ final case class Carousel[A] private (
 
         // The stable strip: ALL items, each 1/itemCount of the strip so numVisible
         // fill the viewport; the strip spans itemCount/numVisible viewports wide.
-        val itemEls: List[UI] = itemList.zipWithIndex.map { (a, i) =>
+        // Each item carries the count it was sized for, so a list that grows sizes
+        // every item again.
+        def itemEl(a: A, i: Int, n: Int): UI =
             div
                 .cssClass("p-carousel-item")
-                .id(itemIds(i))
+                .id(s"$stripId-i$i")
                 .role("group")
                 .aria("roledescription", "slide")
-                .style(_.flexGrow(0).flexShrink(0).flexBasis(basis))(
+                .cssClass("p-carousel-item-active", r.map(p => inWindow(i, p, n)))
+                .style(_.flexGrow(0).flexShrink(0).flexBasis(basis(n)))(
                     toChild(templateF.map(_(a)).getOrElse(stringToUI(a.toString)))
                 )
-        }
+        val itemEls: List[UI] = entries match
+            case Reading.Fixed(as) => as.zipWithIndex.map((a, i) => itemEl(a, i, as.size))
+            case Reading.Live(sig) =>
+                given CanEqual[Chunk[(A, Int)], Chunk[(A, Int)]] = CanEqual.derived
+                List(sig.map(as => Chunk.from(as.map(a => (a, as.size)))).foreachIndexed((i, an) => itemEl(an._1, i, an._2)))
+        val initial = entries match
+            case Reading.Fixed(as) => as.size
+            case Reading.Live(_)   => 0
 
         var strip = div
             .cssClass("p-carousel-item-list")
             .cssClass("p-uic-carousel-track")
             .id(stripId)
+        // A live strip is sized by the bound style alone, which carries the size beside the translate.
         strip =
-            if verticalFlag then strip.style(_.height(stripSpan))
-            else strip.style(_.width(stripSpan))
+            if verticalFlag then strip.style(_.height(stripSpan(initial)))
+            else strip.style(_.width(stripSpan(initial)))
         // Swipe: the stable strip carries the pointer handlers; the turn
-        // reads the LIVE page (r.get) and writes on release, so the write patches the
+        // reads the LIVE page (r.get) and items on release, so the write patches the
         // transform in place and the strip slides without being re-rendered.
         strip = strip
             .onPointerDown((e: PointerEvent) => startPos.set(if verticalFlag then e.y else e.x))
             .onPointerUp { (e: PointerEvent) =>
-                startPos.get.map { s0 =>
-                    val delta = (if verticalFlag then e.y else e.x) - s0
-                    if delta <= -Carousel.SwipeThreshold then r.get.map(p => setPage(Carousel.clampPage(p, pages) + 1, pages))
-                    else if delta >= Carousel.SwipeThreshold then r.get.map(p => setPage(Carousel.clampPage(p, pages) - 1, pages))
-                    else ()
-                }
+                for
+                    s0 <- startPos.get
+                    as <- current
+                    p  <- r.get
+                yield
+                    val pages           = pagesOf(as.size)
+                    val delta           = (if verticalFlag then e.y else e.x) - s0
+                    val turn: UI.Action =
+                        if delta <= -Carousel.SwipeThreshold then setPage(Carousel.clampPage(p, pages) + 1, pages)
+                        else if delta >= Carousel.SwipeThreshold then setPage(Carousel.clampPage(p, pages) - 1, pages)
+                        else ()
+                    turn
             }
         val stripEl: UI = strip(itemEls.map(toChild)*)
 
@@ -294,8 +341,12 @@ final case class Carousel[A] private (
         val content: UI = div.cssClass("p-carousel-content")((prev ++ (viewportEl :: next)).map(toChild)*)
 
         val indicators: List[UI] =
-            if showIndicatorsFlag && pages > 0 then
-                List(r.render(p => indicatorList(Carousel.clampPage(p, pages), pages, dotIds(stripId, pages), focus)))
+            if showIndicatorsFlag then
+                List(state.render { (as, p) =>
+                    val pages = pagesOf(as.size)
+                    if pages > 0 then indicatorList(Carousel.clampPage(p, pages), pages, dotIds(stripId, pages), focus)
+                    else UI.empty
+                })
             else Nil
 
         shell(content, indicators)
@@ -306,7 +357,7 @@ final case class Carousel[A] private (
       * Byte-identical to the pre-slide render, so the golden assertions stay green.
       */
     private def body(rawPage: Int)(using Frame): UI =
-        val pages   = totalPages
+        val pages   = pagesOf(itemList.size)
         val page    = Carousel.clampPage(rawPage, pages)
         val start   = math.min(page * numScrollV, math.max(0, itemList.size - numVisibleV))
         val visible = itemList.slice(start, start + numVisibleV)
@@ -412,11 +463,11 @@ final case class Carousel[A] private (
         )
     end indicatorList
 
-    /** The strip's main-size span (the strip is `itemCount/numVisible` viewports). */
-    private def stripSpan: Length = (math.max(itemList.size, 1) * 100.0 / numVisibleV).pct
+    /** The strip's main-size span over `n` items (the strip is `n/numVisible` viewports). */
+    private def stripSpan(n: Int): Length = (math.max(n, 1) * 100.0 / numVisibleV).pct
 
-    /** A runtime strip item's flex-basis: 1/itemCount of the strip. */
-    private def basis: Length = (100.0 / math.max(itemList.size, 1)).pct
+    /** A runtime strip item's flex-basis: 1/n of the strip. */
+    private def basis(n: Int): Length = (100.0 / math.max(n, 1)).pct
 
     /** A nav/indicator/swipe turn writes the (wrapped, clamped) page and fires
       * `onPageChange`. The translating strip keeps the active window in view, so

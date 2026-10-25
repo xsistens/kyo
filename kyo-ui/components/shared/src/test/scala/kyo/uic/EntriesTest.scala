@@ -25,6 +25,12 @@ class EntriesTest extends UicTest:
             case uic.Reading.Fixed(items) => items
             case _                        => throw new AssertionError("entries without a signal were read as live")
 
+    /** The entries a structural component reads, which hold no signal and so read as fixed. */
+    private def fixed[A](r: uic.Reading[List[A]]): List[A] =
+        r match
+            case uic.Reading.Fixed(as) => as
+            case _                     => throw new AssertionError("entries without a signal were read as live")
+
     /** The rows a listbox keeps as sources, resolved the way its region resolves them. */
     private def options(lb: uic.Listbox[String])(using Frame): List[uic.OptionItem[uic.ListItem[String]]] =
         uic.OptionItem.reading(lb.optionSources) match
@@ -77,7 +83,7 @@ class EntriesTest extends UicTest:
 
     "breadcrumb crumbs" in {
         val scoped = uic.Breadcrumb().items(_.item("Docs", href = Present("/docs")), _.item("Menu"))
-        assert(scoped.itemsV == List(uic.BreadcrumbItem("Docs", href = Present("/docs")), uic.BreadcrumbItem("Menu")))
+        assert(fixed(scoped.entries) == List(uic.BreadcrumbItem("Docs", href = Present("/docs")), uic.BreadcrumbItem("Menu")))
     }
 
     "listbox options, and options with groups whose entries take the same spellings" in {
@@ -97,35 +103,35 @@ class EntriesTest extends UicTest:
 
     "tree nodes, nested through their children" in {
         val direct = List(uic.TreeNode("Documents", "docs", children = List(uic.TreeNode("CV", "cv"))))
-        assert(uic.Tree[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).nodeList == direct)
+        assert(fixed(uic.Tree[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).entries) == direct)
         assert(uic.TreeSelect[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).roots ==
             uic.Reading.Fixed(direct))
     }
 
     "tree table nodes" in {
         val scoped = uic.TreeTable[String]().nodes(_.node("root", children = Seq(_.node("leaf"))))
-        assert(scoped.nodeList == List(uic.TreeTableNode("root", List(uic.TreeTableNode("leaf")))))
+        assert(fixed(scoped.entries) == List(uic.TreeTableNode("root", List(uic.TreeTableNode("leaf")))))
     }
 
     "galleria images" in {
         val scoped = uic.Galleria().items(_.item("/a.jpg", alt = "A"), _.item("/b.jpg"))
-        assert(scoped.itemList == List(uic.GalleriaItem("/a.jpg", alt = "A"), uic.GalleriaItem("/b.jpg")))
+        assert(fixed(scoped.entries) == List(uic.GalleriaItem("/a.jpg", alt = "A"), uic.GalleriaItem("/b.jpg")))
     }
 
     "accordion panels and tabs, with a constant label" in {
         val panels = uic.Accordion[String]().panels(_.panel("Shipping", content, "ship", disabled = true))
-        assert(panels.panelList == List(uic.AccordionPanel("Shipping", content, "ship", disabled = true)))
+        assert(fixed(panels.entries) == List(uic.AccordionPanel("Shipping", content, "ship", disabled = true)))
         val tabs = uic.Tabs[String]().tabs(_.tab("Profile", content, "profile", disabled = true))
-        assert(tabs.tabList == List(uic.Tab("Profile", content, "profile", disabled = true)))
+        assert(fixed(tabs.entries) == List(uic.Tab("Profile", content, "profile", disabled = true)))
     }
 
     "accordion panels and tabs take a reactive label too, as their single-entry builders do" in {
         val label = Signal.initConst("Live")
-        assert(uic.Accordion[String]().panels(_.panel(label, content, "a")).panelList ==
-            uic.Accordion[String]().panel(label, "a")(content).panelList)
+        assert(fixed(uic.Accordion[String]().panels(_.panel(label, content, "a")).entries) ==
+            fixed(uic.Accordion[String]().panel(label, "a")(content).entries))
         // Tabs.tab wraps its content in a fragment; the label is what is compared here.
-        assert(uic.Tabs[String]().tabs(_.tab(label, content, "t")).tabList.map(t => (t.text, t.id)) ==
-            uic.Tabs[String]().tab(label, "t")(content).tabList.map(t => (t.text, t.id)))
+        assert(fixed(uic.Tabs[String]().tabs(_.tab(label, content, "t")).entries).map(t => (t.text, t.id)) ==
+            fixed(uic.Tabs[String]().tab(label, "t")(content).entries).map(t => (t.text, t.id)))
     }
 
     "`_` offers only what that setter takes" in {

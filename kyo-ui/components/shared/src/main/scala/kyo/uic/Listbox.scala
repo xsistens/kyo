@@ -16,7 +16,7 @@ final case class ListItem[K](
     icon: Maybe[IconGlyph] = Absent,
     additionalText: Maybe[String] = Absent,
     tooltip: Maybe[String] = Absent
-)
+) derives CanEqual
 
 object ListItem:
     /** Ergonomic public constructor with a constant label: the primary `text: TextValue` field is
