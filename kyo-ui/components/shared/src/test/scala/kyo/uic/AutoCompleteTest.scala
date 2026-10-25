@@ -41,6 +41,18 @@ class AutoCompleteTest extends UicTest:
     "ArrowUp from nothing lands on the last, which the hand-written loop got wrong" in
         after(-1, UI.Keyboard.ArrowUp).map(at => assert(at == 2))
 
+    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+        for
+            (_, _, open, ui) <- state(hiAt = 0)
+            whenOpen         <- regionsAbove(ui, "p-autocomplete")
+            _                <- open.set(false)
+            whenClosed       <- regionsAbove(ui, "p-autocomplete")
+        yield assert(
+            whenOpen == 1 && whenClosed == 1,
+            s"a pick writes the text and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+        )
+    }
+
     "the ends hold" in {
         for
             top    <- after(0, UI.Keyboard.ArrowUp)

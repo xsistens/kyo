@@ -158,6 +158,9 @@ final case class SelectButton[A] private (
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
+    // Lets the one region skip a write that holds what it already showed; options are still matched by key.
+    private given CanEqual[A, A] = CanEqual.derived
+
     /** The ids the group moves focus between, and the way to move it.
       *
       * Only a single-select group has them: it is a radio group, so it holds ONE tab stop and the
@@ -184,18 +187,20 @@ final case class SelectButton[A] private (
 
     private def renderNav(nav: Nav)(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(
-            BoolValue.reactive(disabledFlag): d =>
-                BoolValue.reactive(loadingV): l =>
-                    copy(disabledFlag = d, loadingV = l).renderResolved(nav, validity)
-        )
+        // The switches and the selection are read as ONE region (see [[Reading]]), pinned back into the slots as constants
+        // so the body reads plain values.
+        val read = Reading.optional(disabledFlag).and(Reading.optional(loadingV)).and(held)
+        validity.follow(read.render { case ((d, l), h) =>
+            copy(disabledFlag = d.map(BoolValue.Const(_)), loadingV = l.map(BoolValue.Const(_))).body(h, nav, validity)
+        })
     end renderNav
 
-    private def renderResolved(nav: Nav, validity: FieldValidity)(using Frame): UI =
+    /** The options held, whichever binding holds them. */
+    private def held(using Frame): Reading[List[A]] =
         (single, multi) match
-            case (Present(c), _) if !multipleFlag => c.render(held => body(held.toList, nav, validity))
-            case (_, Present(c)) if multipleFlag  => c.render(held => body(held.toList, nav, validity))
-            case _                                => body(Nil, nav, validity)
+            case (Present(c), _) if !multipleFlag => c.reading.map(_.toList)
+            case (_, Present(c)) if multipleFlag  => Reading.Live(c.ref.map(_.toList))
+            case _                                => Reading.Fixed(Nil)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
       *

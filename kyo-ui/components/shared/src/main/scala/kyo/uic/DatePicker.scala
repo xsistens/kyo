@@ -238,8 +238,8 @@ final case class DatePicker[A] private (
         val stat: UI =
             if inlineFlag then
                 val panel = openRef match
-                    case Present(o) => when(o)(calendarReactive(Absent, Absent, inline = true))
-                    case Absent     => calendarReactive(Absent, Absent, inline = true)
+                    case Present(o) => when(o)(calendarStatic)
+                    case Absent     => calendarStatic
                 assemble(openRef, Absent, floating = false, panel)
             else assemble(Absent, Absent, floating = true, UI.empty)
         if !interactive then stat
@@ -293,15 +293,14 @@ final case class DatePicker[A] private (
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
             DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
-        // The cursor and the seed flag are read together rather than through a second nested render: two regions over the
-        // same grid would leave the inner one drawing against the cursor it closed over.
+        // The month, the cursor, the seed flag, the view and the selection are read as ONE region (see [[Reading]]): a pick
+        // writes several of them, and a nested region would draw the grid against the values it closed over.
+        val calendar = Reading.Live(mref.signal).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
         val body: UI =
-            mref.signal.render(mv =>
-                cursor.combineLatest(seed).render { pair =>
-                    val (cv, sd) = pair
-                    calendarReactive(Present(oref), Present(nav(mv, cv, sd)), inline = inlineFlag)
-                }
-            )
+            calendar.render { case (((mv, cv), sd), (view, snap)) =>
+                val n = nav(mv, cv, sd)
+                panelUI(view, if mv.isEmpty then Absent else Present(mv), snap, Present(oref), Present(n), inline = inlineFlag)
+            }
         val panel: UI =
             if inlineFlag then when(oref)(body)
             else Overlay(oref).seedFocus(false)(body).render
@@ -594,37 +593,23 @@ final case class DatePicker[A] private (
 
     // === reactive panel =====================================================
 
-    /** The calendar, reacting to the bound selection, month ref and view ref. `oref` is the EFFECTIVE open ref picks close
-      * through; `inline` picks the panel variant class.
+    /** The inline calendar of the static projection, inert. Without a mount a caller's own `month(ref)` is the only month
+      * there is, read with the view and the selection as ONE region.
       */
-    private def calendarReactive(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav], inline: Boolean)(using Frame): UI =
-        withView { view =>
-            withMonthOverride(nav) { mOv =>
-                withSelection(snap => panelUI(view, mOv, snap, oref, nav, inline))
+    private def calendarStatic(using Frame): UI =
+        val month: Reading[Maybe[String]] =
+            monthRef.fold(Reading.Fixed(Maybe.empty[String])) { ref =>
+                Reading.Live(DatePicker.ShownMonth.Bound(ref).signal.map(m => Present(m)))
             }
-        }
+        calendarState.and(month).render { case ((view, snap), mOv) => panelUI(view, mOv, snap, Absent, Absent, inline = true) }
+    end calendarStatic
 
-    private def withView(f: DatePickerView => UI)(using Frame): UI =
-        currentViewRefV match
-            case Present(ref) => ref.render(f)
-            case Absent       => f(kind.view)
-
-    /** The displayed month. The mount's own ref is already resolved into [[DatePicker.Nav]] (and rendered one level up), so
-      * this only has to turn its empty state back into "no override"; without a mount a caller's own `month(ref)` is the only
-      * source there is.
-      */
-    private def withMonthOverride(nav: Maybe[DatePicker.Nav])(f: Maybe[String] => UI)(using Frame): UI =
-        nav match
-            case Present(n) => f(if n.monthOvV.isEmpty then Absent else Present(n.monthOvV))
-            case Absent     =>
-                monthRef match
-                    case Present(ref) => DatePicker.ShownMonth.Bound(ref).signal.render(m => f(Present(m)))
-                    case Absent       => f(Absent)
-
-    private def withSelection(f: DatePicker.Snapshot => UI)(using Frame): UI =
-        bindingV match
-            case Present(b) => b.snapshot(kind).render(f)
-            case Absent     => f(DatePicker.Snapshot.Single(""))
+    /** The view and the selection the calendar reads, as one [[Reading]] the host reads beside its month. */
+    private def calendarState(using Frame): Reading[(DatePickerView, DatePicker.Snapshot)] =
+        val view = currentViewRefV.fold(Reading.Fixed(kind.view))(Reading.Live(_))
+        val snap = bindingV.fold(Reading.Fixed[DatePicker.Snapshot](DatePicker.Snapshot.Single("")))(b => Reading.Live(b.snapshot(kind)))
+        view.and(snap)
+    end calendarState
 
     /** Builds the panel for the derived month and current view, the SAME render for both hosts; only the variant class
       * differs (`-inline` in-flow vs the bare floating panel inside the Overlay).

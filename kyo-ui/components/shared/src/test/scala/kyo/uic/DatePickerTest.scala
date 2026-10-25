@@ -102,6 +102,16 @@ class DatePickerTest extends UicTest:
 
     // === the keyboard ===================================================================================
 
+    "the open calendar is ONE reactive region inside the open gate, over everything it reads" in {
+        for
+            (_, _, _, _, _, ui) <- wired(july)
+            regions             <- regionsAbove(ui, "p-datepicker-panel")
+        yield assert(
+            regions == 2,
+            s"a pick writes the value, the month and the cursor and closes the panel; nested regions can repaint the older state: $regions"
+        )
+    }
+
     "the grid is ONE tab stop, and it says which day it is on" in {
         for
             (_, _, _, _, _, ui) <- wired(july)

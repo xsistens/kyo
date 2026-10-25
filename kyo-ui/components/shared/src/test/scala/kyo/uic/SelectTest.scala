@@ -810,6 +810,22 @@ class SelectTest extends UicTest:
         end for
     }
 
+    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+        for
+            on            <- Signal.initRef(true)
+            loading       <- Signal.initRef(false)
+            ph            <- Signal.initRef("Pick one")
+            value         <- Signal.initRef(Maybe.empty[SelectTest.User])
+            (open, _, ui) <- search(people.filterable(on).loading(loading).placeholder(ph).selection(value), open = true, query = "")
+            whenOpen      <- regionsAbove(ui, "p-select")
+            _             <- open.set(false)
+            whenClosed    <- regionsAbove(ui, "p-select")
+        yield assert(
+            whenOpen == 1 && whenClosed == 1,
+            s"a pick writes the value and closes the panel; a nested region can repaint the older state: $whenOpen / $whenClosed"
+        )
+    }
+
     "opening while the filter is off leaves the query alone; opening while it is on starts a fresh one" in {
         for
             off              <- Signal.initRef(false)

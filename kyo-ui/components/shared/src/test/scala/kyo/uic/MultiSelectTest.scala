@@ -487,6 +487,21 @@ class MultiSelectTest extends UicTest:
         end for
     }
 
+    "the wired field is ONE reactive region over everything it reads, open or closed" in {
+        for
+            on               <- Signal.initRef(true)
+            loading          <- Signal.initRef(false)
+            ph               <- Signal.initRef("Pick some")
+            (open, _, _, ui) <- search(people.filterable(on).loading(loading).placeholder(ph), open = true, query = "")
+            whenOpen         <- regionsAbove(ui, "p-multiselect")
+            _                <- open.set(false)
+            whenClosed       <- regionsAbove(ui, "p-multiselect")
+        yield assert(
+            whenOpen == 1 && whenClosed == 1,
+            s"a pick writes the value while the panel state moves; a nested region can repaint the older state: $whenOpen / $whenClosed"
+        )
+    }
+
     "opening while the filter is off leaves the query alone" in {
         for
             off                <- Signal.initRef(false)

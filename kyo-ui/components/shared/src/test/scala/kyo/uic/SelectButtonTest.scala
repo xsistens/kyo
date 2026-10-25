@@ -46,6 +46,22 @@ class SelectButtonTest extends UicTest:
             got                <- value.get.map(_.getOrElse(""))
         yield (went, got)
 
+    "the group is ONE reactive region over everything it reads, single or multiple" in {
+        for
+            disabled <- Signal.initRef(false)
+            loading  <- Signal.initRef(false)
+            value    <- Signal.initRef(Maybe("Small"))
+            several  <- Signal.initRef(Set("Small"))
+            single = group.disabled(disabled).loading(loading).selection(value).wired(ids, _ => ())
+            multi  = group.multiple.disabled(disabled).loading(loading).selection(several).render
+            singleRegions <- regionsAbove(single, "p-selectbutton")
+            multiRegions  <- regionsAbove(multi, "p-selectbutton")
+        yield assert(
+            singleRegions == 1 && multiRegions == 1,
+            s"one subscription per signal nests each inside the last: $singleRegions / $multiRegions"
+        )
+    }
+
     "the group says it is one, and its options say they are radios" in {
         for
             (_, _, ui) <- wired("Medium")

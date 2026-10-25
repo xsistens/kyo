@@ -206,7 +206,7 @@ final case class TreeSelect[K] private (
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = withValue(sel => body(sel, Set.empty, false, Absent, validity))
+        val stat: UI = shown.render((sel, ld, ph) => bodyStatic(sel, Set.empty, false, Absent, ph, ld, validity))
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -231,33 +231,22 @@ final case class TreeSelect[K] private (
         idBase: String
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        open.render { o =>
-            exp.render { e =>
-                hi.render { h =>
-                    withValue(sel => body(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), validity))
-                }
-            }
+        val panel    = Reading.Live(open).and(Reading.Live(exp)).and(Reading.Live(hi))
+        panel.and(shown).render { case (((o, e), h), (sel, ld, ph)) =>
+            bodyStatic(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), ph, ld, validity)
         }
     end wired
 
-    private def withValue(f: Set[K] => UI)(using Frame): UI =
-        valueRef match
-            case Present(ref) => ref.render(f)
-            case Absent       => f(Set.empty)
-
-    private def body(
-        current: Set[K],
-        exp: Set[K],
-        isOpen: Boolean,
-        st: Maybe[TreeSelect.State[K]],
-        validity: FieldValidity
-    )(using Frame): UI =
-        // Reactive-placeholder gate (INSIDE the mount subscription, never around the UI.mounted node). The
-        // resolved placeholder text threads through; the validity is stamped on the field, never re-rendered.
-        BoolValue.reactive(loadingV): ld =>
-            val loading = ld.constTrue
-            TextValue.reactive(placeholderV): ph =>
-                bodyStatic(current, exp, isOpen, st, ph, loading, validity)
+    /** What the field shows whatever its panel does: the selected ids, whether the nodes are still loading, and the
+      * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * never read here.
+      */
+    private def shown(using Frame): Reading[(Set[K], Boolean, Maybe[String])] =
+        val held: Reading[Set[K]] = valueRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
+        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((sel, ld), ph) =>
+            (sel, ld.getOrElse(false), ph)
+        }
+    end shown
 
     private def bodyStatic(
         current: Set[K],
