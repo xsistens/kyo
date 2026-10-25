@@ -2269,12 +2269,15 @@ class FormValidationTest extends UicTest:
                     _    <- arr.add
                     flds <- captured.get
                     fld = flds.head
-                    _  <- assertEventually(fld.valueRef.waiters.map(_ == 1))
-                    _  <- fld.addRule(countedReading(runs, rowMax))
-                    _  <- rowMax.set(2)
-                    _  <- assertEventually(quiet(fld, Present(FieldError("too-long", Map("max" -> "2")))))
-                    r  <- runs.get
-                    e  <- fld.error.current
+                    _ <- assertEventually(fld.valueRef.waiters.map(_ == 1))
+                    _ <- fld.addRule(countedReading(runs, rowMax))
+                    _ <- rowMax.set(2)
+                    _ <- assertEventually(quiet(fld, Present(FieldError("too-long", Map("max" -> "2")))))
+                    r <- runs.get
+                    e <- fld.error.current
+                    // The observer that just delivered the change parks again after its run; read once it has, or a
+                    // read in between sees it busy and counts nothing.
+                    _  <- assertEventually(rowMax.waiters.map(_ >= 1))
                     w  <- rowMax.waiters
                     _  <- arr.removeAt(0)
                     _  <- assertEventually(rowMax.waiters.map(_ == 0))
