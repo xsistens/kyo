@@ -116,4 +116,21 @@ class CarouselTest extends UicTest:
         }
     }
 
+    "items a signal takes away from the page shown leave the last page there is active" in {
+        // The strip falls back to the last page; the items it shows there must be the active ones too.
+        def active(html: String): Int = "p-carousel-item-active".r.findAllMatchIn(html).size
+        for
+            live  <- Signal.initRef(Seq("A", "B", "C", "D"))
+            page  <- Signal.initRef(1)
+            start <- Signal.initRef(0.0)
+            ui = uic.Carousel[String]().items(live)(s => span(s)).numVisible(2).numScroll(2).wired(page, "car", start)
+            before <- UI.runRender(ui).take(1).run.map(_.mkString)
+            _      <- live.set(Seq("A", "B"))
+            after  <- UI.runRender(ui).take(1).run.map(_.mkString)
+        yield
+            assert(active(before) == 2, s"page 2 shows C and D: ${active(before)}")
+            assert(active(after) == 2, s"A and B, the page the strip falls back to, are active: ${active(after)}")
+        end for
+    }
+
 end CarouselTest

@@ -54,6 +54,22 @@ class AutoCompleteTest extends UicTest:
         )
     }
 
+    "suggestions from a signal follow it after the reader has typed" in {
+        // The order the demo's reader takes: type first, the list changes after.
+        for
+            live    <- Signal.initRef(Seq("Berlin", "Hamburg"))
+            openRef <- Signal.initRef(true)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            text    <- Signal.initRef("B")
+            ui = uic.AutoComplete[String]().options(live).value(text).wired(openRef, hi, all, Present("ac"))
+            before <- elementsWithClass(ui, "p-autocomplete-option")
+            _      <- live.set(Seq("Berlin", "Hamburg", "Bern", "Bremen"))
+            after  <- elementsWithClass(ui, "p-autocomplete-option")
+        yield assert(before.size == 1 && after.size == 3, s"${before.size} then ${after.size}")
+        end for
+    }
+
     "the ends hold" in {
         for
             top    <- after(0, UI.Keyboard.ArrowUp)

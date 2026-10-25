@@ -205,9 +205,10 @@ final case class Carousel[A] private (
     /** An invisible sibling that wires the in-place patches AFTER the strip is in
       * the DOM (a nested `UI.mounted` whose effect runs once the enclosing content
       * is published, so `getElementById` resolves the freshly inserted strip): it
-      * binds the strip's `transform` to the page (the translate that slides) and
-      * each item's `p-carousel-item-active` to the current window. Both detach when
-      * the mount's Scope closes. Captures `cmds` so the inner effect needs no Env.
+      * binds the strip's size and `transform` to the items and the page (the translate
+      * that slides). Each item's `p-carousel-item-active` is a reactive class on the
+      * item itself. The binding detaches when the mount's Scope closes. Captures `cmds`
+      * so the inner effect needs no Env.
       */
     private def slideTrigger(cmds: UI.Commands, stripId: String, r: SignalRef[Int])(using Frame): UI =
         UI.mounted {
