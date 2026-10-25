@@ -875,9 +875,14 @@ private[kyo] object ReactiveUI:
                     case Present(childHandle) =>
                         safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
                     case Absent =>
-                        Maybe.fromOption(reactiveChild).fold(bubble)(child =>
-                            safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
-                        )
+                        reactiveChild match
+                            case Some(child) =>
+                                safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
+                            // Every child this element holds has a static handler or is a reactive child at its own path, so a
+                            // target naming neither is one that has left the page since the reader acted on it (a second click
+                            // on an option its own pick just closed away). Its handlers went with it, and this element's are no
+                            // stand-in: a field would read the option's click as its own and open the panel again.
+                            case None => Kyo.lift(false)
             yield result
             end for
         else

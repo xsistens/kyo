@@ -1429,4 +1429,51 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             assert(evt == Present("foo"))
     }
 
+    "a click on an element that has left the page reaches nothing, while one on an element without handlers still bubbles" in {
+        for
+            open    <- Signal.initRef(true)
+            toggles <- AtomicInt.init(0)
+            picks   <- AtomicInt.init(0)
+            painted <- Channel.init[Unit](8)
+            ui = open.render { o =>
+                val field = div.onClick(toggles.incrementAndGet.unit)
+                if o then field(span("label").id("label"), button("pick").id("opt").onClick(picks.incrementAndGet.unit))
+                else field(span("label").id("label"))
+            }
+            html <- HtmlRenderer.render(ui, Seq.empty)
+            // The address the client clicks an element by: the `data-kyo-path` of the tag carrying the id.
+            pathOf = (id: String) =>
+                val tag = ("""<[^>]*\bid="""" + id + """"[^>]*>""").r.findFirstIn(html).get
+                """data-kyo-path="([^"]*)"""".r.findFirstMatchIn(tag).get.group(1).split('.').toSeq
+            opt      = pathOf("opt")
+            label    = pathOf("label")
+            exchange = new UIExchange:
+                def onChange(
+                    region: ReactiveRegion,
+                    path: Seq[String],
+                    context: ReactiveRegion.RegionIdentity,
+                    parentContext: ReactiveRegion.ParentContext,
+                    previous: Maybe[UI],
+                    changed: UI
+                )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
+            click = (p: Seq[String]) => UIEvent.Click(p, MouseEventData(UI.Modifiers.none, Absent))
+            result <- Scope.run {
+                for
+                    root     <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub      <- ReactiveUI.subscribe(root, exchange)
+                    _        <- open.set(false)
+                    _        <- painted.take
+                    _        <- sub.handle(opt, click(opt))
+                    vanished <- toggles.get
+                    _        <- sub.handle(label, click(label))
+                    inert    <- toggles.get
+                    p        <- picks.get
+                yield (vanished, inert, p)
+            }
+        yield assert(
+            result == (0, 1, 0),
+            s"(toggles after a click on the closed option, toggles after a click on the label, picks): $result"
+        )
+    }
+
 end UIEventWiringTest
