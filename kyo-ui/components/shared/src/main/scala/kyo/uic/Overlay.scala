@@ -298,10 +298,7 @@ final case class Overlay private (
                     for
                         cmds <- UI.commands
                         id   <- cmds.freshId
-                    yield fragment(
-                        pointerRepositionTrigger(at, id),
-                        renderOpenAt(anchorV, Present(id), portal = true)
-                    )
+                    yield renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
                 }.placeholder(renderOpenAt(anchorV, Absent, portal = true))
             case Absent => anchoredOpenContent
 
@@ -319,10 +316,11 @@ final case class Overlay private (
                     cmds     <- UI.commands
                     panelId  <- cmds.freshId
                     anchorId <- cmds.freshId
-                yield fragment(
-                    anchorProbe(anchorId),
-                    portalRepositionTrigger(cmds, anchorId, panelId),
-                    renderOpenAt(anchorV, Present(panelId), portal = true)
+                yield renderOpenAt(
+                    anchorV,
+                    Present(panelId),
+                    portal = true,
+                    after = List(anchorProbe(anchorId), portalRepositionTrigger(cmds, anchorId, panelId))
                 )
                 // The placeholder must be portal-shaped too: a non-portal placeholder panel sits IN FLOW
                 // inside the anchor's scroll container for the frames before the effect content re-homes
@@ -342,10 +340,7 @@ final case class Overlay private (
                 for
                     cmds <- UI.commands
                     id   <- cmds.freshId
-                yield fragment(
-                    repositionTrigger(cmds, id),
-                    renderOpenAt(anchorV, Present(id))
-                )
+                yield renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(cmds, id)))
             }.placeholder(renderOpenAt(anchorV, Absent))
 
     /** An invisible sibling that wires the reposition AFTER the panel is in the
@@ -443,7 +438,7 @@ final case class Overlay private (
             // The pointer placement survives here because nothing it needs is subscribed to the
             // host's ref: the id comes from the host, and the measuring mount publishes nothing.
             case (Present(at), Present(id)) =>
-                fragment(pointerRepositionTrigger(at, id), renderOpenAt(anchorV, Present(id), portal = true))
+                renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
             case _ => renderOpenAt(anchorV, Absent)
 
     /** The backdrop + panel at the DECLARED anchor, optionally id-stamped: the
@@ -452,8 +447,20 @@ final case class Overlay private (
       * measured flip/shift is applied separately, IN PLACE, via `bindStyleById`;
       * this builder always emits the declared-anchor geometry class, so the panel
       * is rendered exactly once.
+      *
+      * `after` holds what only the measured content adds (its probe and observers), placed AFTER
+      * the panel in the same fragment. The client addresses a click by the path the element had when
+      * the reader clicked, and the session resolves it against the tree it holds when the click
+      * arrives, so a click on the placeholder's panel that arrives after the measured content
+      * replaced it must find the same element at the same path. Anything placed before the panel
+      * shifts every path inside it, and the click then lands in whatever took its place.
       */
-    private def renderOpenAt(anchor: OverlayAnchor, panelId: Maybe[String], portal: Boolean = false)(using Frame): UI =
+    private def renderOpenAt(
+        anchor: OverlayAnchor,
+        panelId: Maybe[String],
+        portal: Boolean = false,
+        after: List[UI] = Nil
+    )(using Frame): UI =
         val close: UI.Action = openRef.set(false)
 
         val backdrop: List[UI] =
@@ -518,7 +525,7 @@ final case class Overlay private (
         end if
         val panelUI: UI = panel(kids.map(toChild)*)
 
-        fragment((backdrop :+ panelUI)*)
+        fragment((backdrop ++ (panelUI :: after))*)
     end renderOpenAt
 end Overlay
 

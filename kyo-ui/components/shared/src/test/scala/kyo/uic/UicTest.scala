@@ -236,6 +236,31 @@ abstract class UicTest extends kyo.test.Test[Any]:
         }
     end clickBubbling
 
+    /** A click as the client sends it: addressed by the path the element had on the page, not by the element. */
+    private[uic] def clickAt(path: Seq[String]): kyo.internal.UIEvent =
+        kyo.internal.UIEvent.Click(path, kyo.internal.MouseEventData(UI.Modifiers.none, Absent))
+
+    /** The `data-kyo-path` the element with id `id` carries in `html`, which is the address the client clicks it by. */
+    private[uic] def pathOf(html: String, id: String): Seq[String] =
+        val tag = ("""<[^>]*\bid="""" + java.util.regex.Pattern.quote(id) + """"[^>]*>""").r
+            .findFirstIn(html).getOrElse(throw new AssertionError(s"no element with id $id in $html"))
+        val raw = """data-kyo-path="([^"]*)"""".r.findFirstMatchIn(tag).map(_.group(1))
+            .getOrElse(throw new AssertionError(s"the element with id $id carries no path: $tag"))
+        if raw.isEmpty then Seq.empty else raw.split('.').toSeq
+    end pathOf
+
+    /** An exchange that paints nothing, for a live session whose test reads refs and handlers rather than the page. */
+    private[uic] val quietExchange: kyo.internal.UIExchange =
+        new kyo.internal.UIExchange:
+            def onChange(
+                region: kyo.internal.ReactiveRegion,
+                path: Seq[String],
+                contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
+                parentContext: kyo.internal.ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async = ()
+
     /** Whether `el` declares any click handler, the self-only one included. */
     private[uic] def declaresClick(el: UI.Ast.Element): Boolean =
         val a = el.attrs
