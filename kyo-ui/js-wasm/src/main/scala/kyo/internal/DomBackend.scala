@@ -1347,14 +1347,16 @@ private[kyo] object DomBackend:
             end match
         end onListPatch
 
-        // Each channel patches in place and marks the attribute owned (__kyoOwn), so a parent region's morph
-        // will not reconcile the live value back. The `*Now` forms are the patches themselves, written without
-        // the Sync wrapper for a caller that already holds the thread (see UIExchange's synchronous sinks); the
-        // effectful twins do nothing but defer to them, so the two can never drift apart.
+        // Each channel patches in place. Unlike the id-addressed channels it does NOT mark the attribute owned: the
+        // render writes a path channel's value into the HTML, so a morph that repaints the element carries the value
+        // the channel stands for, and the observer the repaint starts is seeded with that value. Owning it instead
+        // kept the morph from ever reconciling the attribute again, so an element repainted with a different value
+        // (a list row whose item changed) kept the one the first patch wrote. The `*Now` forms are the patches
+        // themselves, written without the Sync wrapper for a caller that already holds the thread (see UIExchange's
+        // synchronous sinks); the effectful twins do nothing but defer to them, so the two can never drift apart.
         private def attrPatchNow(path: Seq[String], name: String, value: String): Unit =
             val el = queryByPath(path)
             if el != null then
-                markOwned(el, name)
                 el.setAttribute(name, value)
                 syncFieldProperty(el, name, value)
             end if
@@ -1363,15 +1365,13 @@ private[kyo] object DomBackend:
         private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
             val el = queryByPath(path)
             if el != null then
-                markOwned(el, name)
                 if value then el.setAttribute(name, "") else el.removeAttribute(name)
         end boolAttrPatchNow
 
-        // Toggle in place (so CSS transitions fire) rather than re-render; owns "class" against the morph.
+        // Toggle in place (so CSS transitions fire) rather than re-render.
         private def classPatchNow(path: Seq[String], name: String, on: Boolean): Unit =
             val el = queryByPath(path)
             if el != null then
-                markOwned(el, "class")
                 discard(el.classList.toggle(name, on))
         end classPatchNow
 
