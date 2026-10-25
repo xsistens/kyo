@@ -22,7 +22,7 @@ class MenuTest extends UicTest:
 
     "a menu announces the row it has highlighted, without being given an id" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = menu.wired(hi, "m")
             list <- elementWithClass(ui, "p-menu-list")
             row  <- elementWithClass(ui, "p-focus")
@@ -33,7 +33,7 @@ class MenuTest extends UicTest:
 
     "the caller's own id still wins, since a page may want to name the row itself" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = menu.id("mine").wired(hi, "m")
             list <- elementWithClass(ui, "p-menu-list")
         yield assert(list.attrs.ariaAttrs.get("activedescendant").contains("mine-active"))
@@ -41,7 +41,7 @@ class MenuTest extends UicTest:
 
     "nothing highlighted, nothing announced" in {
         for
-            hi <- Signal.initRef(-1)
+            hi <- Anchored.init(-1)
             ui = menu.wired(hi, "m")
             list <- elementWithClass(ui, "p-menu-list")
         yield assert(list.attrs.ariaAttrs.get("activedescendant").isEmpty)
@@ -50,7 +50,7 @@ class MenuTest extends UicTest:
     "Tab closes a floating menu, because the reader has left it" in {
         for
             open <- Signal.initRef(true)
-            hi   <- Signal.initRef(1)
+            hi   <- Anchored.init(1)
             ui = menu.popup(open).wired(hi, "m")
             list  <- elementWithClass(ui, "p-menu-list")
             _     <- press(list, UI.Keyboard.Tab)
@@ -61,7 +61,7 @@ class MenuTest extends UicTest:
 
     "an inline menu has no popup to close, and keeps answering the arrows" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = menu.wired(hi, "m")
             list <- elementWithClass(ui, "p-menu-list")
             _    <- press(list, UI.Keyboard.ArrowDown)
@@ -80,7 +80,7 @@ class MenuTest extends UicTest:
     "an item's disabled follows a signal, and the row dims on emission" in {
         for
             off <- Signal.initRef(false)
-            hi  <- Signal.initRef(0)
+            hi  <- Anchored.init(0)
             ui = uic.Menu().items(rows(0), rows(1).disabled(off), rows(2)).wired(hi, "m")
             before <- dimmed(ui)
             _      <- off.set(true)
@@ -93,7 +93,7 @@ class MenuTest extends UicTest:
         // reactive one cannot leave them disagreeing.
         for
             off <- Signal.initRef(true)
-            hi  <- Signal.initRef(0)
+            hi  <- Anchored.init(0)
             ui = uic.Menu().items(rows(0), rows(1).disabled(off), rows(2)).wired(hi, "m")
             items <- elementsWithClass(ui, "p-menu-item")
             list  <- elementWithClass(ui, "p-menu-list")
@@ -115,7 +115,7 @@ class MenuTest extends UicTest:
             derived = target.combineLatest(list).map { (t, l) =>
                 t.map(k => l.contains(k)).getOrElse(false)
             }
-            hi <- Signal.initRef(0)
+            hi <- Anchored.init(0)
             ui = uic.Menu().items(rows(0), rows(1).disabled(derived), rows(2)).wired(hi, "m")
             before <- dimmed(ui)
             _      <- target.set(Present("a"))
@@ -129,7 +129,7 @@ class MenuTest extends UicTest:
         // constant menu and a reactive one both have the one region the highlight needs.
         for
             off      <- Signal.initRef(false)
-            hi       <- Signal.initRef(0)
+            hi       <- Anchored.init(0)
             constant <- regionsAbove(menu.wired(hi, "m"), "p-menu-item")
             reactive <- regionsAbove(
                 uic.Menu().items(rows(0), rows(1).disabled(off), rows(2)).wired(hi, "m"),
@@ -142,7 +142,7 @@ class MenuTest extends UicTest:
         // The class is for the sheet; `aria-current` is the whole of what is said to a reader
         // who cannot see it, which is the same split as the highlight two tests above.
         for
-            hi <- Signal.initRef(-1)
+            hi <- Anchored.init(-1)
             ui = uic.Menu().items(
                 uic.MenuItem("Home").url("/"),
                 uic.MenuItem("Queue").url("/queue").current(true)
@@ -167,7 +167,7 @@ class MenuTest extends UicTest:
         // navigation would rebuild the strip and throw away the reader's keyboard position.
         for
             here <- Signal.initRef(false)
-            hi   <- Signal.initRef(0)
+            hi   <- Anchored.init(0)
             ui = uic.Menu().items(rows(0), rows(1).url("/queue").current(here), rows(2)).wired(hi, "m")
             regions <- regionsAbove(ui, "p-menu-item")
             rowEls  <- elementsWithClass(ui, "p-menu-item")
@@ -240,7 +240,7 @@ class MenuTest extends UicTest:
 
     "the navigation role holds no highlight, so a bound one changes nothing" in {
         for
-            hi <- Signal.initRef(1)
+            hi <- Anchored.init(1)
             ui = site.wired(hi, "m")
             focused <- elementsWithClass(ui, "p-focus")
             list    <- elementWithClass(ui, "p-menu-list")
@@ -251,7 +251,7 @@ class MenuTest extends UicTest:
 
     "an ordinary menu keeps the menu vocabulary, and takes a name on its list" in {
         for
-            hi <- Signal.initRef(-1)
+            hi <- Anchored.init(-1)
             ui = menu.accessibleName("File").wired(hi, "m")
             list <- elementWithClass(ui, "p-menu-list")
             row  <- elementWithClass(ui, "p-menu-item")
@@ -260,5 +260,46 @@ class MenuTest extends UicTest:
             assert(row.attrs.role.contains("menuitem"))
             assert(list.attrs.ariaAttrs.get("label").contains("File"), "the list is the menu, so it carries the name")
     }
+
+    "a row the signal adds before the highlighted one leaves the highlight on its row" in {
+        for
+            live <- Signal.initRef(Seq.empty[uic.MenuItem])
+            hi   <- Anchored.init(-1)
+            ui = uic.Menu().items(_.item("New").onSelect(()), live, _.item("Print").onSelect(())).wired(hi, "m")
+            _      <- elementWithClass(ui, "p-menu-list").map(press(_, UI.Keyboard.ArrowDown))
+            _      <- elementWithClass(ui, "p-menu-list").map(press(_, UI.Keyboard.ArrowDown))
+            before <- elementWithClass(ui, "p-focus")
+            _      <- live.set(Seq(uic.MenuItem("Recent").onSelect(())))
+            after  <- elementWithClass(ui, "p-focus")
+        yield
+            assert(labelOf(before) == "Print", s"Print is highlighted: ${labelOf(before)}")
+            assert(labelOf(after) == "Print", s"and stays highlighted once Recent arrives before it: ${labelOf(after)}")
+        end for
+    }
+
+    "a highlighted row the signal removes takes the highlight with it" in {
+        for
+            live <- Signal.initRef(Seq(uic.MenuItem("Recent").onSelect(())))
+            hi   <- Anchored.init(-1)
+            ui = uic.Menu().items(_.item("New").onSelect(()), live, _.item("Print").onSelect(())).wired(hi, "m")
+            _       <- elementWithClass(ui, "p-menu-list").map(press(_, UI.Keyboard.ArrowDown))
+            _       <- elementWithClass(ui, "p-menu-list").map(press(_, UI.Keyboard.ArrowDown))
+            before  <- elementWithClass(ui, "p-focus")
+            _       <- live.set(Seq.empty)
+            focused <- elementsWithClass(ui, "p-focus")
+        yield
+            assert(labelOf(before) == "Recent", s"Recent is highlighted: ${labelOf(before)}")
+            assert(focused.isEmpty, s"no neighbour takes it: ${focused.map(labelOf)}")
+        end for
+    }
+
+    /** The label text a row shows. */
+    private def labelOf(row: UI.Ast.Element): String =
+        def texts(n: UI): List[String] = n match
+            case t: UI.Ast.Text    => List(t.value)
+            case e: UI.Ast.Element => e.children.toList.flatMap(texts)
+            case _                 => Nil
+        texts(row).mkString
+    end labelOf
 
 end MenuTest

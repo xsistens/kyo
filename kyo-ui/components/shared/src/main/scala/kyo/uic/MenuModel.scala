@@ -188,34 +188,155 @@ object MenuGroupScope:
     private[uic] def resolve(entries: Seq[MenuGroupEntry]): List[MenuGroup] = Entry.resolve(scope, entries)
 end MenuGroupScope
 
-/** Which submenus of a host are open: ONE ref over the set of open paths (index chains from the root), however the items
-  * change. A ref per path could only be allocated for the paths of the items the host was built with, so rows that arrive
-  * through a signal would have none.
+/** A host's positional state (an open path, a highlighted row) together with the root items it was written against, so the
+  * state belongs to an ITEM rather than to a place in the list.
   *
-  * A host reads [[reading]] in its one region beside its other state; a `Set` is a `List[Int] => Boolean`, so a row asks
-  * `open(path)`. A submenu panel closes its own path, and with it everything below, through [[close]].
+  * Positions are index chains, and the handlers that write them compute them against the items of the render they came
+  * from. A list that takes a signal among its items can move under them: an item the signal adds before the open one
+  * would otherwise hand the open submenu, or the highlight, to its neighbour. So each write records the RAW root items
+  * of its render (`Snap.roots`), and every reader translates the value onto the roots it shows now ([[Snap.at]]),
+  * matching items by reference identity. An item that is gone takes its state with it.
+  *
+  * ONE ref holds the value and its roots, so a reader never sees a value with the wrong roots. `Absent` roots mean
+  * "relative to whatever the host shows", the meaning a value written before any render (an `init`) has. Writes go
+  * through a [[View]], which a host builds in its one region from the snap it read and the roots it shows.
   */
-final private[uic] class Submenus private (ref: SignalRef[Set[List[Int]]]):
+final private[uic] class Anchored[S] private (ref: SignalRef[Anchored.Snap[S]]):
 
-    /** The open paths, for the host's one region. */
-    def reading: Reading[Set[List[Int]]] = Reading.Live(ref)
+    /** The value and its roots, for the host's one region. */
+    def reading: Reading[Anchored.Snap[S]] = Reading.Live(ref)
 
-    /** The open paths now. */
-    def openPaths(using Frame): Set[List[Int]] < Sync = ref.get
+    /** The value as last written, untranslated: for tests and for state that means the same against any roots. */
+    def get(using Frame): S < Sync = ref.get.map(_.value)
 
-    /** Opens exactly the chain leading to `target` (every prefix of the path) and closes everything else; `Absent` closes
-      * the whole tree.
+    /** Writes `v` against whatever roots the host shows next, the meaning an `init` has: for a value that is the same
+      * against any roots (nothing open, no highlight), or for a writer with no render to anchor to (a test seeding state).
       */
-    def openExactly(target: Maybe[List[Int]])(using Frame): UI.Action =
-        ref.set(target.fold(Set.empty[List[Int]])(t => (1 to t.size).map(t.take).toSet))
+    def reset(v: S)(using Frame): UI.Action = ref.set(Anchored.Snap(v, Absent))
 
-    /** Closes `path` and every submenu below it, as an Escape or an outside click on that submenu does. */
-    def close(path: List[Int])(using Frame): UI.Action =
-        ref.updateAndGet(_.filterNot(_.startsWith(path))).unit
+    /** The state as the host shows it over `roots`, with writers that record those roots. */
+    def view(snap: Anchored.Snap[S], roots: List[AnyRef])(using Anchored.Rebase[S]): Anchored.View[S] =
+        new Anchored.View(ref, roots, snap.at(roots))
+end Anchored
+
+private[uic] object Anchored:
+
+    def init[S](v: S)(using Frame): Anchored[S] < Sync = Signal.initRef(Snap(v, Absent)).map(new Anchored(_))
+
+    /** A value and the raw root items it was written against. */
+    final case class Snap[S](value: S, roots: Maybe[List[AnyRef]]):
+        /** The value translated onto `now`. */
+        def at(now: List[AnyRef])(using r: Rebase[S]): S =
+            roots match
+                case Present(from) if !(from eq now) => r.rebase(value, from, now)
+                case _                               => value
+    end Snap
+
+    given [S]: CanEqual[Snap[S], Snap[S]] = CanEqual.derived
+
+    /** How a value moves when its roots do: every root index it names is looked up again by identity. */
+    trait Rebase[S]:
+        def rebase(v: S, from: List[AnyRef], to: List[AnyRef]): S
+
+    /** Where root `i` of `from` sits in `to`: the same place if the same item is still there, else the first place the
+      * item is, else nowhere.
+      */
+    def index(i: Int, from: List[AnyRef], to: List[AnyRef]): Maybe[Int] =
+        if i < 0 || i >= from.size then Absent
+        else
+            val item = from(i)
+            if i < to.size && (to(i) eq item) then Present(i)
+            else
+                val j = to.indexWhere(_ eq item)
+                if j >= 0 then Present(j) else Absent
+            end if
+
+    /** A path from the root, `Nil` for none; a path whose root item is gone becomes `Nil`. Only the head moves: below the
+      * root the items are the root item's own, which a signal among the roots cannot reorder.
+      */
+    given Rebase[List[Int]] = (v, from, to) =>
+        v match
+            case Nil       => Nil
+            case h :: rest => index(h, from, to).fold(Nil)(_ :: rest)
+
+    /** A set of paths; a path whose root item is gone drops out. */
+    given Rebase[Set[List[Int]]] = (v, from, to) =>
+        v.flatMap {
+            case Nil       => Set.empty[List[Int]]
+            case h :: rest => index(h, from, to).fold(Set.empty[List[Int]])(j => Set(j :: rest))
+        }
+
+    /** The state over the roots a host shows: `value` translated onto them, and writers that store against them. */
+    final class View[S] private[Anchored] (ref: SignalRef[Snap[S]], roots: List[AnyRef], val value: S)(using Rebase[S]):
+
+        /** Stores `v`, a value computed against the roots this view shows. */
+        def set(v: S)(using Frame): UI.Action = ref.set(Snap(v, Present(roots)))
+
+        /** Stores `f` of the value as it stands now, translated onto these roots first, in one write. */
+        def update(f: S => S)(using Frame): UI.Action =
+            ref.updateAndGet(s => Snap(f(s.at(roots)), Present(roots))).unit
+    end View
+end Anchored
+
+/** The rows a host draws beside the RAW root items they were resolved from, which its [[Anchored]] state is matched against
+  * (see [[MenuRender.readRooted]]).
+  */
+final private[uic] case class Rooted[A](roots: List[AnyRef], items: List[A])
+
+private[uic] object Rooted:
+    given [A]: CanEqual[Rooted[A], Rooted[A]] = CanEqual.derived
+
+/** Which submenus of a host are open: ONE anchored set of open paths (index chains from the root), however the items
+  * change. A ref per path could only be allocated for the paths of the items the host was built with, so rows that arrive
+  * through a signal would have none; and the paths follow their items ([[Anchored]]), so an item a signal adds before an
+  * open submenu leaves that submenu open.
+  *
+  * A host reads [[reading]] in its one region beside its other state and builds a [[Submenus.View]] over the roots it
+  * shows; a row asks `view.open(path)`. A submenu panel closes its own path, and with it everything below, through
+  * [[Submenus.View.close]].
+  */
+final private[uic] class Submenus private (paths: Anchored[Set[List[Int]]]):
+
+    /** The open paths and their roots, for the host's one region. */
+    def reading: Reading[Anchored.Snap[Set[List[Int]]]] = paths.reading
+
+    /** The open paths now, untranslated. */
+    def openPaths(using Frame): Set[List[Int]] < Sync = paths.get
+
+    /** Closes the whole tree: the same against any roots, so it needs no render to write from. */
+    def closeAll(using Frame): UI.Action = paths.reset(Set.empty)
+
+    /** Opens the chain to `target` against whatever roots the host shows next, the meaning an `init` has. For a writer
+      * with no render to anchor to (a test seeding state); a host writes through a [[Submenus.View]].
+      */
+    def openUnanchored(target: List[Int])(using Frame): UI.Action =
+        paths.reset((1 to target.size).map(target.take).toSet)
+
+    /** The open paths over the roots a host shows. */
+    def view(snap: Anchored.Snap[Set[List[Int]]], roots: List[AnyRef]): Submenus.View =
+        new Submenus.View(paths.view(snap, roots))
 end Submenus
 
 private[uic] object Submenus:
-    def init(open: Set[List[Int]] = Set.empty)(using Frame): Submenus < Sync = Signal.initRef(open).map(new Submenus(_))
+    def init(open: Set[List[Int]] = Set.empty)(using Frame): Submenus < Sync = Anchored.init(open).map(new Submenus(_))
+
+    /** The open paths as a host shows them, with the writers its rows use. */
+    final class View private[Submenus] (paths: Anchored.View[Set[List[Int]]]):
+
+        /** The open paths over the host's roots. */
+        def open: Set[List[Int]] = paths.value
+
+        /** Opens exactly the chain leading to `target` (every prefix of the path) and closes everything else; `Absent`
+          * closes the whole tree.
+          */
+        def openExactly(target: Maybe[List[Int]])(using Frame): UI.Action =
+            paths.set(target.fold(Set.empty[List[Int]])(t => (1 to t.size).map(t.take).toSet))
+
+        /** Closes `path` and every submenu below it, as an Escape or an outside click on that submenu does. */
+        def close(path: List[Int])(using Frame): UI.Action =
+            paths.update(_.filterNot(_.startsWith(path)))
+    end View
+end Submenus
 
 /** Package-internal machinery shared by the menu family. */
 private[uic] object MenuRender:
@@ -273,6 +394,17 @@ private[uic] object MenuRender:
             case Reading.Fixed(items) => readDisabled(items)
             case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => readDisabled(items).signal))
 
+    /** [[readItems]] beside the RAW root items it was resolved from, which are what [[Anchored]] state is matched against.
+      * Raw, because resolving a reactive `disabled` copies the items it pins, so the rows a host draws are new values on
+      * every emission; the raw ones are the setter's fixed entries, resolved once, and the app's own instances from a
+      * signal.
+      */
+    def readRooted(entries: List[MenuItemLiveEntry])(using Frame): Reading[Rooted[MenuItem]] =
+        MenuItemScope.reading(entries) match
+            case Reading.Fixed(items) => readDisabled(items).map(pinned => Rooted(items, pinned))
+            case Reading.Live(sig) => Reading.Live(sig.switchMap(items => readDisabled(items).map(pinned => Rooted(items, pinned)).signal))
+    end readRooted
+
     /** The reading itself, shared by the two traversals: every reactive slot as one `combineLatestAll`, each value
       * pinned into `seed`. With `dyns` empty it is `seed`, fixed.
       */
@@ -327,7 +459,7 @@ private[uic] object MenuRender:
     end readMegaDisabled
 
     /** Applies a [[MenuNav.Step]] to a keyboard host's signals: threads the
-      * `OpenOp` through [[Submenus.openExactly]], and, on `activate` (run the focused
+      * `OpenOp` through [[Submenus.View.openExactly]], and, on `activate` (run the focused
       * leaf's action) or `dismiss`, collapses the submenu tree, closes the popup
       * if any, and clears the highlight. Plain movement just writes the new focus
       * path. Shared by every nested menu host (TieredMenu, ContextMenu, Menubar,
@@ -335,8 +467,8 @@ private[uic] object MenuRender:
       */
     def applyStep(
         items: List[MenuItem],
-        submenus: Maybe[Submenus],
-        focusRef: SignalRef[List[Int]],
+        submenus: Maybe[Submenus.View],
+        focusRef: Anchored.View[List[Int]],
         popupRef: Maybe[SignalRef[Boolean]],
         step: MenuNav.Step
     )(using Frame): UI.Action =

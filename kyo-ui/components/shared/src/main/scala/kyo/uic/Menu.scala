@@ -135,7 +135,7 @@ final case class Menu private (
                     for
                         cmds <- UI.commands
                         base <- cmds.freshId
-                        hi   <- Signal.initRef(-1)
+                        hi   <- Anchored.init(-1)
                     yield wired(hi, base)
                 }.placeholder(stat)
     end render
@@ -203,7 +203,7 @@ final case class Menu private (
       * (as this did) makes them one value, and then either the caller's id never reaches the DOM
       * or a machine name does. Same split `AutoComplete` makes at its own mount.
       */
-    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI =
+    private[uic] def wired(hi: Anchored[Int], base: String)(using Frame): UI =
         roleV match
             // A navigation has no highlight to wire, so the seam shows what `render` does.
             case MenuAccessibleRole.Navigation => navigation
@@ -215,8 +215,10 @@ final case class Menu private (
                 // The items, the highlight and a popup's open state are read as ONE region (see [[Reading]]): leaving
                 // writes the popup ref and the highlight together, and a nested region would repaint what it closed over.
                 val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
-                MenuRender.readItems(entriesV).and(Reading.Live(hi)).and(popup).render { case ((items, h), shown) =>
-                    copy(itemsV = items).body(h, Present(hi), Present(idV.getOrElse(base)), shown)
+                // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
+                MenuRender.readRooted(entriesV).and(hi.reading).and(popup).render { case ((Rooted(roots, items), h), shown) =>
+                    val hv = hi.view(h, roots)(using Menu.rowRebase)
+                    copy(itemsV = items).body(hv.value, Present(hv), Present(idV.getOrElse(base)), shown)
                 }
     end wired
 
@@ -224,14 +226,14 @@ final case class Menu private (
       * highlight and the popup's open state in its own ONE region, and hands them over: the menu then adds no region of
       * its own. `SplitButton` hosts its menu this way.
       */
-    private[uic] def hosted(h: Int, hi: SignalRef[Int], base: String, shown: Boolean)(using Frame): UI =
+    private[uic] def hosted(h: Int, hi: Anchored.View[Int], base: String, shown: Boolean)(using Frame): UI =
         body(h, Present(hi), Present(idV.getOrElse(base)), Present(shown))
 
     /** @param partBase what internal parts derive from (`s"$partBase-active"`): the caller's id
       *                 when there is one, else the id the mount minted. Distinct from `idV`,
       *                 which is only ever the caller's and is what lands on the element.
       */
-    private def body(h: Int, hiRef: Maybe[SignalRef[Int]], partBase: Maybe[String], popupShown: Maybe[Boolean] = Absent)(using
+    private def body(h: Int, hiRef: Maybe[Anchored.View[Int]], partBase: Maybe[String], popupShown: Maybe[Boolean] = Absent)(using
         Frame
     ): UI =
         val rows = flatRows
@@ -380,3 +382,26 @@ end MenuRow
 object Menu:
     /** An empty menu; add rows via [[Menu.items]]. */
     def apply(): Menu = new Menu()
+
+    /** How a highlighted ROW position moves when the roots do. A row is a position in the flattened list (a section
+      * spreads into its heading and its children), so it is located as a root item and an offset within it, the root is
+      * found again by identity ([[Anchored.index]]), and the row keeps its offset there. A row whose root is gone leaves
+      * nothing highlighted.
+      */
+    private[uic] val rowRebase: Anchored.Rebase[Int] = (h, from, to) =>
+        def span(root: AnyRef): Int = root match
+            case it: MenuItem if !it.separatorFlag && it.itemsV.nonEmpty => 1 + it.itemsV.size
+            case _                                                       => 1
+        @scala.annotation.tailrec
+        def locate(roots: List[AnyRef], i: Int, start: Int): Maybe[(Int, Int)] =
+            roots match
+                case Nil       => Absent
+                case r :: rest =>
+                    val n = span(r)
+                    if h < start + n then Present((i, h - start)) else locate(rest, i + 1, start + n)
+        if h < 0 then -1
+        else
+            locate(from, 0, 0).flatMap((i, offset) => Anchored.index(i, from, to).map(j => to.take(j).map(span).sum + offset))
+                .getOrElse(-1)
+        end if
+end Menu
