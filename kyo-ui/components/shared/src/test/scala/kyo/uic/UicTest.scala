@@ -155,6 +155,15 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 case e: UI.Ast.Element       => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
                 case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk(_, depth + 1))
                 case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
+                case f: UI.Ast.Foreach[?, ?] =>
+                    // A list region counts like `Reactive`: a row is drawn again when its value changes.
+                    f.applyTyped([T] =>
+                        (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                            signal.current(using f.frame).map { items =>
+                                Kyo.foreach(items.zipWithIndex) { (item, i) => walk(render(i, item), depth + 1) }
+                                    .map(_.flattenChunk)
+                            }
+                    )
                 case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
                 case _                       => Chunk.empty
         walk(node, 0).map(ds => if ds.isEmpty then throw new AssertionError(s"no mount draws $cls") else ds.min)

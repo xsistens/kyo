@@ -65,7 +65,8 @@ class DataTableReuseTest extends UicTest:
     // Was 80 for these forty rows (two full passes per write) before the body's reactive unit
     // became the row.
     //
-    // The waiters: the error ref is read by the wired region alone. Rows and selection meet in one
+    // The waiters: the error ref is read by the table's two sibling regions over its one reading (the cards and the
+    // table container), so it carries two. Rows and selection meet in one
     // combineLatest, read by the keyed body and the two chrome regions (the rowKey card, and the
     // frozen and lazy cards), so each ref carries three.
     "one selected row costs one rendered row" in {
@@ -82,10 +83,10 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
                 _     <- ReactiveUI.subscribe(root, quiet)
-                _     <- settled(err -> 1, rows -> 3, sel -> 3)
+                _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 first <- counted.take
                 _     <- sel.set(Set(items(5)))
-                _     <- settled(err -> 1, rows -> 3, sel -> 3)
+                _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 after <- counted.take
             yield
                 assert(first >= rowCount, s"the first pass has to render every row; it rendered $first")
@@ -106,8 +107,9 @@ class DataTableReuseTest extends UicTest:
                 scroll <- Signal.initRef(0.0)
                 err    <- Signal.initRef(Absent: Maybe[(CellKey, kyo.uic.form.FieldError)])
                 // Five rows fit the viewport (200 / 40), with no overscan. A windowed body resolves the
-                // rows around itself, so the waiters are one each: the wired region on the error ref,
-                // the rows region, and the keyed window mapped from the scroll ref.
+                // rows around itself: the error ref and the rows are in the table's one reading, which the cards, the
+                // body's height channel and the keyed window read, three each; the window reads the scroll ref with
+                // them in one combineLatest, one.
                 ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
                     .scrollHeight("200px").scrollRows(40, overscan = 0)
                     .columns(uic.column("Name") { i =>
@@ -116,11 +118,11 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, quiet)
-                _    <- settled(err -> 1, rows -> 1, scroll -> 1)
+                _    <- settled(err -> 3, rows -> 3, scroll -> 1)
                 _    <- counted.take
                 // Exactly one row's worth: the window moves from [0, n) to [1, n + 1).
                 _     <- scroll.set(40.0)
-                _     <- settled(err -> 1, rows -> 1, scroll -> 1)
+                _     <- settled(err -> 3, rows -> 3, scroll -> 1)
                 after <- counted.take
             yield assert(
                 after == 1,
@@ -138,8 +140,8 @@ class DataTableReuseTest extends UicTest:
         // body and the keyed list inside it, whose row registry was then new and empty, and that
         // caller saw none of the reuse the tests above measure. It was 40 here.
         //
-        // The waiters: one on the error ref (the wired region), three on the rows (the keyed body
-        // and the two chrome regions, each over the rows signal alone).
+        // The waiters: two on the error ref (the cards and the table container, the two regions over the table's one
+        // reading), three on the rows (the keyed body and the two chrome regions, each over the rows signal alone).
         Scope.run {
             val counted = new Renders
             for
@@ -152,11 +154,11 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => ())
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, quiet)
-                _    <- settled(err -> 1, rows -> 3)
+                _    <- settled(err -> 2, rows -> 3)
                 _    <- counted.take
                 // One row's value changes; the other thirty-nine are equal to what they were.
                 _     <- rows.set(items.updated(5, Item("k5", "row-5-changed")))
-                _     <- settled(err -> 1, rows -> 3)
+                _     <- settled(err -> 2, rows -> 3)
                 after <- counted.take
             yield assert(
                 after == 1,
@@ -173,9 +175,11 @@ class DataTableReuseTest extends UicTest:
         //
         // The waiters: the keyed body and the two chrome regions read one combineLatest of rows,
         // selection and context row, and the selection is a map of the rows, so each of the three
-        // registers on the rows twice (six) and on the context row once (three). The sort ref has
-        // its region around the body (one), the error ref the wired region (one). Only a click
-        // reads the anchor, so nothing waits on it.
+        // registers on the rows twice (six) and on the context row once (three). The error ref is in
+        // the table's one reading, read by the cards and by the row list (two). The sort ref is too, and
+        // the header reads it besides through the column's sorted class and the region of its sort marks
+        // (four; the column has no ordering, so no sort can name it and it carries no aria-sort). Only a
+        // click reads the anchor, so nothing waits on it.
         Scope.run {
             val counted                              = new Renders
             def selectedOf(rs: Seq[Item]): Set[Item] =
@@ -200,11 +204,11 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, quiet)
-                _    <- settled(err -> 1, rows -> 6, ctx -> 3, sort -> 1)
+                _    <- settled(err -> 2, rows -> 6, ctx -> 3, sort -> 4)
                 _    <- counted.take
                 // A click writes the client field on one row, and the query re-emits the list.
                 _     <- rows.set(items.updated(5, Item("k5", "row-5*")))
-                _     <- settled(err -> 1, rows -> 6, ctx -> 3, sort -> 1)
+                _     <- settled(err -> 2, rows -> 6, ctx -> 3, sort -> 4)
                 after <- counted.take
             yield assert(after == 1, s"one row was written and $after of $rowCount rendered")
             end for
@@ -217,7 +221,7 @@ class DataTableReuseTest extends UicTest:
         // one longer made all of them unequal. Nothing reads it there (the range reads it live),
         // and it is gone.
         //
-        // The waiters are those of the first test: one on the error ref, three each on the rows and
+        // The waiters are those of the first test: two on the error ref, three each on the rows and
         // the selection, which the keyed body and the two chrome regions read through one
         // combineLatest.
         Scope.run {
@@ -233,10 +237,10 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
                 _     <- ReactiveUI.subscribe(root, quiet)
-                _     <- settled(err -> 1, rows -> 3, sel -> 3)
+                _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 _     <- counted.take
                 _     <- rows.set(items :+ Item("k40", "row-40"))
-                _     <- settled(err -> 1, rows -> 3, sel -> 3)
+                _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 after <- counted.take
             yield assert(after == 1, s"one row was appended to $rowCount and $after rendered")
             end for
@@ -250,7 +254,8 @@ class DataTableReuseTest extends UicTest:
         //
         // The waiters: the frozen group is a second keyed list over the same combineLatest as the
         // body, so the rows and the selection carry four each (two bodies, two chrome regions), and
-        // the error ref one.
+        // the error ref three: the cards, the row list and the frozen group, each a region of its own
+        // over the table's one reading.
         Scope.run {
             val counted = new Renders
             for
@@ -265,11 +270,11 @@ class DataTableReuseTest extends UicTest:
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
                 _     <- ReactiveUI.subscribe(root, quiet)
-                _     <- settled(err -> 1, rows -> 4, sel -> 4)
+                _     <- settled(err -> 3, rows -> 4, sel -> 4)
                 first <- counted.take
                 // The row is in BOTH bodies, so both have one row to draw again and no more.
                 _     <- sel.set(Set(items(1)))
-                _     <- settled(err -> 1, rows -> 4, sel -> 4)
+                _     <- settled(err -> 3, rows -> 4, sel -> 4)
                 after <- counted.take
             yield
                 assert(first >= rowCount, s"the first pass renders every row; it rendered $first")
