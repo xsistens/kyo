@@ -1375,6 +1375,17 @@ private[kyo] object DomBackend:
                 discard(el.classList.toggle(name, on))
         end classPatchNow
 
+        // The inline-style channel: drop what the previous value had and this one lacks, then set this one's declarations,
+        // property by property, so the element's other inline properties stay as they are.
+        private def stylePatchNow(path: Seq[String], set: Seq[(String, String)], removed: Seq[String]): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                val style = el.asInstanceOf[dom.HTMLElement].style
+                removed.foreach(n => discard(style.removeProperty(n)))
+                set.foreach((n, v) => style.setProperty(n, v))
+            end if
+        end stylePatchNow
+
         override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
             Sync.defer(attrPatchNow(path, name, value))
 
@@ -1384,6 +1395,11 @@ private[kyo] object DomBackend:
         override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
             Sync.defer(classPatchNow(path, name, on))
 
+        override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
+            Frame
+        ): Unit < Async =
+            Sync.defer(stylePatchNow(path, set, removed))
+
         // A bound text region: the value goes into the text node as-is. Unlike patchLoneText, which receives
         // rendered html and must therefore refuse payloads carrying `<` or `&`, this receives the string itself,
         // and a text node holds literal characters, so every string is writable here with no escaping and no
@@ -1391,10 +1407,11 @@ private[kyo] object DomBackend:
         private def textPatchNow(path: Seq[String], value: String): Unit =
             discard(regions.setTextAt(path, value))
 
-        override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Present(attrPatchNow)
-        override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present(boolAttrPatchNow)
-        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
-        override val textPatcherNow: Maybe[(Seq[String], String) => Unit]              = Present(textPatchNow)
+        override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]                      = Present(attrPatchNow)
+        override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                 = Present(boolAttrPatchNow)
+        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]                    = Present(classPatchNow)
+        override val stylePatcherNow: Maybe[(Seq[String], Seq[(String, String)], Seq[String]) => Unit] = Present(stylePatchNow)
+        override val textPatcherNow: Maybe[(Seq[String], String) => Unit]                              = Present(textPatchNow)
 
         /** Reconcile the region's live nodes toward the incoming payload instead of replacing them.
           *

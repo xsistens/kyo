@@ -57,13 +57,18 @@ private[kyo] object HtmlOp:
     // break a CSS `>` child-combinator anchored on that element. Emitted by UI.Commands.bindAttrById.
     case class SetAttrById(id: String, name: String, value: String) extends HtmlOp derives Schema
     // Declarative, path-addressed (data-kyo-path) twin of SetAttrById/SetClassById: patch the attribute/class in
-    // place (no re-render, no re-mount). The client marks ownership (the __kyoOwn shield) so a parent re-render's
-    // morph won't reconcile the live value back. Emitted by the observers started in ReactiveUI.subscribeScoped
+    // place (no re-render, no re-mount). Unlike the id-addressed ops they mark no ownership: the render writes their
+    // value, so a morph that repaints the element carries it. Emitted by the observers started in ReactiveUI.subscribeScoped
     // from Attrs.reactiveAttrs / reactiveBoolAttrs / reactiveClasses; SetClassByPath uses classList.toggle so CSS
     // transitions fire.
     case class SetAttrByPath(path: Seq[String], name: String, value: String)      extends HtmlOp derives Schema
     case class SetBoolAttrByPath(path: Seq[String], name: String, value: Boolean) extends HtmlOp derives Schema
     case class SetClassByPath(path: Seq[String], name: String, on: Boolean)       extends HtmlOp derives Schema
+    // The inline-style channel (inlineStyle(sig)): setProperty each declaration in `set` and removeProperty each name in
+    // `removed`, the properties the previous value had and this one lacks. The server's observer knows the previous value,
+    // the client does not, so the op carries what to remove. Not owned, like the other path channels: the render writes the
+    // channel's value inline, so a morph that repaints the element carries it.
+    case class SetStyleByPath(path: Seq[String], set: Seq[StyleDecl], removed: Seq[String]) extends HtmlOp derives Schema
     // Attach capturing scroll+resize listeners to getElementById(id); each reply routes to a PERSISTENT sink in
     // UI.Commands.observers (kept, not consumed like RequestMeasureById).
     case class ObserveViewportById(id: String) extends HtmlOp derives Schema
@@ -95,4 +100,7 @@ private[kyo] object HtmlOp:
 
     /** Resolves a browser drag session with the server's acceptance decision. */
     final case class ResolveDrag(sessionId: String, decision: Drag.Decision) extends HtmlOp derives Schema
+
+    /** One inline declaration of a [[SetStyleByPath]]: a CSS property name and its value. */
+    final case class StyleDecl(name: String, value: String) derives CanEqual, Schema
 end HtmlOp

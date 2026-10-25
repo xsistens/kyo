@@ -309,6 +309,12 @@ private[kyo] object UIServer:
             override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
                 val op = HtmlOp.SetClassByPath(path, name, on)
                 Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+            override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
+                Frame
+            ): Unit < Async =
+                val op = HtmlOp.SetStyleByPath(path, set.map((n, v) => HtmlOp.StyleDecl(n, v)), removed)
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+            end onStylePatch
 
             override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
                 region match

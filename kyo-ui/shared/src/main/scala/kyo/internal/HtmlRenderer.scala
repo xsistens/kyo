@@ -73,6 +73,7 @@ private[kyo] object HtmlRenderer:
             case _: Reactive[?] | _: Foreach[?, ?] => true
             case el: Element                       =>
                 el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty
+                || el.attrs.reactiveStyle.nonEmpty
                 || ReactiveUI.collectSignalRef(el).nonEmpty
                 || (el match
                     case ta: Textarea => hasSignalRefValue(ta.value)
@@ -408,7 +409,7 @@ private[kyo] object HtmlRenderer:
                 renderBoundElementBoundary(sb, elem, context, namespace, parentContext, boundaryMode) {
                     // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
                     // none are bound, so the `class` attribute is byte-identical there.
-                    def openTag(extraClasses: Seq[String]): Unit =
+                    def openTag(extraClasses: Seq[String], channelStyle: Seq[(String, String)]): Unit =
                         discard(sb.append('<').append(tag))
                         // The event attribute first: whether one was written is half of the path decision, and
                         // it is known only by walking the handlers, which this does once.
@@ -423,7 +424,8 @@ private[kyo] object HtmlRenderer:
                             if extraClasses.isEmpty then elem.attrs
                             else elem.attrs.copy(cssClasses = elem.attrs.cssClasses ++ extraClasses),
                             elem.isInstanceOf[Svg.SvgElement],
-                            cssRules
+                            cssRules,
+                            channelStyle
                         )
                         // Which element value this is: the browser mount starts the onAttached hook again for a rebuilt
                         // element, and leaves the content of one shown again unchanged, which the hook may own, alone.
@@ -431,7 +433,7 @@ private[kyo] object HtmlRenderer:
                             discard(sb.append(" data-kyo-attach=\"")
                                 .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
                     end openTag
-                    openTag(reactiveTrueClasses(elem.attrs))
+                    openTag(reactiveTrueClasses(elem.attrs), reactiveStyleNow(elem.attrs))
                     renderElementAttrs(sb, elem)
                     renderReactiveAttrs(sb, elem.attrs)
                     renderReactiveBoolAttrs(sb, elem.attrs)
@@ -659,13 +661,14 @@ private[kyo] object HtmlRenderer:
         Frame,
         SignalNow.Locals
     ): Unit =
-        val baseId = dd.attrs.identifier.getOrElse("")
+        val baseId  = dd.attrs.identifier.getOrElse("")
+        val ddStyle = reactiveStyleNow(dd.attrs)
         // Read current selected value for initial highlight
         val currentVal = dd.value match
             case Present(Bound.Ref(ref)) => SignalNow(ref)
             case Present(Bound.Const(s)) => s
             case _                       => ""
-        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules)
+        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules, ddStyle)
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -674,7 +677,8 @@ private[kyo] object HtmlRenderer:
         path: Seq[String],
         baseId: String,
         currentVal: String,
-        cssRules: Maybe[CssCollector]
+        cssRules: Maybe[CssCollector],
+        channelStyle: Seq[(String, String)] = Nil
     )(using
         Frame
     ): Unit =
@@ -685,12 +689,8 @@ private[kyo] object HtmlRenderer:
         val hidAttr     = if dd.attrs.hidden.getOrElse(false) then " hidden" else ""
         val tabAttr     = dd.attrs.tabIndex.map(n => s""" tabindex="$n"""").getOrElse("")
         val pseudoClass = registerPseudoClass(cssRules, dd.attrs.uiStyle)
-        // A generated pseudoClass already carries the base props in its own rule (see
-        // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
-        val styleStr = if pseudoClass.nonEmpty then ""
-        else
-            val styleAttr = CssStyleRenderer.render(dd.attrs.uiStyle)
-            if styleAttr.nonEmpty then s""" style="${esc(styleAttr)}"""" else ""
+        val styleAttr   = inlineCss(dd.attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
+        val styleStr    = if styleAttr.nonEmpty then s""" style="${esc(styleAttr)}"""" else ""
         // The dropdown wrapper carries its cssClasses (the same `.cssClass(...)` hook every other
         // element honors), plus the generated pseudoClass when present, so callers can style the
         // trigger container via a class selector.
@@ -815,12 +815,18 @@ private[kyo] object HtmlRenderer:
         }
 
     private def renderCommonAttrs(sb: StringBuilder, elem: Element, cssRules: Maybe[CssCollector] = Absent)(using Frame): Unit =
-        renderCommonAttrs(sb, elem.attrs, elem.isInstanceOf[Svg.SvgElement], cssRules)
+        renderCommonAttrs(sb, elem.attrs, elem.isInstanceOf[Svg.SvgElement], cssRules, Nil)
 
     /** The `attrs` overload lets a caller render an element with a MODIFIED attribute set (the reactive
       * classes currently true are folded into the class list) without rebuilding the element itself.
       */
-    private def renderCommonAttrs(sb: StringBuilder, attrs: Attrs, isSvg: Boolean, cssRules: Maybe[CssCollector])(using Frame): Unit =
+    private def renderCommonAttrs(
+        sb: StringBuilder,
+        attrs: Attrs,
+        isSvg: Boolean,
+        cssRules: Maybe[CssCollector],
+        channelStyle: Seq[(String, String)]
+    )(using Frame): Unit =
         attrs.identifier.foreach { id =>
             sb.append(" id=\"")
             escInto(sb, id)
@@ -872,11 +878,8 @@ private[kyo] object HtmlRenderer:
         // Portal marker (read client-side by the patch-application code): the client re-homes this element to
         // document.body behind a data-kyo-portal-slot placeholder; SSR/SSG keep it inline.
         attrs.portal.foreach(v => if v then w(sb, """ data-kyo-portal="1""""))
-        // A generated pseudoClass already carries the base props in its own rule (see
-        // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
-        if pseudoClass.isEmpty then
-            val css = CssStyleRenderer.render(attrs.uiStyle)
-            if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
+        val css = inlineCss(attrs.uiStyle, pseudoClass.nonEmpty, channelStyle)
+        if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
         // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
         // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
         if attrs.ariaAttrs.nonEmpty then
@@ -936,6 +939,28 @@ private[kyo] object HtmlRenderer:
             attrs.reactiveBoolAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
                 if SignalNow(sig) then w(sb, s" $name")
             }
+
+    /** The inline-style channel's current declarations, for writing inline at render; the client patches them in place
+      * afterwards (HtmlOp.SetStyleByPath). Empty when no channel is bound.
+      */
+    private def reactiveStyleNow(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[(String, String)] =
+        attrs.reactiveStyle match
+            case Present(sig) => CssStyleRenderer.declarations(SignalNow(sig))
+            case Absent       => Nil
+
+    /** The element's `style` attribute: its static declarations, then the channel's, which win where both name a
+      * property. A generated pseudo-state class already carries the static base props in its own rule (see
+      * registerPseudoClass), and rendering them inline too would shadow the pseudo-state override, so there only the
+      * channel's declarations are inline.
+      */
+    private def inlineCss(static: Style, pseudo: Boolean, channel: Seq[(String, String)]): String =
+        val base = if pseudo then "" else CssStyleRenderer.render(static)
+        if channel.isEmpty then base
+        else
+            val own = channel.map((n, v) => s"$n: $v;").mkString(" ")
+            if base.isEmpty then own else s"$base $own"
+        end if
+    end inlineCss
 
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
@@ -1241,7 +1266,7 @@ private[kyo] object HtmlRenderer:
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||
             attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
-            attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.reactiveStyle.nonEmpty || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
             attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
             attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
             attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
@@ -2205,6 +2230,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.SetClassByPath){
            |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
            |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
+           |  }else if(op.SetStyleByPath){
+           |    // Path-addressed inline style: drop what the previous value had and this one lacks, set the rest. Not owned: the render carries it.
+           |    var sspp=op.SetStyleByPath.path.join(".");var sspel=document.querySelector(__kyoPathSel(sspp));if(sspel){var ssr=op.SetStyleByPath.removed||[];for(var ssri=0;ssri<ssr.length;ssri++)sspel.style.removeProperty(ssr[ssri]);var sss=op.SetStyleByPath.set||[];for(var sssi=0;sssi<sss.length;sssi++)sspel.style.setProperty(sss[sssi].name,sss[sssi].value);}
            |  }else if(op.ObserveViewportById){
            |    var vid=op.ObserveViewportById.id;
            |    window.__kyoVpObs=window.__kyoVpObs||{};

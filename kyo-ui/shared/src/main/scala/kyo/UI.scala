@@ -957,6 +957,10 @@ object UI:
                                 Abort.runPartial[Closed](channel.put(())).unit
                             override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
                                 Abort.runPartial[Closed](channel.put(())).unit
+                            override def onStylePatch(path: Seq[String], set: Seq[(String, String)], removed: Seq[String])(using
+                                Frame
+                            ): Unit < Async =
+                                Abort.runPartial[Closed](channel.put(())).unit
                     // Scope.run owns the root region Fiber.init: when the stream consumer stops draining,
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
                     Scope.run {
@@ -1402,7 +1406,8 @@ object UI:
               *
               *   - `style`: a [[kyo.Style]] may carry pseudo-state rules, which become a generated class plus an
               *     injected stylesheet rule rather than an inline value, and `uiStyle ++ v` merges rather than
-              *     replaces. Not one attribute.
+              *     replaces. Not one attribute. Its INLINE part is a channel of its own, `inlineStyle`, which
+              *     patches the declarations of the element's `style` attribute (see there).
               *   - `checked` / `selected`: the ATTRIBUTE is the control's default, the live state is the DOM
               *     property. Patching the attribute would leave a live control where it stood.
               *   - `indeterminate`: a DOM property with no attribute at all (see `applyJsProps`).
@@ -1420,6 +1425,8 @@ object UI:
                 withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated(name, sig)))
             private[kyo] inline def withReactiveClass(name: String, on: Signal[Boolean]): Self =
                 withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+            private[kyo] inline def withReactiveStyle(sig: Signal[Style]): Self =
+                withAttrs(attrs.copy(reactiveStyle = Present(sig)))
 
             // Identity & visibility
             def id(v: String): Self      = withAttrs(attrs.copy(identifier = Present(v)))
@@ -1434,10 +1441,27 @@ object UI:
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
             def style(f: Style.type => Style): Self = style(f(Style))
 
-            /** Reactive `style`: re-renders when the signal emits. */
+            /** Reactive `style`: re-renders when the signal emits. A pseudo-state rule (`hover`, `focus`, ...) can only follow
+              * a signal this way, since it lives in a generated class that a re-render picks; for a style made of inline
+              * declarations alone, [[inlineStyle]] patches them in place instead.
+              */
             def style(v: Signal[Style]): Reactive[Self] =
                 given Frame = frame
                 Reactive[Self](v.map(s => this.style(s): UI))
+
+            /** The element's INLINE style as a channel: the declarations of each value are patched onto the element's
+              * `style` attribute in place, setting the ones the value has and removing the ones the previous value had and
+              * this one lacks, so the element and everything inside it (a typed field, a mount, a running transition) stay
+              * as they are. The render writes the current value inline, so an element drawn again carries it.
+              *
+              * Why a setter of its own rather than `style(Signal[Style])`: whether a value carries pseudo-state rules is
+              * only known per emission, and those need a generated class, which only a re-render applies. This setter
+              * says the style is inline declarations, which is what a measured size or offset is; pseudo-state rules in
+              * its values are not applied (bind them with `style(Signal)`, or statically). A property this channel sets
+              * belongs to it: the static `style` of the same property is overridden while the channel holds it, and gone
+              * once the channel drops it.
+              */
+            def inlineStyle(v: Signal[Style]): Self = withReactiveStyle(v)
 
             // ARIA attributes
             /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`). */
@@ -2138,7 +2162,10 @@ object UI:
             // present while true (disabled/readOnly(sig)); reactiveClasses: classList.toggle (cssClass(name, sig)).
             reactiveAttrs: Map[String, Signal[String]] = Map.empty,
             reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-            reactiveClasses: Map[String, Signal[Boolean]] = Map.empty
+            reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+            // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
+            // HtmlOp.SetStyleByPath on emission.
+            reactiveStyle: Maybe[Signal[Style]] = Absent
         )
 
         // ---- Non-element AST cases ----

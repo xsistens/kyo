@@ -123,4 +123,38 @@ class ReactiveSetterWireTest extends UITest:
         }
     }
 
+    "inlineStyle(Signal) patches the declarations in place, and drops what the next value lacks" in {
+        val ui: UI < Async =
+            for wide <- Signal.initRef(false)
+            yield UI.div(
+                UI.div(UI.input.id("si")).id("s").inlineStyle(wide.map(w =>
+                    if w then Style.width(30.px) else Style.width(10.px).height(20.px)
+                )),
+                UI.button("go").id("go").onClick(wide.set(true))
+            )
+        withUI(ui) {
+            for
+                _ <- Browser.fill(Selector.id("si"), "typed")
+                _ <- Browser.evalDiscard("document.getElementById('s').__kyoProbe='kept'")
+                _ <- Browser.evalDiscard(captureFrames)
+                _ <- Browser.assertAttributeSatisfies(Selector.id("s"), "style", "the first value inline")(st =>
+                    st.contains("width: 10px") && st.contains("height: 20px")
+                )
+                _ <- Browser.click(Selector.id("go"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("s"), "style", "the second value, without the height")(st =>
+                    st.contains("width: 30px") && !st.contains("height")
+                )
+                probe <- Browser.evalJson[String]("String(document.getElementById('s').__kyoProbe)")
+                value <- Browser.evalJson[String]("document.getElementById('si').value")
+                op    <- lastOp
+            yield
+                assert(probe == "kept" && value == "typed", s"the element and what it holds stayed: probe=$probe value=$value")
+                op match
+                    case HtmlOp.SetStyleByPath(_, set, removed) =>
+                        assert(set == Seq(HtmlOp.StyleDecl("width", "30px")) && removed == Seq("height"), s"$set / $removed")
+                    case other => fail(s"expected an in-place style patch, got $other")
+                end match
+        }
+    }
+
 end ReactiveSetterWireTest

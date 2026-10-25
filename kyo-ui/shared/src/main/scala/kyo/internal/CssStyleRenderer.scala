@@ -49,6 +49,43 @@ private[kyo] object CssStyleRenderer:
         sb.toString
     end render
 
+    /** The inline declarations of `style` as (property, value) pairs, in the order [[render]] writes them, a later
+      * declaration of a property replacing an earlier one. What the inline-style channel sets and compares: two values
+      * are diffed by property name. Splits [[render]]'s own output, at the `;` that end declarations and never inside
+      * parentheses or quotes, so a `url(...)` or a quoted font family keeps its value whole.
+      */
+    private[kyo] def declarations(style: Style): Seq[(String, String)] =
+        val css           = render(style)
+        val out           = scala.collection.mutable.LinkedHashMap.empty[String, String]
+        val decl          = new StringBuilder
+        var depth         = 0
+        var quote         = 0.toChar
+        def flush(): Unit =
+            val d     = decl.toString.trim
+            val colon = d.indexOf(':')
+            if colon > 0 then
+                val name = d.substring(0, colon).trim
+                discard(out.remove(name))
+                out.update(name, d.substring(colon + 1).trim)
+            end if
+            decl.clear()
+        end flush
+        css.foreach { c =>
+            if quote != 0 then
+                if c == quote then quote = 0
+                decl.append(c)
+            else
+                c match
+                    case '"' | '\''        => quote = c; decl.append(c)
+                    case '('               => depth += 1; decl.append(c)
+                    case ')'               => depth = math.max(0, depth - 1); decl.append(c)
+                    case ';' if depth == 0 => flush()
+                    case _                 => decl.append(c)
+        }
+        flush()
+        out.toSeq
+    end declarations
+
     /** Derives a stable class name and CSS rule text for a [[kyo.Style]] that carries a pseudo-state
       * (hover/focus/active/disabled), for renderers that have no inline-style channel for
       * pseudo-states: an inline `style="..."` attribute cannot express `:hover` etc., so the

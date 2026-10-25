@@ -707,4 +707,29 @@ class ForeachTest extends UITest:
         }
     }
 
+    "a row whose value changes takes the inline style its new value draws" in {
+        // The style twin of the class case above: the channel patched each row once already, and the rows that stay
+        // are drawn again with a new value, whose style the element must take.
+        val app: UI < Async =
+            for
+                items <- Signal.initRef(Chunk(("a", 3), ("b", 3), ("c", 3)))
+                page  <- Signal.initRef(0)
+            yield UI.div(
+                items.foreachIndexed((i, row) =>
+                    UI.span(row._1).id(s"srow$i").inlineStyle(page.map(p => Style.width((p * 100 + row._2).px)))
+                ),
+                UI.button("Next").id("snext").onClick(page.set(1)),
+                UI.button("Shrink").id("sshrink").onClick(items.set(Chunk(("a", 2), ("b", 2))))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "drawn at 3px")(_.contains("width: 3px"))
+                _ <- Browser.click(Selector.id("snext"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "patched to 103px")(_.contains("width: 103px"))
+                _ <- Browser.click(Selector.id("sshrink"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("srow0"), "style", "the new value's 102px")(_.contains("width: 102px"))
+            yield ()
+        }
+    }
+
 end ForeachTest
