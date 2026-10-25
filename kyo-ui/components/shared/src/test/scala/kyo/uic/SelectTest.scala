@@ -828,6 +828,52 @@ class SelectTest extends UicTest:
             assert(opened2 && fresh == "", s"on: a fresh query per open, as before ($fresh)")
     }
 
+    "a click on an option the opening paint shows picks it, though the panel's own mount has not started yet" in {
+        import kyo.internal.*
+        // The opening click writes the open state, and the field it re-renders already holds the panel's placeholder,
+        // which is what the page shows; the overlay's own mount registers itself on a fiber of its own afterwards. A click
+        // sent the moment the opening click returns lands in between, which is where the issue tracker's first click on
+        // an option landed. The rounds keep it from passing on one lucky interleaving.
+        val rounds                                                                        = 25
+        def round(fieldPath: Seq[String], optionPath: Seq[String]): Maybe[String] < Async =
+            for
+                value <- Signal.initRef(Present(fruit.head): Maybe[Fruit])
+                live  <- Promise.init[Unit, Any]
+                cmds  <- UI.Commands.init(_ => Kyo.unit)
+                ui = select.selection(value).render
+                // The first paint is the field's mount publishing the live field, the one a click can open.
+                exchange = new UIExchange:
+                    def onChange(
+                        region: ReactiveRegion,
+                        path: Seq[String],
+                        context: ReactiveRegion.RegionIdentity,
+                        parentContext: ReactiveRegion.ParentContext,
+                        previous: Maybe[UI],
+                        changed: UI
+                    )(using Frame): Unit < Async = live.completeUnitDiscard
+                v <- Scope.run(UICommands.commands.let(Present(cmds)) {
+                    for
+                        root <- ReactiveUI.normalize(ui, Seq.empty)
+                        sub  <- ReactiveUI.subscribe(root, exchange)
+                        _    <- live.get
+                        _    <- sub.handle(fieldPath, clickAt(fieldPath))
+                        _    <- sub.handle(optionPath, clickAt(optionPath))
+                        v    <- value.get
+                    yield v
+                })
+            yield v.map(_.name)
+        end round
+        for
+            closed         <- HtmlRenderer.render(select.selection(Present(fruit.head): Maybe[Fruit]).render, Seq.empty)
+            (_, _, opened) <- field(select, open = true)
+            shown          <- HtmlRenderer.render(opened, Seq.empty)
+            picks          <- Kyo.foreach(1 to rounds)(_ => round(pathOf(closed, "sel"), pathOf(shown, "sel-option-2")))
+        yield
+            val missed = picks.count(_ != Present("Cherry"))
+            assert(missed == 0, s"$missed of $rounds clicks on Cherry left the field elsewhere: ${picks.distinct}")
+        end for
+    }
+
 end SelectTest
 
 object SelectTest:
@@ -835,4 +881,5 @@ object SelectTest:
         case Warm, Cool
 
     final case class User(name: String, email: String) derives CanEqual
+
 end SelectTest
