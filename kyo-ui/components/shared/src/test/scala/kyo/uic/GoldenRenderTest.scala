@@ -6599,7 +6599,7 @@ class GoldenRenderTest extends UicTest:
             )
             stepAt  <- Signal.initRef(0)
             stepper <- renderHtml(
-                uic.Stepper[String]().step("One")(p("1")).step("Two")(p("2")).active(stepAt).wired(List("s0", "s1"), _ => ())
+                uic.Stepper[String]().step("One")(p("1")).step("Two")(p("2")).active(stepAt).wired("s", _ => ())
             )
             // A `role="group"` of toggle buttons is NOT a composite widget: it asks for no roving
             // and no arrows, and Prime leaves every button its own tab stop. Rendered here so the
@@ -7124,9 +7124,9 @@ class GoldenRenderTest extends UicTest:
     }
 
     "every structural component draws its entries from a signal, in place" in {
-        // The structural counterpart of the picker sweep: tabs, panels, crumbs, images, slides, events and nodes that
-        // change while the page shows them are handed over as a signal, so the component is not built again around
-        // them. Each gets one fixed entry and one from a signal, then the signal moves.
+        // The structural counterpart of the picker sweep: tabs, panels, crumbs, images, slides, events, nodes and
+        // steps that change while the page shows them are handed over as a signal, so the component is not built
+        // again around them. Each gets one fixed entry and one from a signal, then the signal moves.
         for
             tabs  <- Signal.initRef(Seq(uic.Tab("Live A", p("a"), "a")))
             pans  <- Signal.initRef(Seq(uic.AccordionPanel("Live A", p("a"), "a")))
@@ -7141,6 +7141,7 @@ class GoldenRenderTest extends UicTest:
             nodes <- Signal.initRef(Seq(uic.TreeNode("Live A", "a")))
             rows  <- Signal.initRef(Seq(uic.TreeTableNode("Live A")))
             hi    <- Signal.initRef(-1)
+            wiz   <- Signal.initRef(Seq(uic.Step("Live A")(p("a"))))
             hosts = List(
                 ("Tabs", uic.Tabs[String]().tabs(_.tab("Fixed", p("f"), "f"), tabs).wired("t", _ => ())),
                 ("Accordion", uic.Accordion[String]().panels(_.panel("Fixed", p("f"), "f"), pans).value(open).wired("acc", _ => ())),
@@ -7152,7 +7153,8 @@ class GoldenRenderTest extends UicTest:
                 (
                     "TreeTable",
                     uic.TreeTable[String]().nodes(_.node("Fixed"), rows).columns(uic.column("C")(identity)).wired("tt", Absent, _ => ())
-                )
+                ),
+                ("Stepper", uic.Stepper().steps(uic.Step("Fixed")(p("f")), wiz).wired("st", _ => ()))
             )
             before <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
             _      <- tabs.set(Seq(uic.Tab("Live B", p("b"), "b")))
@@ -7162,6 +7164,7 @@ class GoldenRenderTest extends UicTest:
             _      <- Kyo.foreach(List(slide, evts))(_.set(Seq("Live B")))
             _      <- nodes.set(Seq(uic.TreeNode("Live B", "b")))
             _      <- rows.set(Seq(uic.TreeTableNode("Live B")))
+            _      <- wiz.set(Seq(uic.Step("Live B")(p("b"))))
             after  <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
         yield
             val unread = before.collect { case (name, html) if !html.contains("Live A") || !html.contains("Fixed") => name }

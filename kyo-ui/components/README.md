@@ -194,7 +194,7 @@ def actions(last: SignalRef[String])(using Frame): UI =
         )
 ```
 
-The scope offers the builders of that setter's entry type and nothing else, so `_.` completes to exactly what fits: `_.item(...)` and `_.item.separator` in every menu (the `ContextMenu(Seq(...))` constructor included), `_.group(...)` in a `MegaMenuItem.column`, `_.item(...)` in `Breadcrumb.items`, `Listbox.items` and `Galleria.items`, `_.item(...)` and `_.group(...)(...)` in `Listbox.optionGroups`, `_.node(...)` in `Tree`, `TreeSelect` and `TreeTable` (whose `children` take the same two spellings), `_.panel(...)` in `Accordion.panels`, and `_.tab(...)` in `Tabs.tabs`. A builder from the wrong scope does not compile, the same contract as a setter a component does not have.
+The scope offers the builders of that setter's entry type and nothing else, so `_.` completes to exactly what fits: `_.item(...)` and `_.item.separator` in every menu (the `ContextMenu(Seq(...))` constructor included), `_.group(...)` in a `MegaMenuItem.column`, `_.item(...)` in `Breadcrumb.items`, `Listbox.items` and `Galleria.items`, `_.item(...)` and `_.group(...)(...)` in `Listbox.optionGroups`, `_.node(...)` in `Tree`, `TreeSelect` and `TreeTable` (whose `children` take the same two spellings), `_.panel(...)` in `Accordion.panels`, `_.tab(...)` in `Tabs.tabs`, and `_.step(...)` in `Stepper.steps`. A builder from the wrong scope does not compile, the same contract as a setter a component does not have.
 
 ### Icons are typed glyph values
 
@@ -1099,7 +1099,7 @@ val compact: UI < Async =
 
 A `DataTable` reaches the same setters through `paginator(f)`, a function over the paginator it renders below its rows. Prime mirrors a handful of the paginator's props onto the table and a caller reaching for one it did not mirror has nowhere to go; here the paginator is a value, so one name covers all of them. The four the table owns are applied after `f` and cannot be overridden from there: the record count, the page size, the current page and the ref it writes to, since a paginator disagreeing with the rows above it would page a list nobody is looking at.
 
-`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[K])` keys each step by a value of the app's own type and survives steps being inserted or reordered. A step without a value is reachable through `active` only. `K` is the type of the step values and never needs spelling out: `uic.Stepper()` takes it from `value(ref)` or a step's `value`, and a stepper driven by `active` alone is a `Stepper[Nothing]`, which admits no step value at all.
+`Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[K])` keys each step by a value of the app's own type and survives steps being inserted or reordered. A step without a value is reachable through `active` only. `steps(...)` takes the steps as `uic.Step(...)` values, as `_.step(...)`, or as a `Signal[Seq[Step[K]]]` for steps that change while the stepper is shown; the binding is read against the steps there are, so a value no step carries shows the first step until the signal brings the one it names. `K` is the type of the step values and never needs spelling out: `uic.Stepper()` takes it from `value(ref)` or a step's `value`, and a stepper driven by `active` alone is a `Stepper[Nothing]`, which admits no step value at all.
 
 ```scala
 enum Phase derives CanEqual:
