@@ -15,7 +15,7 @@ final case class AccordionPanel[K] private[uic] (
     id: K,
     disabled: Boolean,
     headerUI: Maybe[UI]
-)
+) derives CanEqual
 
 object AccordionPanel:
     /** Construct a panel with a constant `header` title. The `Accordion.panel` builder takes
@@ -32,6 +32,11 @@ end AccordionPanel
 
 /** An Accordion panel, built directly or as `_.panel(...)` (see [[AccordionPanelScope]]). */
 type AccordionPanelEntry[K] = Entry[AccordionPanel[K], AccordionPanelScope[K]]
+
+/** An [[AccordionPanelEntry]] or a signal of panels, for an accordion whose panels change while it is shown (see
+  * [[LiveEntry]]).
+  */
+type AccordionPanelLiveEntry[K] = LiveEntry[AccordionPanel[K], AccordionPanelScope[K]]
 
 /** What `_` stands for in [[Accordion.panels]]: `_.panel("Shipping", shippingForm, "shipping")`. The header takes a `Signal[String]`
   * too, as [[Accordion.panel]] does.
@@ -53,6 +58,9 @@ object AccordionPanelScope:
 
     private[uic] def resolve[K](entries: Seq[AccordionPanelEntry[K]]): List[AccordionPanel[K]] =
         Entry.resolve(scope.asInstanceOf[AccordionPanelScope[K]], entries)
+
+    private[uic] def reading[K](entries: Seq[AccordionPanelLiveEntry[K]])(using CanEqual[K, K], Frame): Reading[List[AccordionPanel[K]]] =
+        Entry.reading(scope.asInstanceOf[AccordionPanelScope[K]], entries)
 end AccordionPanelScope
 
 /** Accordion: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -82,22 +90,27 @@ end AccordionPanelScope
   * inside a `UI.mounted`, so each panel's content container stays STABLE across
   * toggles; a whole-body `ref.render` would replace it and reset the grid-rows
   * transition. Per panel: the `.p-accordioncontent.p-uic-collapse` container is
-  * id-stamped and ALWAYS present (the grid 0fr row hides a collapsed panel), and
-  * the shell's `.p-accordionpanel-active` class plus the content's
-  * `.p-uic-collapsed` class are toggled IN PLACE via `bindClassById` (a nested
-  * mount driving the binds after publish, the [[Overlay]] `measureTrigger`
-  * precedent). The header button must stay a DIRECT child of the shell for Prime's
-  * `.p-accordionpanel[...] > .p-accordionheader` rules (active background, chevron
-  * color, first/last radii), so it is NEVER wrapped in a reactive region: its
-  * `aria-expanded` tracks the open state via the id-addressed `bindAttrById` channel
-  * (in place, no wrapper), and only the chevron glyph swaps in a tiny reactive region
-  * INSIDE the button (the toggle-icon rule is descendant, so that inner wrapper is
-  * harmless). The mount's
-  * `.placeholder` is today's un-animated whole-body `ref.render` (content
-  * only-when-active), the byte-identical SSR/golden fallback.
+  * ALWAYS present (the grid 0fr row hides a collapsed panel), and the shell's
+  * `.p-accordionpanel-active` class plus the content's `.p-uic-collapsed` class
+  * are reactive classes, toggled IN PLACE on the element. The header button must
+  * stay a DIRECT child of the shell for Prime's `.p-accordionpanel[...] >
+  * .p-accordionheader` rules (active background, chevron color, first/last
+  * radii), so it is NEVER wrapped in a reactive region: its `aria-expanded` is a
+  * reactive attribute, patched in place, and only the chevron glyph swaps in a
+  * tiny reactive region INSIDE the button (the toggle-icon rule is descendant,
+  * so that inner wrapper is harmless). The mount's `.placeholder` is the
+  * un-animated whole-body render (content only-when-active), the SSR/golden
+  * fallback.
+  *
+  * Panels from a signal (see [[LiveEntry]]) are a list keyed by panel id inside
+  * the one body: a panel the signal adds is a new row, and one that stays keeps
+  * its content and its transition. Every row shares the list's one region, so
+  * the first-child and last-child radii still see one run of panels.
   */
 final case class Accordion[K] private (
+    // The panels `body` draws, resolved from `panelSources` by the render.
     panelList: List[AccordionPanel[K]] = Nil,
+    panelSources: List[AccordionPanelLiveEntry[K]] = Nil,
     singleRef: Maybe[SignalRef[Maybe[K]]] = Absent,
     multiRef: Maybe[SignalRef[Set[K]]] = Absent,
     onToggleF: Maybe[K => UI.Action] = Absent
@@ -107,16 +120,19 @@ final case class Accordion[K] private (
     // Panel ids compare the way the sets that hold them already compare them, by `equals`.
     private given CanEqual[K, K] = CanEqual.derived
 
-    /** Appends the given panels, each built directly or from `_` (see [[AccordionPanelScope]]). */
-    def panels(ps: AccordionPanelEntry[K]*): Accordion[K] =
-        copy(panelList = panelList ++ AccordionPanelScope.resolve(ps))
+    /** Appends the given panels, each built directly or from `_` (see [[AccordionPanelScope]]), or a signal of panels that
+      * change while the accordion is shown (see [[LiveEntry]]). A panel whose id stays in the signal keeps its content.
+      * The panel's DOM ids and its row in a live list are named by the id's text, so two panels need ids that print
+      * differently, as two tabs of [[Tabs]] do.
+      */
+    def panels(ps: AccordionPanelLiveEntry[K]*): Accordion[K] = copy(panelSources = panelSources ++ ps)
 
     /** Appends a single panel (ergonomic builder: no need to construct
       * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
     def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
-        copy(panelList = panelList :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
+        copy(panelSources = panelSources :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
 
     /** Binds the open panel two-way, SINGLE mode (Prime's default): at most one
       * panel open, the ref holds its id (`Absent` = all closed); clicking the open
@@ -133,86 +149,63 @@ final case class Accordion[K] private (
     /** Fired with the panel id after a header click (after the value write). */
     def onToggle(f: K => UI.Action)(using Frame): Accordion[K] = copy(onToggleF = Present(Callback.of(f)))
 
+    /** The panels as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
+
+    /** The open panel ids, read from whichever ref is bound (single mode lifts the one id into a set); none, and fixed,
+      * without a ref.
+      */
+    private def openIds(using Frame): Reading[Set[K]] =
+        (singleRef, multiRef) match
+            case (Present(r), _)      => Reading.Live(r.map(_.toList.toSet))
+            case (Absent, Present(r)) => Reading.Live(r)
+            case _                    => Reading.Fixed(Set.empty)
+
     private[uic] def render(using Frame): UI =
-        (singleRef, multiRef) match
-            case (Present(r), _) =>
-                animated(id => r.map(_.contains(id)), r.render(v => body(v.toList.toSet)))
-            case (Absent, Present(r)) =>
-                animated(id => r.map(_.contains(id)), r.render(body))
-            case _ => body(Set.empty)
+        val still = entries.and(openIds).render((ps, open) => copy(panelList = ps).body(open))
+        if interactive then
+            UI.mounted {
+                UI.commands.map(cmds => cmds.freshId.map(base => wired(base, id => cmds.focusId(id))))
+            }.placeholder(still)
+        else still
+        end if
+    end render
 
-    /** The animated body: build the accordion ONCE in a mount so the per-panel
-      * content containers stay stable, mint a shell id + content id per panel, and
-      * drive their in-place class toggles from a nested mount (after publish).
-      * `activeOf` maps a panel id to its open `Signal`; `placeholder` is today's
-      * un-animated whole-body render.
+    /** The animated body the mount publishes, and the seam the golden tests render: built ONCE, each panel toggling its
+      * own classes and `aria-expanded` in place, so its content container stays stable and the grid-rows transition
+      * plays. Every id derives from `base` and the panel's own id, so a panel a signal adds later has its ids without a
+      * mint of its own.
       */
-    private def animated(activeOf: K => Signal[Boolean], placeholder: => UI)(using Frame): UI =
-        UI.mounted {
-            for
-                cmds <- UI.commands
-                ids  <- Kyo.foreach(panelList) { _ =>
-                    for
-                        shellId   <- cmds.freshId
-                        contentId <- cmds.freshId
-                        headerId  <- cmds.freshId
-                    yield (shellId, contentId, headerId)
-                }
-                open <- currentOpen
-            yield
-                val pairs = panelList.zip(ids)
-                // The header ids in panel order, and the positions the keyboard may land on:
-                // a disabled header is not focusable, so ArrowDown steps over it.
-                val headerIds = pairs.map { case (_, (_, _, headerId)) => headerId }
-                val navigable = panelList.zipWithIndex.collect { case (p, i) if !p.disabled => i }
-                fragment(
-                    activeBinder(cmds, pairs, activeOf),
-                    div.cssClass("p-accordion").cssClass("p-component")(
-                        pairs.zipWithIndex.map { case ((p, (shellId, contentId, headerId)), i) =>
-                            toChild(renderAnimatedPanel(
-                                p,
-                                shellId,
-                                contentId,
-                                headerId,
-                                open.contains(p.id),
-                                activeOf(p.id),
-                                Present(headerMove(cmds, headerIds, navigable, i))
-                            ))
-                        }*
-                    )
-                )
-        }.placeholder(placeholder)
+    private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
+        val open                          = openIds.signal
+        def row(p: AccordionPanel[K]): UI = renderAnimatedPanel(p, base, open, focus)
+        val rows: List[UI]                = entries match
+            case Reading.Fixed(ps) => ps.map(row)
+            case Reading.Live(sig) =>
+                given CanEqual[Chunk[AccordionPanel[K]], Chunk[AccordionPanel[K]]] = CanEqual.derived
+                List(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(row))
+        div.cssClass("p-accordion").cssClass("p-component")(rows.map(toChild)*)
+    end wired
 
-    /** The currently-open panel ids, read from whichever ref is bound (single mode
-      * lifts the one id into a set; `Absent` = none).
+    /** A panel id as it appears in a DOM id: its text behind its length, so the ids below stay distinct for any two
+      * panels whose ids print differently ("a" plus "-content" is not the panel "a-content").
       */
-    private def currentOpen(using Frame): Set[K] < Sync =
-        (singleRef, multiRef) match
-            case (Present(r), _)      => r.get.map(_.toList.toSet)
-            case (Absent, Present(r)) => r.get
-            case _                    => Set.empty[K]
+    private def idPart(id: K): String =
+        val s = id.toString
+        s"${s.length}-$s"
+    end idPart
 
-    /** Nested mount (runs after the body is published) that installs, per panel, the
-      * in-place binds, all WITHOUT replacing the shell or header, so Prime's
-      * `.p-accordionpanel[...] > .p-accordionheader` child-combinator rules keep
-      * matching: `.p-accordionpanel-active` on the shell tracks the open signal,
-      * `.p-uic-collapsed` on the content tracks its negation, and `aria-expanded` on
-      * the header button tracks the open state via the id-addressed attribute channel.
+    private def shellId(base: String, id: K): String   = s"$base-${idPart(id)}"
+    private def contentId(base: String, id: K): String = s"$base-${idPart(id)}-content"
+    private def headerId(base: String, id: K): String  = s"$base-${idPart(id)}-header"
+
+    /** The panels as they are now: what a key press moves among, read when the key arrives so a live list counts the
+      * panels it holds at that moment.
       */
-    private def activeBinder(
-        cmds: UI.Commands,
-        pairs: List[(AccordionPanel[K], (String, String, String))],
-        activeOf: K => Signal[Boolean]
-    )(using Frame): UI =
-        UI.mounted {
-            Kyo.foreach(pairs) { case (p, (shellId, contentId, headerId)) =>
-                val active = activeOf(p.id)
-                cmds
-                    .bindClassById(shellId, "p-accordionpanel-active", active)
-                    .andThen(cmds.bindClassById(contentId, "p-uic-collapsed", active.map(!_)))
-                    .andThen(cmds.bindAttrById(headerId, "aria-expanded", active.map(_.toString)))
-            }.andThen(UI.empty)
-        }.placeholder(UI.empty)
+    private def current(using Frame): List[AccordionPanel[K]] < Sync =
+        entries match
+            case Reading.Fixed(ps) => ps
+            case Reading.Live(sig) => sig.current
 
     /** ArrowDown/ArrowUp/Home/End move focus between the headers, which is the ARIA accordion
       * pattern and what Prime does: the headers are buttons and each is its own tab stop, so
@@ -223,26 +216,23 @@ final case class Accordion[K] private (
       * focused would take Enter nowhere. Enter and Space are left alone for exactly that
       * reason, since the browser already presses the focused header with them.
       */
-    private def headerMove(cmds: UI.Commands, headerIds: List[String], navigable: List[Int], self: Int)(using
-        Frame
-    ): KeyboardEvent => UI.Action = e =>
-        // Prime's accordion cycles, so ArrowDown on the last header comes back to the first.
-        ListNav.onKey(navigable, self, e.key, wrap = true) match
-            case Present(step) if step.focus != self && headerIds.isDefinedAt(step.focus) =>
-                cmds.focusId(headerIds(step.focus))
-            case _ => ()
+    private def headerMove(base: String, self: K, focus: String => UI.Action)(using Frame): KeyboardEvent => UI.Action = e =>
+        current.map { ps =>
+            // A disabled header is not focusable, so ArrowDown steps over it.
+            val navigable = ps.zipWithIndex.collect { case (p, i) if !p.disabled => i }
+            val at        = ps.indexWhere(_.id == self)
+            // Prime's accordion cycles, so ArrowDown on the last header comes back to the first.
+            val moved: UI.Action = ListNav.onKey(navigable, at, e.key, wrap = true) match
+                case Present(step) if step.focus != at && ps.isDefinedAt(step.focus) => focus(headerId(base, ps(step.focus).id))
+                case _                                                               => ()
+            moved
+        }
 
-    private def renderAnimatedPanel(
-        p: AccordionPanel[K],
-        shellId: String,
-        contentId: String,
-        headerId: String,
-        active0: Boolean,
-        active: Signal[Boolean],
-        onHeaderKey: Maybe[KeyboardEvent => UI.Action] = Absent
-    )(using Frame): UI =
-        var shell = div.cssClass("p-accordionpanel").id(shellId)
-        if active0 then shell = shell.cssClass("p-accordionpanel-active")
+    private def renderAnimatedPanel(p: AccordionPanel[K], base: String, open: Signal[Set[K]], focus: String => UI.Action)(using
+        Frame
+    ): UI =
+        val active = open.map(_.contains(p.id))
+        var shell  = div.cssClass("p-accordionpanel").id(shellId(base, p.id)).cssClass("p-accordionpanel-active", active)
         if p.disabled then shell = shell.cssClass("p-disabled")
 
         val headerSlot: UI = p.headerUI match
@@ -255,20 +245,18 @@ final case class Accordion[K] private (
         // The button stays a DIRECT child of the shell so Prime's `.p-accordionpanel[...]
         // > .p-accordionheader` rules (active background, chevron color, first/last radii)
         // match; a Reactive wrapper span between panel and header would break the `>`
-        // combinator. So the two reactive header bits patch without wrapping the button:
-        // `aria-expanded` via the id-addressed `bindAttrById` channel (see activeBinder),
-        // baked here to the initial state; the chevron glyph via a tiny nested reactive
-        // region INSIDE the button (the toggle-icon rule is descendant, so the inner
-        // wrapper is harmless).
+        // combinator. So `aria-expanded` is a reactive attribute patched in place, and the
+        // chevron glyph swaps in a tiny nested reactive region INSIDE the button (the
+        // toggle-icon rule is descendant, so the inner wrapper is harmless).
         var header = button
             .cssClass("p-accordionheader")
-            .id(headerId)
+            .id(headerId(base, p.id))
             .jsProp("type", "button")
-            .aria("expanded", active0.toString)
+            .aria("expanded", active.map(_.toString))
         if p.disabled then header = header.jsProp("disabled", "true")
         else
             if interactive then header = header.onClick(toggle(p.id))
-            onHeaderKey.foreach(f => header = header.preventScrollKeys.onKeyDown(f))
+            header = header.preventScrollKeys.onKeyDown(headerMove(base, p.id, focus))
         end if
         val headerEl: UI = header(
             toChild(headerSlot),
@@ -277,14 +265,12 @@ final case class Accordion[K] private (
 
         // Content is ALWAYS present: the grid 0fr row hides a collapsed panel.
         val contentEl: UI =
-            var c = div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId)
-            if !active0 then c = c.cssClass("p-uic-collapsed")
-            c(
-                div.cssClass("p-accordioncontent-wrapper")(
-                    div.cssClass("p-accordioncontent-content")(toChild(p.content))
+            div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId(base, p.id))
+                .cssClass("p-uic-collapsed", active.map(!_))(
+                    div.cssClass("p-accordioncontent-wrapper")(
+                        div.cssClass("p-accordioncontent-content")(toChild(p.content))
+                    )
                 )
-            )
-        end contentEl
 
         shell(toChild(headerEl), toChild(contentEl))
     end renderAnimatedPanel

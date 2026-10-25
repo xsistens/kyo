@@ -154,6 +154,15 @@ Rules a new one follows:
   `LiveEntry` like a menu. `GoldenRenderTest` ("every picker draws its options from a signal ...") holds them.
   Ids that follow the options derive from ONE minted base (`$base-<n>`), never one mint per option, or a
   list that grows has rows without ids.
+- **Structural components take it too** (Tabs, Accordion, Breadcrumb, Galleria, Tree, TreeTable through
+  `LiveEntry`; Carousel and Timeline through `Iterable[A] | Signal[Seq[A]]`, read with `Reading.concat`). Each
+  exposes its list as `entries` and keeps the resolved copy (`tabList`, `nodeList`) only for what a render
+  hands its body; a host that builds one internally hands it resolved entries (`Tree.rooted`), or its methods
+  see an empty list. Rows that carry content the reader works in (tab and accordion panels) are a list keyed
+  by their id (`foreachKeyed`), so a change to the list builds only the rows that are new, and state that a
+  row shows per selection is a reactive class or attribute on the row, never a region over it. All rows share
+  one region (`Reading.children`), so Prime's sibling rules (`:first-child`, `:nth-child`, `~`) still see one
+  run. `GoldenRenderTest` ("every structural component draws its entries from a signal ...") holds them.
 - **Which submenus are open is ONE set of paths** (`Submenus`), not a ref per path: refs could only be
   allocated for the items the host was built with. A submenu panel is `Overlay.gated(subs.close(path))`.
 

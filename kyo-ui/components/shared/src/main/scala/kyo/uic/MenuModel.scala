@@ -105,8 +105,8 @@ final case class MenuItem private (
 end MenuItem
 
 object MenuItem:
-    // Lets a host's one region skip a resolution that pins the slots it already drew.
-    private[uic] given CanEqual[MenuItem, MenuItem] = CanEqual.derived
+    // Lets a host's one region skip a resolution that pins the slots it already drew, and a caller hold items in a signal.
+    given CanEqual[MenuItem, MenuItem] = CanEqual.derived
 
     /** An item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).

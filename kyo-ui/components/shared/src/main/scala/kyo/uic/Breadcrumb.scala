@@ -15,7 +15,7 @@ final case class BreadcrumbItem private[uic] (
     href: Maybe[String],
     target: Maybe[String],
     icon: Maybe[IconGlyph]
-)
+) derives CanEqual
 
 object BreadcrumbItem:
     /** Construct a crumb. A `Signal[String]` label re-renders in place on emission; the rest of
@@ -31,6 +31,9 @@ end BreadcrumbItem
 
 /** A crumb, built directly or as `_.item(...)` (see [[BreadcrumbItemScope]]). */
 type BreadcrumbItemEntry = Entry[BreadcrumbItem, BreadcrumbItemScope]
+
+/** A [[BreadcrumbItemEntry]] or a signal of crumbs, for a trail that changes while it is shown (see [[LiveEntry]]). */
+type BreadcrumbItemLiveEntry = LiveEntry[BreadcrumbItem, BreadcrumbItemScope]
 
 /** What `_` stands for in [[Breadcrumb.items]]: `_.item("Docs", href = Present("/docs"))`, as [[BreadcrumbItem.apply]]. */
 final class BreadcrumbItemScope private ():
@@ -48,6 +51,9 @@ object BreadcrumbItemScope:
 
     private[uic] def resolve(entries: Seq[BreadcrumbItemEntry]): List[BreadcrumbItem] =
         Entry.resolve(scope, entries)
+
+    private[uic] def reading(entries: Seq[BreadcrumbItemLiveEntry])(using Frame): Reading[List[BreadcrumbItem]] =
+        Entry.reading(scope, entries)
 end BreadcrumbItemScope
 
 /** Breadcrumb: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -64,25 +70,27 @@ end BreadcrumbItemScope
   */
 final case class Breadcrumb private (
     homeV: Maybe[BreadcrumbItem] = Absent,
-    itemsV: List[BreadcrumbItem] = Nil,
+    itemSources: List[BreadcrumbItemLiveEntry] = Nil,
     separatorV: Maybe[IconGlyph] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
     onItemClickF: Maybe[BreadcrumbItem => UI.Action] = Absent
 ) extends Node, HasAccessibleName:
     type Self = Breadcrumb
 
-    /** Appends the given crumbs to the trail, each built directly or from `_` (see [[BreadcrumbItemScope]]). */
-    def items(is: BreadcrumbItemEntry*): Breadcrumb = copy(itemsV = itemsV ++ BreadcrumbItemScope.resolve(is))
+    /** Appends the given crumbs to the trail, each built directly or from `_` (see [[BreadcrumbItemScope]]), or a signal of
+      * crumbs that change while the trail is shown (see [[LiveEntry]]).
+      */
+    def items(is: BreadcrumbItemLiveEntry*): Breadcrumb = copy(itemSources = itemSources ++ is)
 
     /** Appends a linked crumb. A `Signal[String]` label re-renders in place on emission. */
     def item(text: String | Signal[String], href: String): Breadcrumb =
-        copy(itemsV = itemsV :+ BreadcrumbItem(text, Present(href)))
+        copy(itemSources = itemSources :+ BreadcrumbItem(text, Present(href)))
 
     /** Appends a crumb with nothing to open (the current page, or a step in the trail that has
       * no page of its own). A `Signal[String]` label re-renders in place on emission. Only the
       * last crumb of the trail carries `aria-current="page"`.
       */
-    def item(text: String | Signal[String]): Breadcrumb = copy(itemsV = itemsV :+ BreadcrumbItem(text))
+    def item(text: String | Signal[String]): Breadcrumb = copy(itemSources = itemSources :+ BreadcrumbItem(text))
 
     /** Prime's home item: an icon-only crumb rendered first (`li.p-breadcrumb-home-item`). */
     def home(icon: IconGlyph, href: String): Breadcrumb =
@@ -96,12 +104,26 @@ final case class Breadcrumb private (
     /** Fired with the item clicked, in addition to the anchor's native navigation. */
     def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb = copy(onItemClickF = Present(Callback.of(f)))
 
+    /** The crumbs as ONE reading: fixed unless one of the setters was handed a signal. */
+    private[uic] def entries(using Frame): Reading[List[BreadcrumbItem]] = BreadcrumbItemScope.reading(itemSources)
+
     private[uic] def render(using Frame): UI =
+        val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
+        val labelled = accessibleNameV match
+            case Present(TextValue.Const(v)) => navBase.aria("label", v)
+            case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
+            case Absent                      => navBase.aria("label", "Breadcrumb")
+        // Only the list follows a live trail: which crumb is last, and so current, moves with it.
+        labelled(toChild(entries.render(items => UI.ol.cssClass("p-breadcrumb-list")(trail(items).map(toChild)*))))
+    end render
+
+    /** The rows of the list: the home item and the crumbs, separated by the chevron. */
+    private def trail(items: List[BreadcrumbItem])(using Frame): List[UI] =
         val sepGlyph                                  = separatorV.getOrElse(Icons.chevronRight)
         val allItems: List[(BreadcrumbItem, Boolean)] =
-            homeV.toList.map(h => (h, true)) ++ itemsV.map(i => (i, false))
-        val lastIdx           = allItems.length - 1
-        val entries: List[UI] = allItems.zipWithIndex.flatMap { case ((it, isHome), i) =>
+            homeV.toList.map(h => (h, true)) ++ items.map(i => (i, false))
+        val lastIdx = allItems.length - 1
+        allItems.zipWithIndex.flatMap { case ((it, isHome), i) =>
             val itemCls       = if isHome then "p-breadcrumb-home-item" else "p-breadcrumb-item"
             val row: UI       = li.cssClass(itemCls)(toChild(renderLink(it, i == lastIdx)))
             val sep: List[UI] =
@@ -114,15 +136,7 @@ final case class Breadcrumb private (
                 else Nil
             row :: sep
         }
-        val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
-        val labelled = accessibleNameV match
-            case Present(TextValue.Const(v)) => navBase.aria("label", v)
-            case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
-            case Absent                      => navBase.aria("label", "Breadcrumb")
-        labelled(
-            UI.ol.cssClass("p-breadcrumb-list")(entries.map(toChild)*)
-        )
-    end render
+    end trail
 
     /** One crumb's `a.p-breadcrumb-item-link` (icon + label); hrefless crumbs
       * render the same anchor without an href, and the LAST crumb is the one

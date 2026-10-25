@@ -56,22 +56,8 @@ private[uic] object Entry:
       * A signal is matched before a function, since neither an entry type nor a builder is a `Signal`.
       */
     def reading[A, S](scope: S, entries: Seq[LiveEntry[A, S]])(using Frame): Reading[List[A]] =
-        given CanEqual[List[A], List[A]]  = CanEqual.derived
-        val parts: List[Reading[List[A]]] =
-            entries.foldLeft(List.empty[Reading[List[A]]]) { (acc, e) =>
-                e match
-                    case sig: Signal[?] => Reading.Live(sig.asInstanceOf[Signal[Seq[A]]].map(_.toList)) :: acc
-                    case entry          =>
-                        val one = resolve[A, S](scope, Seq(entry.asInstanceOf[Entry[A, S]]))
-                        acc match
-                            case Reading.Fixed(prev) :: rest => Reading.Fixed(prev ++ one) :: rest
-                            case _                           => Reading.Fixed(one) :: acc
-            }.reverse
-        // Neighbouring fixed entries were joined above, so two parts or more hold a signal.
-        parts match
-            case Nil        => Reading.Fixed(Nil)
-            case one :: Nil => one
-            case several    => Reading.Live(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
-        end match
-    end reading
+        Reading.concat(entries.map {
+            case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
+            case entry          => resolve[A, S](scope, Seq(entry.asInstanceOf[Entry[A, S]]))
+        })
 end Entry

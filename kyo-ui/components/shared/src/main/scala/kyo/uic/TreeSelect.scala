@@ -80,8 +80,7 @@ final case class TreeSelect[K] private (
 
     // Ids compare the way the sets that hold them already compare them, by `equals`; the expansion ref this field
     // allocates for itself needs that said.
-    private given CanEqual[K, K]                     = CanEqual.derived
-    private given CanEqual[TreeNode[K], TreeNode[K]] = CanEqual.derived
+    private given CanEqual[K, K] = CanEqual.derived
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): TreeSelect[K] = copy(idV = v)
@@ -349,7 +348,7 @@ final case class TreeSelect[K] private (
             else
                 st.map { state =>
                     var t = Tree[K]()
-                        .nodes(nodeList*)
+                        .rooted(nodeList)
                         .expanded(state.expRef)
                         .selectionMode(selectionModeV)
                         .onItemClick(_ => afterPick)

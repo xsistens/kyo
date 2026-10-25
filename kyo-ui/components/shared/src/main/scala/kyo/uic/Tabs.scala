@@ -20,7 +20,7 @@ final case class Tab[K] private[uic] (
     // No default: the synthetic companion `apply` would then also carry defaults and
     // clash with the hand-written one below.
     urlV: Maybe[String]
-):
+) derives CanEqual:
     /** Navigation target: the header renders as a real `<a href=…>` instead of a
       * `<button>`, so a plain click navigates, a middle click opens a new tab, the
       * link can be copied, and a crawler can follow it, none of which a button
@@ -66,6 +66,9 @@ end Tab
 /** A tab, built directly or as `_.tab(...)` (see [[TabScope]]). */
 type TabEntry[K] = Entry[Tab[K], TabScope[K]]
 
+/** A [[TabEntry]] or a signal of tabs, for a strip whose tabs change while it is shown (see [[LiveEntry]]). */
+type TabLiveEntry[K] = LiveEntry[Tab[K], TabScope[K]]
+
 /** What `_` stands for in [[Tabs.tabs]]: `_.tab("Profile", profileForm, "profile")`. The label takes a `Signal[String]` too, as
   * [[Tabs.tab]] does.
   */
@@ -87,6 +90,9 @@ object TabScope:
 
     private[uic] def resolve[K](entries: Seq[TabEntry[K]]): List[Tab[K]] =
         Entry.resolve(scope.asInstanceOf[TabScope[K]], entries)
+
+    private[uic] def reading[K](entries: Seq[TabLiveEntry[K]])(using CanEqual[K, K], Frame): Reading[List[Tab[K]]] =
+        Entry.reading(scope.asInstanceOf[TabScope[K]], entries)
 end TabScope
 
 /** Tabs: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
@@ -120,12 +126,16 @@ end TabScope
   * `id(...)` is the base each header derives from: `s"$id-${tab.id}"`, using the
   * tab's own logical id, so a strip's headers are addressable without `Tab`
   * growing a second id slot beside the one it already has. Without a base the
-  * mount mints them, which keeps the arrow wiring working unasked but leaves the
+  * mount mints one, which keeps the arrow wiring working unasked but leaves the
   * ids arbitrary, and absent entirely from a golden render or an SSG page,
   * since minting needs a mount. With a base they are the same in all three.
+  * Either way a tab a signal adds later (see [[LiveEntry]]) derives its id the
+  * same way, with nothing more to mint.
   */
 final case class Tabs[K] private (
+    // The tabs the header strip draws, resolved from `tabSources` by the render.
     tabList: List[Tab[K]] = Nil,
+    tabSources: List[TabLiveEntry[K]] = Nil,
     selectedBinding: Maybe[ReactiveValue[K]] = Absent,
     onTabSelectF: Maybe[K => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
@@ -136,12 +146,17 @@ final case class Tabs[K] private (
     // Tab ids compare by `equals`, the identity an app's id type already has.
     private given CanEqual[K, K] = CanEqual.derived
 
-    /** Appends the given tabs, each built directly or from `_` (see [[TabScope]]). */
-    def tabs(ts: TabEntry[K]*): Tabs[K] = copy(tabList = tabList ++ TabScope.resolve(ts))
+    /** Appends the given tabs, each built directly or from `_` (see [[TabScope]]), or a signal of tabs that change while the
+      * strip is shown (see [[LiveEntry]]). A tab whose id stays in the signal keeps its panel, and what the reader left in it.
+      */
+    def tabs(ts: TabLiveEntry[K]*): Tabs[K] = copy(tabSources = tabSources ++ ts)
 
     /** Appends a single tab from bare content children (ergonomic builder). */
     def tab(text: String | Signal[String], id: K)(content: UI*)(using Frame): Tabs[K] =
-        copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
+        copy(tabSources = tabSources :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
+
+    /** The tabs as ONE reading: fixed unless one of them was handed over as a signal. */
+    private[uic] def entries(using Frame): Reading[List[Tab[K]]] = TabScope.reading(tabSources)
 
     /** The active tab's id. A `SignalRef` binds two way: clicking a tab writes its
       * id back before firing `onTabSelect`, which is the self-contained panel
@@ -177,69 +192,46 @@ final case class Tabs[K] private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Header ids derived from a caller-set base (`s"$base-${tab.id}"`), chosen and stable.
-      * `Absent` when no base was given, which is what sends [[render]] to the mount to mint
-      * them instead.
-      */
-    private def derivedIds: Maybe[List[String]] =
-        idV.map(base => tabList.map(t => s"$base-${t.id}"))
-
     private[uic] def render(using Frame): UI =
         UI.mounted {
             UI.commands.map { cmds =>
-                idsFor(cmds).map(ids => renderTabs(ids, id => cmds.focusId(id)))
+                // A caller's base wins, and only without one does the mount mint it. Same rule as [[Menu]]'s base: the ARIA
+                // and focus wiring works unasked, and a caller who wants to address a header can.
+                val base: String < Sync = idV match
+                    case Present(b) => b
+                    case Absent     => cmds.freshId
+                base.map(b => wired(b, id => cmds.focusId(id)))
             }
         }
             // With a base the ids are known without a mount, so the placeholder carries them
             // too: a golden render, an SSG page and the live tree then agree on the header
             // ids instead of only the live one having any. Arrow-key focus still needs the
             // mount, which is what the no-op focus says here.
-            .placeholder(renderTabs(derivedIds.getOrElse(Nil), _ => ()))
-
-    /** The header ids: a caller's base wins, and only without one does the mount mint them.
-      * Same rule as [[Menu]]'s base: the ARIA and focus wiring works unasked, and a caller
-      * who wants to address a header can.
-      */
-    private def idsFor(cmds: UI.Commands)(using Frame): List[String] < Sync =
-        derivedIds match
-            case Present(ids) => ids
-            case Absent       => Kyo.foreach(tabList)(_ => cmds.freshId).map(_.toList)
-
-    /** The rendered tabs. `ids` empty means no header carries one, which is what a
-      * placeholder shows for an un-based strip: a usable tab strip whose inactive headers
-      * are reachable by clicking, with the arrow wiring arriving with the mount.
-      */
-    private def renderTabs(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        body(ids, focus)
+            .placeholder(body(idV, _ => ()))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        body(ids, focus)
+    private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
+        body(Present(base), focus)
 
-    /** The tab a selection shows: the one it names, or the first when it names none. */
-    private def resolve(selected: Maybe[K]): Maybe[K] =
-        selected.filter(s => tabList.exists(_.id == s)).orElse(Maybe.fromOption(tabList.headOption.map(_.id)))
-
-    /** Builds `f` against the active tab id, however the selection is bound.
-      *
-      * `Dyn` before `Const` and no `ReactiveVariable` case: a two-way binding IS-A
-      * `Dyn`, and reading it is identical to reading a one-way signal. The ref is
-      * only needed to WRITE, which happens in [[select]].
+    /** The id of tab `t`'s header under `base`; none without a base, which is what a placeholder shows for an un-based
+      * strip: a usable tab strip whose inactive headers are reachable by clicking, with the arrow wiring arriving with the
+      * mount.
       */
-    private def withActive(f: Maybe[K] => UI)(using Frame): UI =
-        selectedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(a => f(resolve(Present(a))))
-            case Present(ReactiveValue.Const(v)) => f(resolve(Present(v)))
-            case Absent                          => f(resolve(Absent))
+    private def headerId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"$b-${t.id}")
 
-    /** Hides the panel of tab `id` while another tab is active. A bound signal toggles the
-      * attribute in place, which is what keeps the panel's subtree alive across a switch.
+    /** The tab a selection shows among `ts`: the one it names, or the first when it names none. Resolved against the tabs
+      * read with it, since a live list may no longer hold the tab a selection names.
       */
-    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: K)(using Frame): E =
-        selectedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => el.hidden(sig.map(a => !resolve(Present(a)).contains(id)))
-            case Present(ReactiveValue.Const(v)) => if resolve(Present(v)).contains(id) then el else el.hidden(true)
-            case Absent                          => if resolve(Absent).contains(id) then el else el.hidden(true)
+    private def resolveIn(ts: List[Tab[K]], selected: Maybe[K]): Maybe[K] =
+        selected.filter(s => ts.exists(_.id == s)).orElse(Maybe.fromOption(ts.headOption.map(_.id)))
+
+    /** Hides the panel of tab `id` while another tab is active. A live selection toggles the attribute in place, which is
+      * what keeps the panel's subtree alive across a switch.
+      */
+    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: K, act: Reading[Maybe[K]])(using Frame): E =
+        act match
+            case Reading.Live(sig) => el.hidden(sig.map(a => !a.contains(id)))
+            case Reading.Fixed(a)  => if a.contains(id) then el else el.hidden(true)
 
     /** The ref to write back to; `Absent` unless the binding is two-way. */
     private def selectedRef: Maybe[SignalRef[K]] = selectedBinding match
@@ -311,31 +303,42 @@ final case class Tabs[K] private (
       * outside it, each hiding itself while another tab is active, so choosing a tab repaints
       * the headers and toggles two attributes, and builds no panel. A lazy strip puts the
       * panels in a region of their own instead, since it builds the active one on each switch.
+      *
+      * The panels of a live strip are a list keyed by tab id: a tab the signal adds is a new
+      * row, and a tab that stays keeps the panel it has, so the list is the one region above
+      * a panel and a change to it builds only the panels that are new.
       */
-    private def body(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        def panel(t: Tab[K], i: Int): UI.Ast.Div =
+    private def body(base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
+        def panel(t: Tab[K]): UI.Ast.Div =
             var el = div.cssClass("p-tabpanel").role("tabpanel")
-            if ids.isDefinedAt(i) then el = el.id(panelId(ids(i))).aria("labelledby", ids(i))
+            headerId(base, t).foreach(h => el = el.id(panelId(h)).aria("labelledby", h))
             el
         end panel
-        val indexed    = tabList.zipWithIndex
+        val listed     = entries.and(Reading.optional(selectedBinding))
+        val act        = listed.map((ts, sel) => resolveIn(ts, sel))
         val panels: UI =
             if lazyPanelsFlag then
-                withActive { active =>
-                    div.cssClass("p-tabpanels")(
-                        indexed.filter(ti => active.contains(ti._1.id)).map((t, i) => toChild(panel(t, i)(toChild(t.content))))*
-                    )
+                listed.render { (ts, sel) =>
+                    val a = resolveIn(ts, sel)
+                    div.cssClass("p-tabpanels")(ts.filter(t => a.contains(t.id)).map(t => toChild(panel(t)(toChild(t.content))))*)
                 }
             else
-                div.cssClass("p-tabpanels")(
-                    indexed.map((t, i) => toChild(hideUnlessActive(panel(t, i), t.id)(toChild(t.content))))*
-                )
+                def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.id, act)(toChild(t.content))
+                entries match
+                    case Reading.Fixed(ts) => div.cssClass("p-tabpanels")(ts.map(t => toChild(shown(t)))*)
+                    case Reading.Live(sig) =>
+                        given CanEqual[Chunk[Tab[K]], Chunk[Tab[K]]] = CanEqual.derived
+                        div.cssClass("p-tabpanels")(toChild(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(shown)))
+                end match
         // The caller's id on the component's own root, as HasElementId requires of a container.
         // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
         // because a derived name is a different string (GAPS.md F-34).
         var root = div.cssClass("p-tabs").cssClass("p-component")
         idV.foreach(v => root = root.id(v))
-        root(toChild(withActive(active => tablistWith(active, ids, focus))), toChild(panels))
+        val headers = listed.render { (ts, sel) =>
+            copy(tabList = ts).tablistWith(resolveIn(ts, sel), ts.flatMap(t => headerId(base, t).toList), focus)
+        }
+        root(toChild(headers), toChild(panels))
     end body
 
     private def tablistWith(active: Maybe[K], ids: List[String], focus: String => UI.Action)(using Frame): UI =

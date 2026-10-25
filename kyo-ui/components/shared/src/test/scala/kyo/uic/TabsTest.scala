@@ -12,7 +12,8 @@ import kyo.UI.*
   */
 class TabsTest extends UicTest:
 
-    private val ids = List("t0", "t1", "t2")
+    // The base the headers derive their ids from: `s"$base-${tab.id}"`, so "t-one", "t-two" and "t-three".
+    private val base = "t"
 
     private def strip(using Frame) =
         uic.Tabs[String]().tabs(
@@ -25,33 +26,33 @@ class TabsTest extends UicTest:
     private def move(at: Int, key: UI.Keyboard)(using Frame): Maybe[String] < Async =
         for
             moved <- Signal.initRef(Absent: Maybe[String])
-            ui = strip.wired(ids, id => moved.set(Present(id)))
+            ui = strip.wired(base, id => moved.set(Present(id)))
             headers <- elementsWithClass(ui, "p-tab")
             _       <- press(headers(at), key)
             to      <- moved.get
         yield to
 
-    "ArrowRight moves to the next header" in move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("t2")))
+    "ArrowRight moves to the next header" in move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("t-three")))
 
     "and steps over a disabled one on the way" in {
         // Position 1 is disabled, so ArrowRight from 0 lands on 2 rather than on it.
-        move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("t2")))
+        move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("t-three")))
     }
 
-    "ArrowLeft moves back" in move(2, UI.Keyboard.ArrowLeft).map(to => assert(to == Present("t0")))
+    "ArrowLeft moves back" in move(2, UI.Keyboard.ArrowLeft).map(to => assert(to == Present("t-one")))
 
     "the ends wrap, as Prime's tablist does" in {
         for
             forward <- move(2, UI.Keyboard.ArrowRight)
             back    <- move(0, UI.Keyboard.ArrowLeft)
-        yield assert(forward == Present("t0") && back == Present("t2"))
+        yield assert(forward == Present("t-one") && back == Present("t-three"))
     }
 
     "Home and End reach the ends directly" in {
         for
             home <- move(2, UI.Keyboard.Home)
             end  <- move(0, UI.Keyboard.End)
-        yield assert(home == Present("t0") && end == Present("t2"))
+        yield assert(home == Present("t-one") && end == Present("t-three"))
     }
 
     "the vertical arrows belong to the page, not to a horizontal tablist" in {
@@ -237,7 +238,7 @@ class TabsTest extends UicTest:
     "only the active header is in the Tab order, and a disabled one is in neither" in {
         for
             active  <- Signal.initRef("three")
-            ui      <- Kyo.lift(strip.selected(active).wired(ids, _ => ()))
+            ui      <- Kyo.lift(strip.selected(active).wired(base, _ => ()))
             headers <- elementsWithClass(ui, "p-tab")
         yield
             assert(headers(0).attrs.tabIndex.contains(-1), "an inactive header is out of the Tab order")
@@ -282,6 +283,26 @@ class TabsTest extends UicTest:
             assert(regions == 0, "no reactive region sits above a panel, so a switch cannot rebuild one")
             assert(before == Chunk(true, true, false))
             assert(after == Chunk(false, true, true), "the click shows the first panel and hides the third")
+    }
+
+    "tabs from a signal keep their panels out of the selection region, and a new tab adds a panel" in {
+        // The list is the one region above a panel: choosing a tab toggles `hidden` in place, and a tab the signal
+        // adds is a new row of a keyed list rather than a rebuild of the panels already shown.
+        for
+            live <- Signal.initRef(Seq(uic.Tab("Two", p("second"), "two")))
+            ref  <- Signal.initRef("one")
+            ui = uic.Tabs[String]().tabs(_.tab("One", p("first"), "one"), live).selected(ref).wired("t", _ => ())
+            regions <- regionsAbove(ui, "p-tabpanel")
+            _       <- ref.set("two")
+            chosen  <- hiddenFlags(ui)
+            _       <- live.set(Seq(uic.Tab("Two", p("second"), "two"), uic.Tab("Three", p("third"), "three")))
+            grown   <- hiddenFlags(ui)
+            headers <- elementsWithClass(ui, "p-tab")
+        yield
+            assert(regions == 1, "only the list sits above a panel")
+            assert(chosen == Chunk(true, false), "the chosen tab's panel is the visible one")
+            assert(grown == Chunk(true, false, true), "the added tab brings a hidden panel of its own")
+            assert(headers.map(_.attrs.identifier).toList == List(Present("t-one"), Present("t-two"), Present("t-three")))
     }
 
     "an id that names no tab shows the first panel, as the header strip does" in {

@@ -3086,7 +3086,8 @@ class GoldenRenderTest extends UicTest:
         val leafA = uic.TreeNode("Child A", "a")
         val leafB = uic.TreeNode("Child B", "b")
         val root  = uic.TreeNode("Root", "root", children = List(leafA, leafB))
-        val tree  = uic.Tree[String]().selectionMode(uic.SelectionMode.Checkbox).nodes(root)
+        // The cascade runs on the roots a render resolved, which is what `rooted` hands the tree.
+        val tree = uic.Tree[String]().selectionMode(uic.SelectionMode.Checkbox).rooted(List(root))
 
         // Cascade: check the parent, then uncheck one leaf, then re-check it.
         val checkedAll = tree.cascadeToggle("root", Set.empty)
@@ -5667,6 +5668,27 @@ class GoldenRenderTest extends UicTest:
 
     // ---- the container/data block ----
 
+    "Accordion ids stay distinct for any panel ids, and the arrows reach the panel they name" in {
+        // The ids derive from the panel ids, so a panel named like another one's derived id ("a" and "a-content",
+        // "a-header") must still get ids of its own, or focus lands on the wrong element.
+        for
+            open  <- Signal.initRef(Absent: Maybe[String])
+            moved <- Signal.initRef(Absent: Maybe[String])
+            ui = uic.Accordion[String]()
+                .panels(_.panel("A", p("a"), "a"), _.panel("A content", p("b"), "a-content"), _.panel("A header", p("c"), "a-header"))
+                .value(open)
+                .wired("acc", id => moved.set(Present(id)))
+            all     <- elements(ui)
+            headers <- elementsWithClass(ui, "p-accordionheader")
+            _       <- press(headers(0), UI.Keyboard.ArrowDown)
+            to      <- moved.get
+        yield
+            val ids = all.flatMap(_.attrs.identifier.toList).toList
+            assert(ids.distinct == ids, s"every id is distinct: $ids")
+            assert(to == headers(1).attrs.identifier, "ArrowDown moves to the next panel's header")
+        end for
+    }
+
     "Accordion renders Prime's panel anatomy; the ref TYPE picks single vs multiple mode" in {
         def panels(acc: uic.Accordion[String]): uic.Accordion[String] =
             acc.panels(
@@ -6563,7 +6585,7 @@ class GoldenRenderTest extends UicTest:
             // live in a mount, and a golden render shows a mount only as its placeholder.
             tabs <- renderHtml(
                 uic.Tabs[String]().tabs(uic.Tab("One", p("1"), "one"), uic.Tab("Two", p("2"), "two"))
-                    .wired(List("k0", "k1"), _ => ())
+                    .wired("k", _ => ())
             )
             carPage  <- Signal.initRef(0)
             carStart <- Signal.initRef(0.0)
@@ -7050,8 +7072,7 @@ class GoldenRenderTest extends UicTest:
         // The picker counterpart of the menu sweep: options that change while the field is shown (the results of a
         // search, the choices another field leaves) are handed over as a signal, so the field is not built again around
         // them. Each picker gets one fixed option and one from a signal, opened, then the signal moves.
-        def opts(using Frame)                                      = Signal.initRef(Seq("Live A"))
-        given CanEqual[uic.ListItem[String], uic.ListItem[String]] = CanEqual.derived
+        def opts(using Frame) = Signal.initRef(Seq("Live A"))
         for
             o1   <- opts
             o2   <- opts
@@ -7099,6 +7120,58 @@ class GoldenRenderTest extends UicTest:
             }
             assert(unread.isEmpty, s"these pickers do not draw the options of a signal: ${unread.mkString(", ")}")
             assert(stale.isEmpty, s"these pickers do not follow the signal, or draw it out of order: ${stale.mkString(", ")}")
+        end for
+    }
+
+    "every structural component draws its entries from a signal, in place" in {
+        // The structural counterpart of the picker sweep: tabs, panels, crumbs, images, slides, events and nodes that
+        // change while the page shows them are handed over as a signal, so the component is not built again around
+        // them. Each gets one fixed entry and one from a signal, then the signal moves.
+        for
+            tabs  <- Signal.initRef(Seq(uic.Tab("Live A", p("a"), "a")))
+            pans  <- Signal.initRef(Seq(uic.AccordionPanel("Live A", p("a"), "a")))
+            open  <- Signal.initRef(Absent: Maybe[String])
+            crumb <- Signal.initRef(Seq(uic.BreadcrumbItem("Live A")))
+            pics  <- Signal.initRef(Seq(uic.GalleriaItem("a.png", alt = "Live A")))
+            at    <- Signal.initRef(0)
+            slide <- Signal.initRef(Seq("Live A"))
+            page  <- Signal.initRef(0)
+            start <- Signal.initRef(0.0)
+            evts  <- Signal.initRef(Seq("Live A"))
+            nodes <- Signal.initRef(Seq(uic.TreeNode("Live A", "a")))
+            rows  <- Signal.initRef(Seq(uic.TreeTableNode("Live A")))
+            hi    <- Signal.initRef(-1)
+            hosts = List(
+                ("Tabs", uic.Tabs[String]().tabs(_.tab("Fixed", p("f"), "f"), tabs).wired("t", _ => ())),
+                ("Accordion", uic.Accordion[String]().panels(_.panel("Fixed", p("f"), "f"), pans).value(open).wired("acc", _ => ())),
+                ("Breadcrumb", uic.Breadcrumb().items(_.item("Fixed"), crumb).render),
+                ("Galleria", uic.Galleria().items(_.item("f.png", alt = "Fixed"), pics).activeIndex(at).wired("g", _ => ())),
+                ("Carousel", uic.Carousel[String]().items(Seq("Fixed"))(p(_)).items(slide)(p(_)).page(page).wired(page, "car", start)),
+                ("Timeline", uic.Timeline[String]().events(Seq("Fixed")).events(evts).content(span(_)).render),
+                ("Tree", uic.Tree[String]().nodes(_.node("Fixed", "f"), nodes).wired(hi, "tr")),
+                (
+                    "TreeTable",
+                    uic.TreeTable[String]().nodes(_.node("Fixed"), rows).columns(uic.column("C")(identity)).wired("tt", Absent, _ => ())
+                )
+            )
+            before <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+            _      <- tabs.set(Seq(uic.Tab("Live B", p("b"), "b")))
+            _      <- pans.set(Seq(uic.AccordionPanel("Live B", p("b"), "b")))
+            _      <- crumb.set(Seq(uic.BreadcrumbItem("Live B")))
+            _      <- pics.set(Seq(uic.GalleriaItem("b.png", alt = "Live B")))
+            _      <- Kyo.foreach(List(slide, evts))(_.set(Seq("Live B")))
+            _      <- nodes.set(Seq(uic.TreeNode("Live B", "b")))
+            _      <- rows.set(Seq(uic.TreeTableNode("Live B")))
+            after  <- Kyo.foreach(hosts)((name, ui) => renderHtml(ui).map(name -> _))
+        yield
+            val unread = before.collect { case (name, html) if !html.contains("Live A") || !html.contains("Fixed") => name }
+            val stale  = after.collect {
+                case (name, html)
+                    if html.contains("Live A") || !html.contains("Live B") || html.indexOf("Fixed") > html.indexOf("Live B") =>
+                    name
+            }
+            assert(unread.isEmpty, s"these components do not draw the entries of a signal: ${unread.mkString(", ")}")
+            assert(stale.isEmpty, s"these components do not follow the signal, or draw it out of order: ${stale.mkString(", ")}")
         end for
     }
 
