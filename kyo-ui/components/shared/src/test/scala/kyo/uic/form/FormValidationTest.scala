@@ -725,12 +725,12 @@ class FormValidationTest extends UicTest:
                 form <- mkForm
                 f    <- form.field.rules(Validator.required() and Validator.minLength(3)).declare // Blur + Change, the default
                 _    <- f.wireChange                                                              // as Form.mountedWith does
-                _    <- f.error.streamChanges.filter(_.nonEmpty).take(1).run                      // its silent first check ran
+                _    <- assertEventually(f.error.current.map(_.nonEmpty), within = 30.seconds)    // its silent first check ran
                 _    <- f.valueRef.set("a comment")                                               // the reader types
-                _    <- f.touched.streamChanges.filter(identity).take(1).run                      // the observer saw the edit
+                _    <- assertEventually(f.touched.current, within = 30.seconds)                  // the observer saw the edit
                 _    <- form.submit(form.reset)
                 // The observer validates the value the reset wrote: the raw error is back, and nothing may show it.
-                _       <- f.error.streamChanges.filter(_.exists(_.code == "required")).take(1).run
+                _       <- assertEventually(f.error.current.map(_.exists(_.code == "required")), within = 30.seconds)
                 touched <- f.touched.current
                 shown   <- f.visibleError.current
                 // Submitting the emptied form again is refused and shows the error, as on a fresh form.
@@ -756,12 +756,33 @@ class FormValidationTest extends UicTest:
                 _    <- f.valueRef.set("a comment")
                 _    <- form.reset // no change observer is wired yet, as before the field is mounted
                 _    <- f.wireChange
-                _     <- f.error.streamChanges.filter(_.nonEmpty).take(1).run // its silent first check ran
-                _     <- f.valueRef.set("ok")                                 // the reader types
-                _     <- f.touched.streamChanges.filter(identity).take(1).run // the edit marks the field touched
-                _     <- f.error.streamChanges.filter(_.exists(_.code == "min-length")).take(1).run
+                _     <- assertEventually(f.error.current.map(_.nonEmpty), within = 30.seconds) // its silent first check ran
+                _     <- f.valueRef.set("ok")                                                   // the reader types
+                _     <- assertEventually(f.touched.current, within = 30.seconds)               // the edit marks the field touched
+                _     <- assertEventually(f.error.current.map(_.exists(_.code == "min-length")), within = 30.seconds)
                 shown <- f.visibleError.current
             yield assert(shown.exists(_.code == "min-length"), s"the reader's short comment shows its error: $shown")
+        }
+    }
+
+    "an edit landing the moment the field is wired is the reader's edit, not the value it mounted with" in {
+        // `wireChange` starts the change observer on a fiber of its own, and the edit is written before that fiber has
+        // subscribed. The rounds keep it from passing on an interleaving where the fiber happened to subscribe first.
+        val rounds                 = 25
+        def round: Boolean < Async =
+            Scope.run {
+                for
+                    form    <- mkForm
+                    f       <- form.field.rules(Validator.required() and Validator.minLength(3)).declare
+                    _       <- f.wireChange
+                    _       <- f.valueRef.set("ok")
+                    _       <- assertEventually(f.valueRef.waiters.map(_ == 1), within = 30.seconds) // it handled the edit
+                    touched <- f.touched.current
+                yield touched
+            }
+        Kyo.foreach(1 to rounds)(_ => round).map { touched =>
+            val missed = touched.count(!_)
+            assert(missed == 0, s"$missed of $rounds edits were judged as the mounted value, so the field was never touched")
         }
     }
 
@@ -871,20 +892,20 @@ class FormValidationTest extends UicTest:
             for
                 form <- mkForm
                 f    <- form.field.rules(Validator.required() and Validator.minLength(3)).declare
-                _    <- f.wireChange                                         // as Form.mountedWith does
-                _    <- f.error.streamChanges.filter(_.nonEmpty).take(1).run // its silent first check ran
+                _    <- f.wireChange                                                           // as Form.mountedWith does
+                _    <- assertEventually(f.error.current.map(_.nonEmpty), within = 30.seconds) // its silent first check ran
                 ui = uic.TextArea().bind(f).render
                 regions  <- regionsAbove(ui, "p-textarea")
                 before   <- elementWithClass(ui, "p-textarea")
-                _        <- f.valueRef.set("ab")                                 // the reader types
-                _        <- f.touched.streamChanges.filter(identity).take(1).run // the edit marks the field touched
-                _        <- f.error.streamChanges.filter(_.exists(_.code == "min-length")).take(1).run
+                _        <- f.valueRef.set("ab")                                     // the reader types
+                _        <- assertEventually(f.touched.current, within = 30.seconds) // the edit marks the field touched
+                _        <- assertEventually(f.error.current.map(_.exists(_.code == "min-length")), within = 30.seconds)
                 shownOn  <- f.visibleError.current
                 invalid  <- elementWithClass(ui, "p-textarea")
                 rowsOn   <- elementsWithClass(ui, "p-uic-invalid-message")
                 redOn    <- Kyo.foreach(invalid.attrs.reactiveClasses.get("p-invalid").toSeq)(_.current)
                 _        <- f.valueRef.set("abcd")
-                _        <- f.error.streamChanges.filter(_.isEmpty).take(1).run
+                _        <- assertEventually(f.error.current.map(_.isEmpty), within = 30.seconds)
                 shownOff <- f.visibleError.current
                 valid    <- elementWithClass(ui, "p-textarea")
                 rowsOff  <- elementsWithClass(ui, "p-uic-invalid-message")
@@ -1756,6 +1777,36 @@ class FormValidationTest extends UicTest:
             assert(touched, "the blur touched the field")
             assert(plainRuns == 1, s"the rule that does not read the password kept its verdict: $plainRuns runs")
         end for
+    }
+
+    "a dependency that moves the moment dependsOn subscribes runs every rule, not just the mount's change run" in {
+        // `dependsOn` starts its observer on a fiber of its own, and the dependency moves before that fiber has subscribed.
+        // The rounds keep it from passing on an interleaving where the fiber happened to subscribe first.
+        val rounds                       = 25
+        def round: Maybe[String] < Async =
+            for
+                runs  <- AtomicInt.init(0)
+                other <- Signal.initRef("secret")
+                form  <- mkForm
+                // Reads `other` behind the field's back, so only `dependsOn` says it moved; and on(Submit), so a change run
+                // passes it over and only a dependency run, which runs every rule, judges it.
+                same = Validator[String](v => other.get.map(o => if v == o then Absent else Present(FieldError("differs"))))
+                    .on(Activation.Submit)
+                f <- form.field("secret").rules(countedPlain(runs) and same).declare
+                e <- Scope.run {
+                    for
+                        _ <- f.dependsOn(other)
+                        _ <- other.set("other")
+                        _ <- assertEventually(other.waiters.map(_ == 1), within = 30.seconds) // it handled the move
+                        _ <- assertEventually(f.validating.current.map(!_), within = 30.seconds)
+                        e <- f.error.current
+                    yield e
+                }
+            yield e.map(_.code)
+        Kyo.foreach(1 to rounds)(_ => round).map { errors =>
+            val missed = errors.count(_ != Present("differs"))
+            assert(missed == 0, s"$missed of $rounds moves were judged as the mount's value: ${errors.distinct}")
+        }
     }
 
     "a dependency that stops matching shows the error of a rule on(Blur) at once" in {

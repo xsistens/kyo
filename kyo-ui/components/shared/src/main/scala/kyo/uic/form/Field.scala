@@ -238,13 +238,13 @@ sealed abstract class FormField[A] private[form] (
       * verdict it found for that value, which was about the dependency's OLD value. The fresh
       * verdicts are remembered, so the events after it reuse them while the value stays. The run
       * does not touch the field: whether its error shows is still up to its own events and the
-      * submit. The dependency's value at subscription is not a change and runs as the mount does.
+      * submit. The dependency's value at this call is not a change and runs as the mount does; it is
+      * read here rather than when the observer's fiber gets to run, so a change landing in between
+      * is still a change.
       */
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) =
         Kyo.foreach(sigs) { s =>
-            AtomicInt.init(0).map { seen =>
-                Fiber.init(s.observe(_ => seen.getAndIncrement.map(n => if n == 0 then revalidate else revalidateAll))).unit
-            }
+            s.current.map(at => Fiber.init(revalidate.andThen(s.observe(Present(at), Signal.defaultRepairInterval)(_ => revalidateAll))))
         }.unit
 
     /** This field must equal the live value of `other` (the password-confirmation pattern):
@@ -285,9 +285,9 @@ sealed abstract class FormField[A] private[form] (
       */
     private[form] def wireChange(using Frame): Unit < (Async & Scope) =
         for
-            _    <- wireDependencies
-            seen <- AtomicInt.init(0)
-            _    <- Fiber.init(changeObserver(seen)).unit
+            _        <- wireDependencies
+            baseline <- changeBaseline
+            _        <- Fiber.init(changeObserver(baseline)).unit
         yield ()
 
     /** [[wireChange]] for a caller with no ambient `Scope`: the change observer runs on an UNSCOPED fiber, handed back
@@ -296,7 +296,7 @@ sealed abstract class FormField[A] private[form] (
       * scope closes, which is what makes the change events behave on rows exactly as they do on the static tree.
       */
     private[form] def wireChangeUnscoped(using Frame): Fiber[Unit, Any] < Sync =
-        observeDependencies.andThen(AtomicInt.init(0).map(seen => Fiber.initUnscoped(changeObserver(seen))))
+        observeDependencies.andThen(changeBaseline.map(baseline => Fiber.initUnscoped(changeObserver(baseline))))
 
     /** [[observeDependencies]] in the enclosing `Scope`, with no change observer and no run of its own: what a test that
       * drives the field's events by hand wires.
@@ -335,23 +335,24 @@ sealed abstract class FormField[A] private[form] (
     private[form] def dependencyChanged(signal: Signal[?])(using Frame): Unit < Async =
         onCurrent((v, mine) => decide(v, signal, mine, Absent))
 
-    /** The observer both wirings run: first emission validates SILENTLY (correct `isValid`
-      * without flagging an untouched field), every later one goes through [[onEvent]], except the
-      * value a reset wrote, which the reset judges itself ([[resetField]]).
+    /** The value the change observer starts from, read when the field is wired and not when the observer's fiber gets to
+      * run: an edit landing in between is then a change from it, the reader's edit, rather than the value the field mounted
+      * with. A reset before the wiring wrote a value no observer will deliver, so its pending write is spent here.
       */
-    private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
-        value.observe { v =>
+    private def changeBaseline(using Frame): A < Sync =
+        resetWrite.set(Absent).andThen(valueRef.get)
+
+    /** The observer both wirings run: the mount's check first, SILENTLY (correct `isValid` without flagging an untouched
+      * field), then every value that differs from `baseline` through [[onEvent]], except the value a reset wrote, which
+      * the reset judges itself ([[resetField]]).
+      */
+    private def changeObserver(baseline: A)(using Frame): Unit < Async =
+        revalidate.andThen(value.observe(Present(baseline), Signal.defaultRepairInterval) { v =>
             // Every emission spends a pending reset write, so one this observer never saw cannot be
             // taken for a later edit; and only the value the reset wrote counts as the reset's, which
             // the reset judges itself.
-            resetWrite.getAndSet(Absent).map { written =>
-                seen.getAndIncrement.map { n =>
-                    if n == 0 then revalidate
-                    else if written.contains(v) then Kyo.unit
-                    else onEvent(v, Activation.Change)
-                }
-            }
-        }
+            resetWrite.getAndSet(Absent).map(written => if written.contains(v) then Kyo.unit else onEvent(v, Activation.Change))
+        })
 
     /** An id the control already carried when [[bind]] stamped this field's own over it.
       *
