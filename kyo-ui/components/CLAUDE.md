@@ -535,6 +535,12 @@ ids, pointer handlers, focus wiring).
   single-subscription form). `renderShown` is the host-gated form WITH the full placement
   (autoFlip, portal, pointer anchor), for a host whose one region already reads the open state
   (the pickers, a popup menu, DatePicker); see "A control that reads several refs is ONE region".
+- **A host-gated panel takes the host's id** (`renderShown(panelId)`, `renderGated(open, panelId)`,
+  `s"$base-panel"`). The host redraws the panel with every change it reads, so a mount around the panel
+  would start again on every arrow key, and while a mount restarts kyo-ui shows an inert snapshot that no
+  click or key reaches. With the id the panel is drawn directly and only the measuring triggers are mounts,
+  keyed by it, publishing nothing. `Absent` is for a static projection only. `OverlayTest` ("a host
+  repainting around an open panel ...") holds it.
 - `autoFlip` only flips DECISIVELY where nothing inside the panel is focus-seeded.
   kyo's focus-seed calls `element.focus()` without `preventScroll`, so a seeded
   element gets scrolled into view by the browser before the measure lands: the
