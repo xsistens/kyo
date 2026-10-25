@@ -22,6 +22,9 @@ final case class TreeNode[K](
 /** A tree node, built directly or as `_.node(...)` (see [[TreeNodeScope]]). */
 type TreeNodeEntry[K] = Entry[TreeNode[K], TreeNodeScope[K]]
 
+/** A [[TreeNodeEntry]] or a signal of nodes, for a tree whose roots change while it is shown (see [[LiveEntry]]). */
+type TreeNodeLiveEntry[K] = LiveEntry[TreeNode[K], TreeNodeScope[K]]
+
 /** What `_` stands for in [[Tree.nodes]] and [[TreeSelect.nodes]]: `_.node("Documents", "docs", children = Seq(_.node(...)))`. The
   * children take the same two spellings, so a whole tree reads one way.
   */
@@ -43,6 +46,9 @@ object TreeNodeScope:
 
     private[uic] def resolve[K](entries: Seq[TreeNodeEntry[K]]): List[TreeNode[K]] =
         Entry.resolve(scope.asInstanceOf[TreeNodeScope[K]], entries)
+
+    private[uic] def reading[K](entries: Seq[TreeNodeLiveEntry[K]])(using Frame): Reading[List[TreeNode[K]]] =
+        Entry.reading(scope.asInstanceOf[TreeNodeScope[K]], entries)
 end TreeNodeScope
 
 /** Tree: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Tree

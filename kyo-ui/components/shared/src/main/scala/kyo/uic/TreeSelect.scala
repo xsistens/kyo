@@ -51,6 +51,7 @@ import scala.annotation.targetName
   * `$id-node-<n>` from it (a minted base stands in where none is given).
   */
 final case class TreeSelect[K] private (
+    // The roots the body draws, resolved from `nodeSources` by the region that draws them.
     nodeList: List[TreeNode[K]] = Nil,
     valueRef: Maybe[SignalRef[Set[K]]] = Absent,
     expandedRefV: Maybe[SignalRef[Set[K]]] = Absent,
@@ -72,13 +73,15 @@ final case class TreeSelect[K] private (
     onChangeF: Maybe[Set[K] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[K] => UI.Action] = Absent,
-    loadingV: Maybe[BoolValue] = Absent
+    loadingV: Maybe[BoolValue] = Absent,
+    nodeSources: List[TreeSelect.NodeSource[K]] = Nil
 ) extends Node, MultiChoiceFormControl[K], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = TreeSelect[K]
 
     // Ids compare the way the sets that hold them already compare them, by `equals`; the expansion ref this field
     // allocates for itself needs that said.
-    private given CanEqual[K, K] = CanEqual.derived
+    private given CanEqual[K, K]                     = CanEqual.derived
+    private given CanEqual[TreeNode[K], TreeNode[K]] = CanEqual.derived
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): TreeSelect[K] = copy(idV = v)
@@ -94,19 +97,20 @@ final case class TreeSelect[K] private (
       * an icon, a tooltip and an accessible name that no `A => String` supplies;
       * reach for [[nodes]] with the hand-authored model when you need those.
       */
-    def options(roots: Iterable[K])(label: K => String)(children: K => Iterable[K]): TreeSelect[K] =
-        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, (k: K) => k, children)))
+    def options(roots: Iterable[K] | Signal[Seq[K]])(label: K => String)(children: K => Iterable[K]): TreeSelect[K] =
+        copy(nodeSources = nodeSources :+ TreeSelect.projected(roots, label, (k: K) => k, children))
 
     /** [[options]] over any `A`, with `id` projecting each to the node id the selection holds. */
-    def options[A](roots: Iterable[A])(label: A => String, id: A => K)(children: A => Iterable[A]): TreeSelect[K] =
-        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, id, children)))
+    def options[A](roots: Iterable[A] | Signal[Seq[A]])(label: A => String, id: A => K)(children: A => Iterable[A]): TreeSelect[K] =
+        copy(nodeSources = nodeSources :+ TreeSelect.projected(roots, label, id, children))
 
     /** Appends root nodes of the hand-authored [[TreeNode]] model, the escape hatch
       * from [[options]] when a node needs an icon, a tooltip or its own accessible
       * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]]. Each node is built
-      * directly or from `_` (see [[TreeNodeScope]]).
+      * directly or from `_` (see [[TreeNodeScope]]), or as a signal of nodes for a tree whose roots change while the
+      * field is shown (see [[LiveEntry]]).
       */
-    def nodes(ns: TreeNodeEntry[K]*): TreeSelect[K] = copy(nodeList = nodeList ++ TreeNodeScope.resolve(ns))
+    def nodes(ns: TreeNodeLiveEntry[K]*): TreeSelect[K] = copy(nodeSources = nodeSources :+ TreeSelect.NodeSource.Entries(ns.toList))
 
     /** Binds the set of selected node ids two-way to `ref`: picks write the updated
       * set back, ref changes reselect the matching nodes.
@@ -206,7 +210,10 @@ final case class TreeSelect[K] private (
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = shown.render((sel, ld, ph) => bodyStatic(sel, Set.empty, false, Absent, ph, ld, validity))
+        val stat: UI = roots.and(shown).render { (rs, s) =>
+            val (sel, ld, ph) = s
+            copy(nodeList = rs).bodyStatic(sel, Set.empty, false, Absent, ph, ld, validity)
+        }
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -232,10 +239,17 @@ final case class TreeSelect[K] private (
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = Reading.Live(open).and(Reading.Live(exp)).and(Reading.Live(hi))
-        panel.and(shown).render { case (((o, e), h), (sel, ld, ph)) =>
-            bodyStatic(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), ph, ld, validity)
+        panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
+            copy(nodeList = rs).bodyStatic(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), ph, ld, validity)
         }
     end wired
+
+    /** The roots as ONE reading, in the order the setters received them: fixed while none of them is a signal. */
+    private[uic] def roots(using Frame): Reading[List[TreeNode[K]]] =
+        TreeNodeScope.reading(nodeSources.flatMap {
+            case TreeSelect.NodeSource.Entries(es)  => es
+            case TreeSelect.NodeSource.Projected(f) => List(f(summon[Frame]))
+        })
 
     /** What the field shows whatever its panel does: the selected ids, whether the nodes are still loading, and the
       * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
@@ -467,4 +481,25 @@ object TreeSelect:
       */
     private def project[A, K](a: A, label: A => String, id: A => K, children: A => Iterable[A]): TreeNode[K] =
         TreeNode(label(a), id(a), children = children(a).toList.map(project(_, label, id, children)))
+
+    /** Where some of the roots come from: entries as [[nodes]] takes them, or roots that [[options]] projects, which for a
+      * signal can only happen once the region has a `Frame` to map it with. Its own case rather than a function among the
+      * entries, since an entry may already be one (`_.node(...)`).
+      */
+    private[uic] enum NodeSource[K]:
+        case Entries(entries: List[TreeNodeLiveEntry[K]])
+        case Projected(make: Frame => Signal[Seq[TreeNode[K]]])
+
+    /** The roots `options` was given, projected: as fixed nodes for a collection, deferred for a signal. */
+    private def projected[A, K](roots: Iterable[A] | Signal[Seq[A]], label: A => String, id: A => K, children: A => Iterable[A])
+        : NodeSource[K] =
+        roots match
+            case sig: Signal[?] =>
+                NodeSource.Projected { frame =>
+                    given CanEqual[Seq[TreeNode[K]], Seq[TreeNode[K]]] = CanEqual.derived
+                    sig.asInstanceOf[Signal[Seq[A]]].map(_.map(project(_, label, id, children)))(using summon, frame)
+                }
+            case is =>
+                // Fixed nodes are entries of their own: a node is not a function, so each is one entry.
+                NodeSource.Entries(is.asInstanceOf[Iterable[A]].toList.map(project(_, label, id, children)))
 end TreeSelect

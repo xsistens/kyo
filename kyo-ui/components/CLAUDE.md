@@ -148,6 +148,12 @@ Rules a new one follows:
   `MenuRender.readItems`). A setter takes `LiveEntry` only once its host reads signals, or a signal would
   compile and be ignored; `GoldenRenderTest` ("every host of MenuItem draws its rows from a signal ...") holds
   the menu hosts to it.
+- **A picker's options take the same union** (`options(Iterable[A] | Signal[Seq[A]])(label)`,
+  `optionGroups(... | Signal[Seq[OptionItem[A]]])`), kept as `OptionSource`s and read with `OptionItem.reading`
+  in the picker's one region; a picker built on `Entry` (Listbox, CascadeSelect, TreeSelect's `nodes`) takes
+  `LiveEntry` like a menu. `GoldenRenderTest` ("every picker draws its options from a signal ...") holds them.
+  Ids that follow the options derive from ONE minted base (`$base-<n>`), never one mint per option, or a
+  list that grows has rows without ids.
 - **Which submenus are open is ONE set of paths** (`Submenus`), not a ref per path: refs could only be
   allocated for the items the host was built with. A submenu panel is `Overlay.gated(subs.close(path))`.
 

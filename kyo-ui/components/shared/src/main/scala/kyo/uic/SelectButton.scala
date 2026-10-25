@@ -30,6 +30,7 @@ import scala.annotation.targetName
   * It moves with the selection, and that option's minted id gives way to it.
   */
 final case class SelectButton[A] private (
+    // The options the body draws, resolved from `optionSources` by the region that draws them.
     items: List[A],
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
@@ -52,7 +53,8 @@ final case class SelectButton[A] private (
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
     onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    optionSources: List[OptionSource[A]] = Nil
 ) extends Node, ChoiceFormControl[A], HasAccessibleNameRef:
     type Self = SelectButton[A]
 
@@ -62,13 +64,18 @@ final case class SelectButton[A] private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Appends typed options with their text projection. */
-    def options(is: Iterable[A])(label: A => String): SelectButton[A] =
-        copy(items = items ++ is.toList, labelF = label)
+    /** Appends typed options with their text projection: a collection, or a signal of options for a group whose choices
+      * change while it is shown, read in the group's own region.
+      */
+    def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): SelectButton[A] =
+        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
 
-    /** Convenience for plain string options (label = identity). */
-    def options(is: Iterable[String])(using ev: String =:= A): SelectButton[A] =
-        copy(items = items ++ is.map(ev).toList, labelF = a => ev.flip(a))
+    /** Convenience for plain string options (label = identity), a collection or a signal. */
+    def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): SelectButton[A] =
+        copy(
+            optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
+            labelF = a => ev.flip(a)
+        )
 
     /** Stable per-option key: the value written into the bound ref(s); defaults
       * to the label projection.
@@ -90,7 +97,10 @@ final case class SelectButton[A] private (
       */
     def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): SelectButton[A] =
         val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
-        copy(items = items ++ all.map(ev).toList, labelF = a => ev.flip(a).fold(none)(label))
+        copy(
+            optionSources = optionSources :+ OptionSource.Fixed(all.map(m => OptionItem.Item(ev(m)))),
+            labelF = a => ev.flip(a).fold(none)(label)
+        )
     end optionsWithNone
 
     /** Binds the SINGLE selection to the option itself, matched by [[optionKey]]. The value always holds an option, so a
@@ -173,25 +183,26 @@ final case class SelectButton[A] private (
         // ids and no mount. Single select is a radio group, and the mount is where its ids come from.
         if multipleFlag then renderNav(Absent)
         else
+            // ONE minted base the option ids derive from (`$base-<n>`), so the ids follow the options however many there are.
             UI.mounted {
                 UI.commands.map { cmds =>
-                    Kyo.foreach(items)(_ => cmds.freshId).map(ids =>
-                        renderNav(Present((ids.toList, (id: String) => cmds.focusId(id))))
-                    )
+                    cmds.freshId.map(base => renderNav(Present((base, (id: String) => cmds.focusId(id)))))
                 }
             }.placeholder(renderNav(Absent))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
-        renderNav(Present((ids, focus)))
+    private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
+        renderNav(Present((base, focus)))
 
-    private def renderNav(nav: Nav)(using Frame): UI =
+    private def renderNav(minted: Maybe[(String, String => UI.Action)])(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         // The switches and the selection are read as ONE region (see [[Reading]]), pinned back into the slots as constants
         // so the body reads plain values.
-        val read = Reading.optional(disabledFlag).and(Reading.optional(loadingV)).and(held)
-        validity.follow(read.render { case ((d, l), h) =>
-            copy(disabledFlag = d.map(BoolValue.Const(_)), loadingV = l.map(BoolValue.Const(_))).body(h, nav, validity)
+        val read = Reading.optional(disabledFlag).and(Reading.optional(loadingV)).and(held).and(OptionItem.reading(optionSources))
+        validity.follow(read.render { case (((d, l), h), opts) =>
+            val shownItems = OptionItem.flatten(opts)
+            val nav: Nav   = minted.map((base, focus) => (shownItems.indices.map(i => s"$base-$i").toList, focus))
+            copy(items = shownItems, disabledFlag = d.map(BoolValue.Const(_)), loadingV = l.map(BoolValue.Const(_))).body(h, nav, validity)
         })
     end renderNav
 
@@ -385,10 +396,10 @@ final case class MultiSelectButton[A] private[uic] (private[uic] val group: Sele
     private def on(g: SelectButton[A]): MultiSelectButton[A] = copy(group = g)
 
     /** Appends typed options with their text projection, as [[SelectButton.options]]. */
-    def options(is: Iterable[A])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))
+    def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))
 
-    /** Convenience for plain string options (label = identity). */
-    def options(is: Iterable[String])(using ev: String =:= A): MultiSelectButton[A] = on(group.options(is))
+    /** Convenience for plain string options (label = identity), a collection or a signal. */
+    def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): MultiSelectButton[A] = on(group.options(is))
 
     /** Stable per-option key, what options are matched by; defaults to the label projection. */
     def optionKey(f: A => String): MultiSelectButton[A] = on(group.optionKey(f))

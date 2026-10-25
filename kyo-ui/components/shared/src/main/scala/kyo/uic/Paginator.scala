@@ -167,19 +167,18 @@ final case class Paginator private (
                 List(sel.render)
 
         // Prime's second way to reach a page directly: the same targets as the page links,
-        // as a list rather than a row of buttons, which is what a hundred pages need. Its options are the pages, so it
-        // follows the rows and the total, and shows the page one way.
+        // as a list rather than a row of buttons, which is what a hundred pages need. Its options are the pages: it
+        // reads the pages the rows and the total give as a signal, and shows the page one way, so it is built once.
         val jtpDropdown: List[UI] =
-            List(shape.render { (r, t) =>
-                val pages = totalPages(t, r)
+            List(
                 Select[Int]()
-                    .options((0 until pages).toList)(p => (p + 1).toString)
+                    .options(shape.map[Seq[Int]]((r, t) => (0 until totalPages(t, r)).toList).slot)(p => (p + 1).toString)
                     .extraClass("p-paginator-jtp-dropdown")
-                    .selection(page.map(View.clamp(_, pages)).slot)
+                    .selection(state.map((p, s) => View.clamp(p, totalPages(s._2, s._1))).slot)
                     .accessibleName("Jump to page")
                     .onChange(_.fold(())(activate))
                     .render
-            })
+            )
 
         def elementUI(e: PaginatorElement): List[UI] = e match
             case PaginatorElement.FirstPageLink =>

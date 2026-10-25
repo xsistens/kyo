@@ -23,7 +23,7 @@ class PaginatorTest extends UicTest:
         )
     }
 
-    "a page change rebuilds neither dropdown, so neither starts its mount again" in {
+    "a page change or a rows change rebuilds neither dropdown, so neither starts its mount again" in {
         val both = List(
             PaginatorElement.PrevPageLink,
             PaginatorElement.PageLinks,
@@ -42,8 +42,8 @@ class PaginatorTest extends UicTest:
             jtpLive  <- regionsAboveMount(live, "p-paginator-jtp-dropdown")
         yield
             assert(rppFixed == 0 && jtpFixed == 0, s"with the rows fixed: rpp under $rppFixed region(s), jtp under $jtpFixed")
-            // The jump list's options are the pages, so a rows change rebuilds it; a page change must not.
-            assert(rppLive == 0 && jtpLive == 1, s"with the rows bound: rpp under $rppLive region(s), jtp under $jtpLive")
+            // The jump list's options are the pages, read as a signal, so neither a page nor a rows change rebuilds it.
+            assert(rppLive == 0 && jtpLive == 0, s"with the rows bound: rpp under $rppLive region(s), jtp under $jtpLive")
         end for
     }
 
