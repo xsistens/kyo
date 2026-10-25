@@ -2677,6 +2677,22 @@ class DataTableTest extends UicTest:
             assert(!all.exists(_.attrs.cssClasses.contains("p-datatable-inline-filter")), "one display or the other")
     }
 
+    "the menu's operator and match-mode dropdowns write the draft they are picked in" in {
+        // Both handlers were `fold(())(f)`, which hands the action back as a value: a pick in either dropdown did nothing.
+        val two = ColumnFilter(List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains)), uic.FilterOperator.And)
+        val dt  = uic.DataTable[String]().rows(List("A")).columns(uic.column("Name")(identity))
+        for
+            draft <- Signal.initRef(two)
+            _     <- dt.operatorPicked(draft, two)(Present(uic.FilterOperator.Or))
+            op    <- draft.get
+            _     <- dt.modePicked(draft, two, 1)(Present(MatchMode.StartsWith))
+            mode  <- draft.get
+        yield
+            assert(op.operator == uic.FilterOperator.Or, s"the operator pick: ${op.operator}")
+            assert(mode.rules(1).mode == MatchMode.StartsWith, s"the second rule's mode pick: ${mode.rules(1).mode}")
+        end for
+    }
+
     "opening the menu seeds the draft from the filter the table is running" in {
         for
             (ui, filters, open, draft) <- filterMenu

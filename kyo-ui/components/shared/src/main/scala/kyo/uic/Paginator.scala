@@ -136,13 +136,32 @@ final case class Paginator private (
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
+    private def pageReading(using Frame): Reading[Int] =
+        currentPageV match
+            case Present(cur) => Reading.Fixed(cur)
+            case Absent       => pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
+
+    private def rowsReading(using Frame): Reading[Int] =
+        rowsRef.fold(Reading.Fixed(rowsV))(ref => Reading.Live(ref.map(math.max(1, _))))
+
+    private def totalReading(using Frame): Reading[Int] = Reading.of(totalV).map(math.max(0, _))
+
+    /** What the rows-per-page dropdown runs on a pick of `n`. */
+    private[uic] def rowsPicked(n: Int)(using Frame): UI.Action =
+        pageReading.and(rowsReading.and(totalReading)).signal.current.map { case (p, (r, t)) => changeRows(n, View(p, r, t)) }
+
+    /** What the rows-per-page dropdown runs on a change. The fold is typed: an untyped `fold(())(f)` infers a common type of
+      * Unit and the action, which hands the action back as a value and runs nothing.
+      */
+    private[uic] def rowsChange(using Frame): Maybe[Int] => UI.Action = _.fold[UI.Action](())(rowsPicked)
+
+    /** What the jump-to-page dropdown runs on a change. */
+    private[uic] def jumpChange(using Frame): Maybe[Int] => UI.Action = _.fold[UI.Action](())(activate)
+
     private[uic] def render(using Frame): UI =
-        val page: Reading[Int] =
-            currentPageV match
-                case Present(cur) => Reading.Fixed(cur)
-                case Absent       => pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
-        val rows: Reading[Int] = rowsRef.fold(Reading.Fixed(rowsV))(ref => Reading.Live(ref.map(math.max(1, _))))
-        val total              = Reading.of(totalV).map(math.max(0, _))
+        val page: Reading[Int] = pageReading
+        val rows: Reading[Int] = rowsReading
+        val total              = totalReading
         // The rows and the total decide the page count; the page is read with them as ONE reading (see [[Reading]]):
         // changing the rows writes both, and a nested region would repaint the page it closed over.
         val shape = rows.and(total)
@@ -164,9 +183,7 @@ final case class Paginator private (
                     .accessibleName("Rows per page")
                 rowsRef match
                     case Present(_) =>
-                        sel = sel.onChange(_.fold(())(n =>
-                            state.signal.current.map { case (p, (r, t)) => changeRows(n, View(p, r, t)) }
-                        ))
+                        sel = sel.onChange(rowsChange)
                     case Absent => sel = sel.disabled(true)
                 end match
                 List(sel.render)
@@ -181,7 +198,7 @@ final case class Paginator private (
                     .extraClass("p-paginator-jtp-dropdown")
                     .selection(state.map((p, s) => View.clamp(p, totalPages(s._2, s._1))).slot)
                     .accessibleName("Jump to page")
-                    .onChange(_.fold(())(activate))
+                    .onChange(jumpChange)
                     .render
             )
 
