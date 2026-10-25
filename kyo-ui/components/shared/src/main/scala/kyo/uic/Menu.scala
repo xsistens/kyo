@@ -385,8 +385,8 @@ object Menu:
 
     /** How a highlighted ROW position moves when the roots do. A row is a position in the flattened list (a section
       * spreads into its heading and its children), so it is located as a root item and an offset within it, the root is
-      * found again by identity ([[Anchored.index]]), and the row keeps its offset there. A row whose root is gone leaves
-      * nothing highlighted.
+      * found again ([[Anchored.index]]), and the row keeps its offset there. A row whose root is gone, or whose offset the
+      * root found again no longer has (a section rebuilt with fewer children), leaves nothing highlighted.
       */
     private[uic] val rowRebase: Anchored.Rebase[Int] = (h, from, to) =>
         def span(root: AnyRef): Int = root match
@@ -401,7 +401,8 @@ object Menu:
                     if h < start + n then Present((i, h - start)) else locate(rest, i + 1, start + n)
         if h < 0 then -1
         else
-            locate(from, 0, 0).flatMap((i, offset) => Anchored.index(i, from, to).map(j => to.take(j).map(span).sum + offset))
-                .getOrElse(-1)
+            locate(from, 0, 0).flatMap((i, offset) =>
+                Anchored.index(i, from, to).filter(j => offset < span(to(j))).map(j => to.take(j).map(span).sum + offset)
+            ).getOrElse(-1)
         end if
 end Menu

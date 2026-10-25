@@ -167,8 +167,10 @@ Rules a new one follows:
   allocated for the items the host was built with. A submenu panel is `Overlay.gated(subs.close(path))`.
 - **Positional menu state belongs to its item** (`Anchored`): the open paths, a focus path and Menu's
   highlighted row are stored with the RAW root items they were written against, and each render translates
-  them onto the roots it shows by reference identity, so an item a signal adds before an open submenu leaves it
-  open, and one it removes takes its state along. The raw roots come from `MenuRender.readRooted` (MegaMenu:
+  them onto the roots it shows (`Anchored.index`: the same item by reference, else an equal one, else the same
+  place when the list kept its length and the item there is new, as a label with a count is), so an item a signal
+  adds before an open submenu leaves it open, one it removes takes its state along, and one it emits again as a new
+  value keeps it. The raw roots come from `MenuRender.readRooted` (MegaMenu:
   `MegaMenuItemScope.rooted`), never from the pinned rows, which resolving a reactive `disabled` copies. A host
   writes through the `View` it builds in its one region (`subs.view(snap, roots)`, `focus.view(snap, roots)`);
   `reset`, `closeAll` and `openUnanchored` write with no roots, for values the same against any roots or a test.
