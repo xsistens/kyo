@@ -77,4 +77,37 @@ class MenubarTest extends UicTest:
         end for
     }
 
+    /** Opens the signal's first item (root 1) and puts the highlight on it, then replaces the signal's list with `next`;
+      * returns the rows open and highlighted after.
+      */
+    private def afterRebuild(first: uic.MenuItem, next: uic.MenuItem)(using Frame): (List[String], List[String]) < Async =
+        for
+            live  <- Signal.initRef(Seq(first))
+            subs  <- Submenus.init()
+            focus <- Anchored.init(List.empty[Int])
+            ui = bar(live).wired(subs, focus, "mb")
+            // Two arrows: the first lands on File, the second on the signal's item.
+            _       <- pressOn(ui, "p-menubar-root-list", UI.Keyboard.ArrowRight)
+            _       <- pressOn(ui, "p-menubar-root-list", UI.Keyboard.ArrowRight)
+            links   <- elementsWithClass(ui, "p-menubar-item-link")
+            _       <- click(links(1))
+            _       <- live.set(Seq(next))
+            active  <- rowsWith(ui, "p-menubar-item-active")
+            focused <- rowsWith(ui, "p-focus")
+        yield (active, focused)
+
+    "an item the signal emits again as a new but equal value keeps its submenu open and its highlight" in {
+        afterRebuild(
+            uic.MenuItem("Plugin").items(uic.MenuItem("Tools")),
+            uic.MenuItem("Plugin").items(uic.MenuItem("Tools"))
+        ).map((active, focused) => assert(active == List("Plugin") && focused == List("Plugin"), s"$active / $focused"))
+    }
+
+    "an item the signal rebuilds in the same place with a new label keeps its state, as a count in a label does" in {
+        afterRebuild(
+            uic.MenuItem("Inbox (2)").items(uic.MenuItem("Read")),
+            uic.MenuItem("Inbox (3)").items(uic.MenuItem("Read"))
+        ).map((active, focused) => assert(active == List("Inbox (3)") && focused == List("Inbox (3)"), s"$active / $focused"))
+    }
+
 end MenubarTest
