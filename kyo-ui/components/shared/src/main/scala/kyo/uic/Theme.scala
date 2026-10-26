@@ -348,6 +348,14 @@ object Theme:
         """@keyframes p-icon-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       |.p-icon-spin { animation: p-icon-spin 2s linear infinite; }
       |.p-uic-invalid-message { color: var(--p-form-field-invalid-placeholder-color, #ef4444); font-size: 0.875rem; margin-top: 0.25rem; }
+      |/* Form.errorSummary: one message row per error, a field's row a button that focuses it. The
+      |   button keeps the row's look (size and colour from .p-uic-invalid-message), not the browser's. */
+      |.p-uic-form-errors { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; }
+      |.p-uic-form-errors > .p-uic-invalid-message { margin-top: 0; }
+      |.p-uic-error-link { background: none; border: 0; padding: 0; font-family: inherit; line-height: inherit; text-align: start; cursor: pointer; }
+      |.p-uic-error-link:hover { text-decoration: underline; }
+      |.p-uic-error-link:focus-visible { outline: var(--p-focus-ring-width, 1px) var(--p-focus-ring-style, solid) var(--p-focus-ring-color, currentColor);
+      |  outline-offset: var(--p-focus-ring-offset, 2px); }
       |/* Identity misconfiguration (a colliding option key, a table using selection with no rowKey):
       |   the failure it causes is silent and data-dependent, so the card is deliberately loud. */
       |.p-uic-key-error { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
