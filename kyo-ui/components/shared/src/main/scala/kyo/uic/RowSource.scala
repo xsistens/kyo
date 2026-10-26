@@ -88,10 +88,24 @@ end Total
   * [[demand]], and the source answers the range it is given; a component that reads
   * [[rows]] renders what it is handed. That split is what lets one source serve a
   * paginated table, an infinitely scrolled one, and a virtual list at the same time.
+  *
+  * ==A page size that changes==
+  *
+  * A size bound as a `SignalRef` is the reader's to change through a rows-per-page
+  * dropdown. The source then moves [[page]] to the page that still shows the first row the
+  * reader saw, in the same write, so a paginator that writes the size and then that page
+  * finds it already there and nothing is fetched for the old page number at the new size.
+  * A range a viewport wrote is not a page and stays where it is.
   */
 final class RowSource[Q, A] private[uic] (
     /** How many rows one page holds, which is also what a paginator steps by. */
-    val pageSize: Int,
+    val pageSize: Signal[Int],
+
+    /** The size as the caller handed it: a constant, or the ref a rows-per-page dropdown
+      * writes. A component binds this rather than [[pageSize]], so a constant stays one the
+      * reader cannot change.
+      */
+    private[uic] val pageSizeBinding: Int | SignalRef[Int],
 
     /** The 0-based page, for a paginator to drive. Writing it rewrites [[demand]]. */
     val page: SignalRef[Int],
@@ -195,15 +209,16 @@ object RowSource:
     /** How the buffer behaves.
       *
       * @param blockSize
-      *   Rows per fetch. Defaults to the page size, so one page is one request; a larger
-      *   block serves several pages from one.
+      *   Rows per fetch. Defaults to the page size and follows it when it changes, so one
+      *   page is one request; a larger block serves several pages from one.
       * @param buffer
       *   How many blocks to fetch ahead on either side of the range asked for. One is the
       *   next page and the previous one.
       * @param maxBlocks
       *   How many blocks the cache holds before it starts dropping the least recently
-      *   used. Raised automatically to whatever one range plus its buffers needs, since a
-      *   block dropped before the range that asked for it is read would be fetched twice.
+      *   used. Raised automatically to whatever the range asked for plus its buffers needs,
+      *   also when a page grows, since a block dropped before the range that asked for it
+      *   is read again would be fetched twice.
       * @param expireAfterWrite
       *   How long a fetched block stays usable. `Duration.Zero` keeps it until it is
       *   evicted or the query changes, which is right for data that does not move under
@@ -228,56 +243,83 @@ object RowSource:
       *   sort spec, the filters. It is part of the cache key, so changing it retires the
       *   blocks of the old query without invalidating anything.
       * @param pageSize
-      *   Rows per page, and the default block size.
+      *   Rows per page, and the default block size. A `SignalRef` binds two way: a
+      *   rows-per-page dropdown writes the reader's pick into it, and the source pages by
+      *   whatever it holds.
       * @param fetch
       *   `(query, offset, limit)` to the rows of that range plus what is known about the
       *   size of the whole. It is called with block-aligned offsets, so `limit` is the
       *   block size except possibly at the end.
       */
-    def init[Q, A](query: Signal[Q], pageSize: Int, config: Config = Config())(
+    def init[Q, A](query: Signal[Q], pageSize: Int | SignalRef[Int], config: Config = Config())(
         fetch: (Q, Int, Int) => (Seq[A], Total) < Async
     )(using Frame, CanEqual[Q, Q], CanEqual[A, A]): RowSource[Q, A] < (Sync & Async & Scope) =
-        val size  = math.max(1, pageSize)
-        val block = math.max(1, config.blockSize.getOrElse(size))
         val ahead = math.max(0, config.buffer)
-        // A range spans at most this many blocks, and dropping one of them before the
-        // range that asked for it is read would fetch it a second time.
-        val span = (size + block - 1) / block + 1
-        val room = math.max(config.maxBlocks, span + 2 * ahead)
         // The page the source opens on, and the baseline the observer below is seeded with.
-        val firstPage = 0
+        val firstPage                    = 0
+        val sized: SignalRef[Int] < Sync = pageSize match
+            case n: Int                       => Signal.initRef(math.max(1, n))
+            case r: SignalRef[Int] @unchecked => r
         for
+            sizeRef    <- sized
+            openSize   <- sizeRef.get.map(math.max(1, _))
             pageRef    <- Signal.initRef(firstPage)
-            demandRef  <- Signal.initRef(Demand(0, size))
+            demandRef  <- Signal.initRef(Demand(0, openSize))
             windowRef  <- Signal.initRef(Window(0, Seq.empty[A]))
             totalRef   <- Signal.initRef(Total.Unknown(false): Total)
             loadingRef <- Signal.initRef(true)
-            cache      <- Cache.init[(Q, Int), Fiber[(Seq[A], Total), Any]](
-                maxSize = room,
-                expireAfterWrite = config.expireAfterWrite
-            )
-            seen <- AtomicRef.init(Absent: Maybe[(Q, Int)])
-            feed = new Feed(query, fetch, cache, seen, block, ahead, windowRef, totalRef, loadingRef)
+            cache      <- AtomicRef.init(Absent: Maybe[(Int, Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]])])
+            seen       <- AtomicRef.init(Absent: Maybe[(Q, Int)])
+            laidOut    <- AtomicInt.init(openSize)
+            feed = new Feed(query, fetch, cache, seen, sizeRef, config, ahead, windowRef, totalRef, loadingRef)
             // A page is a range that starts on a page boundary. Keeping the two refs
             // rather than folding them is what lets a viewport write the range directly.
             //
-            // Seeded with the page the source opens on, so the observer writes only what a
-            // caller CHANGED. Unseeded it opens by delivering the current page, and that
-            // delivery lands whenever the fork gets to run: a viewport that wrote its range
-            // in between (a scroller reports its position on the first render after the
-            // source was built) had it overwritten with page 0's, putting the reader back at
-            // the top of a list they had already scrolled. Seeding at subscription time
-            // instead would trade the stale write for a lost one, since a page set before the
-            // fork ran would become the baseline and never be served.
-            _ <- UI.fork(
-                pageRef.observe(Present(firstPage), Signal.defaultRepairInterval)(p =>
-                    demandRef.set(Demand(math.max(0, p) * size, size))
-                )
-            )
+            // Both are `onChange`, which runs inside the write that changed the ref, so the
+            // range follows a page or a size before the writer's `set` returns: a size and
+            // the page a paginator writes after it are applied in that order, and the second
+            // finds the range the first already moved to. `observe` would deliver them later
+            // on a fiber of its own, where the size could be applied to a range the page had
+            // not reached yet. Seeded with what the opening range was laid out from, so they
+            // write only what a caller CHANGED; registered here and not on a fork, so a range
+            // a viewport writes right after `init` is never overwritten with page 0's.
+            _ <- pageRef.onChange(Present(firstPage))(p => sizeRef.get.map(s => demandRef.set(pageRange(p, s))))
+            _ <- sizeRef.onChange(Present(openSize))(s => resize(pageRef, demandRef, laidOut, s))
             _ <- UI.fork(query.combineLatest(demandRef).observe((q, d) => feed.serve(q, d)))
-        yield new RowSource(size, pageRef, demandRef, windowRef, totalRef, loadingRef)
+        yield new RowSource(sizeRef.map(math.max(1, _)), pageSize, pageRef, demandRef, windowRef, totalRef, loadingRef)
         end for
     end init
+
+    /** The range of page `p` at `size` rows a page. */
+    private def pageRange(p: Int, size: Int): Demand =
+        val s = math.max(1, size)
+        Demand(math.max(0, p) * s, s)
+
+    /** A new page size, applied to the range the reader is on.
+      *
+      * A range laid out as a page at the previous size moves to the page that still shows
+      * its first row, which is where a paginator moves its own page on the same pick, and
+      * the range is written with it. This runs inside the write of the size, so by the time
+      * a paginator writes its page that page is already the source's and the write changes
+      * nothing: no range is ever served for the old page number at the new size. A range a
+      * viewport wrote is left alone, since it is not a page at all.
+      */
+    private def resize(pageRef: SignalRef[Int], demandRef: SignalRef[Demand], laidOut: AtomicInt, size: Int)(using
+        Frame
+    ): Unit < Sync =
+        val s = math.max(1, size)
+        for
+            was <- laidOut.getAndSet(s)
+            p   <- pageRef.get
+            d   <- demandRef.get
+            _   <-
+                if d == pageRange(p, was) && was != s then
+                    val moved = math.max(0, p) * was / s
+                    pageRef.set(moved).andThen(demandRef.set(pageRange(moved, s)))
+                else Kyo.unit
+        yield ()
+        end for
+    end resize
 
     /** The fetching half, kept out of [[RowSource]] so the value a caller holds carries
       * only what a caller reads.
@@ -285,14 +327,47 @@ object RowSource:
     final private class Feed[Q, A](
         query: Signal[Q],
         fetch: (Q, Int, Int) => (Seq[A], Total) < Async,
-        cache: Cache[(Q, Int), Fiber[(Seq[A], Total), Any]],
+        cacheRef: AtomicRef[Maybe[(Int, Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]])]],
         seen: AtomicRef[Maybe[(Q, Int)]],
-        block: Int,
+        sizeRef: SignalRef[Int],
+        config: Config,
         ahead: Int,
         windowRef: SignalRef[Window[A]],
         totalRef: SignalRef[Total],
         loadingRef: SignalRef[Boolean]
     )(using CanEqual[Q, Q]):
+        /** The cache, with room for `blocks` blocks at least.
+          *
+          * A range spans that many blocks with its buffers, and dropping one of them before
+          * the range that asked for it is read again would fetch it a second time. A range
+          * of more blocks than the cache holds (a page that grew, a viewport taller than a
+          * page) gets a larger cache, which takes over the blocks of that range and its
+          * buffers from the old one. The rest of the old one is let go: it is a buffer, and
+          * what it held is fetched again if it is ever asked for.
+          */
+        private def room(q: Q, block: Int, first: Int, last: Int)(using
+            Frame
+        ): Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]] < Sync =
+            val blocks = math.max(config.maxBlocks, last - first + 1 + 2 * ahead)
+            cacheRef.get.map {
+                case Present((held, cache)) if held >= blocks => cache
+                case old                                      =>
+                    Cache.init[(Q, Int, Int), Fiber[(Seq[A], Total), Any]](
+                        maxSize = blocks,
+                        expireAfterWrite = config.expireAfterWrite
+                    ).map { grown =>
+                        val keep                 = (math.max(0, first - ahead) to (last + ahead)).toList
+                        val carried: Unit < Sync = old match
+                            case Present((_, cache)) =>
+                                Kyo.foreachDiscard(keep)(at =>
+                                    cache.get((q, block, at)).map(_.fold(Kyo.unit)(f => grown.add((q, block, at), f).unit))
+                                )
+                            case Absent => Kyo.unit
+                        carried.andThen(cacheRef.set(Present((blocks, grown)))).andThen(grown)
+                    }
+            }
+        end room
+
         /** The block already in flight or done for this key, or a fresh one started for it.
           *
           * Synchronous on purpose: every call runs on the observer's own fiber, so two
@@ -300,40 +375,52 @@ object RowSource:
           * out of the caller's scope, which is the rule the class doc explains, and the
           * `Sync` in the return type is what keeps it that way: a scoped `Fiber.init`
           * needs a `Scope` here and does not compile.
+          *
+          * The block size is part of the key, since block 3 of five rows is not block 3 of
+          * two: a page size that changes leaves the old blocks to fall out on their own.
           */
-        private def warm(q: Q, at: Int)(using Frame): Fiber[(Seq[A], Total), Any] < Sync =
-            cache.get((q, at)).map {
+        private def warm(
+            cache: Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]],
+            q: Q,
+            block: Int,
+            at: Int
+        )(using Frame): Fiber[(Seq[A], Total), Any] < Sync =
+            cache.get((q, block, at)).map {
                 case Present(f) => f
                 case Absent     =>
-                    Fiber.initUnscoped(fetch(q, at * block, block)).map(f => cache.add((q, at), f))
+                    Fiber.initUnscoped(fetch(q, at * block, block)).map(f => cache.add((q, block, at), f))
             }
 
         /** One turn of the loop: cover the range, publish it, then reach one buffer out on
           * either side. The reaching is the last thing, so a reader never waits on it.
           */
         def serve(q: Q, d: Demand)(using Frame): Unit < Async =
-            val first = math.max(0, d.offset) / block
-            val last  = math.max(first, (math.max(0, d.offset) + math.max(1, d.limit) - 1) / block)
-            for
-                wanted <- Kyo.foreach((first to last).toList)(warm(q, _))
-                // Warm already means served: the mask is for a reader who has to wait.
-                ready <- Kyo.foreach(wanted)(_.poll).map(_.forall(_.isDefined))
-                _     <- loadingRef.set(!ready)
-                parts <- Kyo.foreach(wanted)(_.get)
-                total <- settle(q, first, parts)
-                _     <- report(parts, first, total)
-                // The total goes out BEFORE the rows, and the order is load-bearing: a
-                // consumer that positions rows by the total, a virtual viewport above all,
-                // would otherwise be handed rows at an offset the total does not reach yet
-                // and draw them as though they were not there. Ahead is the harmless side
-                // to be on: an extent that is already long enough costs a spacer that is
-                // briefly too tall, where the other way round costs the rows themselves.
-                _ <- totalRef.set(total)
-                _ <- windowRef.set(Window(math.max(0, d.offset), slice(parts, first, d)))
-                _ <- loadingRef.set(false)
-                _ <- Kyo.foreach(neighbours(first, last, total))(warm(q, _))
-            yield ()
-            end for
+            sizeRef.get.map { size =>
+                val block = math.max(1, config.blockSize.getOrElse(math.max(1, size)))
+                val first = math.max(0, d.offset) / block
+                val last  = math.max(first, (math.max(0, d.offset) + math.max(1, d.limit) - 1) / block)
+                for
+                    cache  <- room(q, block, first, last)
+                    wanted <- Kyo.foreach((first to last).toList)(warm(cache, q, block, _))
+                    // Warm already means served: the mask is for a reader who has to wait.
+                    ready <- Kyo.foreach(wanted)(_.poll).map(_.forall(_.isDefined))
+                    _     <- loadingRef.set(!ready)
+                    parts <- Kyo.foreach(wanted)(_.get)
+                    total <- settle(q, block, first, parts)
+                    _     <- report(parts, block, first, total)
+                    // The total goes out BEFORE the rows, and the order is load-bearing: a
+                    // consumer that positions rows by the total, a virtual viewport above all,
+                    // would otherwise be handed rows at an offset the total does not reach yet
+                    // and draw them as though they were not there. Ahead is the harmless side
+                    // to be on: an extent that is already long enough costs a spacer that is
+                    // briefly too tall, where the other way round costs the rows themselves.
+                    _ <- totalRef.set(total)
+                    _ <- windowRef.set(Window(math.max(0, d.offset), slice(parts, block, first, d)))
+                    _ <- loadingRef.set(false)
+                    _ <- Kyo.foreach(neighbours(block, first, last, total))(warm(cache, q, block, _))
+                yield ()
+                end for
+            }
         end serve
 
         /** What the blocks say together, with everything the source knows added to it.
@@ -344,7 +431,7 @@ object RowSource:
           * WITH its query, so a new one starts from nothing rather than inheriting the
           * length of the last.
           */
-        private def settle(q: Q, first: Int, parts: Seq[(Seq[A], Total)])(using Frame): Total < Sync =
+        private def settle(q: Q, block: Int, first: Int, parts: Seq[(Seq[A], Total)])(using Frame): Total < Sync =
             val served = first * block + parts.map(_._1.size).sum
             seen.updateAndGet {
                 case Present((prev, floor)) if prev == q => Present((q, math.max(floor, served)))
@@ -360,14 +447,14 @@ object RowSource:
         end settle
 
         /** The rows of the range, cut out of the blocks that cover it. */
-        private def slice(parts: Seq[(Seq[A], Total)], first: Int, d: Demand): Seq[A] =
+        private def slice(parts: Seq[(Seq[A], Total)], block: Int, first: Int, d: Demand): Seq[A] =
             val from = math.max(0, d.offset) - first * block
             parts.flatMap(_._1).slice(from, from + math.max(1, d.limit))
 
         /** The blocks to fetch ahead, clamped at the start and, where the size is known, at
           * the end: reaching past either would fetch a range that cannot exist.
           */
-        private def neighbours(first: Int, last: Int, total: Total): List[Int] =
+        private def neighbours(block: Int, first: Int, last: Int, total: Total): List[Int] =
             val before = (math.max(0, first - ahead) until first).toList
             val after  = total match
                 case Total.Known(n) =>
@@ -383,7 +470,7 @@ object RowSource:
           * real rows. It does shift everything behind it by one, which is worth saying out
           * loud rather than leaving to be noticed.
           */
-        private def report(parts: Seq[(Seq[A], Total)], first: Int, total: Total)(using Frame): Unit < Async =
+        private def report(parts: Seq[(Seq[A], Total)], block: Int, first: Int, total: Total)(using Frame): Unit < Async =
             val lastBlock = total match
                 case Total.Known(n)      => Present(math.max(0, (n - 1) / block))
                 case Total.Unknown(_, _) => Absent

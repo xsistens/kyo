@@ -1267,6 +1267,10 @@ class DataTableTest extends UicTest:
     private def served[A](ch: Channel[Seq[A]])(using Frame): Seq[A] < (Async & Abort[Closed]) =
         ch.take.map(v => if v.nonEmpty then v else served(ch))
 
+    /** The first window of `n` rows a source published. */
+    private def servedOf[A](ch: Channel[Seq[A]], n: Int)(using Frame): Seq[A] < (Async & Abort[Closed]) =
+        ch.take.map(v => if v.size == n then v else servedOf(ch, n))
+
     /** Waits for a source's loading flag to come down, which is its answer, empty or not. */
     private def answered(ch: Channel[Boolean])(using Frame): Unit < (Async & Abort[Closed]) =
         ch.take.map(loading => if loading then answered(ch) else ())
@@ -1290,6 +1294,29 @@ class DataTableTest extends UicTest:
         yield
             assert(names == Chunk("A", "B"), "the first page of the source")
             assert(offered == List("1", "2", "3"), "five rows of two, counted off the source's total")
+            assert(current == List("1"))
+    }
+
+    // The table binds a source's size the way `paginate` binds a ref, so the rows-per-page dropdown writes it and the
+    // table and the source page by the same number.
+    "a source with a bound page size pages by what it holds" in {
+        for
+            query <- Signal.initRef("a")
+            size  <- Signal.initRef(2)
+            src   <- RowSource.init(query, pageSize = size) { (_, offset, limit) =>
+                (five.slice(offset, offset + limit), Total.Known(five.size))
+            }
+            seen <- Channel.init[Seq[Item]](16)
+            _    <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            _    <- served(seen)
+            ui = uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name)).source(src).render
+            _                  <- size.set(4)
+            _                  <- servedOf(seen, 4)
+            names              <- bodyNames(ui)
+            (offered, current) <- pages(ui)
+        yield
+            assert(names == Chunk("A", "B", "C", "D"), s"a page of four, not $names")
+            assert(offered == List("1", "2"), "five rows of four are two pages")
             assert(current == List("1"))
     }
 
