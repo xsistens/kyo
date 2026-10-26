@@ -17,6 +17,9 @@ class RowSourceTest extends UicTest:
 
     final case class Row(id: Int) derives CanEqual
 
+    /** One fetch: the query it was for, the block it asked for and the block size it asked in. */
+    final case class Call(query: String, block: Int, size: Int) derives CanEqual
+
     private val all = (0 until 10).map(Row(_))
 
     /** One source under test, with everything it published as a stream. */
@@ -25,7 +28,7 @@ class RowSourceTest extends UicTest:
         query: SignalRef[String],
         rows: Channel[Seq[Row]],
         loading: Channel[Boolean],
-        calls: Channel[List[(String, Int)]]
+        calls: Channel[List[Call]]
     )
 
     /** Every value a signal publishes, as a channel. The observer delivers the current
@@ -42,7 +45,7 @@ class RowSourceTest extends UicTest:
         ch.take.map(v => if p(v) then v else until(ch)(p))
 
     private def probe(
-        pageSize: Int = 2,
+        pageSize: Int | SignalRef[Int] = 2,
         config: RowSource.Config = RowSource.Config(),
         rows: String => Seq[Row] = _ => all,
         total: Maybe[Total] = Absent,
@@ -50,12 +53,12 @@ class RowSourceTest extends UicTest:
     )(using Frame): Probe < (Async & Scope) =
         for
             q     <- Signal.initRef("a")
-            calls <- Signal.initRef(List.empty[(String, Int)])
+            calls <- Signal.initRef(List.empty[Call])
             src   <- RowSource.init(q, pageSize, config) { (query, offset, limit) =>
                 val data  = rows(query)
                 val block = offset / limit
                 for
-                    _ <- calls.getAndUpdate(_ :+ (query, block))
+                    _ <- calls.getAndUpdate(_ :+ Call(query, block, limit))
                     _ <- (gate match
                         case Present((b, latch)) if b == block => latch.await
                         case _                                 => ()
@@ -69,8 +72,12 @@ class RowSourceTest extends UicTest:
         yield Probe(src, q, rowsCh, loadCh, callCh)
 
     /** The blocks fetched for `q`, in the order the fetches recorded themselves. */
-    private def blocksOf(calls: List[(String, Int)], q: String): List[Int] =
-        calls.collect { case (`q`, b) => b }
+    private def blocksOf(calls: List[Call], q: String): List[Int] =
+        calls.collect { case Call(`q`, b, _) => b }
+
+    /** The blocks fetched for `q` in blocks of `size` rows. */
+    private def blocksOf(calls: List[Call], q: String, size: Int): List[Int] =
+        calls.collect { case Call(`q`, b, `size`) => b }
 
     "a Known count speaks for every block of a query, an Unknown one only for the last" in {
         assert(Total.combine(Seq(Total.Unknown(true), Total.Known(9))) == Total.Known(9))
@@ -216,11 +223,11 @@ class RowSourceTest extends UicTest:
         yield assert(rows == all.slice(1, 5), "rows 1 to 4, out of blocks 0, 1 and 2")
     }
 
-    // The page observer runs on a fork, so its first delivery lands some time AFTER `init`
-    // returned. Anything a viewport wrote in between is a range the observer would then
-    // overwrite with page 0's, putting the reader back at the top of a list they had already
-    // scrolled. A table writes exactly there: the scroller reports its position on the first
-    // render after the source was built.
+    // The page observer once ran on a fork, so its first delivery landed some time AFTER `init`
+    // returned. Anything a viewport wrote in between was a range the observer then overwrote
+    // with page 0's, putting the reader back at the top of a list they had already scrolled. A
+    // table writes exactly there: the scroller reports its position on the first render after
+    // the source was built. It is registered inside `init` now and seeded, and this holds it so.
     "a range written before the page observer starts is not reset to the first page" in {
         // Built here rather than through `probe`, because the write has to be the FIRST thing
         // after `init`: every step in between is another chance for the observer to have
@@ -297,6 +304,89 @@ class RowSourceTest extends UicTest:
         yield
             assert(held == Total.Unknown(true, 8), "the old query had been served eight rows")
             assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
+    }
+
+    // ---- a page size that changes ----
+
+    // What a rows-per-page dropdown does to a paginated source: the page grows, and the reader
+    // keeps the row they were looking at, the way Paginator moves its own page on the same pick.
+    "a bound page size serves pages of the size it holds and keeps the first row shown" in {
+        for
+            size <- Signal.initRef(2)
+            p    <- probe(pageSize = size)
+            _    <- until(p.rows)(_ == all.take(2))
+            _    <- p.source.page.set(2)
+            _    <- until(p.rows)(_ == all.slice(4, 6))
+            _    <- size.set(3)
+            rows <- until(p.rows)(_.size == 3)
+            page <- p.source.page.get
+            seen <- p.source.pageSize.current
+        yield
+            assert(rows == all.slice(3, 6), "a page of three that still shows row 4")
+            assert(page == 1, s"which is page 1 of three rows, not $page")
+            assert(seen == 3, "and the source says how many rows a page holds now")
+    }
+
+    // A paginator writes the size and then the page. Between the two the source must not take
+    // the old page number at the new size: page 4 of two rows is row 8, page 4 of five rows is
+    // row 20, and asking for that is a request for rows the reader never asked to see. The
+    // source's observer of a ref runs inside the write, so the range is read right after it:
+    // whether a fetch for the wrong range got to start before the next write is down to the
+    // scheduler, and a test waiting for it would pass by luck.
+    "a page size change moves to the page that shows the first row before anything else is written" in {
+        for
+            size   <- Signal.initRef(2)
+            p      <- probe(pageSize = size)
+            _      <- until(p.rows)(_ == all.take(2))
+            _      <- p.source.page.set(4)
+            _      <- until(p.rows)(_ == all.slice(8, 10))
+            _      <- size.set(5)
+            demand <- p.source.demand.get
+            page   <- p.source.page.get
+            // What the paginator writes next, which then changes nothing.
+            _    <- p.source.page.set(1)
+            rows <- until(p.rows)(_ == all.slice(5, 10))
+        yield
+            assert(demand == RowSource.Demand(5, 5), s"rows 5 to 9, not $demand")
+            assert(page == 1, s"page 1 of five rows, not $page")
+            assert(rows == all.slice(5, 10))
+    }
+
+    // A viewport writes its range directly and has no page; the size is not what places it.
+    "a page size change leaves a range a viewport wrote where it was" in {
+        for
+            size   <- Signal.initRef(2)
+            p      <- probe(pageSize = size)
+            _      <- until(p.rows)(_.nonEmpty)
+            _      <- p.source.demand.set(RowSource.Demand(1, 4))
+            _      <- until(p.rows)(_.size == 4)
+            _      <- size.set(3)
+            demand <- p.source.demand.get
+            page   <- p.source.page.get
+        yield
+            assert(demand == RowSource.Demand(1, 4), s"the viewport's range, not $demand")
+            assert(page == 0, "and no page was invented for it")
+    }
+
+    // The cache is sized for one range and its buffers, so a range read again is not fetched
+    // twice. A page that grows past what the source opened with is a range of more blocks, and
+    // the room has to grow with it: here the source opened with room for three blocks of two
+    // rows, and a page of eight is four of them before its buffer.
+    "a page that grows past its opening size is read again from the buffer" in {
+        for
+            size <- Signal.initRef(2)
+            p    <- probe(pageSize = size, config = RowSource.Config(blockSize = Present(2), maxBlocks = 1))
+            _    <- until(p.rows)(_ == all.take(2))
+            _    <- size.set(8)
+            _    <- until(p.rows)(_ == all.take(8))
+            // The same blocks under another range, which is what a viewport over the page asks.
+            _ <- p.source.demand.set(RowSource.Demand(1, 7))
+            _ <- until(p.rows)(_ == all.slice(1, 8))
+            _ <- p.query.set("b")
+            c <- until(p.calls)(c => blocksOf(c, "b").nonEmpty)
+        yield
+            val twice = blocksOf(c, "a").filter(_ <= 3).groupBy(identity).collect { case (b, n) if n.size > 1 => b }
+            assert(twice.isEmpty, s"blocks of the page fetched twice: $twice")
     }
 
     // ---- the viewport arithmetic ----

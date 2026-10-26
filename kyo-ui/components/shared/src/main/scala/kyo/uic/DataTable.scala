@@ -869,18 +869,17 @@ final case class DataTable[A] private (
       * which is the whole wiring of a lazily loaded table in one call.
       *
       * It sets what `rows`, `lazyRows`, `loading` and `paginate` set, so a later call to
-      * any of those overrides it: bind the source first, then override.
+      * any of those overrides it: bind the source first, then override. The page size is
+      * bound as the source was given it, so a source opened over a `SignalRef` size lets the
+      * paginator's rows-per-page dropdown change it, and one opened over a constant does not.
       */
     def source(src: RowSource[?, A]): DataTable[A] =
         copy(
             sourceV = Present(src),
             rowsSigV = Present(src.rows),
             lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
-            loadingV = Present(BoolValue.Dyn(src.loading)),
-            pageSizeV = Present(src.pageSize),
-            pageSizeRef = Absent,
-            pageRef = Present(src.page)
-        )
+            loadingV = Present(BoolValue.Dyn(src.loading))
+        ).paginate(src.pageSizeBinding)(src.page)
 
     /** Selection semantics: `Single`/`Multiple` select on row click, `Checkbox`
       * via Prime's checkbox column; `None` (default) leaves rows inert.
