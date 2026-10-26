@@ -295,7 +295,13 @@ final private[uic] case class RowInputs[A](
     ctx: Maybe[String] = Absent,
     cells: Set[CellKey] = Set.empty,
     exp: Set[String] = Set.empty,
-    groups: Set[GroupPath] = Set.empty
+    groups: Set[GroupPath] = Set.empty,
+    // Whether the rows are still on their way (the `loading` slot). Held with the rows because it
+    // decides what an empty row list MEANS: a page not answered yet, or a query that matched nothing.
+    waiting: Boolean = false,
+    // What is known about the size of the whole (`lazyRows`). Held with the rows for the same
+    // reason: while a page loads, it says how many rows the page will have.
+    total: Total = Total.Unknown(false)
 )
 
 private[uic] object RowInputs:
@@ -404,17 +410,27 @@ private[uic] object RowSpec:
       */
     final case class Spacer[A](px: Int, marks: Maybe[(Int, Int)] = Absent) extends RowSpec[A]
 
-    /** A row of the window the source has not reached: one skeleton per column. The column counts
-      * and the frozen plan ride along because a slot has to hold the same grid as a real row.
+    /** A row the rows have not reached yet: one skeleton per column. The column counts and the frozen
+      * plan ride along because a slot has to hold the same grid as a real row. A window's slot is as
+      * tall as its rows are declared to be; a page's, with no height declared, is as tall as a line of
+      * text makes a row.
       */
     final case class Slot[A](
         index: Int,
-        height: Int,
+        height: Maybe[Int],
         lead: Int,
         cells: Int,
         trail: Int,
         frozen: FrozenPlan
     ) extends RowSpec[A]
+
+    /** A row standing in for a row still on their way when the caller set the loading slot: the `at`-th
+      * of a run of `run` such rows, `index` naming it among the body's. Under `loadingContent` each is
+      * one line of text tall (or `height`) and the first carries the content over the whole run: rows
+      * rather than one tall cell, so the height is the rows' own in every theme and never a sum of
+      * padding the stylesheet would have to know. Under `loadingRow` each holds the caller's row.
+      */
+    final case class Loading[A](index: Int, at: Int, run: Int, colCount: Int, height: Maybe[Int]) extends RowSpec[A]
 
     final case class Empty[A](colCount: Int) extends RowSpec[A]
 
@@ -544,7 +560,12 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   *   - `Column.rowSpan(key)`: the other way to show a key, where that column's cells merge
   *     across their run, clipped by the merged columns left of them and by the
   *     innermost group, so two spans can never cross.
-  *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table.
+  *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table (`loadingMask(false)`
+  *     leaves it off). While it is set the body already has the shape of the page that is
+  *     coming: the rows it holds, cut to the page size, and the place of the rest, so it neither
+  *     says "No records found" for a page nobody has answered yet nor grows or shrinks when the
+  *     page lands. The place is a skeleton per cell, what `loadingContent(...)` puts over it, or
+  *     the caller's own rows from `loadingRow`.
   *   - `scrollHeight(css)`: caps and scrolls the container, pinning the row
   *     groups to its edges.
   *
@@ -588,12 +609,14 @@ final case class DataTable[A] private (
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
+    loadingContentV: Maybe[LoadingContent] = Absent,
     onRowClickF: Maybe[A => UI.Action] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     headerV: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
+    loadingMaskV: Maybe[BoolValue] = Absent,
     scrollHeightV: Maybe[String] = Absent,
     flexScrollFlag: Boolean = false,
     rowHeightV: Maybe[Int] = Absent,
@@ -620,7 +643,7 @@ final case class DataTable[A] private (
     orderedPaths: List[List[String]] = Nil,
     idV: Maybe[String] = Absent,
     anchorRef: Maybe[SignalRef[Maybe[A]]] = Absent
-) extends Node, HasElementId, HasEmptyContent, HasAccessibleNameRef:
+) extends Node, HasElementId, HasEmptyContent, HasLoadingContent, HasAccessibleNameRef:
     type Self = DataTable[A]
 
     /** Stores the element id. */
@@ -1304,6 +1327,8 @@ final case class DataTable[A] private (
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = copy(emptyContentV = v)
 
+    private[uic] def withLoadingContent(v: Maybe[LoadingContent]): DataTable[A] = copy(loadingContentV = v)
+
     /** Fired with the row after any selection write from a row click. */
     def onRowClick(f: A => UI.Action)(using Frame): DataTable[A] = copy(onRowClickF = Present(Callback.of(f)))
 
@@ -1340,6 +1365,15 @@ final case class DataTable[A] private (
       * sub-region without re-rendering the rows.
       */
     def loading(v: Boolean | Signal[Boolean]): DataTable[A] = copy(loadingV = Present(ReactiveValue(v)))
+
+    /** Whether `loading` lays Prime's mask over the table: the dimming `.p-datatable-mask` with its
+      * spinner, which also takes every click while it is up. On by default, as in Prime. Off, the
+      * table still holds the place of the rows that are coming (see [[loadingContent]]) and still says
+      * `aria-busy`, so the wait stays visible and announced, only nothing is dimmed or blocked: for a
+      * table whose readers keep working while it loads, or one whose loading content they use. A
+      * `Signal` switches the mask alone, as a region of its own beside the table.
+      */
+    def loadingMask(v: Boolean | Signal[Boolean]): DataTable[A] = copy(loadingMaskV = Present(ReactiveValue(v)))
 
     /** Caps the table container at a CSS length and scrolls it, pinning the `thead`
       * (and the `tfoot`, when columns carry footers) to the container edges.
@@ -1548,7 +1582,9 @@ final case class DataTable[A] private (
         // rather than from the empty value and overwrites only what a signal supplies.
         val base = RowInputs[A](
             rows = rowsV,
-            sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String])
+            sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
+            waiting = BoolValue.const(loadingV).getOrElse(false),
+            total = lazyTotalV.flatMap(_.const).getOrElse(Total.Unknown(false))
         )
         def fold[T](
             acc: Maybe[Signal[RowInputs[A]]],
@@ -1571,8 +1607,20 @@ final case class DataTable[A] private (
         val b = fold[Maybe[String]](a, contextRowRef.map(x => x), (i, v) => i.copy(ctx = v))
         val c = fold[Set[CellKey]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
         val d = fold[Set[String]](c, expandedRef.map(x => x), (i, v) => i.copy(exp = v))
-        fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
+        val e = fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
+        val f = fold[Boolean](e, loadingSignal, (i, v) => i.copy(waiting = v))
+        fold[Total](f, totalSignal, (i, v) => i.copy(total = v))
     end rowInputsSignal
+
+    /** The `lazyRows` total as a signal, when it is one. */
+    private def totalSignal: Maybe[Signal[Total]] = lazyTotalV match
+        case Present(ReactiveValue.Dyn(sig)) => Present(sig)
+        case _                               => Absent
+
+    /** The `loading` slot as a signal, when it is one. */
+    private def loadingSignal: Maybe[Signal[Boolean]] = loadingV match
+        case Present(BoolValue.Dyn(sig)) => Present(sig)
+        case _                           => Absent
 
     /** The row bindings where they are read around the body: the rows and where they start, the selection, the context
       * row, the selected cells, the expansion, the groups and the total, as one reading. [[renderWith]] reads them below
@@ -1587,8 +1635,12 @@ final case class DataTable[A] private (
             .and(Reading.orElse(selectedCellsRef, Set.empty[CellKey]))
             .and(Reading.orElse(expandedRef, Set.empty[String]))
             .and(Reading.orElse(expandedGroupsRef, Set.empty[GroupPath]))
-            .map { case ((((((rows, offset), s), ctx), cells), exp), groups) => RowInputs(rows, offset, s, ctx, cells, exp, groups) }
+            .and(loadingV.fold(Reading.Fixed(false))(Reading.of(_)))
+            .map { case (((((((rows, offset), s), ctx), cells), exp), groups), waiting) =>
+                RowInputs(rows, offset, s, ctx, cells, exp, groups, waiting)
+            }
             .and(totalReading)
+            .map((in, t) => (in.copy(total = t), t))
     end rowInputsReading
 
     /** Whether anything can be edited at all, which is what decides whether the table
@@ -2720,6 +2772,12 @@ final case class DataTable[A] private (
         var tbl = table.cssClass("p-datatable-table")
         if scrollingOn || frozenOn || frozenRowsOn then tbl = tbl.cssClass("p-datatable-scrollable-table")
         else tbl = classWhen(tbl, "p-datatable-scrollable-table", expanding)
+        // While rows are on their way the body stands in for them, which is what `aria-busy` tells
+        // assistive technology: the rows it reads now are about to change.
+        loadingV.foreach {
+            case BoolValue.Dyn(sig) => tbl = tbl.aria("busy", sig.map(_.toString))
+            case BoolValue.Const(b) => if b then tbl = tbl.aria("busy", "true")
+        }
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
@@ -3165,6 +3223,17 @@ final case class DataTable[A] private (
 
         val frozen = frozenPlan(size)
 
+        /** `n` rows standing in for rows that are still on their way: a skeleton per cell, or the
+          * caller's [[loadingContent]] over all of them.
+          */
+        def loadingRows(n: Int, height: Maybe[Int]): List[RowSpec[A]] =
+            val run = math.max(1, n)
+            (0 until run).toList.map(i =>
+                if loadingContentV.isDefined then RowSpec.Loading[A](i, i, run, colCount, height)
+                else RowSpec.Slot(i, height, leadTerms.size, leafCols.size, trailTerms.size, frozen)
+            )
+        end loadingRows
+
         // A grip is only offered where a drop would land where the reader let go: the rows
         // on the screen have to be the rows in the list, in that order, and the list has to
         // be somewhere the table can write. Anything else and the column still renders,
@@ -3199,28 +3268,55 @@ final case class DataTable[A] private (
           * of the pass that happened to build it.
           */
         def specsFor(in: RowInputs[A]): List[RowSpec[A]] =
-            val ar   = arrange(in, Total.Unknown(false))
+            val all = arrange(in, Total.Unknown(false))
+            // While rows are on their way the body already has the page's shape: the rows it holds, no more
+            // than the page will have, then the place of the rest. So it neither says "No records" for a page
+            // nobody has answered yet nor grows, or shrinks, when the page lands.
+            val expected = if in.waiting then expectedRows(in.total, all.pg.rows.size) else all.pg.rows.size
+            val ar       = all.copy(pg = all.pg.copy(rows = all.pg.rows.take(expected)))
+            val missing  =
+                if !in.waiting then 0
+                else if ar.pg.rows.isEmpty then math.max(1, expected)
+                else expected - ar.pg.rows.size
             val view = bodyViewOf(ar.rows, ar.sorted, ar.pg, in.groups)
-            if ar.pg.rows.isEmpty then List(RowSpec.Empty(colCount))
-            else
-                groupSegments(
-                    ar.pg.rows.zipWithIndex,
-                    groupsV,
-                    Nil,
-                    in.sel,
-                    in.ctx,
-                    in.cells,
-                    in.exp,
-                    in.groups,
-                    colCount,
-                    edit,
-                    navFor(in, ar),
-                    frozen,
-                    moveFor(view),
-                    selectIn
-                )
+            val data =
+                if ar.pg.rows.isEmpty then Nil
+                else
+                    groupSegments(
+                        ar.pg.rows.zipWithIndex,
+                        groupsV,
+                        Nil,
+                        in.sel,
+                        in.ctx,
+                        in.cells,
+                        in.exp,
+                        in.groups,
+                        colCount,
+                        edit,
+                        navFor(in, ar),
+                        frozen,
+                        moveFor(view),
+                        selectIn
+                    )
+            if missing > 0 then data ++ loadingRows(missing, Absent)
+            else if data.isEmpty then List(RowSpec.Empty(colCount))
+            else data
             end if
         end specsFor
+
+        /** How many rows the page that is loading will hold. Over a paginated window onto rows prepared
+          * elsewhere that is the page size, or what a known total leaves for the last page; a table that
+          * slices its own rows already holds the page it shows, so it holds the place of a page only
+          * while it has none.
+          */
+        def expectedRows(total: Total, held: Int): Int =
+            pageSizeV match
+                case Present(size) if lazyOn =>
+                    total match
+                        case Total.Known(n) => math.max(0, math.min(size, n - math.max(0, page) * size))
+                        case _              => size
+                case Present(size) if held == 0 => size
+                case _                          => held
 
         /** How many rows there are to scroll over, which does not depend on where the
           * reader is: the rows themselves locally, and how far the source reaches over one.
@@ -3241,7 +3337,10 @@ final case class DataTable[A] private (
             val held      = paged.toVector
             val loadedEnd = staticInputs.offset + held.size
             val count     = windowCount
-            if count <= 0 then List(RowSpec.Empty(colCount))
+            // Nothing to scroll over while the source has not answered yet holds the viewport's rows,
+            // as slots at the height they will have, rather than saying "No records".
+            if count <= 0 && staticInputs.waiting then loadingRows(vp.visible, Present(rowHeightV.getOrElse(1)))
+            else if count <= 0 then List(RowSpec.Empty(colCount))
             else
                 val (from, reach)           = vp.span(vp.clamp(scrollTop, count))
                 val until                   = math.min(count, reach)
@@ -3265,10 +3364,17 @@ final case class DataTable[A] private (
                             staticSelect,
                             rowHeightV
                         )
+                    else if loadingContentV.isDefined then
+                        // The rows not reached lie in one run above the held ones or one below them, and
+                        // the caller's content stands over the whole run.
+                        val (runFrom, runUntil) =
+                            if i < staticInputs.offset then (from, math.min(until, staticInputs.offset))
+                            else (math.max(from, loadedEnd), until)
+                        RowSpec.Loading[A](i, i - runFrom, runUntil - runFrom, colCount, Present(rowHeightV.getOrElse(1)))
                     else
                         RowSpec.Slot(
                             i,
-                            rowHeightV.getOrElse(1),
+                            Present(rowHeightV.getOrElse(1)),
                             leadTerms.size,
                             leafCols.size,
                             trailTerms.size,
@@ -3393,11 +3499,15 @@ final case class DataTable[A] private (
         // dim the rows that did, on every scroll that reaches past the buffer.
         if windowOn then Nil
         else
-            loadingV match
-                case Present(BoolValue.Const(true))  => List(maskDiv)
-                case Present(BoolValue.Dyn(sig))     => List(sig.render(b => if b then maskDiv else UI.empty))
-                case Present(BoolValue.Const(false)) => Nil
-                case Absent                          => Nil
+            // Up while the rows load AND the mask is wanted (`loadingMask`, on unless switched off). Two
+            // constants decide it here; a signal on either side makes it one region of its own.
+            val loading = loadingV.fold(Reading.Fixed(false))(Reading.of(_))
+            val wanted  = loadingMaskV.fold(Reading.Fixed(true))(Reading.of(_))
+            loading.and(wanted).map(_ && _) match
+                case Reading.Fixed(true)  => List(maskDiv)
+                case Reading.Fixed(false) => Nil
+                case Reading.Live(sig)    => List(sig.render(b => if b then maskDiv else UI.empty))
+            end match
         end if
     end loadingMask
 
@@ -5088,15 +5198,44 @@ final case class DataTable[A] private (
       * so the grid stays whole and the geometry never moves once the rows land.
       */
     private def slotRow(spec: RowSpec.Slot[A])(using Frame): UI =
-        // A line's worth of skeleton, which is what the cell would hold: the row is as
-        // tall as every other one because the row says so, not because the slot does.
+        // A line's worth of skeleton, which is what the cell would hold. In a window the row is as
+        // tall as every other one because the row says so, not because the slot does; with no height
+        // declared the skeleton is exactly one line (`1lh`), so the row is as tall as a row of text.
+        val line                           = if spec.height.isDefined then "1rem" else "1lh"
         def slot(f: Maybe[FrozenSlot]): UI =
-            freeze(td(toChild(Skeleton().height("1rem").render)), f)
+            freeze(td(toChild(Skeleton().height(line).render)), f)
         val leading  = (0 until spec.lead).toList.map(i => slot(spec.frozen.leadAt(i)))
         val cells    = (0 until spec.cells).toList.map(i => slot(spec.frozen.at(i)))
         val trailing = (0 until spec.trail).toList.map(i => slot(spec.frozen.trailAt(i)))
-        tr.style(_.height(spec.height.px))((leading ++ cells ++ trailing).map(toChild)*)
+        val row      = spec.height.fold(tr)(h => tr.style(_.height(h.px)))
+        row((leading ++ cells ++ trailing).map(toChild)*)
     end slotRow
+
+    /** A row standing in for a row on its way. Under [[loadingRow]] it holds the caller's row and
+      * nothing else. Under [[loadingContent]] it holds one invisible line, so it is as tall as a row of
+      * text, and the first of its run carries the content laid over the whole run
+      * (`.p-uic-datatable-loading-content`, as tall as that many of these rows).
+      */
+    private def loadingRow(spec: RowSpec.Loading[A])(using Frame): UI =
+        val row  = spec.height.fold(tr)(h => tr.style(_.height(h.px))).cssClass("p-uic-datatable-loading-row")
+        val cell = td.colspan(math.max(spec.colCount, 1))
+        loadingContentV match
+            case Present(LoadingContent.Rows(f)) => row(toChild(cell(toChild(f(spec.at, spec.run)))))
+            case content                         =>
+                // One invisible line makes the row as tall as a row of text; the content lies over the run.
+                val line: UI       = span.cssClass("p-uic-datatable-loading-line").aria("hidden", "true")("\u00a0")
+                val over: List[UI] =
+                    if spec.at != 0 then Nil
+                    else
+                        content.toList.flatMap(c =>
+                            LoadingContent.over(c, spec.run)(inner =>
+                                div.cssClass("p-uic-datatable-loading-content")
+                                    .style(_.height(Length.Calc(s"${spec.run} * 100%")))(inner)
+                            ).toList
+                        )
+                row.cssClass("p-uic-datatable-loading-over")(toChild(cell((line :: over).map(toChild)*)))
+        end match
+    end loadingRow
 
     /** The `<tr>` an expanded row emits under itself.
       *
@@ -5126,9 +5265,10 @@ final case class DataTable[A] private (
             case g: RowSpec.GroupFoot[A] => s"gf:${g.path.keys.mkString(" ")}"
             // The leading spacer is the one that states where the window starts; the trailing one
             // never does, which is what tells them apart without carrying a flag for it.
-            case s: RowSpec.Spacer[A] => if s.marks.isDefined then "sp:top" else "sp:bottom"
-            case s: RowSpec.Slot[A]   => s"slot:${s.index}"
-            case _: RowSpec.Empty[A]  => "empty"
+            case s: RowSpec.Spacer[A]  => if s.marks.isDefined then "sp:top" else "sp:bottom"
+            case s: RowSpec.Slot[A]    => s"slot:${s.index}"
+            case l: RowSpec.Loading[A] => s"loading:${l.index}"
+            case _: RowSpec.Empty[A]   => "empty"
         end match
     end rowSpecKey
 
@@ -5152,8 +5292,9 @@ final case class DataTable[A] private (
                     pad = pad.data("uic-vs-first", first.toString).data("uic-vs-count", count.toString)
                 }
                 pad
-            case s: RowSpec.Slot[A]  => slotRow(s)
-            case e: RowSpec.Empty[A] => emptyRow(e.colCount)
+            case s: RowSpec.Slot[A]    => slotRow(s)
+            case l: RowSpec.Loading[A] => loadingRow(l)
+            case e: RowSpec.Empty[A]   => emptyRow(e.colCount)
         end match
     end renderTr
 

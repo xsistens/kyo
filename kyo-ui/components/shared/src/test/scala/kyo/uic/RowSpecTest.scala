@@ -52,8 +52,8 @@ class RowSpecTest extends UicTest:
             RowSpec.GroupFoot((_, rows) => UI.span(rows.size.toString), GroupPath(List("A")), items, 3),
             RowSpec.Spacer(120, Present((4, 10))),
             RowSpec.Spacer(80),
-            RowSpec.Slot(4, 32, 0, 1, 0, FrozenPlan()),
-            RowSpec.Slot(5, 32, 0, 1, 0, FrozenPlan()),
+            RowSpec.Slot(4, Present(32), 0, 1, 0, FrozenPlan()),
+            RowSpec.Slot(5, Present(32), 0, 1, 0, FrozenPlan()),
             RowSpec.Empty(3)
         )
     end specs
