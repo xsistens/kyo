@@ -1473,6 +1473,24 @@ class DataTableTest extends UicTest:
             assert(held == 1 && busy == Chunk("true"), "the place of the rows and aria-busy stay")
     }
 
+    // Content of the caller's own already says how the wait looks, and the mask's spinner landed on top
+    // of it. So setting it switches the mask off unless the mask is asked for as well.
+    "loading content of the caller's own leaves the mask off unless it is asked for" in {
+        def table(using Frame) =
+            uic.DataTable[Item]().rows(Seq.empty[Item]).rowKey(_.id).columns(uic.column("Name")(_.name)).loading(true)
+        for
+            text    <- masks(table.loadingContent("Fetching").render)
+            counted <- masks(table.loadingContent(n => UI.span(s"$n")).render)
+            rows    <- masks(table.loadingRow((i, _) => UI.span(s"$i")).render)
+            asked   <- masks(table.loadingContent("Fetching").loadingMask(true).render)
+            plain   <- masks(table.render)
+        yield
+            assert((text, counted, rows) == (0, 0, 0), "no spinner over the caller's own content")
+            assert(asked == 1, "unless the mask is asked for")
+            assert(plain == 1, "the skeletons keep Prime's mask")
+        end for
+    }
+
     "a mask bound to a signal comes and goes with it" in {
         for
             ref <- Signal.initRef(true)
