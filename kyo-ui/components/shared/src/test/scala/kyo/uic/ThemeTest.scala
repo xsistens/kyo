@@ -178,6 +178,26 @@ class ThemeTest extends UicTest:
         assert(slim.contains(".p-uic-invalid-message"), "the kyo remainder is always included")
     }
 
+    /** `Form.errorSummary` renders its jump rows as real `<button>`s, so without a rule of its
+      * own every row wears the browser's grey, bordered button face in a system font instead of
+      * reading as the message it is.
+      */
+    "the remainder styles the form's error summary and its jump rows" in {
+        def rule(selector: String): String =
+            val at = Theme.primeExtraCss.indexOf(selector + " {")
+            assert(at >= 0, s"no rule for $selector")
+            Theme.primeExtraCss.substring(at, Theme.primeExtraCss.indexOf('}', at))
+        end rule
+        val box  = rule(".p-uic-form-errors")
+        val link = rule(".p-uic-error-link")
+        assert(box.contains("flex-direction: column"), box)
+        assert(link.contains("background: none"), link)
+        assert(link.contains("border: 0"), link)
+        assert(link.contains("font-family: inherit"), link)
+        assert(!link.contains("font:"), "the shorthand would reset the message row's font-size")
+        assert(link.contains("cursor: pointer"), link)
+    }
+
     /** The assertion the whole exercise turns on. A `cssFor` that quietly included
       * everything would pass every other case here and save nothing.
       */
