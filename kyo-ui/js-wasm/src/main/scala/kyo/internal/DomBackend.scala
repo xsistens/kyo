@@ -2398,6 +2398,12 @@ private[kyo] object DomBackend:
             st.top = rect.top.asInstanceOf[Double].toString + "px"
             st.width = rect.width.asInstanceOf[Double].toString + "px"
             st.height = rect.height.asInstanceOf[Double].toString + "px"
+            // At <body> a class's percentage min-size resolves against the viewport and beats the inline size (a
+            // dropdown's min-width:100% stretched the ghost to the window edge). Only the minimum is reset: max-* stays
+            // with the classes, so a leave that collapses through max-height still can.
+            st.boxSizing = "border-box"
+            st.minWidth = "0"
+            st.minHeight = "0"
             st.margin = "0"
             st.pointerEvents = "none"
             g.setAttribute("data-kyo-ghost", "1")

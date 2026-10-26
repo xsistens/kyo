@@ -2456,6 +2456,10 @@ private[kyo] object HtmlRenderer:
            |    var g=node.cloneNode(true);kyoStrip(g);
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
+           |    // At <body> a class's percentage min-size resolves against the viewport and beats the inline size (a dropdown's
+           |    // min-width:100% stretched the ghost to the window edge). Only the minimum is reset: max-* stays with the
+           |    // classes, so a leave that collapses through max-height still can.
+           |    g.style.boxSizing="border-box";g.style.minWidth="0";g.style.minHeight="0";
            |    g.setAttribute("data-kyo-ghost","1");
            |    ghosts.push({src:node,node:g,leave:leave});
            |  }
