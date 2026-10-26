@@ -322,6 +322,36 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(live)
     }
 
+    // Regression: a mount paints its placeholder bare into its slot, and its content arrives inside a range of its own.
+    // The morph read that as an element against a span and replaced the whole subtree, so a placeholder built like
+    // its content (uic's Tabs, a page section) was thrown away with everything hanging off its nodes: the scroll
+    // anchor, focus, an editor attached to it.
+    "a mount's content takes over the nodes of a placeholder built like it" in {
+        for
+            gate  <- Promise.init[Unit, Any]
+            label <- Signal.initRef("content")
+            shape = (text: UI) => UI.div(UI.p(text).id("mount-label")).id("mount-box")
+            ui    = UI.div(UI.mounted(gate.get.andThen(shape(label.render(t => UI.span(t))))).placeholder(shape(UI.span("content"))))
+            ready = new DomTestEnv.MountReady
+            fiber    <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _        <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("mount-box") != null))
+            box      <- Sync.defer(dom.document.getElementById("mount-box"))
+            para     <- Sync.defer(dom.document.getElementById("mount-label"))
+            applied  <- Sync.defer(ready.applied)
+            _        <- gate.completeUnitDiscard
+            _        <- assertEventually(Sync.defer(ready.applied > applied))
+            sameBox  <- Sync.defer(dom.document.getElementById("mount-box") eq box)
+            samePara <- Sync.defer(dom.document.getElementById("mount-label") eq para)
+            // The range the content arrived in is registered, so a region inside it keeps painting.
+            _ <- label.set("updated")
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("mount-label").textContent == "updated"))
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield
+            assert(sameBox, "the placeholder's root was replaced instead of morphed")
+            assert(samePara, "the placeholder's child was replaced instead of morphed")
+    }
+
     /** What the page shows while the mount inside a new instance of `outer` loads: the outer mount shows a shell and an
       * inner mount, which answers at once for "a" and waits for a gate for "b".
       */

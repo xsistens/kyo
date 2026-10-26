@@ -254,13 +254,57 @@ private[kyo] object DomBackend:
         first
     end insertLogicalClone
 
-    /** Reconcile the live sibling run of `parent` that starts at `fromStart` and stops before `fromEnd` (null meaning
-      * the end of the parent) toward the run starting at `toStart`, which lives in a detached fragment.
-      *
-      * Positional, pair by pair: this pass reuses a node where the shapes line up and replaces it where they do not.
-      * Reordering a keyed list therefore costs more than it has to here, which is the two-ended keyed pass's job; what
-      * matters at this level is that the nodes that did not move keep their identity.
+    /** Reconcile the live logical run `[fromStart, fromEnd)` of `parent` (null meaning the end of the parent) toward
+      * `[toStart, toEnd)`, which lives in a detached fragment, keeping the identity of every node that lines up.
       */
+    private def morphNodeRun(
+        parent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node
+    )(using Frame): Unit =
+        wrapInIncomingRange(parent, fromStart, fromEnd, toStart, toEnd) match
+            case Present((liveClose, close)) => morphNodeRun(parent, fromStart, liveClose, toStart.nextSibling, close)
+            case Absent                      => morphKeyedRun(parent, fromStart, fromEnd, toStart, toEnd)
+    end morphNodeRun
+
+    /** Wraps a bare live run in the one range the incoming run consists of, answering the live close marker it put after
+      * the run and the incoming one, or `Absent` when the runs are not that pair.
+      *
+      * A mount paints its placeholder bare into its slot, and its content arrives inside a range of its own. Taken as an
+      * element against a span, that pair is replaced whole, and with it every node of a placeholder built like its
+      * content and everything hanging off those nodes: focus, the reader's scroll anchor, an editor attached to one.
+      * Wrapping the live run in the incoming range and reconciling the range's content against it gives the same markup
+      * and keeps those nodes. A run holding a range of its own does not qualify: that one is reconciled pair by pair.
+      */
+    private def wrapInIncomingRange(
+        parent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node
+    ): Maybe[(dom.Node, dom.Node)] =
+        if toStart == null || fromStart == null || (fromStart eq fromEnd) then Absent
+        else
+            DomReactiveRegions.startMarkerId(toStart)
+                .flatMap(id => spanClose(toStart, id))
+                .filter(close => (close.nextSibling eq toEnd) && holdsNoRange(fromStart, fromEnd))
+                .map { close =>
+                    discard(parent.insertBefore(document.importNode(toStart, false), fromStart))
+                    (parent.insertBefore(document.importNode(close, false), fromEnd), close)
+                }
+
+    /** Whether the live run `[start, end)` holds no range marker at its own level. */
+    private def holdsNoRange(start: dom.Node, end: dom.Node): Boolean =
+        var scan = start
+        var none = true
+        while none && scan != null && !(scan eq end) do
+            if DomReactiveRegions.startMarkerId(scan).nonEmpty then none = false
+            scan = scan.nextSibling
+        none
+    end holdsNoRange
+
     /** Reconcile the live logical run `[fromStart, fromEnd)` of `parent` toward `[toStart, toEnd)`.
       *
       * A two-ended keyed pass runs first, then a single cursor over whatever it could not settle. The cursor alone
@@ -269,7 +313,7 @@ private[kyo] object DomBackend:
       * first relocates only the children that actually changed place, two for that swap and none for a removal in
       * the middle.
       */
-    private def morphNodeRun(
+    private def morphKeyedRun(
         parent: dom.Element,
         fromStart: dom.Node,
         fromEnd: dom.Node,
@@ -342,7 +386,7 @@ private[kyo] object DomBackend:
         val cursorToEnd = if toTail + 1 < toNodes.length then toNodes(toTail + 1) else toEnd
         val cursorTo    = if toHead <= toTail then toNodes(toHead) else cursorToEnd
         morphRangeCursor(parent, cursorFrom, tailBoundary, cursorTo, cursorToEnd, fromKeyed, toKeyed)
-    end morphNodeRun
+    end morphKeyedRun
 
     /** Snapshot the logical children of `[start, end)` into `nodes` and their keys into `keys`, null where unkeyed.
       * One pass: the two-ended walk reads keys four times per step, and finding a span's close marker is not free.
