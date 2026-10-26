@@ -168,6 +168,24 @@ class DataTableTest extends UicTest:
             assert(now == Present(CellPath(items(1), List("Name"))), "and the editor moved on")
     }
 
+    "a click inside the open cell leaves what was typed in it" in {
+        // A number field's spinner, or a click to place the caret, lands on the open cell too. It opened the cell
+        // again and seeded it from the row, so every spinner step snapped back to the value the cell started with.
+        for
+            (ui, _, editing, _, price, _, _) <- wire
+            cell                             <- elementWithId(ui, "t-c0-1")
+            _                                <- press(cell, UI.Keyboard.Enter)
+            open                             <- elementWithId(ui, "t-c0-1")
+            _                                <- typeInto(open, "42")
+            again                            <- elementWithId(ui, "t-c0-1")
+            _                                <- click(again)
+            draft                            <- price.get
+            now                              <- editing.get
+        yield
+            assert(draft == "42", s"the draft kept what was typed: $draft")
+            assert(now == Present(CellPath(items(0), List("Price"))), "and the cell is still the open one")
+    }
+
     "clicking another cell while the open one refuses leaves the editor where it is" in {
         for
             (ui, rows, editing, _, _, err, _) <- wire
