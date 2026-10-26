@@ -1267,6 +1267,10 @@ class DataTableTest extends UicTest:
     private def served[A](ch: Channel[Seq[A]])(using Frame): Seq[A] < (Async & Abort[Closed]) =
         ch.take.map(v => if v.nonEmpty then v else served(ch))
 
+    /** Waits for a source's loading flag to come down, which is its answer, empty or not. */
+    private def answered(ch: Channel[Boolean])(using Frame): Unit < (Async & Abort[Closed]) =
+        ch.take.map(loading => if loading then answered(ch) else ())
+
     private val five = (1 to 5).toList.map(i => Item(i.toString, ('A' + i - 1).toChar.toString, i * 10))
 
     "a bound source fills the rows, the total and the paginator in one call" in {
@@ -1287,6 +1291,220 @@ class DataTableTest extends UicTest:
             assert(names == Chunk("A", "B"), "the first page of the source")
             assert(offered == List("1", "2", "3"), "five rows of two, counted off the source's total")
             assert(current == List("1"))
+    }
+
+    // Before its first answer a source holds no rows and is loading, which is not the same as a
+    // query that matched nothing: the table used to say "No records found" under its mask for as
+    // long as the first page took, then grew by every row that arrived.
+    "a page still loading is not reported as empty" in {
+        for
+            query <- Signal.initRef("a")
+            gate  <- Promise.init[Unit, Any]
+            src   <- RowSource.init(query, pageSize = 3) { (_, offset, limit) =>
+                gate.get.andThen((five.slice(offset, offset + limit), Total.Known(five.size)))
+            }
+            ui = uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name)).source(src).render
+            trs <- bodyTrs(ui)
+            _   <- gate.completeUnitDiscard
+        yield
+            assert(trs.nonEmpty, "the body holds the place of the page it is waiting for")
+            assert(
+                !trs.exists(_.attrs.cssClasses.contains("p-datatable-empty-message")),
+                "nothing has been asked yet, so nothing can have been found missing"
+            )
+    }
+
+    /** A lazily loaded page of `size` rows, still loading, holding `rows` from before. */
+    private def loadingPage(rows: Seq[Item], size: Int, page: Int, total: Total)(using Frame): UI < Sync =
+        for
+            sizeRef <- Signal.initRef(size)
+            pageRef <- Signal.initRef(page)
+        yield uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .paginate(sizeRef)(pageRef).lazyRows(total).loading(true).render
+
+    /** How many of `trs` hold a skeleton rather than a row. */
+    private def skeletonRows(trs: List[UI.Ast.Element])(using Frame): Int < Sync =
+        Kyo.foreach(trs)(tr => elements(tr).map(_.exists(_.attrs.cssClasses.contains("p-skeleton")))).map(_.count(identity))
+
+    // The reader asked for more rows per page. Until the bigger page arrives the table holds the rows it
+    // has and the place of the rest, so it does not grow by them when they land.
+    "a page that grows while it loads keeps its rows and holds the place of the rest" in {
+        for
+            ui    <- loadingPage(five.take(3), size = 5, page = 0, total = Total.Known(10))
+            names <- bodyNames(ui)
+            trs   <- bodyTrs(ui)
+            held  <- skeletonRows(trs)
+        yield
+            assert(names == Chunk("A", "B", "C"), "the rows it has stay")
+            assert(trs.size == 5 && held == 2, s"two places held for the rows to come, got ${trs.size} rows, $held held")
+    }
+
+    "a page that shrinks while it loads shows only the rows it will have" in {
+        for
+            ui    <- loadingPage(five, size = 3, page = 0, total = Total.Known(10))
+            names <- bodyNames(ui)
+        yield assert(names == Chunk("A", "B", "C"), "the rows past the new page size belong to no page the reader asked for")
+    }
+
+    "the last page holds the place of only the rows that remain" in {
+        for
+            ui   <- loadingPage(Nil, size = 3, page = 3, total = Total.Known(10))
+            trs  <- bodyTrs(ui)
+            held <- skeletonRows(trs)
+        yield assert(trs.size == 1 && held == 1, s"ten rows leave one for the fourth page of three, got ${trs.size}")
+    }
+
+    /** The rows standing in under `loadingContent`, and the height their content is laid over. */
+    private def loadingParts(trs: List[UI.Ast.Element])(using Frame): (Int, List[Maybe[Length]]) < Sync =
+        Kyo.foreach(trs)(tr => elements(tr)).map { inside =>
+            val rows = trs.count(_.attrs.cssClasses.contains("p-uic-datatable-loading-row"))
+            val over = inside.flatten.filter(_.attrs.cssClasses.contains("p-uic-datatable-loading-content")).map(heightOf).toList
+            (rows, over)
+        }
+
+    "loading text stands over the place of the rows that are coming, as tall as they will be" in {
+        for
+            sizeRef <- Signal.initRef(3)
+            pageRef <- Signal.initRef(0)
+            ui = uic.DataTable[Item]().rows(Seq.empty[Item]).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(sizeRef)(pageRef).lazyRows(Total.Known(10)).loading(true)
+                .loadingContent("Loading products").render
+            trs          <- bodyTrs(ui)
+            (rows, over) <- loadingParts(trs)
+            text         <- elements(ui).map(_.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }))
+        yield
+            assert(rows == 3, "one row per row that is coming, so the height is theirs")
+            assert(over == List(Present(Length.Calc("3 * 100%"))), "and the text once, over all three")
+            assert(text.count(_ == "Loading products") == 1)
+            assert(!trs.exists(_.attrs.cssClasses.contains("p-datatable-empty-message")))
+    }
+
+    "loading content of the caller's own stands over the rows still missing from a growing page" in {
+        for
+            sizeRef <- Signal.initRef(5)
+            pageRef <- Signal.initRef(0)
+            table = uic.DataTable[Item]().rows(five.take(3)).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(sizeRef)(pageRef).lazyRows(Total.Known(10)).loading(true)
+                .loadingContent(UI.span("one moment").id("mine")).render
+            names        <- bodyNames(table)
+            trs          <- bodyTrs(table)
+            (rows, over) <- loadingParts(trs)
+            mine         <- elements(table).map(_.count(_.attrs.identifier.contains("mine")))
+        yield
+            assert(names == Chunk("A", "B", "C"), "the rows it has stay")
+            assert(rows == 2 && over == List(Present(Length.Calc("2 * 100%"))), "the caller's content over the two to come")
+            assert(mine == 1, "rendered once")
+    }
+
+    /** What one table shows now: its rows' names, how many rows stand in under `loadingContent`, how
+      * tall the content over them is, and the texts it holds.
+      */
+    private def loadingState(ui: UI)(using Frame): (Chunk[String], Int, List[Maybe[Length]], Chunk[String]) < Sync =
+        for
+            names        <- bodyNames(ui)
+            trs          <- bodyTrs(ui)
+            (rows, over) <- loadingParts(trs)
+            texts        <- Kyo.foreach(trs)(tr => elements(tr)).map(_.flatten.flatMap(_.children.collect { case t: UI.Ast.Text =>
+                t.value
+            }.filterNot(_ == "\u00a0")))
+        yield (names, rows, over, Chunk.from(texts))
+
+    "the place held for a loading page follows the page size, the rows held and the flag as they change" in {
+        for
+            sizeRef <- Signal.initRef(3)
+            pageRef <- Signal.initRef(0)
+            rows    <- Signal.initRef(Seq.empty[Item])
+            loading <- Signal.initRef(true)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(sizeRef)(pageRef).lazyRows(Total.Known(10)).loading(loading)
+                .loadingContent(n => UI.span(s"$n coming")).render
+            first  <- loadingState(ui)
+            _      <- sizeRef.set(5)
+            grown  <- loadingState(ui)
+            _      <- rows.set(five.take(2))
+            held   <- loadingState(ui)
+            _      <- sizeRef.set(1)
+            shrunk <- loadingState(ui)
+            _      <- loading.set(false)
+            done   <- loadingState(ui)
+        yield
+            assert(first == (Chunk(), 3, List(Present(Length.Calc("3 * 100%"))), Chunk("3 coming")), first.toString)
+            assert(grown == (Chunk(), 5, List(Present(Length.Calc("5 * 100%"))), Chunk("5 coming")), grown.toString)
+            assert(held == (Chunk("A", "B"), 3, List(Present(Length.Calc("3 * 100%"))), Chunk("A", "B", "3 coming")), held.toString)
+            assert(shrunk == (Chunk("A"), 0, Nil, Chunk("A")), shrunk.toString)
+            assert(done._2 == 0 && done._3.isEmpty && !done._4.exists(_.contains("coming")), done.toString)
+    }
+
+    "loadingRow puts the caller's own row in place of each row that is coming" in {
+        for
+            sizeRef <- Signal.initRef(3)
+            pageRef <- Signal.initRef(0)
+            ui = uic.DataTable[Item]().rows(Seq.empty[Item]).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(sizeRef)(pageRef).lazyRows(Total.Known(10)).loading(true)
+                .loadingRow((i, n) => UI.span(s"row ${i + 1} of $n")).render
+            (_, rows, over, texts) <- loadingState(ui)
+            trs                    <- bodyTrs(ui)
+            held                   <- skeletonRows(trs)
+        yield
+            assert(texts == Chunk("row 1 of 3", "row 2 of 3", "row 3 of 3"))
+            assert(trs.size == 3 && held == 0, "the caller's rows and nothing of the table's own")
+            assert(!trs.exists(_.attrs.cssClasses.contains("p-uic-datatable-loading-over")) && over.isEmpty)
+    }
+
+    /** How many busy masks `ui` holds now. */
+    private def masks(ui: UI)(using Frame): Int < Sync =
+        elements(ui).map(_.count(_.attrs.cssClasses.contains("p-datatable-mask")))
+
+    private def maskTable(mask: Boolean | Signal[Boolean])(using Frame): UI =
+        uic.DataTable[Item]().rows(Seq.empty[Item]).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .loading(true).loadingMask(mask).render
+
+    "loadingMask(false) keeps the mask off while the rows load, and the place and the busy flag on" in {
+        for
+            off  <- masks(maskTable(false))
+            on   <- masks(maskTable(true))
+            trs  <- bodyTrs(maskTable(false))
+            busy <- elements(maskTable(false)).map(_.filter(_.attrs.cssClasses.contains("p-datatable-table"))
+                .flatMap(_.attrs.ariaAttrs.get("busy").toList))
+            held <- skeletonRows(trs)
+        yield
+            assert(off == 0, "no mask")
+            assert(on == 1, "the default and an explicit true both mask")
+            assert(held == 1 && busy == Chunk("true"), "the place of the rows and aria-busy stay")
+    }
+
+    "a mask bound to a signal comes and goes with it" in {
+        for
+            ref <- Signal.initRef(true)
+            ui = maskTable(ref)
+            first  <- masks(ui)
+            _      <- ref.set(false)
+            hidden <- masks(ui)
+            _      <- ref.set(true)
+            back   <- masks(ui)
+        yield assert((first, hidden, back) == (1, 0, 1))
+    }
+
+    "a table whose rows are on their way says it is busy" in {
+        for
+            busy <- elements(uic.DataTable[Item]().rows(Seq.empty[Item]).rowKey(_.id)
+                .columns(uic.column("Name")(_.name)).loading(true).render)
+                .map(_.filter(_.attrs.cssClasses.contains("p-datatable-table")).flatMap(_.attrs.ariaAttrs.get("busy").toList))
+        yield assert(busy == Chunk("true"))
+    }
+
+    "a source that answered no rows is reported as empty" in {
+        for
+            query <- Signal.initRef("a")
+            src   <- RowSource.init(query, pageSize = 3) { (_, _, _) =>
+                (Seq.empty[Item], Total.Known(0))
+            }
+            done <- Channel.init[Boolean](16)
+            _    <- Fiber.init(src.loading.observe(v => done.put(v)))
+            _    <- answered(done)
+            ui = uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name)).source(src).render
+            trs <- bodyTrs(ui)
+        yield assert(trs.sizeIs == 1 && trs.head.attrs.cssClasses.contains("p-datatable-empty-message"))
     }
 
     // A cursor knows what follows, not how much. The paginator then grows a page at a
@@ -1383,6 +1601,25 @@ class DataTableTest extends UicTest:
     private def windowed(using Frame): DataTable[Item] =
         uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name))
             .scrollHeight("200px").scrollRows(40, overscan = 0)
+
+    // A window over a source that has not answered has nothing to scroll over yet, and used to
+    // say "No records found" for it, then grew to the height of its viewport.
+    "a window still loading holds its rows' place rather than reporting them missing" in {
+        for
+            query <- Signal.initRef("a")
+            gate  <- Promise.init[Unit, Any]
+            src   <- RowSource.init(query, pageSize = 6)((_, o, l) =>
+                gate.get.andThen((hundred.slice(o, o + l), Total.Known(100)))
+            )
+            trs <- bodyTrs(windowed.source(src).render)
+            _   <- gate.completeUnitDiscard
+        yield
+            assert(!trs.exists(_.attrs.cssClasses.contains("p-datatable-empty-message")), "nothing was found missing")
+            assert(
+                trs.count(tr => heightOf(tr) == Present(40.px)) == 5,
+                "the five rows the viewport holds, at the height they will have"
+            )
+    }
 
     private def bodyEl(node: UI)(using Frame): UI.Ast.Element < Sync =
         elementWithClass(node, "p-datatable-tbody")
@@ -1505,6 +1742,26 @@ class DataTableTest extends UicTest:
             assert(drawn.size == 6 && drawn.forall(isSlotRow), "so the window is six slots")
             assert(drawn.forall(t => heightOf(t) == Present(40.px)), "each as tall as the row it stands in for")
             assert(pad == List(Present(400.px), Present(3360.px)), "and the list is as long as it was")
+    }
+
+    "rows a window has not reached stand under the caller's loading content, a run at a time" in {
+        for
+            query  <- Signal.initRef("a")
+            src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
+            seen   <- Channel.init[Seq[Item]](16)
+            _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            _      <- served(seen)
+            err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.source(src).loadingContent("Loading rows").wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            _            <- scroll.set(400.0)
+            trs          <- bodyTrs(ui)
+            (rows, over) <- loadingParts(trs)
+        yield
+            val drawn = trs.filterNot(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer"))
+            assert(rows == 6 && drawn.size == 6, "the six rows of the window, none of them a skeleton row")
+            assert(drawn.forall(t => heightOf(t) == Present(40.px)), "each as tall as the row it stands in for")
+            assert(over == List(Present(Length.Calc("6 * 100%"))), "and the text once, over the whole run")
     }
 
     // Infinite scrolling is the total saying it does not know, and it reaches one screen
