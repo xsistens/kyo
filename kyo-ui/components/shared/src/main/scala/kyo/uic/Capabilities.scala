@@ -190,7 +190,9 @@ end HasEmptyContent
   * stands for (larger content is clipped) and centered. It is there for assistive technology to read,
   * where skeletons are hidden from it; that the rows are changing is said by `aria-busy` on the table
   * while they load, and nothing is announced on its own. [[loadingRow]] replaces the placeholder rows
-  * with the caller's own. The four share one slot, so the last one set wins.
+  * with the caller's own. The four share one slot, so the last one set wins. Setting any of them
+  * also turns a table's busy mask off unless it is asked for (`DataTable.loadingMask`), since the
+  * mask's spinner would sit on top of it.
   */
 private[uic] trait HasLoadingContent extends Node:
     /** Stores the resolved loading slot. Implemented as `copy(loadingContentV = v)`. */
