@@ -181,3 +181,42 @@ private[uic] trait HasEmptyContent extends Node:
       */
     final def emptyContent(ui: UI): Self = withEmptyContent(Present(EmptyContent.ui(ui)))
 end HasEmptyContent
+
+/** What a row-bearing component shows in place of rows that are still on their way. See
+  * [[LoadingContent]] for why this is a slot of its own beside [[HasEmptyContent]].
+  *
+  * Unset, the component holds the place of each row that is coming with a skeleton per cell. The
+  * `loadingContent` setters lay content over the same place instead: exactly as tall as the rows it
+  * stands for (larger content is clipped) and centered. It is there for assistive technology to read,
+  * where skeletons are hidden from it; that the rows are changing is said by `aria-busy` on the table
+  * while they load, and nothing is announced on its own. [[loadingRow]] replaces the placeholder rows
+  * with the caller's own. The four share one slot, so the last one set wins.
+  */
+private[uic] trait HasLoadingContent extends Node:
+    /** Stores the resolved loading slot. Implemented as `copy(loadingContentV = v)`. */
+    private[uic] def withLoadingContent(v: Maybe[LoadingContent]): Self
+
+    /** Text shown over the place of the rows that are coming. A `Signal[String]` patches the text in
+      * place on emission, so a translated table follows its locale.
+      */
+    final def loadingContent(v: String | Signal[String]): Self =
+        withLoadingContent(Present(LoadingContent.text(v)))
+
+    /** Arbitrary UI over the place of the rows that are coming: a spinner beside a line, an
+      * illustration. It is exactly as tall as those rows; for content of its own height, see
+      * [[loadingRow]].
+      */
+    final def loadingContent(ui: UI): Self = withLoadingContent(Present(LoadingContent.ui(ui)))
+
+    /** UI over the place of the rows that are coming, built from how many are coming ("Loading 25
+      * rows"). Called again whenever that number changes, which it does when the page size does.
+      */
+    final def loadingContent(f: Int => UI): Self = withLoadingContent(Present(LoadingContent.counted(f)))
+
+    /** The caller's own row for each row that is coming, given its position among them and how
+      * many there are: `(index, count) => UI`. Each lands in a row of its own spanning every column,
+      * with nothing of the component's around it, so a placeholder can look like the row it stands
+      * for (an avatar and two lines) and be as tall as it likes.
+      */
+    final def loadingRow(f: (Int, Int) => UI): Self = withLoadingContent(Present(LoadingContent.rows(f)))
+end HasLoadingContent

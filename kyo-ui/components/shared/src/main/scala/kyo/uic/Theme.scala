@@ -659,6 +659,19 @@ object Theme:
       |}
       |.p-uic-dt-drop-after { box-shadow: inset -2px 0 0 0 var(--p-primary-color); }
       |.p-uic-dt-dragging { opacity: 0.5; }
+      |/* DataTable.loadingContent: rows that hold the place of rows on their way, each one invisible
+      |   line tall so its height is a row of text in every theme, with the caller's content laid
+      |   over all of them from the first (its height is set inline as that many rows, and what does
+      |   not fit is clipped). The rows' own borders stay transparent under it but the last, which
+      |   closes the run as a row does. Rows from loadingRow are the caller's and get none of this. */
+      |.p-uic-datatable-loading-over > td { position: relative; }
+      |.p-uic-datatable-loading-over:has(+ .p-uic-datatable-loading-over) > td { border-bottom-color: transparent; }
+      |.p-uic-datatable-loading-line { visibility: hidden; }
+      |.p-uic-datatable-loading-content {
+      |  position: absolute; inset-inline: 0; top: 0; z-index: 1; overflow: hidden;
+      |  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem;
+      |  color: var(--p-text-muted-color);
+      |}
       |/* How wide the table's own columns are. Under the fixed layout a column with no
       |   width takes an equal share of what the sized ones leave over, which over a
       |   checkbox is far more than a checkbox can use; Prime never meets this, since it
