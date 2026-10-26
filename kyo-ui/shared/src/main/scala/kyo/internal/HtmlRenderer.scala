@@ -2707,7 +2707,13 @@ private[kyo] object HtmlRenderer:
            |    // so the two transports cannot answer this differently; KeyPolicyTest holds this text against it.
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-scroll-keys]')){
            |      var __sk=e.target,__ed=(/^(${KeyPolicy.jsTagTest(KeyPolicy.editableTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
-           |      var __vc=(/^(${KeyPolicy.jsTagTest(KeyPolicy.verticalConsumerTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __it=__sk.tagName==="INPUT"?(__sk.getAttribute("type")||"").toLowerCase():"";
+           |      var __st=((${KeyPolicy.jsKeyTest(KeyPolicy.arrowStepKeys)})&&/^(${KeyPolicy.jsTagTest(
+              KeyPolicy.arrowSteppingInputTypes
+          )})$$/.test(__it))||((${KeyPolicy.jsKeyTest(KeyPolicy.pageStepKeys)})&&/^(${KeyPolicy.jsTagTest(
+              KeyPolicy.pageSteppingInputTypes
+          )})$$/.test(__it));
+           |      var __vc=(/^(${KeyPolicy.jsTagTest(KeyPolicy.verticalConsumerTags)})$$/.test(__sk.tagName)||__sk.isContentEditable||__st);
            |      var __sa=(/^(${KeyPolicy.jsTagTest(KeyPolicy.spaceActivatedTags)})$$/.test(__sk.tagName));
            |      var __vk=(${KeyPolicy.jsKeyTest(KeyPolicy.verticalScrollKeys)});
            |      var __hk=(${KeyPolicy.jsKeyTest(KeyPolicy.edgeScrollKeys)});

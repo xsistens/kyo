@@ -28,6 +28,22 @@ private[kyo] object KeyPolicy:
       */
     val verticalConsumerTags: Seq[String] = Seq("TEXTAREA", "SELECT")
 
+    /** The vertical arrows, which a stepping input (below) uses to change its value. */
+    val arrowStepKeys: Seq[String] = Seq("ArrowUp", "ArrowDown")
+
+    /** The page keys, which a slider uses to move by a page step. */
+    val pageStepKeys: Seq[String] = Seq("PageUp", "PageDown")
+
+    /** Input types that change their value on the vertical arrows: a number spins, a slider moves, a date or a time steps
+      * the part the caret is in. A single-line text input is not among them (see [[verticalConsumerTags]]), so for these the
+      * arrows belong to the field even inside a navigation region: a table's number cell editor stayed on its first value
+      * whatever the reader pressed.
+      */
+    val arrowSteppingInputTypes: Seq[String] = Seq("number", "range", "date", "time", "datetime-local", "month", "week")
+
+    /** Input types that also move on the page keys: a slider steps by a page. */
+    val pageSteppingInputTypes: Seq[String] = Seq("range")
+
     /** Tags the browser activates on Space by itself, so suppressing Space would take the activation
       * with it. An anchor is deliberately absent: with a link focused, Space scrolls the page.
       */
@@ -62,11 +78,16 @@ private[kyo] object KeyPolicy:
       * Only consulted inside a region that asked for it with `UI.preventScrollKeys`, which is how a
       * component that navigates with the arrows keeps the page still under it. Space is in here for
       * the same reason the arrows are: a list that is one tab stop has no native control to consume
-      * it, so a Space that picks the highlighted row also scrolled the page a screenful.
+      * it, so a Space that picks the highlighted row also scrolled the page a screenful. `inputType` is an `INPUT`'s `type`,
+      * which decides whether the field steps its own value on a vertical key.
       */
-    def preventsPageScroll(key: String, tag: String, contentEditable: Boolean): Boolean =
-        val editable         = contentEditable || editableTags.contains(tag)
-        val verticalConsumer = contentEditable || verticalConsumerTags.contains(tag)
+    def preventsPageScroll(key: String, tag: String, contentEditable: Boolean, inputType: String = ""): Boolean =
+        val editable = contentEditable || editableTags.contains(tag)
+        val steps    = tag == "INPUT" && (
+            (arrowStepKeys.contains(key) && arrowSteppingInputTypes.contains(inputType.toLowerCase)) ||
+                (pageStepKeys.contains(key) && pageSteppingInputTypes.contains(inputType.toLowerCase))
+        )
+        val verticalConsumer = contentEditable || verticalConsumerTags.contains(tag) || steps
         if verticalScrollKeys.contains(key) then !verticalConsumer
         else if edgeScrollKeys.contains(key) then !editable
         else if key == " " then !editable && !spaceActivatedTags.contains(tag)

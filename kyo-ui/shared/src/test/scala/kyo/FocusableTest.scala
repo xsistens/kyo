@@ -828,6 +828,22 @@ class FocusableTest extends UITest:
         }
     }
 
+    "preventScrollKeys keeps the arrows stepping a number field inside the region" in {
+        // A table cell editor is a number field inside the table's navigation region. The arrows are what step its value,
+        // and suppressing them as page scrolls left the field on its first value whatever the reader pressed.
+        // The region navigates with its own keys, as the table does, so a keydown listener is attached at all.
+        withUI(UI.div.preventScrollKeys.onKeyDown((_: KeyboardEvent) => ())(UI.numberInput.id("qty").value("5"))) {
+            for
+                _    <- Browser.click(Selector.id("qty"))
+                _    <- Browser.press(Selector.id("qty"), Key.ArrowUp)
+                _    <- Browser.press(Selector.id("qty"), Key.ArrowUp)
+                up   <- Browser.eval("document.getElementById('qty').value")
+                _    <- Browser.press(Selector.id("qty"), Key.ArrowDown)
+                down <- Browser.eval("document.getElementById('qty').value")
+            yield assert(up == "7" && down == "6", s"the arrows must step the field: up to '$up', down to '$down'")
+        }
+    }
+
     "preventScrollKeys keeps caret line movement in a textarea inside the region" in {
         // A textarea consumes vertical keys itself (caret line movement), so the region must not suppress them there.
         withUI(UI.div.preventScrollKeys(

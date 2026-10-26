@@ -27,6 +27,19 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
         assert(!KeyPolicy.preventsPageScroll("ArrowDown", "DIV", contentEditable = true))
     }
 
+    "an input that steps its value with the vertical keys keeps them" in {
+        // A number field in a table's navigation region: suppressing the arrows as a page scroll left it on its first value.
+        for t <- Seq("number", "range", "date", "time", "datetime-local", "month", "week") do
+            assert(!KeyPolicy.preventsPageScroll("ArrowUp", "INPUT", contentEditable = false, inputType = t), t)
+            assert(!KeyPolicy.preventsPageScroll("ArrowDown", "INPUT", contentEditable = false, inputType = t), t)
+        end for
+        assert(KeyPolicy.preventsPageScroll("ArrowDown", "INPUT", contentEditable = false, inputType = "text"))
+        assert(KeyPolicy.preventsPageScroll("PageDown", "INPUT", contentEditable = false, inputType = "number"))
+        // A slider moves by a page step on PageUp and PageDown too.
+        assert(!KeyPolicy.preventsPageScroll("PageDown", "INPUT", contentEditable = false, inputType = "range"))
+        assert(!KeyPolicy.preventsPageScroll("PageUp", "INPUT", contentEditable = false, inputType = "range"))
+    }
+
     "a single-line input stays suppressed for the vertical keys, which is the combobox case" in {
         assert(KeyPolicy.preventsPageScroll("ArrowDown", "INPUT", contentEditable = false))
     }
@@ -158,8 +171,14 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
     }
 
     "the server-push client tests exactly the tags the policy names" in {
-        val expected = List(KeyPolicy.editableTags, KeyPolicy.verticalConsumerTags, KeyPolicy.spaceActivatedTags)
-        val missing  = expected.filterNot(tags => clientJs.contains(KeyPolicy.jsTagTest(tags)))
+        val expected = List(
+            KeyPolicy.editableTags,
+            KeyPolicy.verticalConsumerTags,
+            KeyPolicy.spaceActivatedTags,
+            KeyPolicy.arrowSteppingInputTypes,
+            KeyPolicy.pageSteppingInputTypes
+        )
+        val missing = expected.filterNot(tags => clientJs.contains(KeyPolicy.jsTagTest(tags)))
         assert(missing.isEmpty, s"the client script does not carry these tag sets verbatim: $missing")
     }
 
@@ -172,10 +191,11 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
         val until = clientJs.indexOf("__spk)e.preventDefault();", from)
         assert(from >= 0 && until > from, "the scroll block is no longer recognizable in the client script")
         val block     = clientJs.substring(from, until)
-        val generated = List(KeyPolicy.verticalScrollKeys, KeyPolicy.edgeScrollKeys).map(KeyPolicy.jsKeyTest)
-        val stripped  = generated.foldLeft(block)((js, gen) => js.replace(gen, ""))
-        val governed  = (KeyPolicy.verticalScrollKeys ++ KeyPolicy.edgeScrollKeys).distinct
-        val leaked    = governed.filter(k => stripped.contains(s"""e.key==="$k""""))
+        val generated = List(KeyPolicy.verticalScrollKeys, KeyPolicy.edgeScrollKeys, KeyPolicy.arrowStepKeys, KeyPolicy.pageStepKeys)
+            .map(KeyPolicy.jsKeyTest)
+        val stripped = generated.foldLeft(block)((js, gen) => js.replace(gen, ""))
+        val governed = (KeyPolicy.verticalScrollKeys ++ KeyPolicy.edgeScrollKeys).distinct
+        val leaked   = governed.filter(k => stripped.contains(s"""e.key==="$k""""))
         assert(leaked.isEmpty, s"these keys are still named by hand in the scroll block: $leaked")
     }
 

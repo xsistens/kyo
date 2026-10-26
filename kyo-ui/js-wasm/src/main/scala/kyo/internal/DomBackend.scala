@@ -2551,7 +2551,8 @@ private[kyo] object DomBackend:
         KeyPolicy.preventsPageScroll(
             key = key,
             tag = target.tagName,
-            contentEditable = !scalajs.js.isUndefined(value) && value != null && value.asInstanceOf[Boolean]
+            contentEditable = !scalajs.js.isUndefined(value) && value != null && value.asInstanceOf[Boolean],
+            inputType = Maybe(target.getAttribute("type")).getOrElse("")
         )
     end scrollKeyPrevented
 
