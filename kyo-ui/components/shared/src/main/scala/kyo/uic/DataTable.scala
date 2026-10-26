@@ -5490,13 +5490,16 @@ final case class DataTable[A] private (
         // click from cell to cell used to open the next and drop what was typed into the
         // last, without asking anything and without saying so. A refusal keeps the reader
         // in the value they are fixing, the same as Enter and Tab do.
+        // A click inside the cell that is already open (a number field's spinner, a click that places the caret) is no
+        // way of opening it: seeding it again from the row threw away what the reader had typed or stepped.
         openCellNow(edit).map {
-            case Present(open) if open != cell =>
+            case Present(open) if open == cell => (): UI.Action
+            case Present(open)                 =>
                 commitOpen(open, nav, edit).map { ok =>
                     val next: UI.Action = if ok then move else ()
                     next
                 }
-            case _ => move
+            case Absent => move
         }
     end beginCellEditing
 
