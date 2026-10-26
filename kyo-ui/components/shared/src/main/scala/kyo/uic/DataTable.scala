@@ -560,8 +560,8 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   *   - `Column.rowSpan(key)`: the other way to show a key, where that column's cells merge
   *     across their run, clipped by the merged columns left of them and by the
   *     innermost group, so two spans can never cross.
-  *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table (`loadingMask(false)`
-  *     leaves it off). While it is set the body already has the shape of the page that is
+  *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table (`loadingMask` switches
+  *     it; loading content of the caller's own leaves it off unless asked for). While it is set the body already has the shape of the page that is
   *     coming: the rows it holds, cut to the page size, and the place of the rest, so it neither
   *     says "No records found" for a page nobody has answered yet nor grows or shrinks when the
   *     page lands. The place is a skeleton per cell, what `loadingContent(...)` puts over it, or
@@ -1367,9 +1367,11 @@ final case class DataTable[A] private (
     def loading(v: Boolean | Signal[Boolean]): DataTable[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Whether `loading` lays Prime's mask over the table: the dimming `.p-datatable-mask` with its
-      * spinner, which also takes every click while it is up. On by default, as in Prime. Off, the
-      * table still holds the place of the rows that are coming (see [[loadingContent]]) and still says
-      * `aria-busy`, so the wait stays visible and announced, only nothing is dimmed or blocked: for a
+      * spinner, which also takes every click while it is up. Unset, it is on over the skeletons, as in
+      * Prime, and off once [[loadingContent]] or [[loadingRow]] is set, since content of your own
+      * already says how the wait looks and the spinner would sit on top of it. Off, the table still
+      * holds the place of the rows that are coming and still says `aria-busy`, so the wait stays
+      * visible to the reader and to assistive technology, only nothing is dimmed or blocked: for a
       * table whose readers keep working while it loads, or one whose loading content they use. A
       * `Signal` switches the mask alone, as a region of its own beside the table.
       */
@@ -3499,10 +3501,12 @@ final case class DataTable[A] private (
         // dim the rows that did, on every scroll that reaches past the buffer.
         if windowOn then Nil
         else
-            // Up while the rows load AND the mask is wanted (`loadingMask`, on unless switched off). Two
-            // constants decide it here; a signal on either side makes it one region of its own.
+            // Up while the rows load AND the mask is wanted: `loadingMask` when it is set, else on over
+            // the skeletons and off over loading content of the caller's own, which already says how the
+            // wait looks and would have the spinner on top of it. Two constants decide it here; a signal
+            // on either side makes it one region of its own.
             val loading = loadingV.fold(Reading.Fixed(false))(Reading.of(_))
-            val wanted  = loadingMaskV.fold(Reading.Fixed(true))(Reading.of(_))
+            val wanted  = loadingMaskV.fold(Reading.Fixed(loadingContentV.isEmpty))(Reading.of(_))
             loading.and(wanted).map(_ && _) match
                 case Reading.Fixed(true)  => List(maskDiv)
                 case Reading.Fixed(false) => Nil
