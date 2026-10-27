@@ -25,7 +25,7 @@ import kyo.UI.*
   * Shift-Tab and the pointer always work.
   */
 final case class InputOtp private (
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     lengthV: Int = 4,
     integerOnlyFlag: Boolean = false,
     maskFlag: Boolean = false,
@@ -49,13 +49,12 @@ final case class InputOtp private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Sets a constant code. */
-    def value(v: String): InputOtp = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds the whole code two-way to `ref`: cell edits write their character
-      * into the right position, ref changes re-render every cell.
+    /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
+      * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
+      * only reports the code it asks for through [[onChange]]; without it, a card says the reader cannot change it. A
+      * constant is the starting code. `ref.readOnly` opts a ref out.
       */
-    def value(ref: SignalRef[String]): InputOtp = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    def value(v: String | Signal[String]): InputOtp = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** Number of cells (Prime default 4). */
     def length(n: Int): InputOtp = copy(lengthV = math.max(1, n))
@@ -108,8 +107,8 @@ final case class InputOtp private (
 
     private def renderResolved(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        valueBinding match
-            case Present(Input.Value.Ref(ref)) if interactive =>
+        val field    = valueBinding match
+            case Present(ReactiveValue.Dyn(sig)) if interactive =>
                 // Auto-advance needs the session Commands and stable per-cell ids: mint
                 // them ONCE in a mounted effect, then the reactive body reads the same
                 // ids across re-renders. Golden/SSG projection = the un-advancing
@@ -118,45 +117,35 @@ final case class InputOtp private (
                     for
                         cmds <- UI.commands
                         ids  <- Kyo.foreach(0 until lengthV)(_ => cmds.freshId)
-                    yield wired(ref, ids.toList, id => cmds.focusId(id))
-                }.placeholder(validity.follow(ref.render(v => body(v, Present(ref), Absent, _ => (), validity))))
-            case Present(Input.Value.Ref(ref)) => validity.follow(ref.render(v => body(v, Present(ref), Absent, _ => (), validity)))
-            case Present(Input.Value.Const(v)) => validity.follow(body(v, Absent, Absent, _ => (), validity))
-            case Absent                        => validity.follow(body("", Absent, Absent, _ => (), validity))
-        end match
+                    yield wired(sig, ids.toList, id => cmds.focusId(id))
+                }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), validity))))
+            case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
+            case Present(ReactiveValue.Const(v)) => validity.follow(body(v, Absent, _ => (), validity))
+            case Absent                          => validity.follow(body("", Absent, _ => (), validity))
+        val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
+        if unheard then fragment(field, KeyDiagnostics.unheard("InputOtp", "value", "onChange")) else field
     end renderResolved
 
     /** The advancing subscription the mount publishes: the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
-    private[uic] def wired(ref: SignalRef[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
+    private[uic] def wired(code: Signal[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(ref.render(v => body(v, Present(ref), Present(cellIds), focus, validity)))
+        validity.follow(code.render(v => body(v, Present(cellIds), focus, validity)))
 
-    /** Writes cell i's new content into the bound code: the LAST accepted
-      * character wins (a second keystroke in a full cell replaces it), an empty
-      * edit clears the position; gaps stay as spaces, trailing gaps trimmed.
+    /** Writes cell i's new content into the bound code (or, one-way, reports the code it asks for): the LAST accepted
+      * character wins (a second keystroke in a full cell replaces it), an empty edit clears the position; gaps stay as
+      * spaces, trailing gaps trimmed.
       */
-    private def writeCell(i: Int, raw: String, current: String, ref: Maybe[SignalRef[String]])(using Frame): UI.Action =
+    private def writeCell(i: Int, raw: String, current: String)(using Frame): UI.Action =
         val accepted = (if integerOnlyFlag then raw.filter(_.isDigit) else raw).takeRight(1)
         val padded   = current.padTo(lengthV, ' ').take(lengthV)
         val next     = padded.updated(i, if accepted.isEmpty then ' ' else accepted.head).mkString.reverse.dropWhile(_ == ' ').reverse
-        val write: UI.Action = ref match
-            case Present(r) => r.set(next)
-            case Absent     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
+        ReactiveValue.change(valueBinding, next, onChangeF)
     end writeCell
 
     private def body(
         current: String,
-        ref: Maybe[SignalRef[String]],
         cellIds: Maybe[List[String]],
         focus: String => UI.Action,
         validity: FieldValidity
@@ -185,17 +174,13 @@ final case class InputOtp private (
                     val advance: UI.Action = cellIds match
                         case Present(ids) if accepted.nonEmpty && i + 1 < lengthV => focus(ids(i + 1))
                         case _                                                    => ()
-                    writeCell(i, s, current, ref).andThen(advance)
+                    writeCell(i, s, current).andThen(advance)
                 }
                 onBlurF.foreach { f =>
                     // A cell's native blur carries only its OWN character, so the full
-                    // code is read from the bound ref instead (the fallback covers the
-                    // unbound/const projection).
-                    cell = cell.onBlur { _ =>
-                        ref match
-                            case Present(r) => r.use(f)
-                            case Absent     => f(current)
-                    }
+                    // code is read from the binding instead (the fallback covers the
+                    // unbound projection).
+                    cell = cell.onBlur(_ => valueBinding.fold(f(current))(_.current.map(f)))
                 }
             end if
             cell.render

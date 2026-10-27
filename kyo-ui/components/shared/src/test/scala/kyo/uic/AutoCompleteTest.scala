@@ -13,6 +13,10 @@ import kyo.UI.*
   */
 class AutoCompleteTest extends UicTest:
 
+    /** Whether a field's binding is the constant `v`, which is how a one-way value reaches the element. */
+    private def shows[V](bound: Maybe[UI.Bound[V]], v: V)(using CanEqual[V, V]): Boolean =
+        bound.exists { case UI.Bound.Const(c) => c == v; case _ => false }
+
     private val cities = List("Amsterdam", "Berlin", "Cairo")
 
     private def field(using Frame) =
@@ -271,6 +275,78 @@ class AutoCompleteTest extends UicTest:
         suggestions(people.filter(uic.Filter.all), "zzz").map(s =>
             assert(s == Chunk("Ada Lovelace", "Grace Hopper", "Alan Turing"), s"$s")
         )
+
+    "a text bound one way is shown, typing is reported without being written, and a clear reports to onChange" in {
+        for
+            openRef <- Signal.initRef(false)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            held    <- Signal.initRef("Ber")
+            typed   <- Signal.initRef(List.empty[String])
+            changed <- Signal.initRef(List.empty[String])
+            ui = field.value(held.readOnly).showClear(true)
+                .onInput(v => typed.updateAndGet(_ :+ v).unit)
+                .onChange(v => changed.updateAndGet(_ :+ v).unit)
+                .wired(openRef, hi, all, Present("ac"))
+            input <- elementWithClass(ui, "p-autocomplete-input")
+            clear <- elementWithClass(ui, "p-autocomplete-clear-icon")
+            _     <- handled(input match
+                case t: UI.Ast.TextInput => t.onInput.getOrElse(throw new AssertionError("no input handler"))("Berl")
+                case other               => throw new AssertionError(s"not a text field: $other"))
+            _ <- click(clear)
+            h <- held.get
+            t <- typed.get
+            c <- changed.get
+        yield
+            val shown = input match
+                case t: UI.Ast.TextInput => t.value
+                case _                   => Absent
+            assert(shows(shown, "Ber"), s"shows the signal: $shown")
+            assert(t == List("Berl") && c == List("") && h == "Ber", s"typed $t, changed $c, held $h")
+        end for
+    }
+
+    "a text a ref holds is cleared, and the clear reaches onChange too" in {
+        for
+            openRef <- Signal.initRef(false)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            held    <- Signal.initRef("Ber")
+            changed <- Signal.initRef(List.empty[(String, String)])
+            ui = field.value(held).showClear(true)
+                .onChange(v => held.get.map(h => changed.updateAndGet(_ :+ (v, h)).unit))
+                .wired(openRef, hi, all, Present("ac"))
+            clear <- elementWithClass(ui, "p-autocomplete-clear-icon")
+            _     <- click(clear)
+            c     <- changed.get
+        yield assert(c == List(("", "")), s"reported, held: $c")
+    }
+
+    "a text bound one way names each edit that reaches nobody: typing, a pick, a clear" in {
+        def card(c: uic.AutoComplete[String]): String < Sync =
+            elementsWithClass(c.render, "p-uic-key-error").map(_.map(textOf).mkString)
+        for
+            held      <- Signal.initRef("a")
+            deaf      <- card(field.value(held.readOnly).showClear(true))
+            typing    <- card(field.value(held.readOnly).onInput(_ => ()))
+            clearing  <- card(field.value(held.readOnly).showClear(true).onInput(_ => ()).onSelect(_ => ()))
+            committed <- card(field.value(held.readOnly).onChange(_ => ()))
+            heard     <- card(field.value(held.readOnly).showClear(true).onInput(_ => ()).onChange(_ => ()))
+            picked    <- card(field.value(held.readOnly).onInput(_ => ()).onSelect(_ => ()))
+            constant  <- card(field.value("a"))
+            twoWay    <- card(field.value(held))
+            ro        <- card(field.value(held.readOnly).readonly(true))
+        yield
+            assert(!typing.contains("onInput") && typing.contains("a pick"), s"a pick reaches nobody: $typing")
+            assert(deaf.contains("onInput") && deaf.contains("onChange or onSelect") && deaf.contains("a clear"), s"nothing: $deaf")
+            assert(!clearing.contains("a pick") && clearing.contains("a clear"), s"a clear reaches nobody: $clearing")
+            assert(committed.contains("typing") && !committed.contains("a pick"), s"typing reaches nobody: $committed")
+            assert(
+                heard.isEmpty && picked.isEmpty && constant.isEmpty && twoWay.isEmpty && ro.isEmpty,
+                s"every edit is heard, the text stays, or nobody can edit: $heard $picked $constant $twoWay $ro"
+            )
+        end for
+    }
 
 end AutoCompleteTest
 

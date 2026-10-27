@@ -64,6 +64,17 @@ package object uic:
                 labels
             )
         end unknown
+
+        /** The card for a value a reader edits, bound one way with nobody to hear the edit: every change is painted away
+          * again. `setter` names the binding, `events` the events that would hear it.
+          */
+        def unheard(component: String, setter: String, events: String)(using Frame): UI =
+            card(
+                component,
+                s"$setter is bound one way and nothing hears a change, so the reader cannot change it; add $events, or bind a SignalRef",
+                Nil
+            )
+        end unheard
     end KeyDiagnostics
 
     /** Package-internal parsers from CSS value strings into kyo's typed `Style`

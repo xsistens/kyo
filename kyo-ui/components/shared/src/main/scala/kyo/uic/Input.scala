@@ -18,12 +18,14 @@ end InputType
   * InputText: the component IS the bare `<input class="p-inputtext">`, no
   * wrapper element). Composes the kyo `<input>` element, so two-way binding
   * (`value(SignalRef)` → `Bound.Ref`), `onInput`/`onChange`, and the
-  * caret-preserving morph path are all inherited from kyo-ui, not rebuilt.
+  * caret-preserving morph path are all inherited from kyo-ui, not rebuilt. Any
+  * other `Signal[String]` binds one way: the field shows it, and an edit only
+  * reports through `onInput`/`onChange`.
   * Validation is Prime's `.p-invalid` model: `invalid(Boolean)` plus the
   * optional `invalidMessage(String)` row below the field.
   */
 final case class Input private (
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[BoolValue] = Absent,
@@ -47,7 +49,8 @@ final case class Input private (
     inputMaskV: Maybe[String] = Absent,
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
-    focusAutoFlag: Boolean = false
+    focusAutoFlag: Boolean = false,
+    unheardAsV: (String, String) = ("Input", "onInput or onChange")
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Input
 
@@ -55,6 +58,11 @@ final case class Input private (
       * state classes (`p-filled`) onto the field they wrap.
       */
     private[uic] def extraClass(cls: String): Input = copy(extraClassesV = extraClassesV :+ cls)
+
+    /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose
+      * own events are what hear it ([[InputMask]]).
+      */
+    private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = (component, events))
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
@@ -74,11 +82,12 @@ final case class Input private (
       */
     def focusAuto(v: Boolean): Input = copy(focusAutoFlag = v)
 
-    /** Sets a constant value. */
-    def value(v: String): Input = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds two-way to `ref`: edits write back into the ref, ref changes update the input. */
-    def value(ref: SignalRef[String]): Input = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal
+      * binds ONE-WAY: the field shows it, and an edit writes nothing and only reports through [[onInput]] and
+      * [[onChange]], so the app writes its own state and the field follows; with neither, a card says the reader cannot
+      * change it. A constant is the starting text, which the reader edits freely. `ref.readOnly` opts a ref out.
+      */
+    def value(v: String | Signal[String]): Input = copy(valueBinding = Present(ReactiveValue(v)))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = copy(placeholderText = v)
 
@@ -152,21 +161,63 @@ final case class Input private (
     def inputMask(mask: String): Input = copy(inputMaskV = Present(mask))
 
     private[uic] def render(using Frame): UI =
-        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field: UI = typeV match
+        val validity                        = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        def field(shown: Maybe[String]): UI = typeV match
             case InputType.Text =>
-                buildField(withConstraints(input), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(withConstraints(input), shown, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Email =>
-                buildField(withConstraints(emailInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(
+                    withConstraints(emailInput),
+                    shown,
+                    _.placeholder(_),
+                    _.onInput(_),
+                    _.onChange(_),
+                    (bb, e) => bb.onBlur(e),
+                    validity
+                )
             case InputType.Number =>
-                buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(numberInput, shown, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Password =>
-                buildField(withConstraints(passwordInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(
+                    withConstraints(passwordInput),
+                    shown,
+                    _.placeholder(_),
+                    _.onInput(_),
+                    _.onChange(_),
+                    (bb, e) => bb.onBlur(e),
+                    validity
+                )
             case InputType.Tel =>
-                buildField(withConstraints(telInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(
+                    withConstraints(telInput),
+                    shown,
+                    _.placeholder(_),
+                    _.onInput(_),
+                    _.onChange(_),
+                    (bb, e) => bb.onBlur(e),
+                    validity
+                )
             case InputType.URL =>
-                buildField(withConstraints(urlInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
-        validity.follow(field)
+                buildField(
+                    withConstraints(urlInput),
+                    shown,
+                    _.placeholder(_),
+                    _.onInput(_),
+                    _.onChange(_),
+                    (bb, e) => bb.onBlur(e),
+                    validity
+                )
+        // A two-way ref is kyo-ui's own binding; a one-way signal re-renders the field, and the morph leaves the focused
+        // field's text alone, so the caret survives the owner writing back what the reader typed.
+        val built = valueBinding match
+            case Present(ReactiveVariable(_))    => field(Absent)
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => field(Present(v)))
+            case Present(ReactiveValue.Const(v)) => field(Present(v))
+            case Absent                          => field(Absent)
+        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
+            !readonlyFlag.constTrue && !disabledFlag.constTrue
+        if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
+        else validity.follow(built)
     end render
 
     /** Applies the shared attribute chain to a concrete kyo text-input factory. The
@@ -179,6 +230,7 @@ final case class Input private (
       */
     private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
+        shown: Maybe[String],
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
@@ -198,9 +250,8 @@ final case class Input private (
         b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-inputtext-fluid")
         valueBinding match
-            case Present(Input.Value.Const(v)) => b = b.value(v)
-            case Present(Input.Value.Ref(r))   => b = b.value(r)
-            case Absent                        => ()
+            case Present(ReactiveVariable(r)) => b = b.value(r)
+            case _                            => shown.foreach(v => b = b.value(v))
         end match
         // A constant placeholder joins the attribute chain via the concrete factory's
         // String setter; a reactive one uses kyo-ui's placeholder patch channel (in-place
@@ -225,17 +276,12 @@ final case class Input private (
             case Absent                      => b
         b = onInputF.map(f => setOnInput(b, f)).getOrElse(b)
         b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
-        // onBlur carries no payload, so the current value is read from the bound ref
+        // onBlur carries no payload, so the current value is read from the binding
         // and the prepared effect is handed to the concrete factory's onBlur (passed
         // in like onInput/onChange, since neither is on the TextInput bound).
         b = onBlurF match
-            case Present(f) =>
-                val eff = valueBinding match
-                    case Present(Input.Value.Ref(r))   => r.use(f)
-                    case Present(Input.Value.Const(v)) => f(v)
-                    case Absent                        => f("")
-                setOnBlur(b, eff)
-            case Absent => b
+            case Present(f) => setOnBlur(b, valueBinding.fold(f(""))(_.current.map(f)))
+            case Absent     => b
         b
     end buildField
 
@@ -266,12 +312,4 @@ object Input:
             case "int"     => UI.InputFilter.Digits
             case "decimal" => UI.InputFilter.Decimal
             case chars     => UI.InputFilter.Allowed(chars)
-
-    /** Const-or-ref carrier for the pending `value`. kyo's `UI.Ast.Bound` is the
-      * AST-side equivalent, but its cases are only constructed via the element
-      * setters, so the builder keeps its own until render time.
-      */
-    private[uic] enum Value:
-        case Const(v: String)
-        case Ref(ref: SignalRef[String])
 end Input

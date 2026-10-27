@@ -13,13 +13,13 @@ import kyo.UI.*
   * The label follows Prime's semantics: `onLabel`/`offLabel` default to
   * "Yes"/"No"; when BOTH are cleared the label span renders a non-breaking
   * space so the content box keeps its height (Prime renders `\u00A0`).
-  * `checked(SignalRef)` binds two-way exactly like CheckBox: clicks write the
-  * toggled value back into the ref before firing the user `onChange`. It is a
+  * `checked` binds exactly like CheckBox: a `SignalRef` two-way (a click writes the
+  * toggled value back before firing `onChange`), anything else one way. It is a
   * [[BooleanFormControl]] for the same reason, so `uic.ToggleButton().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   */
 final case class ToggleButton private (
-    checkedBinding: Maybe[ToggleButton.Checked] = Absent,
+    checkedBinding: Maybe[BoolValue] = Absent,
     onLabelV: Maybe[TextValue] = Present(TextValue.Const("Yes")),
     offLabelV: Maybe[TextValue] = Present(TextValue.Const("No")),
     onIconV: Maybe[IconGlyph] = Absent,
@@ -64,11 +64,12 @@ final case class ToggleButton private (
       */
     private[uic] def content(ui: UI): ToggleButton = copy(contentV = Present(ui))
 
-    /** Sets a constant checked state. */
-    def checked(v: Boolean): ToggleButton = copy(checkedBinding = Present(ToggleButton.Checked.Const(v)))
-
-    /** Binds two-way to `ref`: clicks write the toggled value back, ref changes re-render. */
-    def checked(ref: SignalRef[Boolean]): ToggleButton = copy(checkedBinding = Present(ToggleButton.Checked.Ref(ref)))
+    /** The checked state. A `SignalRef` binds TWO-WAY: a click writes the toggled value, and its changes re-render.
+      * Any other signal, or a constant, binds ONE-WAY: the button shows it, and a click writes nothing and only
+      * reports through [[onChange]], so the app writes its own state and the button follows. `ref.readOnly` opts a
+      * ref out. With no [[onChange]], a card says the reader cannot change it.
+      */
+    def checked(v: Boolean | Signal[Boolean]): ToggleButton = copy(checkedBinding = Present(ReactiveValue(v)))
 
     /** Label while checked (Prime default "Yes"). A `Signal[String]` re-renders it in place on emission.
       */
@@ -120,22 +121,17 @@ final case class ToggleButton private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(checkedBinding match
-            case Present(ToggleButton.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
-            case Present(ToggleButton.Checked.Const(v)) => body(v, onChangeF, validity)
-            case Absent                                 => body(false, onChangeF, validity))
+        // A click is wired only where it reaches somebody: a two-way binding, or onChange.
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
+            else Absent
+        val field = validity.follow(checkedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, toggle, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, toggle, validity)
+            case Absent                          => body(false, toggle, validity))
+        if checkedBinding.isEmpty || readonlyFlag || disabledFlag || toggle.nonEmpty then field
+        else fragment(field, KeyDiagnostics.unheard("ToggleButton", "checked", "onChange"))
     end render
-
-    /** Two-way handler: write the toggled value into `ref`, then run the user callback. */
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
-        nb =>
-            onChangeF match
-                case Present(f) =>
-                    for
-                        _ <- ref.set(nb)
-                        r <- f(nb)
-                    yield r
-                case Absent => ref.set(nb)
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
@@ -174,10 +170,7 @@ final case class ToggleButton private (
         // Blur fires even without a toggle: the validation layer's Blur trigger. Reads the
         // ref LIVE (the CheckBox shape), so it reports the state at blur time.
         onBlurF.foreach { f =>
-            el = el.onBlur(checkedBinding match
-                case Present(ToggleButton.Checked.Ref(r))   => r.use(f)
-                case Present(ToggleButton.Checked.Const(v)) => f(v)
-                case Absent                                 => f(false))
+            el = el.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
         }
 
         val contentChildren: List[UI] = contentV match
@@ -203,9 +196,4 @@ object ToggleButton:
       * the group's one tab stop, and the group's key handler for moving within it.
       */
     final private[uic] case class RadioOption(tabbable: Boolean, onKey: UI.KeyboardEvent => UI.Action)
-
-    /** Const-or-ref carrier for the pending `checked` state (the CheckBox pattern). */
-    private[uic] enum Checked:
-        case Const(v: Boolean)
-        case Ref(ref: SignalRef[Boolean])
 end ToggleButton
