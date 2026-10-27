@@ -84,6 +84,20 @@ private[uic] object ReactiveValue:
         write.andThen(report.fold[UI.Action](())(_(next)))
     end change
 
+    /** A reader's change that is a step from the value the slot holds (a sort press, a toggle in a set): a two-way binding
+      * steps its ref atomically, a one-way one steps the value it shows, and `report` hears the result either way.
+      */
+    def update[A](slot: Maybe[ReactiveValue[A]], step: A => A, report: Maybe[A => UI.Action])(using Frame): UI.Action =
+        slot match
+            case Absent         => ()
+            case Present(bound) =>
+                val next: A < Sync = bound match
+                    case ReactiveVariable(ref)  => ref.updateAndGet(step)
+                    case ReactiveValue.Dyn(sig) => sig.current.map(step)
+                    case ReactiveValue.Const(a) => step(a)
+                next.map(v => report.fold[UI.Action](())(_(v)))
+    end update
+
     /** Whether a reader's change to `slot` reaches anybody: a two-way binding, or a `report` to hand it to. A slot bound one
       * way with nobody to report to paints the change away on the next render, which is what the cards say.
       */

@@ -36,6 +36,22 @@ class TreeTableTest extends UicTest:
             assert(afterSpace.head.direction != afterEnter.head.direction, "Space cycles it, as a second click would")
     }
 
+    "a sort bound one way is reported on a header press and not written, and without onSortChange says so" in {
+        for
+            held <- Signal.initRef(List.empty[uic.SortKey])
+            seen <- Signal.initRef(List.empty[uic.SortKey])
+            ui = table.sort(held.readOnly).onSortChange(seen.set).render
+            header <- elementWithClass(ui, "p-treetable-sortable-column")
+            _      <- press(header, UI.Keyboard.Enter)
+            h      <- held.get
+            s      <- seen.get
+            deaf   <- elementsWithClass(table.sort(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h.isEmpty && s.map(_.column) == List("Name"), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onSortChange"), s"a sort nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
     "with metaKeySelection a plain click replaces and Ctrl or Cmd toggles" in {
         def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
             el.attrs.onClickEvt match
