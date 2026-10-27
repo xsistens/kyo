@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
   *
   *   - a COMPONENT is a public, concrete, top-level class in package `kyo.uic` that
   *     implements [[Node]]: exactly the set a caller can construct and place;
-  *   - nested types (`Select.State`, `CheckBox.Checked`), companion objects, traits
+  *   - nested types (`Select.State`, `ToggleButton.RadioOption`), companion objects, traits
   *     ([[Node]], [[FormControl]] and its family) and the model carriers that are not
   *     components (`TreeNode`, `ListItem`, `Column`, `MenuItem`, ...) are not counted.
   *

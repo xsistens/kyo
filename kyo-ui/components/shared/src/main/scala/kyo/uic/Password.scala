@@ -24,7 +24,7 @@ import kyo.UI.*
   * empty shows `promptLabel`.
   */
 final case class Password private (
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     toggleMaskFlag: Boolean = false,
     feedbackFlag: Boolean = false,
     promptLabelV: TextValue = TextValue.Const("Enter a password"),
@@ -51,13 +51,12 @@ final case class Password private (
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = Password
 
-    /** Sets a constant value. */
-    def value(v: String): Password = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds two-way to `ref`: edits write back, ref changes update the field
-      * (and the strength meter when `feedback(true)`).
+    /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter
+      * when `feedback(true)`). Any other signal binds ONE-WAY: the field and the meter show it, and an edit writes
+      * nothing and only reports through [[onInput]] and [[onChange]]; with neither, a card says the reader cannot change
+      * it. A constant is the starting text. `ref.readOnly` opts a ref out.
       */
-    def value(ref: SignalRef[String]): Password = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    def value(v: String | Signal[String]): Password = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
     def toggleMask(v: Boolean): Password = copy(toggleMaskFlag = v)
@@ -133,11 +132,16 @@ final case class Password private (
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        if !toggleMaskFlag then validated(withValue(Absent, _))
-        else
-            UI.mounted {
-                Signal.initRef(false).map(r => wired(r))
-            }.placeholder(validated(withValue(Absent, _)))
+        val field =
+            if !toggleMaskFlag then validated(withValue(Absent, _))
+            else
+                UI.mounted {
+                    Signal.initRef(false).map(r => wired(r))
+                }.placeholder(validated(withValue(Absent, _)))
+        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputSF.orElse(onChangeSF)) &&
+            !readonlyFlag.constTrue && !disabledFlag
+        if unheard then fragment(field, KeyDiagnostics.unheard("Password", "value", "onInput or onChange")) else field
+    end render
 
     /** The subscription tree the mount publishes (golden-test seam): the internal
       * reveal state driving the password/text type switch.
@@ -151,15 +155,16 @@ final case class Password private (
         validity.follow(build(validity))
 
     /** Resolves the bound value: the meter needs the CURRENT text, so with
-      * `feedback(true)` the body renders under `ref.render`; without feedback the
-      * ref binds directly (no re-render per keystroke).
+      * `feedback(true)` the body renders under the signal; without feedback a
+      * two-way ref binds directly (no re-render per keystroke), and a one-way
+      * signal re-renders the field with what it shows.
       */
     private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(Input.Value.Ref(ref)) if feedbackFlag =>
-                ref.render(v => body(v, rev, validity))
-            case Present(Input.Value.Const(v)) => body(v, rev, validity)
-            case _                             => body("", rev, validity)
+            case Present(ReactiveVariable(_)) if !feedbackFlag => body("", rev, validity)
+            case Present(ReactiveValue.Dyn(sig))               => sig.render(v => body(v, rev, validity))
+            case Present(ReactiveValue.Const(v))               => body(v, rev, validity)
+            case Absent                                        => body("", rev, validity)
 
     private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         val revealed = rev.exists(_._2)
@@ -173,14 +178,14 @@ final case class Password private (
             .fluid(fluidFlag)
             .invalid(validity.red)
         valueBinding match
-            case Present(Input.Value.Ref(r)) if !feedbackFlag => in = in.value(r)
-            case Present(_)                                   => in = in.value(current)
-            case Absent                                       => ()
+            case Present(ReactiveVariable(r)) if !feedbackFlag => in = in.value(r)
+            case Present(_)                                    => in = in.value(current)
+            case Absent                                        => ()
         end match
         // Under feedback the field re-renders per keystroke (the meter observes the
         // ref), so the ref writes back through the input handler instead of Bound.Ref.
         valueBinding match
-            case Present(Input.Value.Ref(r)) if feedbackFlag =>
+            case Present(ReactiveVariable(r)) if feedbackFlag =>
                 in = in.onInput { s =>
                     val user: UI.Action = onInputSF match
                         case Present(f) => f(s)

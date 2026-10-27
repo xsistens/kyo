@@ -5,8 +5,7 @@ import kyo.UI.*
 
 /** Const-or-reactive carrier for a component's boolean slot: either a constant `Boolean`
   * or a `Signal[Boolean]` (a mutation-in-flight `disabled`, a reactive `invalid`). The
-  * `Boolean` specialization of the generic [[ReactiveValue]]; sibling of [[TextValue]] and
-  * [[Input.Value]].
+  * `Boolean` specialization of the generic [[ReactiveValue]]; sibling of [[TextValue]].
   *
   * A `Dyn` slot backing a plain boolean ATTRIBUTE (`disabled`) is patched in place through
   * kyo-ui's boolean-attribute channel; `invalid` becomes a class and an attribute channel plus

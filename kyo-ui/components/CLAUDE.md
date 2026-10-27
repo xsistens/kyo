@@ -54,16 +54,17 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
 - **`invalidMessage` is the one deliberate exception.** Its two forms carry different element
   types (`String` always shown vs `Signal[Maybe[String]]` that can clear the row), so
   `String | Signal[Maybe[String]]` would be a heterogeneous union, not this pattern.
-- **The DISPLAY slots follow this; the SELECTION slots do not yet.** `Tabs.selected` was the
-  first converted, `DataTable.selected` the second, and the second is the warning about how this
-  list was drawn up: it was not on it. The family was enumerated from the pickers, and a table's
-  row selection is the same slot wearing different clothes. Assume the list is short, not complete.
-  `Select`/`CascadeSelect`/`SelectButton` were the third: `selection(A | Signal[A])` and
-  `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`).
-  `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below.
-  Still outstanding: `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
-  constant/`SignalRef` overload pair through two private ADTs (`CheckBox.Checked`,
-  `Input.Value`) that duplicate `ReactiveValue` without its one-way case.
+- **The SELECTION and VALUE slots follow it too, and the list of them was never complete.** `Tabs.selected` was the
+  first converted, `DataTable.selected` the second, and the second is the warning about how such a list gets drawn
+  up: it was not on it. The family was enumerated from the pickers, and a table's row selection is the same slot
+  wearing different clothes. `Select`/`CascadeSelect`/`SelectButton` take `selection(A | Signal[A])` and
+  `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`);
+  `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below. The fields'
+  own values came last, through the traits: `BooleanFormControl.checked(Boolean | Signal[Boolean])` and
+  `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`Input`, `TextArea`,
+  `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it. A text
+  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, nothing
+  paints it away, so it gets no card. A boolean field's constant does, because its drawn box never moves.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
   every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
   `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is

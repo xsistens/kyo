@@ -11,14 +11,13 @@ import kyo.UI.*
   * control plus a trailing text span are wrapped in a `<label>` so clicking the
   * text toggles the box natively.
   *
-  * Two-way binding follows Input's const-or-ref carrier idea: `checked(SignalRef)`
-  * renders reactively so the checked class and the native `checked` attribute both
-  * track the current value, and edits write back into the ref before firing the
-  * user `onChange`.
+  * `checked` takes the union every value slot in the module takes: a `SignalRef` binds two-way (a toggle writes it,
+  * then `onChange` hears the new state), any other signal or a constant binds one way (the box shows it, and a toggle
+  * only reports to `onChange`). The checked class and the native `checked` attribute follow the binding either way.
   */
 final case class CheckBox private (
     labelText: Maybe[String] = Absent,
-    checkedBinding: Maybe[CheckBox.Checked] = Absent,
+    checkedBinding: Maybe[BoolValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[Boolean] = Absent,
     requiredFlag: Maybe[Boolean] = Absent,
@@ -56,11 +55,12 @@ final case class CheckBox private (
 
     def text(v: String): CheckBox = copy(labelText = Present(v))
 
-    /** Sets a constant checked state. */
-    def checked(v: Boolean): CheckBox = copy(checkedBinding = Present(CheckBox.Checked.Const(v)))
-
-    /** Binds two-way to `ref`: toggles write back into the ref, ref changes update the box. */
-    def checked(ref: SignalRef[Boolean]): CheckBox = copy(checkedBinding = Present(CheckBox.Checked.Ref(ref)))
+    /** The checked state. A `SignalRef` binds TWO-WAY: a toggle writes it, and its changes update the box. Any other
+      * signal, or a constant, binds ONE-WAY: the box shows it, and a toggle writes nothing and only reports through
+      * [[onChange]], so the app writes its own state and the box follows. `ref.readOnly` opts a ref out. With no
+      * [[onChange]], a card says the reader cannot change it.
+      */
+    def checked(v: Boolean | Signal[Boolean]): CheckBox = copy(checkedBinding = Present(ReactiveValue(v)))
 
     /** Disables the box. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the root's
       * `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
@@ -115,22 +115,18 @@ final case class CheckBox private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(checkedBinding match
-            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
-            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF, validity)
-            case Absent                             => body(false, onChangeF, validity))
+        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange.
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
+            else Absent
+        val field = validity.follow(checkedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, toggle, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, toggle, validity)
+            case Absent                          => body(false, toggle, validity))
+        val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue
+        if checkedBinding.isEmpty || inert || toggle.nonEmpty then field
+        else fragment(field, KeyDiagnostics.unheard("CheckBox", "checked", "onChange"))
     end render
-
-    /** Two-way handler: write the new value into `ref`, then run the user callback. */
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
-        nb =>
-            onChangeF match
-                case Present(f) =>
-                    for
-                        _ <- ref.set(nb)
-                        r <- f(nb)
-                    yield r
-                case Absent => ref.set(nb)
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly    = readonlyFlag.getOrElse(false)
@@ -164,10 +160,7 @@ final case class CheckBox private (
         if !blocked then
             box = onBlurF match
                 case Present(f) =>
-                    box.onBlur(checkedBinding match
-                        case Present(CheckBox.Checked.Ref(r))   => r.use(f)
-                        case Present(CheckBox.Checked.Const(v)) => f(v)
-                        case Absent                             => f(false))
+                    box.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
                 case Absent => box
         end if
 
@@ -201,11 +194,4 @@ end CheckBox
 object CheckBox:
     def apply(): CheckBox             = new CheckBox()
     def apply(text: String): CheckBox = new CheckBox(labelText = Present(text))
-
-    /** Const-or-ref carrier for the pending `checked` state: the boolean analogue of
-      * `Input.Value`. `Ref` establishes two-way binding at render time.
-      */
-    private[uic] enum Checked:
-        case Const(v: Boolean)
-        case Ref(ref: SignalRef[Boolean])
 end CheckBox

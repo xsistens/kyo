@@ -9,12 +9,12 @@ import kyo.UI.*
   * present `div.p-radiobutton-icon` dot that scales in when checked). The kyo
   * `<input type="radio">` provides `name` grouping, the change event, and the
   * disabled state. When `text` is set, the control plus a trailing text span are
-  * wrapped in a `<label>` like [[CheckBox]]. Two-way binding mirrors [[CheckBox]].
+  * wrapped in a `<label>` like [[CheckBox]]. The `checked` binding mirrors [[CheckBox]].
   */
 final case class RadioButton private (
     labelText: Maybe[String] = Absent,
     groupName: Maybe[String] = Absent,
-    checkedBinding: Maybe[CheckBox.Checked] = Absent,
+    checkedBinding: Maybe[BoolValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[Boolean] = Absent,
     requiredFlag: Maybe[Boolean] = Absent,
@@ -43,11 +43,12 @@ final case class RadioButton private (
     /** Radio group name: all buttons sharing a `name` are mutually exclusive. */
     def name(v: String): RadioButton = copy(groupName = Present(v))
 
-    /** Sets a constant checked state. */
-    def checked(v: Boolean): RadioButton = copy(checkedBinding = Present(CheckBox.Checked.Const(v)))
-
-    /** Binds two-way to `ref`: selection writes back into the ref, ref changes update the button. */
-    def checked(ref: SignalRef[Boolean]): RadioButton = copy(checkedBinding = Present(CheckBox.Checked.Ref(ref)))
+    /** The checked state. A `SignalRef` binds TWO-WAY: a selection writes it, and its changes update the button. Any other
+      * signal, or a constant, binds ONE-WAY: the button shows it, and a selection writes nothing and only reports through
+      * [[onChange]], so the app writes its own state and the button follows. `ref.readOnly` opts a ref out. With no
+      * [[onChange]], a card says the reader cannot change it.
+      */
+    def checked(v: Boolean | Signal[Boolean]): RadioButton = copy(checkedBinding = Present(ReactiveValue(v)))
 
     /** Disables the button. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the
       * root's `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
@@ -87,21 +88,18 @@ final case class RadioButton private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(checkedBinding match
-            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
-            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF, validity)
-            case Absent                             => body(false, onChangeF, validity))
+        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange.
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
+            else Absent
+        val field = validity.follow(checkedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, toggle, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, toggle, validity)
+            case Absent                          => body(false, toggle, validity))
+        val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
+        if checkedBinding.isEmpty || inert || toggle.nonEmpty then field
+        else fragment(field, KeyDiagnostics.unheard("RadioButton", "checked", "onChange"))
     end render
-
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
-        nb =>
-            onChangeF match
-                case Present(f) =>
-                    for
-                        _ <- ref.set(nb)
-                        r <- f(nb)
-                    yield r
-                case Absent => ref.set(nb)
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
@@ -126,10 +124,7 @@ final case class RadioButton private (
         if !isReadonly then
             box = onBlurF match
                 case Present(f) =>
-                    box.onBlur(checkedBinding match
-                        case Present(CheckBox.Checked.Ref(r))   => r.use(f)
-                        case Present(CheckBox.Checked.Const(v)) => f(v)
-                        case Absent                             => f(false))
+                    box.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
                 case Absent => box
         end if
 
