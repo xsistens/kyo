@@ -124,7 +124,7 @@ final case class SelectButton[A] private (
         MultiSelectButton(copy(multipleFlag = true, single = Absent, onChangeF = Absent, onPickF = Absent, onBlurF = Absent))
 
     /** Package-internal: the multi-choice half [[MultiSelectButton]] drives. */
-    private[uic] def withMulti(ref: SignalRef[Set[A]]): SelectButton[A]                  = copy(multi = Present(MultiChoice(ref)))
+    private[uic] def withMulti(v: Set[A] | Signal[Set[A]]): SelectButton[A] = copy(multi = Present(MultiChoice(ReactiveValue[Set[A]](v))))
     private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeSetF = Present(Callback.of(f)))
     private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A]   = copy(onBlurSetF = Present(Callback.of(f)))
 
@@ -210,7 +210,7 @@ final case class SelectButton[A] private (
     private def held(using Frame): Reading[List[A]] =
         (single, multi) match
             case (Present(c), _) if !multipleFlag => c.reading.map(_.toList)
-            case (_, Present(c)) if multipleFlag  => Reading.Live(c.ref.map(_.toList))
+            case (_, Present(c)) if multipleFlag  => c.reading.map(_.toList)
             case _                                => Reading.Fixed(Nil)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
@@ -328,7 +328,7 @@ final case class SelectButton[A] private (
             end if
             tb.render
         }
-        el((keyCollisionCard ++ unknownCard(unknown) ++ buttons).map(toChild)*)
+        el((keyCollisionCard ++ unknownCard(unknown) ++ unheardCard ++ buttons).map(toChild)*)
     end body
 
     /** The loud card rendered ahead of the fused buttons when the option keys
@@ -346,6 +346,17 @@ final case class SelectButton[A] private (
             ))
         end if
     end keyCollisionCard
+
+    /** Several choices bound one way that nothing hears: every click is painted away again. */
+    private def unheardCard(using Frame): List[UI] =
+        if !multipleFlag || multi.forall(_.heard(onChangeSetF)) then Nil
+        else
+            List(KeyDiagnostics.card(
+                "SelectButton",
+                "the selection is bound one way and nothing hears a click, so the reader cannot change it; add onChange, or " +
+                    "bind a SignalRef",
+                Nil
+            ))
 
     /** The card naming held options no button carries (see [[KeyDiagnostics.unknown]]). */
     private def unknownCard(unknown: List[A])(using Frame): List[UI] =
@@ -410,9 +421,12 @@ final case class MultiSelectButton[A] private[uic] (private[uic] val group: Sele
     /** Renders matching options disabled. */
     def optionDisabled(f: A => Boolean): MultiSelectButton[A] = on(group.optionDisabled(f))
 
-    /** Binds the set of chosen options two-way. A member no option carries stays in the set while the others toggle. */
+    /** The set of chosen options. A `SignalRef` binds two way; a plain `Signal` or a constant binds one way, and a click
+      * only reports the set it asks for to [[onChange]]. A member no option carries stays in the set while the others
+      * toggle.
+      */
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[A]]): MultiSelectButton[A] = on(group.withMulti(ref))
+    def selection(v: Set[A] | Signal[Set[A]]): MultiSelectButton[A] = on(group.withMulti(v))
 
     /** Fired with the set now held, after a click changed it. */
     def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelectButton[A] = on(group.withChangeSet(f))

@@ -194,6 +194,36 @@ class MultiSelectTest extends UicTest:
     "and types instead, once there is a filter header" in
         after(-1, UI.Keyboard.Char('d'), filter = true).map(at => assert(at == -1))
 
+    private def oneWay(bind: uic.MultiSelect[Fruit] => uic.MultiSelect[Fruit])(using Frame) =
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(-1)
+            query <- Signal.initRef("")
+        yield bind(multi).wired(open, hi, query, Present("ms"))
+
+    // The chosen set lives somewhere else (a route, a parent): the field shows it and hands a pick over.
+    "a selection bound one way is shown, and a pick is reported without being written" in {
+        for
+            held <- Signal.initRef(Set(fruit(2)))
+            seen <- Signal.initRef(Set.empty[Fruit])
+            ui   <- oneWay(_.selection(held.readOnly).onChange(seen.set))
+            rows <- elementsWithClass(ui, "p-multiselect-option")
+            _    <- click(rows(0))
+            h    <- held.get
+            s    <- seen.get
+        yield assert(h == Set(fruit(2)) && s == Set(fruit(0), fruit(2)), s"held $h, reported $s")
+    }
+
+    "a selection bound one way with nothing to hear a pick says so, and a constant one with onChange does not" in {
+        for
+            held  <- Signal.initRef(Set.empty[Fruit])
+            deaf  <- oneWay(_.selection(held.readOnly)).map(elementsWithClass(_, "p-uic-key-error"))
+            heard <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+    }
+
     "the trigger is the combobox, and announces the highlighted option" in {
         for
             (_, _, _, ui) <- panelOf(2)

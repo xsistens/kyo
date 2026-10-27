@@ -155,6 +155,25 @@ class SelectButtonTest extends UicTest:
         yield assert(got.isEmpty)
     }
 
+    "several choices bound one way are shown, and a click is reported without being written" in {
+        for
+            held <- Signal.initRef(Set("Small"))
+            seen <- Signal.initRef(Set.empty[String])
+            ui = uic.SelectButton[String]().options(sizes).multiple.selection(held.readOnly).onChange(seen.set).render
+            os   <- options(ui)
+            _    <- click(os(1))
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(
+                uic.SelectButton[String]().options(sizes).multiple.selection(held.readOnly).render,
+                "p-uic-key-error"
+            )
+        yield
+            assert(h == Set("Small") && s == Set("Small", "Medium"), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
     "several choices stay a group of toggle buttons, each its own tab stop" in {
         for
             value <- Signal.initRef(Set("Small"))

@@ -166,7 +166,7 @@ final case class OrderList[A] private (
             .disabled(disabledFlag)
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
-        selectedRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(r), xs, keyOf)))
+        selectedRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(ReactiveValue[Set[A]](r)), xs, keyOf)))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)

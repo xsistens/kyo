@@ -53,8 +53,9 @@ import scala.annotation.targetName
 final case class TreeSelect[K] private (
     // The roots the body draws, resolved from `nodeSources` by the region that draws them.
     nodeList: List[TreeNode[K]] = Nil,
-    valueRef: Maybe[SignalRef[Set[K]]] = Absent,
-    expandedRefV: Maybe[SignalRef[Set[K]]] = Absent,
+    valueSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    expandedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    onExpandedF: Maybe[Set[K] => UI.Action] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.Single,
     placeholderV: Maybe[TextValue] = Absent,
@@ -111,16 +112,21 @@ final case class TreeSelect[K] private (
       */
     def nodes(ns: TreeNodeLiveEntry[K]*): TreeSelect[K] = copy(nodeSources = nodeSources :+ TreeSelect.NodeSource.Entries(ns.toList))
 
-    /** Binds the set of selected node ids two-way to `ref`: picks write the updated
-      * set back, ref changes reselect the matching nodes.
+    /** The set of selected node ids. A `SignalRef` binds two way: picks write the updated set back, ref changes reselect
+      * the matching nodes. A plain `Signal` or a constant binds one way: the field shows it and a pick only reports the
+      * set it asks for to [[onChange]]; with no [[onChange]] that is reported in a card.
       */
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(valueRef = Present(ref))
+    def selection(v: Set[K] | Signal[Set[K]]): TreeSelect[K] = copy(valueSlot = Present(ReactiveValue[Set[K]](v)))
 
-    /** Binds the expansion set two-way to `ref` (optional; expansion is
-      * component-internal otherwise).
+    /** The expanded node ids of the panel's tree (optional; expansion is component-internal otherwise). A `SignalRef`
+      * binds two way; a plain `Signal` or a constant binds one way, and a toggle only reports the set it asks for to
+      * [[onExpandedChange]], which a one-way binding needs.
       */
-    def expanded(ref: SignalRef[Set[K]]): TreeSelect[K] = copy(expandedRefV = Present(ref))
+    def expanded(v: Set[K] | Signal[Set[K]]): TreeSelect[K] = copy(expandedSlot = Present(ReactiveValue[Set[K]](v)))
+
+    /** Fired with the nodes open after a toggle in the panel, after a two-way [[expanded]] is written. */
+    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(onExpandedF = Present(Callback.of(f)))
 
     /** Says the tree is still arriving: the dropdown icon turns into Prime's spinner, and a selected id no node carries
       * yet is left alone rather than reported in a `.p-uic-key-error` card.
@@ -221,9 +227,9 @@ final case class TreeSelect[K] private (
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
-                exp <- expandedRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(Set.empty[K])
+                exp <- expandedSlot match
+                    case Present(v) => Kyo.lift(v.bound)
+                    case Absent     => Signal.initRef(Set.empty[K]).map(r => r: Set[K] | Signal[Set[K]])
                 hi <- Signal.initRef(-1)
             yield wired(open, exp, hi, base)
         }.placeholder(stat)
@@ -232,14 +238,15 @@ final case class TreeSelect[K] private (
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(
         open: SignalRef[Boolean],
-        exp: SignalRef[Set[K]],
+        exp: Set[K] | Signal[Set[K]],
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(open).and(Reading.Live(exp)).and(Reading.Live(hi))
+        val expV     = ReactiveValue[Set[K]](exp)
+        val panel    = Reading.Live(open).and(Reading.of(expV)).and(Reading.Live(hi))
         panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
-            copy(nodeList = rs).bodyStatic(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase)), ph, ld, validity)
+            copy(nodeList = rs).bodyStatic(sel, e, o, Present(TreeSelect.State(open, expV, hi, h, idBase)), ph, ld, validity)
         }
     end wired
 
@@ -255,7 +262,7 @@ final case class TreeSelect[K] private (
       * never read here.
       */
     private def shown(using Frame): Reading[(Set[K], Boolean, Maybe[String])] =
-        val held: Reading[Set[K]] = valueRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
+        val held: Reading[Set[K]] = valueSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
         held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((sel, ld), ph) =>
             (sel, ld.getOrElse(false), ph)
         }
@@ -300,22 +307,14 @@ final case class TreeSelect[K] private (
                 case Present(s) => if isOpen then s.open.set(false) else openPanel
                 case Absent     => ()
 
-        // Fired by the hosted Tree AFTER its selection write: report the new set
-        // via onChange; Single mode also closes the panel (Prime).
+        // Fired by the hosted Tree after its selection change: Single mode closes the panel (Prime). The new set reaches
+        // onChange through the tree's onSelectionChange, which carries it whether the binding is two-way or one-way.
         def afterPick: UI.Action =
             st match
                 case Present(s) =>
-                    for
-                        _ <- onChangeF match
-                            case Present(g) =>
-                                valueRef match
-                                    case Present(r) => r.get.map(g)
-                                    case Absent     => (): UI.Action
-                            case Absent => (): UI.Action
-                        _ <- selectionModeV match
-                            case SelectionMode.Single | SelectionMode.Radio => s.open.set(false)
-                            case _                                          => (): UI.Action
-                    yield ()
+                    selectionModeV match
+                        case SelectionMode.Single | SelectionMode.Radio => s.open.set(false)
+                        case _                                          => ()
                 case Absent => ()
 
         // === closed trigger ======================================================
@@ -349,10 +348,12 @@ final case class TreeSelect[K] private (
                 st.map { state =>
                     var t = Tree[K]()
                         .rooted(nodeList)
-                        .expanded(state.expRef)
+                        .expanded(state.exp.bound)
                         .selectionMode(selectionModeV)
                         .onItemClick(_ => afterPick)
-                    valueRef.foreach(r => t = t.selection(r))
+                    onExpandedF.foreach(f => t = t.onExpandedChange(f))
+                    valueSlot.foreach(v => t = t.selection(v.bound))
+                    onChangeF.foreach(f => t = t.onSelectionChange(f))
                     t
                 }
 
@@ -446,14 +447,23 @@ final case class TreeSelect[K] private (
             // Focus-loss on the trigger reports the currently bound selection (or the
             // resolved current set when unbound): the validation layer's Blur trigger.
             onBlurF.foreach { f =>
-                el = el.onBlur(valueRef match
-                    case Present(r) => r.use(f)
-                    case Absent     => f(current))
+                el = el.onBlur(valueSlot match
+                    case Present(ReactiveValue.Dyn(sig)) => sig.current.map(f)
+                    case Present(ReactiveValue.Const(c)) => f(c)
+                    case Absent                          => f(current))
             }
         end if
 
         val field = validity.follow(el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
-        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
+        // Bindings made one way that nothing hears: every pick or toggle is painted away again.
+        val unheard =
+            (if valueSlot.isEmpty || ReactiveValue.heard(valueSlot, onChangeF) then Nil
+             else List("selection is bound one way and nothing hears a pick: add onChange, or bind a SignalRef")) ++
+                (if expandedSlot.isEmpty || ReactiveValue.heard(expandedSlot, onExpandedF) then Nil
+                 else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef"))
+        val cards = unknownCard ++
+            (if unheard.isEmpty then Nil else List(KeyDiagnostics.card("TreeSelect", "a binding the reader cannot move", unheard)))
+        if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
 end TreeSelect
 
@@ -465,7 +475,7 @@ object TreeSelect:
       */
     final private[uic] case class State[K](
         open: SignalRef[Boolean],
-        expRef: SignalRef[Set[K]],
+        exp: ReactiveValue[Set[K]],
         hi: SignalRef[Int],
         hiV: Int,
         idBase: String
