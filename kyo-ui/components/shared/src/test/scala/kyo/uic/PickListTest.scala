@@ -280,4 +280,14 @@ class PickListTest extends UicTest:
             )
     }
 
+    "disabled columns say nothing about who hears them, since the reader cannot change them" in {
+        for
+            src <- Signal.initRef(Seq("a"))
+            off <- elementsWithClass(
+                uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(Seq.empty[String]).disabled(true).render,
+                "p-uic-key-error"
+            )
+        yield assert(off.isEmpty, s"nobody can change them: ${off.map(textOf)}")
+    }
+
 end PickListTest

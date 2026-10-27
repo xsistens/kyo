@@ -107,6 +107,7 @@ final case class SelectButton[A] private (
       * click on the chosen one keeps it whatever [[allowEmpty]] says. A `SignalRef` binds two-way. Any other `Signal`, or a
       * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
       * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
+      * With neither event set, a card says the reader cannot change it.
       */
     def selection(v: A | Signal[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ReactiveValue(v))))
 
@@ -347,16 +348,23 @@ final case class SelectButton[A] private (
         end if
     end keyCollisionCard
 
-    /** Several choices bound one way that nothing hears: every click is painted away again. */
+    /** A selection bound one way that nothing hears: every click is painted away again. A disabled group takes no click,
+      * so it has nothing to say.
+      */
     private def unheardCard(using Frame): List[UI] =
-        if !multipleFlag || multi.forall(_.heard(onChangeSetF)) then Nil
+        val heard =
+            if multipleFlag then multi.forall(_.heard(onChangeSetF))
+            else single.forall(_.heard(onChangeF.orElse(onPickF)))
+        if heard || disabledFlag.constTrue then Nil
         else
             List(KeyDiagnostics.card(
                 "SelectButton",
-                "the selection is bound one way and nothing hears a click, so the reader cannot change it; add onChange, or " +
-                    "bind a SignalRef",
+                "the selection is bound one way and nothing hears a click, so the reader cannot change it; add " +
+                    (if multipleFlag then "onChange" else "onChange or onPick") + ", or bind a SignalRef",
                 Nil
             ))
+        end if
+    end unheardCard
 
     /** The card naming held options no button carries (see [[KeyDiagnostics.unknown]]). */
     private def unknownCard(unknown: List[A])(using Frame): List[UI] =

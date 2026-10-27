@@ -279,4 +279,28 @@ class SelectButtonTest extends UicTest:
             assert(held == Size.M)
     }
 
+    "a single choice bound one way that nothing hears says so; onChange, onPick, a ref or disabled keep it quiet" in {
+        def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-key-error")
+        for
+            held     <- Signal.initRef(Size.M)
+            deaf     <- errors(typed.selection(held.readOnly))
+            constant <- errors(typed.selection(Size.M))
+            change   <- errors(typed.selection(held.readOnly).onChange(_ => ()))
+            pick     <- errors(typed.selection(Size.M).onPick(_ => ()))
+            twoWay   <- errors(typed.selection(held))
+            off      <- errors(typed.selection(Size.M).disabled(true))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+        end for
+    }
+
+    "several choices bound one way stay quiet while the group is disabled" in {
+        for
+            held <- Signal.initRef(Set("Small"))
+            off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+        yield assert(off.isEmpty, s"nobody can pick: ${off.map(textOf)}")
+    }
+
 end SelectButtonTest

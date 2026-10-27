@@ -897,6 +897,24 @@ class SelectTest extends UicTest:
         end for
     }
 
+    "a selection bound one way that nothing hears says so; onChange, onPick, a ref or disabled keep it quiet" in {
+        def errors(s: uic.Select[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(s.render, "p-uic-key-error")
+        def base(using Frame)                                            = uic.Select[String]().options(Seq("a", "b"))
+        for
+            held     <- Signal.initRef("a")
+            deaf     <- errors(base.selection(held.readOnly))
+            constant <- errors(base.selection("a"))
+            change   <- errors(base.selection(held.readOnly).onChange(_ => ()))
+            pick     <- errors(base.selection("a").onPick(_ => ()))
+            twoWay   <- errors(base.selection(held))
+            off      <- errors(base.selection("a").disabled(true))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+        end for
+    }
+
 end SelectTest
 
 object SelectTest:

@@ -300,4 +300,21 @@ class CascadeSelectTest extends UicTest:
         end for
     }
 
+    "a selection bound one way that nothing hears says so; onChange, onPick, a ref or disabled keep it quiet" in {
+        def errors(c: uic.CascadeSelect[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(c.render, "p-uic-key-error")
+        for
+            held     <- Signal.initRef("Bern")
+            deaf     <- errors(cascade.selection(held.readOnly))
+            constant <- errors(cascade.selection("Bern"))
+            change   <- errors(cascade.selection(held.readOnly).onChange(_ => ()))
+            pick     <- errors(cascade.selection("Bern").onPick(_ => ()))
+            twoWay   <- errors(cascade.selection(held))
+            off      <- errors(cascade.selection("Bern").disabled(true))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+        end for
+    }
+
 end CascadeSelectTest

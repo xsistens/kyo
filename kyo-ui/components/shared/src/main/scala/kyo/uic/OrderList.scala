@@ -196,13 +196,17 @@ final case class OrderList[A] private (
         div.cssClass("p-orderlist").cssClass("p-component")((unheard :+ controls :+ listUI).map(toChild)*)
     end body
 
-    /** Bindings made one way that nothing hears: every move or click is painted away again. */
+    /** Bindings made one way that nothing hears: every move or click is painted away again. A disabled list takes no move
+      * or click, so it has nothing to say.
+      */
     private def unheard(using Frame): List[UI] =
         val missing =
-            (if itemsSlot.isEmpty || ReactiveValue.heard(itemsSlot, onItemsF) then Nil
-             else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
-                (if selectedSlot.isEmpty || ReactiveValue.heard(selectedSlot, onSelectionF) then Nil
-                 else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
+            if disabledFlag then Nil
+            else
+                (if itemsSlot.isEmpty || ReactiveValue.heard(itemsSlot, onItemsF) then Nil
+                 else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
+                    (if selectedSlot.isEmpty || ReactiveValue.heard(selectedSlot, onSelectionF) then Nil
+                     else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
         if missing.isEmpty then Nil else List(KeyDiagnostics.card("OrderList", "a binding the reader cannot move", missing))
     end unheard
 
