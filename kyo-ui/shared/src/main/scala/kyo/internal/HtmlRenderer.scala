@@ -1141,10 +1141,14 @@ private[kyo] object HtmlRenderer:
     private def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
         value.foreach(v => if v then w(sb, s" $name"))
 
+    /** Renders the `checked` state of a box the render binds, marked `data-kyo-bound` so the morph can tell it from a free
+      * one: a bound box that is off renders no `checked`, exactly like a free one, and only the marker says that what it
+      * shows is the render's to set on every pass.
+      */
     private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         value match
-            case Present(Bound.Const(b)) => if b then w(sb, " checked")
-            case Present(Bound.Ref(ref)) => if SignalNow(ref) then w(sb, " checked")
+            case Present(Bound.Const(b)) => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
+            case Present(Bound.Ref(ref)) => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
             case _                       => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
@@ -1569,9 +1573,10 @@ private[kyo] object HtmlRenderer:
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
           |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
-          |  // turns the control on or off writes it. Only a change is written: a bound control that is off renders no
-          |  // attribute, like an unbound one, whose tick a repaint must keep. Twin of morphAttrs in DomBackend.
-          |  if(tg){var on=to.hasAttribute(tg);if(on!==wasOn)from[tg]=on;}
+          |  // turns the control on or off writes it. A box the render binds (data-kyo-bound) shows the render's state
+          |  // on every pass, so a repaint takes back a tick the app did not accept. A free one is written only on a
+          |  // change: it renders no attribute when off, and a repaint must keep its tick. Twin of morphAttrs in DomBackend.
+          |  if(tg){var on=to.hasAttribute(tg);if(to.hasAttribute("data-kyo-bound")?from[tg]!==on:on!==wasOn)from[tg]=on;}
           |  __kyoRestoreProps(from,to);
           |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.

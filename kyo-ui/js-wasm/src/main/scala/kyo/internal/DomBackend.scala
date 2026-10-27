@@ -158,12 +158,16 @@ private[kyo] object DomBackend:
         end while
         // A checkbox, a radio and an option show their PROPERTY once the reader has toggled them, and the property
         // no longer follows the attribute, so a render that turns the control on or off has to write the property.
-        // Only a change of the rendered state is written: a bound control that is off renders no attribute, exactly
-        // like an unbound one, so writing on every pass would take the reader's tick from every unbound box in a
-        // repainted region.
+        // A box the render binds says so (`data-kyo-bound`) and shows the render's state on every pass, so a repaint
+        // takes back a tick the app did not accept. A free control is written only on a change of the rendered state:
+        // it renders no attribute when off, so writing on every pass would take the reader's tick from every unbound
+        // box in a repainted region. Twin of `__kyoMorphAttrs`.
         if toggled then
-            val on = toEl.hasAttribute(toggle)
-            if on != renderOn then fromEl.asInstanceOf[js.Dynamic].updateDynamic(toggle)(on)
+            val on   = toEl.hasAttribute(toggle)
+            val live = fromEl.asInstanceOf[js.Dynamic].selectDynamic(toggle).asInstanceOf[Boolean]
+            if if toEl.hasAttribute("data-kyo-bound") then live != on else on != renderOn then
+                fromEl.asInstanceOf[js.Dynamic].updateDynamic(toggle)(on)
+        end if
         restoreJsProps(fromEl, toEl)
         // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
         // focused field's live `.value` (its caret) with its own echo (the value already matches); assign only a

@@ -185,6 +185,28 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         assert(para.textContent.asInstanceOf[String] == "c")
     }
 
+    // A box whose `checked` the render binds says so (`data-kyo-bound`): what it shows is the render's, so a repaint
+    // that keeps it where it was takes back a tick the app never accepted. An unbound box (below) keeps the reader's.
+    "embedded morph takes back a tick the render of a bound checkbox never gave" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='held' type='checkbox' data-kyo-bound><span>0</span><!--kyo-re:$id-->")
+        val box = live("held")
+        discard(box.click())
+        replace(id, "<input id='held' type='checkbox' data-kyo-bound><span>1</span>")
+        assert(live("held") eq box)
+        assert(!box.checked.asInstanceOf[Boolean], "the bound checkbox still shows a tick its render never gave")
+    }
+
+    "embedded morph gives back a tick the reader took from a bound checkbox the render keeps on" in {
+        val id = "r"
+        install(s"<!--kyo-rs:$id--><input id='kept' type='checkbox' data-kyo-bound checked><span>0</span><!--kyo-re:$id-->")
+        val box = live("kept")
+        discard(box.click())
+        replace(id, "<input id='kept' type='checkbox' data-kyo-bound checked><span>1</span>")
+        assert(live("kept") eq box)
+        assert(box.checked.asInstanceOf[Boolean], "the bound checkbox lost the tick its render keeps")
+    }
+
     "embedded morph leaves the reader's tick on an unbound checkbox" in {
         val id = "r"
         install(s"<!--kyo-rs:$id--><input id='free' type='checkbox'><span>0</span><!--kyo-re:$id-->")
