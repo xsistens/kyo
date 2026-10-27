@@ -108,14 +108,16 @@ class FieldValidityTest extends UicTest:
                 assert(live == Chunk("field", "message", "card"), s"the reactive render: $live")
         "Select" in check(
             (m, const) =>
-                val s = Select[String]().options(Seq("a")).selection(Maybe("z"))
+                // Heard, so the one card is the one naming the value no option carries.
+                val s = Select[String]().options(Seq("a")).selection(Maybe("z")).onChange(_ => ())
                 (if const then s.invalid(true).invalidMessage("Required") else s.invalidMessage(m)).render
             ,
             "p-select"
         )
         "CascadeSelect" in check(
             (m, const) =>
-                val s = CascadeSelect[String]().options(Seq(CascadeItem.leaf("a")))(identity).selection(Maybe("z"))
+                // Heard, so the one card is the one naming the value no option carries.
+                val s = CascadeSelect[String]().options(Seq(CascadeItem.leaf("a")))(identity).selection(Maybe("z")).onChange(_ => ())
                 (if const then s.invalid(true).invalidMessage("Required") else s.invalidMessage(m)).render
             ,
             "p-cascadeselect"
