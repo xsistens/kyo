@@ -370,6 +370,105 @@ class DataTableTest extends UicTest:
             val ui = table.wired("t", Map.empty, err, _ => (), menus.toMap)
             (ui, filters, menus.toMap)
 
+    private def nameFilter(q: String) = Map(List("Name") -> ColumnFilter(q, MatchMode.Contains))
+
+    /** A table whose column filters are bound as `bind` says, wired the way the mount wires it. */
+    private def filteredBy(bind: uic.DataTable[Item] => uic.DataTable[Item])(using Frame) =
+        for
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            typed <- Signal.initRef(Absent: Maybe[String])
+            menus <- Signal.initRef(false)
+        yield bind(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy))
+            .wired("t", Map.empty, err, _ => (), Map(List("Name") -> menus), filterTyped = Map(List("Name") -> typed))
+
+    private def blur(i: UI.Ast.TextInput)(using Frame): Any < Async =
+        i.attrs.onBlur match
+            case Present(eff) => handled(eff)
+            case Absent       => throw new AssertionError("the input declares no blur handler")
+
+    private def shownQuery(ui: UI)(using Frame): String < Sync =
+        inputs(ui).map(_.head.value match
+            case Present(UI.Bound.Const(v)) => v
+            case other                      => s"not a constant: $other")
+
+    // The filters live somewhere else (a route, a parent): the table filters by them and hands what the reader types over.
+    "column filters bound one way filter by the signal, and typing is reported without being written" in {
+        for
+            held   <- Signal.initRef(nameFilter("A"))
+            seen   <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            ui     <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(seen.set))
+            before <- bodyNames(ui)
+            field  <- inputs(ui).map(_.head)
+            _      <- type_(field, "B")
+            h      <- held.get
+            s      <- seen.get
+        yield
+            assert(before == Chunk("A"), s"the rows follow the signal: $before")
+            assert(h == nameFilter("A") && s == nameFilter("B"), s"held $h, reported $s")
+    }
+
+    "two-way column filters are written before the table reports them" in {
+        for
+            filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            seen    <- Signal.initRef((Map.empty[List[String], ColumnFilter], Map.empty[List[String], ColumnFilter]))
+            ui      <- filteredBy(_.columnFilters(filters).onColumnFiltersChange(m => filters.get.map(h => seen.set((m, h)))))
+            field   <- inputs(ui).map(_.head)
+            _       <- type_(field, "B")
+            s       <- seen.get
+        yield assert(s == (nameFilter("B"), nameFilter("B")), s"reported, held: $s")
+    }
+
+    // An owner that writes back later than the reader types (through a route, say) answers the first keystroke after
+    // the second. The field keeps what the reader typed: the late answer must not take a keystroke back.
+    "an owner that answers late does not take back what the reader typed" in {
+        for
+            held  <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            ui    <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(_ => ()))
+            field <- inputs(ui).map(_.head)
+            _     <- type_(field, "a")
+            _     <- type_(field, "ab")
+            _     <- held.set(nameFilter("a"))
+            late  <- shownQuery(ui)
+        yield assert(late == "ab", s"the late answer to the first keystroke shows $late")
+    }
+
+    "once the reader leaves a one-way filter field it shows what the owner holds" in {
+        for
+            held   <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            ui     <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(_ => ()))
+            field  <- inputs(ui).map(_.head)
+            _      <- type_(field, "ab")
+            _      <- held.set(nameFilter("ab"))
+            field2 <- inputs(ui).map(_.head)
+            _      <- blur(field2)
+            _      <- held.set(nameFilter("x"))
+            after  <- shownQuery(ui)
+        yield assert(after == "x", s"the owner's value after the reader left: $after")
+    }
+
+    "column filters bound one way with nothing to hear the reader say so" in {
+        for
+            held  <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            deaf  <- filteredBy(_.columnFilters(held.readOnly)).map(elementsWithClass(_, "p-uic-key-error"))
+            heard <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onColumnFiltersChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+    }
+
+    "restore writes two-way column filters and leaves one-way ones to their owner" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
+        for
+            twoWay <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            oneWay <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            _      <- table.columnFilters(twoWay).restore(TableState(columnFilters = nameFilter("B")))
+            _ <- table.columnFilters(oneWay.readOnly).onColumnFiltersChange(_ => ()).restore(TableState(columnFilters = nameFilter("B")))
+            t <- twoWay.get
+            o <- oneWay.get
+        yield assert(t == nameFilter("B") && o.isEmpty, s"two-way $t, one-way $o")
+        end for
+    }
+
     /** The row names the table currently renders, read off its body cells. */
     /** One node's own elements, with a reactive or fragment layer resolved away: a windowed
       * body wraps its rows in one, since the rows are what a scroll replaces and the row

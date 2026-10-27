@@ -121,10 +121,14 @@ final private[uic] case class FilterState(
     // re-filtered on the way to the second rule. A row display has no draft: one input is
     // the whole filter, and the keystroke that changes it is the apply.
     drafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
+    // What the reader typed into a row input over filters bound one way, kept until they leave the field: the owner writes
+    // the filters back when it likes, and an answer to an older keystroke must not replace a newer one on the screen.
+    typed: Map[List[String], SignalRef[Maybe[String]]] = Map.empty,
     idPrefix: String = ""
 ):
-    private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]]       = Maybe.fromOption(open.get(path))
-    private[uic] def draftOf(path: List[String]): Maybe[SignalRef[ColumnFilter]] = Maybe.fromOption(drafts.get(path))
+    private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]]        = Maybe.fromOption(open.get(path))
+    private[uic] def draftOf(path: List[String]): Maybe[SignalRef[ColumnFilter]]  = Maybe.fromOption(drafts.get(path))
+    private[uic] def typedOf(path: List[String]): Maybe[SignalRef[Maybe[String]]] = Maybe.fromOption(typed.get(path))
 end FilterState
 
 /** What one grab of a column boundary holds on to: where the pointer started, and the
@@ -636,7 +640,8 @@ final case class DataTable[A] private (
     onRowChangedF: Maybe[RowChange[A] => UI.Action] = Absent,
     translatorV: ErrorTranslator = ErrorTranslator.default,
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
-    columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
+    columnFiltersSlot: Maybe[ReactiveValue[Map[List[String], ColumnFilter]]] = Absent,
+    onColumnFiltersF: Maybe[Map[List[String], ColumnFilter] => UI.Action] = Absent,
     filterDisplayV: FilterDisplay = FilterDisplay.Row,
     columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
@@ -728,9 +733,17 @@ final case class DataTable[A] private (
       */
     def globalFilter(ref: SignalRef[String]): DataTable[A] = copy(filterRef = Present(ref))
 
-    /** Binds the per-column filters two-way, keyed by the column path the sort spec
-      * already names a column by, and gives the table its filter row: one input per
-      * [[Column.filterBy]] column, with the mode menu beside it.
+    /** The per-column filters, keyed by the column path the sort spec already names a
+      * column by, which gives the table its filter row: one input per [[Column.filterBy]]
+      * column, with the mode menu beside it.
+      *
+      * A `SignalRef` binds two way: what the reader types, applies, clears or picks as a
+      * mode is written, then [[onColumnFiltersChange]] hears the new map. A plain `Signal`
+      * or a constant binds one way: the table filters by it and only reports, which is
+      * how filters held in a route or a parent are changed there. While the reader types
+      * into a one-way filter row the field keeps their text until they leave it, so an
+      * owner that answers late does not take a keystroke back. A one-way binding with no
+      * [[onColumnFiltersChange]] is reported in a card.
       *
       * The filters are read the way the reader sees the table. A column that is hidden
       * ([[Column.visible]]) does not filter, exactly as the global filter does not search
@@ -757,8 +770,14 @@ final case class DataTable[A] private (
       */
     def filterDisplay(v: FilterDisplay): DataTable[A] = copy(filterDisplayV = v)
 
-    def columnFilters(ref: SignalRef[Map[List[String], ColumnFilter]]): DataTable[A] =
-        copy(columnFiltersRef = Present(ref))
+    def columnFilters(v: Map[List[String], ColumnFilter] | Signal[Map[List[String], ColumnFilter]]): DataTable[A] =
+        copy(columnFiltersSlot = Present(ReactiveValue[Map[List[String], ColumnFilter]](v)))
+
+    /** Fired with the filters the reader asked for (a keystroke in the filter row, an apply, a clear or a mode pick in
+      * the filter menu), after two-way [[columnFilters]] are written.
+      */
+    def onColumnFiltersChange(f: Map[List[String], ColumnFilter] => UI.Action)(using Frame): DataTable[A] =
+        copy(onColumnFiltersF = Present(Callback.of(f)))
 
     /** Binds the column widths two-way, keyed by the column path the sort spec already
       * names a column by, and gives every boundary between two resizable columns a drag
@@ -1086,7 +1105,7 @@ final case class DataTable[A] private (
         for
             sort  <- sortReading.signal.current
             query <- currentOf(filterRef, "")
-            specs <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            specs <- filtersReading.signal.current
             order <- currentOf(columnOrderRef, List.empty[List[String]])
             rows  <- currentRows
         yield
@@ -1106,7 +1125,7 @@ final case class DataTable[A] private (
         for
             sort   <- sortReading.signal.current
             query  <- currentOf(filterRef, "")
-            specs  <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            specs  <- filtersReading.signal.current
             page   <- pageReading.signal.current
             sel    <- currentValue(selectedBinding, Set.empty[String])
             exp    <- currentOf(expandedRef, Set.empty[String])
@@ -1138,7 +1157,7 @@ final case class DataTable[A] private (
                 keys.flatMap(k => Maybe.fromOption(all.find(r => keyOf(r) == k)).orElse(byKey(k)).toList)
             _ <- writeIf(sortSlot.flatMap(_.writable), s.sort)
             _ <- writeIf(filterRef, s.globalFilter)
-            _ <- writeIf(columnFiltersRef, s.columnFilters)
+            _ <- writeIf(columnFiltersSlot.flatMap(_.writable), s.columnFilters)
             _ <- writeIf(pageSlot.flatMap(_.writable), s.page)
             _ <- writeIf(selectedRef, rows(s.selected))
             _ <- writeIf(expandedTyped, rows(s.expanded))
@@ -1752,7 +1771,7 @@ final case class DataTable[A] private (
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
       */
-    private def filterBound: Boolean = columnFiltersRef.isDefined && leafCols.exists(_.isFilterable)
+    private def filterBound: Boolean = columnFiltersSlot.isDefined && leafCols.exists(_.isFilterable)
 
     /** Whether the filters are edited in a second header row. */
     private def filterRowOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Row
@@ -2329,6 +2348,9 @@ final case class DataTable[A] private (
                         Signal.initRef(ColumnFilter.empty(c.filterV.map(_.default).getOrElse(MatchMode.Contains)))
                             .map(path -> _)
                     )
+                    typed <- Kyo.foreach(filterableLeaves)((path, _) =>
+                        Signal.initRef(Absent: Maybe[String])(using summon[Frame], CanEqual.derived).map(path -> _)
+                    )
                     held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
                     moving <- Signal.initRef(Absent: Maybe[ColumnDrag])
                     rowsIn <- Signal.initRef(Absent: Maybe[RowDrag])
@@ -2372,7 +2394,8 @@ final case class DataTable[A] private (
                         // a table that did not, and it lives exactly as long as this mount does.
                         if !rangeOn then Absent
                         else if anchorRef.isDefined then anchorRef
-                        else Present(anchorRow)
+                        else Present(anchorRow),
+                        typed.toMap
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
@@ -2439,7 +2462,8 @@ final case class DataTable[A] private (
         headTop: Maybe[Signal[Maybe[Int]]] = Absent,
         rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
         filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
-        anchor: Maybe[SignalRef[Maybe[A]]] = Absent
+        anchor: Maybe[SignalRef[Maybe[A]]] = Absent,
+        filterTyped: Map[List[String], SignalRef[Maybe[String]]] = Map.empty
     )(using Frame): UI =
         // The caller's state is read in the table's one region (see `renderWith`): starting an edit writes the error
         // and the edited cell together.
@@ -2456,7 +2480,7 @@ final case class DataTable[A] private (
                 DataTable.Wiring[A](
                     EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
                     NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                    FilterState(open = menus, live = true, drafts = filterDrafts, idPrefix = idPrefix),
+                    FilterState(open = menus, live = true, drafts = filterDrafts, typed = filterTyped, idPrefix = idPrefix),
                     SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
                     OrderState(drag = moving, held = drag),
                     ScrollState(scroll, headTop),
@@ -2506,7 +2530,7 @@ final case class DataTable[A] private (
         val view    = frozenRowsReading
             .and(sortReading)
             .and(Reading.orElse(filterRef, ""))
-            .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
+            .and(filtersReading)
             .and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
             .and(pageReading)
         val live                                 = if rowInputsBelow then rowInputsSignal else Absent
@@ -2673,7 +2697,7 @@ final case class DataTable[A] private (
         given styleEq: CanEqual[Style, Style]                                                     = CanEqual.derived
         val head                                                                                  = HeadLive(
             sort = sortReading,
-            specs = Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]),
+            specs = filtersReading,
             widths = Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]),
             held = w0.order.drag.fold(Reading.Fixed(Absent: Maybe[ColumnDrag]))(Reading.Live(_))
         )
@@ -2914,7 +2938,7 @@ final case class DataTable[A] private (
                 order.and(visibleReading)
                     .and(rowsAndTotal)
                     .and(Reading.orElse(filterRef, ""))
-                    .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
+                    .and(filtersReading)
                     .and(pageReading)
                     .and(pageSizeReading)
                     .map { case ((((((requested, vis), (in, total)), query), specs), page), size) =>
@@ -3047,7 +3071,7 @@ final case class DataTable[A] private (
             rowsNow <- currentRows
             sort    <- sortReading.signal.current
             query   <- currentOf(filterRef, "")
-            specs   <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            specs   <- filtersReading.signal.current
             page    <- pageReading.signal.current
             groups  <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
         yield
@@ -3710,7 +3734,7 @@ final case class DataTable[A] private (
     private def filterCards(filter: FilterState)(using Frame): List[UI] =
         val filterable = leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable)
         val nothing    =
-            if columnFiltersRef.isEmpty || filterable then Nil
+            if columnFiltersSlot.isEmpty || filterable then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3719,7 +3743,7 @@ final case class DataTable[A] private (
                     Nil
                 ))
         val nowhere =
-            if !filterable || columnFiltersRef.isDefined then Nil
+            if !filterable || columnFiltersSlot.isDefined then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3731,7 +3755,7 @@ final case class DataTable[A] private (
         // inert, and reporting it as unknown would name a mistake nobody made.
         val known   = (leafPaths ++ hiddenPaths).collect { case (p, c) if c.isFilterable => p }.toSet
         val unknown =
-            if columnFiltersRef.isEmpty then Nil
+            if columnFiltersSlot.isEmpty then Nil
             else filter.specs.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
         val unknownCard =
             if unknown.isEmpty then Nil
@@ -3757,7 +3781,16 @@ final case class DataTable[A] private (
                         "shows the first; use filterDisplay(FilterDisplay.Menu), which is where several belong",
                     crowded
                 ))
-        nothing ++ nowhere ++ unknownCard ++ crowdedCard
+        val unheard =
+            if !filterable || columnFiltersSlot.isEmpty || ReactiveValue.heard(columnFiltersSlot, onColumnFiltersF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the column filters are bound one way and nothing hears what the reader types or applies, so the " +
+                        "reader cannot change them; add onColumnFiltersChange, or bind a SignalRef",
+                    Nil
+                ))
+        nothing ++ nowhere ++ unknownCard ++ crowdedCard ++ unheard
     end filterCards
 
     /** The loud cards for an editing binding that cannot do anything.
@@ -4279,15 +4312,22 @@ final case class DataTable[A] private (
                     filter.openOf(path) match
                         case Present(openRef) if filter.live && cf.modes.sizeIs > 1 => Reading.Live(openRef)
                         case _                                                      => Reading.Fixed(false)
-                cell(toChild(spec.and(open).render { (cur, isOpen) =>
+                // Over one-way filters the field shows what the reader typed until they leave it (see `FilterState.typed`);
+                // a two-way binding is written on every keystroke, in order, so its value is already what they typed.
+                val typedRef: Maybe[SignalRef[Maybe[String]]] =
+                    if columnFiltersSlot.exists(_.writable.isEmpty) then filter.typedOf(path) else Absent
+                given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                val typed: Reading[Maybe[String]]            = typedRef.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.Live(_))
+                cell(toChild(spec.and(open).and(typed).render { case ((cur, isOpen), kept) =>
                     // A query this table cannot read as a value of its column's type is marked on its own input.
                     val unusable = !lazyOn && cur.active.nonEmpty && cf.predicate(cur).isEmpty
-                    val input    = Input()
-                        .value(cur.query)
+                    var input    = Input()
+                        .value(kept.getOrElse(cur.query))
                         .fluid(true)
                         .invalid(unusable)
                         .accessibleName(s"Filter by ${c.headerV}")
-                        .onInput(t => writeFilter(path, cur.mode, t))
+                        .onInput(t => typedRef.fold[UI.Action](())(_.set(Present(t))).andThen(writeFilter(path, cur.mode, t)))
+                    typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
                     val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
                     div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter, isOpen)).map(toChild)*)
                 }))
@@ -4551,10 +4591,7 @@ final case class DataTable[A] private (
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
     )(using Frame): UI.Action =
-        val write: UI.Action = columnFiltersRef match
-            case Present(ref) => ref.getAndUpdate(m => if d.active.isEmpty then m - path else m + (path -> d))
-            case Absent       => ()
-        write.andThen(openRef.set(false))
+        stepFilters(m => if d.active.isEmpty then m - path else m + (path -> d)).andThen(openRef.set(false))
     end applyFilter
 
     /** Clear: the column stops filtering AND the draft goes back to one empty rule, since
@@ -4566,10 +4603,7 @@ final case class DataTable[A] private (
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
     )(using Frame): UI.Action =
-        val write: UI.Action = columnFiltersRef match
-            case Present(ref) => ref.getAndUpdate(_ - path)
-            case Absent       => ()
-        write.andThen(draft.set(ColumnFilter.empty(cf.default))).andThen(openRef.set(false))
+        stepFilters(_ - path).andThen(draft.set(ColumnFilter.empty(cf.default))).andThen(openRef.set(false))
     end clearFilter
 
     /** Writes what the reader typed, keeping the mode they picked: an emptied input is no
@@ -4577,9 +4611,15 @@ final case class DataTable[A] private (
       * again does not silently go back to "contains".
       */
     private def writeFilter(path: List[String], mode: MatchMode, query: String)(using Frame): UI.Action =
-        columnFiltersRef match
-            case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(query, mode)))
-            case Absent       => ()
+        stepFilters(_ + (path -> ColumnFilter(query, mode)))
+
+    /** Every change the reader makes to the filters: written if they bind two way, then reported. */
+    private def stepFilters(step: Map[List[String], ColumnFilter] => Map[List[String], ColumnFilter])(using Frame): UI.Action =
+        ReactiveValue.update(columnFiltersSlot, step, onColumnFiltersF)
+
+    /** The filters as the table filters by them: the bound map, else none. */
+    private def filtersReading(using Frame): Reading[Map[List[String], ColumnFilter]] =
+        columnFiltersSlot.fold(Reading.Fixed(Map.empty[List[String], ColumnFilter]))(Reading.of(_))
 
     private def pickMode(
         path: List[String],
@@ -4587,10 +4627,7 @@ final case class DataTable[A] private (
         mode: MatchMode,
         openRef: SignalRef[Boolean]
     )(using Frame): UI.Action =
-        val write: UI.Action = columnFiltersRef match
-            case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(cur.query, mode)))
-            case Absent       => ()
-        write.andThen(openRef.set(false))
+        stepFilters(_ + (path -> ColumnFilter(cur.query, mode))).andThen(openRef.set(false))
     end pickMode
 
     /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
