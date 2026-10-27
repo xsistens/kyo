@@ -164,7 +164,7 @@ private[uic] trait SetBinding[K]:
     /** Steps the held set, written where the binding is two-way, and answers the set now held (or, one-way, asked for)
       * where the step changed it.
       */
-    def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < Sync
+    def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < (Async & Abort[Any])
 
     /** Whether a step reaches anybody: a two-way binding, or `report`. */
     def heard[R](report: Maybe[R]): Boolean
@@ -185,7 +185,7 @@ private[uic] object SetBinding:
                 v match
                     case ReactiveValue.Dyn(sig) => sig.current
                     case ReactiveValue.Const(a) => a
-            def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < Sync =
+            def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < (Async & Abort[Any]) =
                 def changed(prev: Set[K]): Maybe[Set[K]] =
                     val now = f(prev)
                     if now == prev then Absent else Present(now)
@@ -196,13 +196,24 @@ private[uic] object SetBinding:
         end new
     end of
 
-    /** A typed set of options read and written through their keys, as [[MultiChoice]] does. */
-    def keyed[A](choice: MultiChoice[A], options: => Seq[A], key: A => String): SetBinding[String] =
+    /** A typed set of options read and written through their keys, as [[MultiChoice]] does. An embedding host that
+      * reports its typed selection hands `report` over: it hears the options the step leaves chosen, typed, before the
+      * embedded list's own events.
+      */
+    def keyed[A](
+        choice: MultiChoice[A],
+        options: => Seq[A],
+        key: A => String,
+        report: Maybe[Set[A] => UI.Action] = Absent
+    ): SetBinding[String] =
         new SetBinding[String]:
-            def render(f: Set[String] => UI)(using Frame): UI                                 = choice.render(as => f(as.map(key)))
-            def signal(using Frame): Signal[Set[String]]                                      = choice.reading.map(_.map(key)).signal
-            def read(f: Set[String] => UI.Action)(using Frame): UI.Action                     = choice.read(as => f(as.map(key)))
-            def update(f: Set[String] => Set[String])(using Frame): Maybe[Set[String]] < Sync =
-                choice.update(options, key)(f).map(_.map(_.map(key)))
-            def heard[R](report: Maybe[R]): Boolean = choice.heard(report)
+            def render(f: Set[String] => UI)(using Frame): UI             = choice.render(as => f(as.map(key)))
+            def signal(using Frame): Signal[Set[String]]                  = choice.reading.map(_.map(key)).signal
+            def read(f: Set[String] => UI.Action)(using Frame): UI.Action = choice.read(as => f(as.map(key)))
+            def update(f: Set[String] => Set[String])(using Frame): Maybe[Set[String]] < (Async & Abort[Any]) =
+                choice.update(options, key)(f).map {
+                    case Present(now) => report.fold[UI.Action](())(_(now)).andThen(Present(now.map(key)))
+                    case Absent       => Absent
+                }
+            def heard[R](other: Maybe[R]): Boolean = choice.heard(report.orElse(other))
 end SetBinding
