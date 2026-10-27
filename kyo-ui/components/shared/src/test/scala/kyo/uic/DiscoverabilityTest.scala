@@ -1336,6 +1336,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         )
         // The page and the rows per page are state slots: a constant or a signal binds one way and a click is reported.
         typeCheck(
+            preamble + """def x(w: Signal[Map[List[String], Double]], o: Signal[List[List[String]]])(using Frame): uic.DataTable[String] = uic.DataTable[String]().globalFilter("a").columnWidths(w).onColumnWidthsChange(_ => ()).columnOrder(o).onColumnOrderChange(_ => ())"""
+        )
+        typeCheck(
             preamble + """def x(e: Signal[Set[String]])(using Frame): uic.TreeTable[String] = uic.TreeTable[String]().expanded(e).onExpandedChange(_ => ()).selection(Set("a")).onSelectionChange(_ => ())"""
         )
         typeCheck(
