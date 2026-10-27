@@ -71,6 +71,12 @@ private[uic] enum SingleChoice[A]:
         end match
     end update
 
+    /** Whether a reader's pick reaches anybody: a two-way binding, or a `report` to hand it to ([[ReactiveValue.heard]]). */
+    def heard[R](report: Maybe[R]): Boolean =
+        this match
+            case Value(v)    => ReactiveValue.heard(Present(v), report)
+            case Optional(v) => ReactiveValue.heard(Present(v), report)
+
     /** Whether the binding can hold none, which is what a clear writes (or, one-way, reports). */
     def clearable: Boolean =
         this match

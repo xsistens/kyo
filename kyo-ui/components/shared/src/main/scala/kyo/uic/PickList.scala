@@ -338,10 +338,12 @@ final case class PickList[A] private (
         div.cssClass("p-picklist").cssClass("p-component")((unheard ++ parts).map(toChild)*)
     end body
 
-    /** Bindings made one way that nothing hears: every transfer, move or click is painted away again. */
+    /** Bindings made one way that nothing hears: every transfer, move or click is painted away again. Disabled columns
+      * take none of those, so they have nothing to say.
+      */
     private def unheard(using Frame): List[UI] =
         def missing[T, R](slot: Maybe[ReactiveValue[T]], report: Maybe[R], setter: String, event: String): List[String] =
-            if slot.isEmpty || ReactiveValue.heard(slot, report) then Nil
+            if disabledFlag || slot.isEmpty || ReactiveValue.heard(slot, report) then Nil
             else List(s"$setter is bound one way and nothing hears a change: add $event, or bind a SignalRef")
         val all =
             missing(sourceSlot, onSourceItemsF, "sourceItems", "onSourceItemsChange") ++

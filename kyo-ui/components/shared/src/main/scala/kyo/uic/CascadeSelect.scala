@@ -134,6 +134,7 @@ final case class CascadeSelect[A] private (
       * writes the leaf. A `SignalRef` binds two-way. Any other `Signal`, or a
       * constant, binds ONE-WAY: the field shows it, and a pick writes nothing and only reports through [[onChange]] and
       * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
+      * With neither event set, a card says the reader cannot change it.
       */
     def selection(v: A | Signal[A]): CascadeSelect[A] = copy(choice = Present(SingleChoice.Value(ReactiveValue(v))))
 
@@ -450,8 +451,22 @@ final case class CascadeSelect[A] private (
         end if
 
         val field = validity.follow(el(((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
-        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
+        val cards = unknownCard ++ unheardCard
+        if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
+
+    /** A selection bound one way that nothing hears: every pick is painted away again. A disabled field takes no pick,
+      * so it has nothing to say.
+      */
+    private def unheardCard(using Frame): List[UI] =
+        if disabledFlag || choice.forall(_.heard(onChangeF.orElse(onPickF))) then Nil
+        else
+            List(KeyDiagnostics.card(
+                "CascadeSelect",
+                "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange or " +
+                    "onPick, or bind a SignalRef",
+                Nil
+            ))
 
     private def activeId(base: String): String = s"$base-active"
 
