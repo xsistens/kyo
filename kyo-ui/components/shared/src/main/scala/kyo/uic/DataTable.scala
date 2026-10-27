@@ -582,7 +582,8 @@ final case class DataTable[A] private (
     rowsV: List[A] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[ColumnTree[A]] = Nil,
-    sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
+    sortSlot: Maybe[ReactiveValue[List[SortKey]]] = Absent,
+    onSortF: Maybe[List[SortKey] => UI.Action] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
     // The page size as `paginate` was given it: a constant, a signal, or a ref the rows-per-page dropdown writes. While a
@@ -695,8 +696,14 @@ final case class DataTable[A] private (
       */
     private lazy val filterableLeaves: List[(List[String], Column[A, FlatOnly])] = leafPaths.filter(_._2.isFilterable)
 
-    /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
-      * being the primary key.
+    /** The ordered sort spec: [[SortKey]] entries, the first sorting one being the primary
+      * key.
+      *
+      * A `SignalRef` binds two way: a header press writes the new spec, then
+      * [[onSortChange]] hears it. A plain `Signal` or a constant binds one way: the table
+      * sorts by it and hands a press to [[onSortChange]] without writing, which is how a
+      * sort held in a route or a parent is changed there. A one-way sort with no
+      * [[onSortChange]] cannot move and is reported in a card.
       *
       * A plain header click sorts by that column alone. A click holding Ctrl (or Cmd)
       * adds the column to the spec, or advances the one already there WITHOUT moving it:
@@ -704,7 +711,12 @@ final case class DataTable[A] private (
       * its slot. That last state is what makes an accidental click cheap, since one more
       * click on the same header puts the column back at the rank it had.
       */
-    def sort(ref: SignalRef[List[SortKey]]): DataTable[A] = copy(sortRef = Present(ref))
+    def sort(v: List[SortKey] | Signal[List[SortKey]]): DataTable[A] = copy(sortSlot = Present(ReactiveValue[List[SortKey]](v)))
+
+    /** Fired with the spec a header press (a click, Enter or Space, with Ctrl or Cmd for several columns) asks for, after
+      * a two-way [[sort]] is written.
+      */
+    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): DataTable[A] = copy(onSortF = Present(Callback.of(f)))
 
     /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
       * and descending, which is Prime's default.
@@ -1072,7 +1084,7 @@ final case class DataTable[A] private (
       */
     def csv(using Frame): String < Async =
         for
-            sort  <- currentOf(sortRef, List.empty[SortKey])
+            sort  <- sortReading.signal.current
             query <- currentOf(filterRef, "")
             specs <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
             order <- currentOf(columnOrderRef, List.empty[List[String]])
@@ -1092,7 +1104,7 @@ final case class DataTable[A] private (
       */
     def state(using Frame): TableState < Async =
         for
-            sort   <- currentOf(sortRef, List.empty[SortKey])
+            sort   <- sortReading.signal.current
             query  <- currentOf(filterRef, "")
             specs  <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
             page   <- pageReading.signal.current
@@ -1124,7 +1136,7 @@ final case class DataTable[A] private (
             all <- currentRows
             rows = (keys: Set[String]) =>
                 keys.flatMap(k => Maybe.fromOption(all.find(r => keyOf(r) == k)).orElse(byKey(k)).toList)
-            _ <- writeIf(sortRef, s.sort)
+            _ <- writeIf(sortSlot.flatMap(_.writable), s.sort)
             _ <- writeIf(filterRef, s.globalFilter)
             _ <- writeIf(columnFiltersRef, s.columnFilters)
             _ <- writeIf(pageSlot.flatMap(_.writable), s.page)
@@ -2492,7 +2504,7 @@ final case class DataTable[A] private (
             columnOrderRef.fold(Reading.Fixed(Maybe.empty[List[List[String]]]))(r => Reading.Live(r.map(o => Present(o))))
         val columns = order.and(visibleReading).and(sortableReading)
         val view    = frozenRowsReading
-            .and(Reading.orElse(sortRef, List.empty[SortKey]))
+            .and(sortReading)
             .and(Reading.orElse(filterRef, ""))
             .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
             .and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
@@ -2579,6 +2591,9 @@ final case class DataTable[A] private (
     /** The page as the table pages by it: the bound one's value, else the first. */
     private def pageReading(using Frame): Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
 
+    /** The sort as the table sorts by it: the bound spec, else none. */
+    private def sortReading(using Frame): Reading[List[SortKey]] = sortSlot.fold(Reading.Fixed(List.empty[SortKey]))(Reading.of(_))
+
     /** This table paging by `size`, where it pages at all. */
     private def sized(size: Int): DataTable[A] =
         if pageSizeV.isEmpty || pageSizeV.contains(size) then this else copy(pageSizeV = Present(size))
@@ -2657,7 +2672,7 @@ final case class DataTable[A] private (
         given specsListEq: CanEqual[List[RowSpec[A]], List[RowSpec[A]]]                           = CanEqual.derived
         given styleEq: CanEqual[Style, Style]                                                     = CanEqual.derived
         val head                                                                                  = HeadLive(
-            sort = Reading.orElse(sortRef, List.empty[SortKey]),
+            sort = sortReading,
             specs = Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]),
             widths = Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]),
             held = w0.order.drag.fold(Reading.Fixed(Absent: Maybe[ColumnDrag]))(Reading.Live(_))
@@ -2695,7 +2710,7 @@ final case class DataTable[A] private (
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
         val interactive: Set[List[String]] =
-            if sortRef.isEmpty then Set.empty
+            if sortSlot.isEmpty then Set.empty
             else leafPaths.collect { case (p, c) if sortsHere(c, p, flags) => p }.toSet
 
         // One tr per header level. The leading expander and checkbox cells belong to the
@@ -3030,7 +3045,7 @@ final case class DataTable[A] private (
     private def bodyViewNow(using Frame): BodyView[A] < Async =
         for
             rowsNow <- currentRows
-            sort    <- currentOf(sortRef, List.empty[SortKey])
+            sort    <- sortReading.signal.current
             query   <- currentOf(filterRef, "")
             specs   <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
             page    <- pageReading.signal.current
@@ -3621,9 +3636,9 @@ final case class DataTable[A] private (
         def show(path: List[String]): String = path.mkString(" / ")
         val empties                          = ColumnTree.emptyGroups(cols)
         val sortable                         = allPaths.collect { case (p, c) if canSortBy(c) => p }
-        val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
+        val unknown                          = if sortSlot.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
         val ambiguous                        =
-            if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
+            if sortSlot.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
         // A column asked to be sortable with nothing to sort by: the flag decides whether the
         // reader may change the spec, and an ordering is what a change would act on.
         // Not in a prepared table: there the flag is the whole declaration, and the
@@ -3671,7 +3686,16 @@ final case class DataTable[A] private (
                         "the flag",
                     noOrdering
                 ))
-        emptyCard ++ unknownCard ++ ambiguousCard ++ noOrderingCard
+        val unheardCard =
+            if sortable.isEmpty || ReactiveValue.heard(sortSlot, onSortF) || sortSlot.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the sort is bound one way and nothing hears a header press, so the reader cannot change it; add " +
+                        "onSortChange, or bind a SignalRef",
+                    sortable.map(show)
+                ))
+        emptyCard ++ unknownCard ++ ambiguousCard ++ noOrderingCard ++ unheardCard
     end headerCards
 
     /** The loud cards for a filter that cannot do anything.
@@ -4685,7 +4709,7 @@ final case class DataTable[A] private (
         filter: FilterState
     )(using Frame): UI =
         given CanEqual[SortDirection, SortDirection] = CanEqual.derived
-        val sortable                                 = sorts && sortRef.isDefined
+        val sortable                                 = sorts && sortSlot.isDefined
         val direction: Reading[SortDirection]        =
             live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
@@ -4723,7 +4747,7 @@ final case class DataTable[A] private (
         // column carries the attribute. One rule for the static page and the live one, so the attribute never has to
         // leave the cell. A column locked against the reader's clicks is still one a sort can name.
         cell = classWhen(cell, "p-datatable-column-sorted", direction.map(_.isSorting))
-        if sortRef.isDefined && canSortBy(c) then
+        if sortSlot.isDefined && canSortBy(c) then
             given CanEqual[String, String] = CanEqual.derived
             direction.map {
                 case SortDirection.Ascending  => "ascending"
@@ -4784,14 +4808,15 @@ final case class DataTable[A] private (
     private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
         Frame
     ): UI.Action =
-        sortRef match
-            case Present(ref) =>
-                val multi = e.modifiers.ctrl || e.modifiers.meta
-                ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
-                    else SortKey.plain(cur, path, removableSortFlag, interactive.contains)
-                )
-            case Absent => ()
+        val multi = e.modifiers.ctrl || e.modifiers.meta
+        ReactiveValue.update(
+            sortSlot,
+            cur =>
+                if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
+                else SortKey.plain(cur, path, removableSortFlag, interactive.contains),
+            onSortF
+        )
+    end toggleSort
 
     private def isExpanded(a: A, exp: Set[String]): Boolean = expansionF.isDefined && exp.contains(keyOf(a))
 

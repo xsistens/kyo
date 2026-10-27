@@ -74,7 +74,8 @@ final case class TreeTable[A] private (
     cols: List[Column[A, AnyTable]] = Nil,
     expandedTyped: Maybe[SignalRef[Set[A]]] = Absent,
     selectedTyped: Maybe[SignalRef[Set[A]]] = Absent,
-    sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
+    sortSlot: Maybe[ReactiveValue[List[SortKey]]] = Absent,
+    onSortF: Maybe[List[SortKey] => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     removableSortFlag: Boolean = true,
@@ -126,11 +127,18 @@ final case class TreeTable[A] private (
     /** Binds the selection two-way to `ref`, the set of chosen rows matched by [[rowKey]]. */
     def selection(ref: SignalRef[Set[A]]): TreeTable[A] = copy(selectedTyped = Present(ref))
 
-    /** Binds the ordered sort spec two-way (applied per sibling level): [[SortKey]]
-      * entries, the first sorting one being the primary key. Clicks follow the DataTable
-      * contract, plain for single-key and Ctrl or Cmd for multi-key in place.
+    /** The ordered sort spec (applied per sibling level): [[SortKey]] entries, the first
+      * sorting one being the primary key. Presses follow the DataTable contract, plain for
+      * single-key and Ctrl or Cmd for multi-key in place.
+      *
+      * A `SignalRef` binds two way: a press writes it, then [[onSortChange]] hears the new
+      * spec. A plain `Signal` or a constant binds one way: the table sorts by it and only
+      * reports a press. A one-way sort with no [[onSortChange]] is reported in a card.
       */
-    def sort(ref: SignalRef[List[SortKey]]): TreeTable[A] = copy(sortRef = Present(ref))
+    def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = copy(sortSlot = Present(ReactiveValue[List[SortKey]](v)))
+
+    /** Fired with the spec a header press asks for, after a two-way [[sort]] is written. */
+    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): TreeTable[A] = copy(onSortF = Present(Callback.of(f)))
 
     /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
       * and descending, which is Prime's default.
@@ -251,7 +259,7 @@ final case class TreeTable[A] private (
         // key is its place in the tree, which a live list moves.
         val exp    = Reading.orElse(expandedTyped, Set.empty[A])
         val sel    = Reading.orElse(selectedTyped, Set.empty[A])
-        val sort   = Reading.orElse(sortRef, List.empty[SortKey])
+        val sort   = sortSlot.fold(Reading.Fixed(List.empty[SortKey]))(Reading.of(_))
         val cursor = Reading.orElse(cursorRef, Absent: Maybe[String])
         entries.and(visible).and(sortable).and(exp).and(sel).and(sort).and(cursor).render {
             case ((((((ns, vis), flags), e), s), so), cu) =>
@@ -289,7 +297,7 @@ final case class TreeTable[A] private (
         // The paths whose headers the reader can actually click; the rest of the spec is
         // the caller's to keep, so no click may clear it.
         val interactive: Set[List[String]] =
-            if sortRef.isEmpty then Set.empty
+            if sortSlot.isEmpty then Set.empty
             else
                 cols.collect {
                     case c if c.isSortable(flags.getOrElse(c.headerV, c.sortableConst)) => List(c.headerV)
@@ -363,8 +371,22 @@ final case class TreeTable[A] private (
             case Size.Large  => root = root.cssClass("p-treetable-lg")
             case Size.Normal => ()
         end match
-        root(div.cssClass("p-treetable-table-container")(toChild(tableEl)))
+        root((unheardSort :+ div.cssClass("p-treetable-table-container")(toChild(tableEl))).map(toChild)*)
     end body
+
+    /** A sort bound one way that nothing hears: the headers take presses that change nothing. */
+    private def unheardSort(using Frame): List[UI] =
+        val sortable = cols.filter(c => c.isSortable(c.sortableConst)).map(_.headerV)
+        if sortable.isEmpty || sortSlot.isEmpty || ReactiveValue.heard(sortSlot, onSortF) then Nil
+        else
+            List(KeyDiagnostics.card(
+                "TreeTable",
+                "the sort is bound one way and nothing hears a header press, so the reader cannot change it; add " +
+                    "onSortChange, or bind a SignalRef",
+                sortable
+            ))
+        end if
+    end unheardSort
 
     /** Applies the sort spec to one sibling list (stable, back-to-front: the
       * DataTable technique, per level).
@@ -383,7 +405,7 @@ final case class TreeTable[A] private (
     private def headerCell(c: Column[A, AnyTable], sort: List[SortKey], flag: Boolean, interactive: Set[List[String]])(
         using Frame
     ): UI =
-        val sortable  = c.isSortable(flag) && sortRef.isDefined
+        val sortable  = c.isSortable(flag) && sortSlot.isDefined
         val sortingKs = SortKey.sorting(sort)
         // A TreeTable renders one header row, so a column's path is its header alone.
         val path      = List(c.headerV)
@@ -450,14 +472,15 @@ final case class TreeTable[A] private (
     private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
         Frame
     ): UI.Action =
-        sortRef match
-            case Present(ref) =>
-                val multi = e.modifiers.ctrl || e.modifiers.meta
-                ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
-                    else SortKey.plain(cur, path, removableSortFlag, interactive.contains)
-                )
-            case Absent => ()
+        val multi = e.modifiers.ctrl || e.modifiers.meta
+        ReactiveValue.update(
+            sortSlot,
+            cur =>
+                if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
+                else SortKey.plain(cur, path, removableSortFlag, interactive.contains),
+            onSortF
+        )
+    end toggleSort
 
     /** The rows as the reader sees them, flat and in order: a collapsed node contributes one
       * row and its children none.

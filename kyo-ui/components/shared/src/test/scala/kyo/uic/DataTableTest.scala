@@ -3229,6 +3229,70 @@ class DataTableTest extends UicTest:
             assert(afterMulti.map(_.column) == List("Name", "Price"), "Ctrl+Enter adds one, as Ctrl+click does")
     }
 
+    private def sortedTable(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id)
+            .columns(uic.column("Name")(_.name).sortBy(_.name), uic.column("Price")(_.price.toString).sortBy(_.price))
+
+    // The sort lives somewhere else (a route, a parent): the table sorts by it and hands a header press over.
+    "a sort bound one way orders the rows by the signal, and a header press is reported without being written" in {
+        val byNameDown = List(uic.SortKey("Name", uic.SortDirection.Descending))
+        for
+            held <- Signal.initRef(byNameDown)
+            seen <- Signal.initRef(List.empty[uic.SortKey])
+            ui = sortedTable.sort(held.readOnly).onSortChange(seen.set).render
+            shown   <- bodyNames(ui)
+            headers <- elementsWithClass(ui, "p-datatable-sortable-column")
+            _       <- press(headers(1), UI.Keyboard.Enter)
+            h       <- held.get
+            s       <- seen.get
+        yield
+            assert(shown == Chunk("B", "A"), s"the rows follow the signal: $shown")
+            assert(h == byNameDown, s"the signal still holds $h")
+            assert(s.map(_.column) == List("Price"), s"the press reported $s")
+        end for
+    }
+
+    "a two-way sort is written before the table reports it" in {
+        for
+            sort <- Signal.initRef(List.empty[uic.SortKey])
+            seen <- Signal.initRef((List.empty[uic.SortKey], List.empty[uic.SortKey]))
+            ui = sortedTable.sort(sort).onSortChange(next => sort.get.map(held => seen.set((next, held)))).render
+            headers <- elementsWithClass(ui, "p-datatable-sortable-column")
+            _       <- press(headers(0), UI.Keyboard.Enter)
+            s       <- seen.get
+        yield assert(s._1.map(_.column) == List("Name") && s._1 == s._2, s"reported, held: $s")
+    }
+
+    "a sort bound one way with nothing to hear a press says so, and a constant one with onSortChange sorts" in {
+        for
+            held  <- Signal.initRef(List.empty[uic.SortKey])
+            seen  <- Signal.initRef(List.empty[uic.SortKey])
+            deaf  <- elementsWithClass(sortedTable.sort(held.readOnly).render, "p-uic-key-error")
+            heard <- elementsWithClass(sortedTable.sort(held.readOnly).onSortChange(_ => ()).render, "p-uic-key-error")
+            fixed = sortedTable.sort(List.empty[uic.SortKey]).onSortChange(seen.set).render
+            headers <- elementsWithClass(fixed, "p-datatable-sortable-column")
+            _       <- press(headers(0), UI.Keyboard.Enter)
+            s       <- seen.get
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onSortChange"), s"a sort nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, s"a sort with somewhere to go: ${heard.map(textOf)}")
+            assert(headers.size == 2 && s.map(_.column) == List("Name"), s"a constant sort reports a press: $s")
+        end for
+    }
+
+    "restore writes a two-way sort and leaves a one-way sort to its owner" in {
+        val restored = List(uic.SortKey("Price", uic.SortDirection.Ascending))
+        for
+            twoWay <- Signal.initRef(List.empty[uic.SortKey])
+            oneWay <- Signal.initRef(List.empty[uic.SortKey])
+            _      <- sortedTable.sort(twoWay).restore(TableState(sort = restored))
+            _      <- sortedTable.sort(oneWay.readOnly).onSortChange(_ => ()).restore(TableState(sort = restored))
+            t      <- twoWay.get
+            o      <- oneWay.get
+        yield assert(t == restored && o.isEmpty, s"two-way $t, one-way $o")
+        end for
+    }
+
     "a selectable row selects on Enter and on Space" in {
         for
             sel <- Signal.initRef(Set.empty[Item])
