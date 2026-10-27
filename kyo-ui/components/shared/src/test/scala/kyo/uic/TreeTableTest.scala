@@ -76,6 +76,79 @@ class TreeTableTest extends UicTest:
         end for
     }
 
+    private val kid = Row("k1", "Kay")
+
+    private def parentTable(using Frame) =
+        uic.TreeTable[Row]().nodes(uic.TreeTableNode(r1, children = List(uic.TreeTableNode(kid))), uic.TreeTableNode(r2))
+            .rowKey(_.id).columns(uic.column("Name")(_.name))
+
+    private def names(ui: UI)(using Frame): Chunk[String] < Sync =
+        elementsWithClass(ui, "p-treetable-tbody").map(_.flatMap(b => Chunk(textOf(b))))
+
+    // Which nodes are open lives somewhere else (a route, a parent): the table opens those and hands a toggle over.
+    "nodes expanded one way follow the signal, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(Set(r1))
+            seen <- Signal.initRef(Set.empty[Row])
+            ui = parentTable.expanded(held.readOnly).onExpandedChange(seen.set).render
+            open    <- names(ui)
+            toggles <- elementsWithClass(ui, "p-treetable-node-toggle-button")
+            _       <- click(toggles(0))
+            h       <- held.get
+            s       <- seen.get
+        yield
+            assert(open.mkString.contains("Kay"), s"the open node shows its child: $open")
+            assert(h == Set(r1) && s.isEmpty, s"held $h, reported $s")
+        end for
+    }
+
+    "two-way expansion is written before the table reports it" in {
+        for
+            exp  <- Signal.initRef(Set.empty[Row])
+            seen <- Signal.initRef((Set.empty[Row], Set.empty[Row]))
+            ui = parentTable.expanded(exp).onExpandedChange(next => exp.get.map(h => seen.set((next, h)))).render
+            toggles <- elementsWithClass(ui, "p-treetable-node-toggle-button")
+            _       <- click(toggles(0))
+            s       <- seen.get
+        yield assert(s == (Set(r1), Set(r1)), s"reported, held: $s")
+    }
+
+    "a selection bound one way is reported on a row press and not written" in {
+        for
+            held <- Signal.initRef(Set(r2))
+            seen <- Signal.initRef(Set.empty[Row])
+            ui = table.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).onSelectionChange(seen.set).render
+            marked <- elementsWithClass(ui, "p-treetable-row-selected")
+            rows   <- elementsWithClass(ui, "p-treetable-selectable-row")
+            _      <- press(rows(0), UI.Keyboard.Enter)
+            h      <- held.get
+            s      <- seen.get
+        yield
+            assert(marked.size == 1, s"the signal's row is the one marked: ${marked.size}")
+            assert(h == Set(r2) && s == Set(r1, r2), s"held $h, reported $s")
+        end for
+    }
+
+    "one-way expansion and selection that nothing hears say so, and onNodeToggle or onRowClick count as hearing" in {
+        for
+            e    <- Signal.initRef(Set.empty[Row])
+            s    <- Signal.initRef(Set.empty[Row])
+            deaf <- elementsWithClass(
+                parentTable.expanded(e.readOnly).selectionMode(uic.SelectionMode.Single).selection(s.readOnly).render,
+                "p-uic-key-error"
+            )
+            byOld <- elementsWithClass(
+                parentTable.expanded(e.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
+                    .selection(s.readOnly).onRowClick(_ => ()).render,
+                "p-uic-key-error"
+            )
+        yield
+            val text = deaf.map(textOf).mkString
+            assert(text.contains("onExpandedChange") && text.contains("onSelectionChange"), s"nobody hears: $text")
+            assert(byOld.isEmpty, s"onNodeToggle and onRowClick hear: ${byOld.map(textOf)}")
+        end for
+    }
+
     "a selectable row selects on Enter and on Space" in {
         for
             sel <- Signal.initRef(Set.empty[Row])
