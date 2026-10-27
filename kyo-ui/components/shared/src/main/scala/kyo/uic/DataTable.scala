@@ -2540,9 +2540,19 @@ final case class DataTable[A] private (
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
         rootElement(order, navOn)(
-            (List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot).map(toChild)*
+            (List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot ++ sourceRun)
+                .map(toChild)*
         )
     end renderWith
+
+    /** A bound source fetches for as long as the table is mounted, through a mount of its own that shows nothing.
+      *
+      * Its own rather than the table's, because a table that owns no state has no mount, and a source is not a reason
+      * to give it one: until this runs, the table renders itself loading from the source's signals, which is what lets
+      * a page bind a source with no mount of its own and no copy of the table as that mount's placeholder.
+      */
+    private def sourceRun(using Frame): List[UI] =
+        sourceV.toList.map(src => UI.mounted(src.run.andThen(UI.empty)).placeholder(UI.empty))
 
     /** The page size as the table pages by it: the bound one's value, else the constant (one where nothing pages). */
     private def pageSizeReading(using Frame): Reading[Int] =
