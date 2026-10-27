@@ -1270,7 +1270,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(preamble + """def x(r: SignalRef[Set[String]]) = uic.Tree[String]().expanded(r).selection(r)""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Boolean]) = uic.Tree[String]().expanded(r)""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.Tree[String]().selected(r)""")
-        typeCheckFailure(preamble + """def x = uic.Listbox[String]().selection(Set("a"))""")
+        // A constant set is a selection bound one way now; a bare id is still not a set.
+        typeCheck(preamble + """def x = uic.Listbox[String]().selection(Set("a"))""")
+        typeCheckFailure(preamble + """def x = uic.Listbox[String]().selection("a")""")
     }
 
     "structural controls' chained setters keep the concrete type" in {
@@ -1335,6 +1337,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x(r: SignalRef[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(10).page(r).onPageChange(_ => ())"""
         )
         // The page and the rows per page are state slots: a constant or a signal binds one way and a click is reported.
+        typeCheck(
+            preamble + """def x(s: Signal[Set[String]])(using Frame): (uic.MultiSelect[String], uic.Listbox[String], uic.Tree[String], uic.TreeSelect[String]) = (uic.MultiSelect[String]().selection(s).onChange(_ => ()), uic.Listbox[String]().selection(s).onChange(_ => ()), uic.Tree[String]().selection(s).onSelectionChange(_ => ()).expanded(Set("a")).onExpandedChange(_ => ()), uic.TreeSelect[String]().selection(s).onChange(_ => ()).expanded(s).onExpandedChange(_ => ()))"""
+        )
         typeCheck(
             preamble + """def x(w: Signal[Map[List[String], Double]], o: Signal[List[List[String]]])(using Frame): uic.DataTable[String] = uic.DataTable[String]().globalFilter("a").columnWidths(w).onColumnWidthsChange(_ => ()).columnOrder(o).onColumnOrderChange(_ => ())"""
         )

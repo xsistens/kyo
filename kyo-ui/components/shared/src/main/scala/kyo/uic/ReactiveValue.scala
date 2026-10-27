@@ -25,6 +25,12 @@ sealed private[uic] trait ReactiveValue[A]:
       */
     private[uic] def dyn: Maybe[Signal[A]]
 
+    /** The binding as the caller gave it, for a host that hands it on to a component it embeds. */
+    private[uic] def bound: A | Signal[A] =
+        this match
+            case ReactiveValue.Const(a) => a
+            case ReactiveValue.Dyn(sig) => sig
+
     /** The ref a reader's change is written into, if this binds two way, else `Absent`. */
     private[uic] def writable: Maybe[SignalRef[A]] = Absent
 end ReactiveValue

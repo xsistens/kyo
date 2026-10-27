@@ -84,4 +84,37 @@ class ListboxTest extends UicTest:
         )
     }
 
+    // The chosen set lives somewhere else (a route, a parent): the list shows it and hands a click over.
+    "a selection bound one way is shown, and a click is reported without being written" in {
+        for
+            held <- Signal.initRef(Set("b"))
+            seen <- Signal.initRef(Set.empty[String])
+            ui = fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).onChange(seen.set).render
+            rows  <- elementsWithClass(ui, "p-listbox-option")
+            _     <- click(rows(0))
+            h     <- held.get
+            s     <- seen.get
+            deaf  <- elementsWithClass(fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).render, "p-uic-key-error")
+            byOld <- elementsWithClass(
+                fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).onItemClick(_ => ()).render,
+                "p-uic-key-error"
+            )
+        yield
+            assert(h == Set("b") && s == Set("a", "b"), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(byOld.isEmpty, s"onItemClick hears: ${byOld.map(textOf)}")
+        end for
+    }
+
+    "a two-way selection is written before the list reports it" in {
+        for
+            sel  <- Signal.initRef(Set.empty[String])
+            seen <- Signal.initRef((Set.empty[String], Set.empty[String]))
+            ui = fruit.selectionMode(uic.SelectionMode.Multiple).selection(sel).onChange(n => sel.get.map(h => seen.set((n, h)))).render
+            rows <- elementsWithClass(ui, "p-listbox-option")
+            _    <- click(rows(1))
+            s    <- seen.get
+        yield assert(s == (Set("b"), Set("b")), s"reported, held: $s")
+    }
+
 end ListboxTest

@@ -218,4 +218,24 @@ class TreeSelectTest extends UicTest:
         end for
     }
 
+    // The chosen nodes live somewhere else: the field shows them and hands a pick in its panel over.
+    "a selection bound one way is shown, and a pick is reported without being written" in {
+        for
+            held <- Signal.initRef(Set.empty[String])
+            seen <- Signal.initRef(Set.empty[String])
+            open <- Signal.initRef(true)
+            exp  <- Signal.initRef(Set("src"))
+            hi   <- Signal.initRef(-1)
+            ui = treeSelect.selection(held.readOnly).onChange(seen.set).expanded(exp).wired(open, exp, hi, "ts")
+            main <- elementsWithClass(ui, "p-tree-node-label").map(_.find(textOf(_) == "main").get)
+            _    <- click(main)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(treeSelect.selection(held.readOnly).expanded(exp).wired(open, exp, hi, "ts"), "p-uic-key-error")
+        yield
+            assert(h.isEmpty && s == Set("main"), s"held $h, reported $s")
+            assert(deaf.map(textOf).mkString.contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
 end TreeSelectTest

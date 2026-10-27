@@ -174,6 +174,7 @@ final case class Listbox[K] private (
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[K] => UI.Action] = Absent,
+    onChangeF: Maybe[Set[K] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
 ) extends Node, MultiChoiceFormControl[K], HasEmptyContent, HasAccessibleNameRef:
@@ -233,12 +234,19 @@ final case class Listbox[K] private (
       */
     def metaKeySelection(v: Boolean): Listbox[K] = copy(metaKeyFlag = v)
 
-    /** Binds the selection two-way to the set of chosen item ids: clicks update the set, ref changes re-render
-      * `aria-selected`. Spelled `selection` like every other picker's bound choice: a Listbox is the always-visible
-      * member of that family, not a different concept.
+    /** The set of chosen item ids. A `SignalRef` binds two way: clicks update the set, ref changes re-render
+      * `aria-selected`. A plain `Signal` or a constant binds one way: the list shows it and a click only reports the set it
+      * asks for to [[onChange]]; with neither [[onChange]] nor [[onItemClick]] that is reported in a card. Spelled
+      * `selection` like every other picker's bound choice: a Listbox is the always-visible member of that family, not a
+      * different concept.
       */
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[K]]): Listbox[K] = copy(selectedRef = Present(SetBinding.of(ref)))
+    def selection(v: Set[K] | Signal[Set[K]]): Listbox[K] = copy(selectedRef = Present(SetBinding.of(ReactiveValue[Set[K]](v))))
+
+    /** Fired with the set a click made of the selection, after a two-way [[selection]] is written, and before
+      * [[onItemClick]]. Nothing fires when the click changed nothing.
+      */
+    def onChange(f: Set[K] => UI.Action)(using Frame): Listbox[K] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Package-internal: an embedding host's typed selection, read and written through its own keys. */
     private[uic] def selectionBinding(b: SetBinding[K]): Listbox[K] = copy(selectedRef = Present(b))
@@ -338,7 +346,7 @@ final case class Listbox[K] private (
     private def renderQuery(validity: FieldValidity)(using Frame): UI =
         // A switch that may turn on (a signal, or `true`) needs a query to filter by; only a constant `false` does not.
         val ownsQuery = filterQueryRef.isEmpty && !filterOn.const.exists(on => !on)
-        UI.mounted {
+        val list      = UI.mounted {
             for
                 cmds <- UI.commands
                 // The id the highlight is announced through. A caller's own `id` wins, and where
@@ -351,6 +359,20 @@ final case class Listbox[K] private (
                     else filterQueryRef: Maybe[SignalRef[String]] < Sync
             yield subscribed(q, Present(hi), Present(base), validity)
         }.placeholder(subscribed(filterQueryRef, Absent, Absent, validity))
+        // A selection bound one way that nothing hears: every click is painted away again.
+        val heard = selectionModeV == SelectionMode.None || selectedRef.forall(_.heard(onChangeF.orElse(onItemClickF)))
+        if heard then list
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "Listbox",
+                    "the selection is bound one way and nothing hears a click, so the reader cannot change it; add onChange, " +
+                        "or bind a SignalRef",
+                    Nil
+                ),
+                list
+            )
+        end if
     end renderQuery
 
     /** The selection/query subscriptions around one [[body]] render. */
@@ -575,7 +597,10 @@ final case class Listbox[K] private (
     private def activate(id: K, meta: Boolean = false)(using Frame): UI.Action =
         val setSelection: UI.Action = selectedRef match
             case Present(ref) if selectionModeV != SelectionMode.None =>
-                ref.update(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
+                ref.update(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur)).map {
+                    case Present(now) => onChangeF.fold[UI.Action](())(_(now))
+                    case Absent       => ()
+                }
             case _ => ()
         val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)

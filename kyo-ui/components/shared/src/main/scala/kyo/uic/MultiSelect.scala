@@ -133,12 +133,14 @@ final case class MultiSelect[A] private (
       */
     def optionDisabled(f: A => Boolean): MultiSelect[A] = copy(optionDisabledF = Present(f))
 
-    /** Binds the selection two-way to the set of chosen options: toggles write the options that carry the chosen
-      * [[optionKey]]s, ref changes reselect the rows whose keys its members carry. A member no option carries stays in
-      * the set while the others toggle, and the trigger shows it from the value itself.
+    /** The set of chosen options. A `SignalRef` binds two way: toggles write the options that carry the chosen
+      * [[optionKey]]s, ref changes reselect the rows whose keys its members carry. A plain `Signal` or a constant binds
+      * one way: the field shows it and a toggle only reports the set it asks for to [[onChange]], so the app writes its
+      * own state; with no [[onChange]] that is reported in a card. A member no option carries stays in the set while the
+      * others toggle, and the trigger shows it from the value itself.
       */
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice(ref)))
+    def selection(v: Set[A] | Signal[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice(ReactiveValue[Set[A]](v))))
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no row carries
       * yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
@@ -352,7 +354,7 @@ final case class MultiSelect[A] private (
       * never read here.
       */
     private def shown(using Frame): Reading[(Set[A], Boolean, Maybe[String])] =
-        val held: Reading[Set[A]] = choice.fold(Reading.Fixed(Set.empty[A]))(c => Reading.Live(c.ref))
+        val held: Reading[Set[A]] = choice.fold(Reading.Fixed(Set.empty[A]))(_.reading)
         held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
             (h, ld.getOrElse(false), ph)
         }
@@ -576,7 +578,18 @@ final case class MultiSelect[A] private (
         end if
 
         val field = validity.follow(el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
-        if unknownCard.isEmpty then field else fragment((field :: unknownCard)*)
+        // A selection bound one way that nothing hears: every toggle is painted away again.
+        val unheard: List[UI] =
+            if choice.forall(_.heard(onChangeF)) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "MultiSelect",
+                    "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange, " +
+                        "or bind a SignalRef",
+                    Nil
+                ))
+        val cards = unknownCard ++ unheard
+        if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
 
     /** The options the panel is showing, the positions the highlight may land on, and where it is

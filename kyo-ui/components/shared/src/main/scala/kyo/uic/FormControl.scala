@@ -89,14 +89,15 @@ trait ChoiceFormControl[A] extends FormControl:
 end ChoiceFormControl
 
 /** A choice of several among typed options ([[MultiSelect]], [[MultiSelectButton]], [[Listbox]], [[TreeSelect]]): the set of chosen options
-  * bound two-way, plus a focus-loss trigger that reports it. `bind` takes a `FormField[Set[A]]`.
+  * (a ref binds two way, a signal or a constant one way, as in [[ChoiceFormControl]]), plus a focus-loss trigger that
+  * reports it. `bind` takes a `FormField[Set[A]]` and hands its ref over, so a bound field is two-way.
   *
   * The members carry a `@targetName` because `SignalRef[Set[A]]` and `Set[A] => ?` erase to the same signatures as
   * [[ChoiceFormControl]]'s members, so a control may carry both traits without a clash.
   */
 trait MultiChoiceFormControl[A] extends FormControl:
     @targetName("selectionSet")
-    def selection(ref: SignalRef[Set[A]]): Self
+    def selection(v: Set[A] | Signal[Set[A]]): Self
     @targetName("onBlurSet")
     def onBlur(f: Set[A] => UI.Action)(using Frame): Self
 end MultiChoiceFormControl

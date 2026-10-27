@@ -60,10 +60,18 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   row selection is the same slot wearing different clothes. Assume the list is short, not complete.
   `Select`/`CascadeSelect`/`SelectButton` were the third: `selection(A | Signal[A])` and
   `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`).
-  Still outstanding: `MultiSelect`/`Listbox`/`TreeSelect` take `SignalRef` and nothing else, and
-  `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
+  `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below.
+  Still outstanding: `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
   constant/`SignalRef` overload pair through two private ADTs (`CheckBox.Checked`,
   `Input.Value`) that duplicate `ReactiveValue` without its one-way case.
+- **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
+  every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
+  `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is
+  written first, atomically for a step, then the `on<Slot>Change` callback hears the new value, whatever the binding
+  (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the pickers keep their family's
+  `onChange`). A one-way binding nothing hears is a card (`ReactiveValue.heard`), where an older per-item event
+  (`onRowClick`, `onNodeToggle`, `onItemClick`) counts as hearing it. `restore` writes only two-way slots. A host that
+  embeds a component hands a slot on as it was bound (`ReactiveValue.bound`), never as a ref it made up.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
   none (`Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike), so check which
@@ -179,7 +187,7 @@ Rules a new one follows:
 ## A choice binds the option, never a key
 
 What a reader chooses binds as the app's own type: `selection(A | Signal[A])` where the field always holds an
-option, `selection(Maybe[A] | Signal[Maybe[A]])` where it may stay empty, `selection(SignalRef[Set[A]])` for several.
+option, `selection(Maybe[A] | Signal[Maybe[A]])` where it may stay empty, `selection(Set[A] | Signal[Set[A]])` for several.
 There is no public setter that takes the key a component compares by. Rules:
 
 - **Keys stay inside.** `optionKey` is how options are matched (panel, keyboard, hidden `<input name>`), and
