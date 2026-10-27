@@ -189,6 +189,22 @@ class RowSourceTest extends UicTest:
         yield assert(blocksOf(c, "a") == List(0), "one page asked for, one block fetched")
     }
 
+    // A reader who moves on from a page that is still loading wants the next one, not the one they left. The feed used
+    // to finish waiting for the old range before it looked at the new one, so a slow page held up every page after it.
+    "a new page is served while the one the reader left is still fetching" in {
+        for
+            latch <- Latch.init(1)
+            p     <- probe(gate = Present((1, latch)))
+            _     <- until(p.rows)(_ == all.take(2))
+            _     <- until(p.calls)(c => blocksOf(c, "a").toSet == Set(0, 1))
+            _     <- p.source.page.set(1)
+            _     <- until(p.loading)(_ == true)
+            _     <- p.source.page.set(3)
+            rows  <- until(p.rows)(_ == all.slice(6, 8))
+            _     <- latch.release
+        yield assert(rows == all.slice(6, 8), "page 4 arrived with block 1 still held")
+    }
+
     "a known total stops the reach at the last block" in {
         for
             p <- probe()
@@ -310,6 +326,123 @@ class RowSourceTest extends UicTest:
             assert(held == Total.Unknown(true, 8), "the old query had been served eight rows")
             assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
     }
+
+    // ---- reloading ----
+
+    /** A running source over rows that can change behind it, the way a server's do. */
+    private def overData(
+        data: SignalRef[Seq[Row]],
+        first: Maybe[Latch] = Absent,
+        gate: Maybe[AtomicRef[Maybe[Latch]]] = Absent
+    )(using
+        Frame
+    ): (RowSource[String, Row], Channel[Seq[Row]], SignalRef[Int]) < (Async & Scope) =
+        for
+            q     <- Signal.initRef("a")
+            calls <- Signal.initRef(0)
+            src   <- RowSource.init(q, pageSize = 2) { (_, offset, limit) =>
+                for
+                    n    <- calls.getAndUpdate(_ + 1)
+                    rows <- data.get
+                    // The very first fetch can be held, so a test can let it land after a reload.
+                    _ <- (first match
+                        case Present(latch) if n == 0 => latch.await
+                        case _                        => ()
+                    ): Unit < Async
+                    // And every fetch can be held from a moment the test picks, so it can read a state before any
+                    // fetch has answered.
+                    shut <- gate.fold(Absent: Maybe[Latch] < Sync)(_.get)
+                    _    <- shut.fold(Kyo.unit: Unit < Async)(_.await)
+                yield (rows.slice(offset, offset + limit), Total.Known(rows.size))
+            }
+            _    <- src.run
+            rows <- watch(src.rows)
+        yield (src, rows, calls)
+
+    // The rows behind a source changed (someone else edited them on the server). The cache still holds the old ones,
+    // so asking for the page again would only answer from it; reload is what fetches them again. Until the new rows
+    // land, the ones on the screen stay, since they are still the best answer anyone has.
+    "a reload fetches the page again and keeps the rows shown until the new ones land" in {
+        for
+            data               <- Signal.initRef[Seq[Row]](all)
+            (src, rows, calls) <- overData(data)
+            _                  <- until(rows)(_ == all.take(2))
+            before             <- calls.get
+            _                  <- data.set(all.reverse)
+            _                  <- src.reload
+            kept               <- src.rows.current
+            fresh              <- until(rows)(_ == all.reverse.take(2))
+            after              <- calls.get
+            page               <- src.page.get
+        yield
+            assert(kept == all.take(2), s"the old rows stay until the new ones arrive: $kept")
+            assert(fresh == all.reverse.take(2), "and the page is the server's new one")
+            assert(after > before, "which took a fetch, not the buffer")
+            assert(page == 0, "on the page the reader was on")
+    }
+
+    // A reset is a source as it opened: the first page, no rows and no length, so a table over it shows itself loading
+    // again rather than the old rows under a mask.
+    // The buffer still holds the old first page when the reset lands, and the rows behind it have changed, so a turn that
+    // got past the reset would put the old page back where the reset had cleared it.
+    "a reset puts the source back to how it opened, and fetches the first page again" in {
+        for
+            data           <- Signal.initRef[Seq[Row]](all)
+            gate           <- AtomicRef.init(Absent: Maybe[Latch])
+            (src, rows, _) <- overData(data, gate = Present(gate))
+            _              <- until(rows)(_ == all.take(2))
+            _              <- src.page.set(3)
+            _              <- until(rows)(_ == all.slice(6, 8))
+            shut           <- Latch.init(1)
+            _              <- gate.set(Present(shut))
+            _              <- data.set(all.reverse)
+            _              <- src.reset
+            page           <- src.page.get
+            demand         <- src.demand.get
+            shown          <- src.rows.current
+            total          <- src.total.current
+            busy           <- src.loading.current
+            _              <- shut.release
+            windows        <- collect(rows)(_ == all.reverse.take(2))
+        yield
+            assert(page == 0 && demand == RowSource.Demand(0, 2), s"back on the first page: $page, $demand")
+            assert(shown.isEmpty && total == Total.Unknown(false), s"with no rows and no length: $shown, $total")
+            assert(busy, "and loading")
+            assert(
+                !windows.exists(w => w == all.take(2) || w == all.slice(6, 8)),
+                s"no rows from before the reset came back: $windows"
+            )
+    }
+
+    // A fetch started before the reload answers for the rows as they were. Landing after the reload, it must not put
+    // them back on the screen over the rows fetched since.
+    "a fetch from before a reload does not land after it" in {
+        for
+            data               <- Signal.initRef[Seq[Row]](all)
+            held               <- Latch.init(1)
+            (src, rows, calls) <- overData(data, Present(held))
+            // The held fetch has to be the one from before the reload: the feed starts on a fiber of its own, and a
+            // reload landing first would make the first fetch a fetch of the new generation, held and never let go.
+            started <- watch(calls)
+            _       <- until(started)(_ >= 1)
+            _       <- data.set(all.reverse)
+            _       <- src.reload
+            _       <- until(rows)(_ == all.reverse.take(2))
+            _       <- held.release
+            // Another page, fetched and shown, is the barrier: the held fetch has landed by the time the window moved on
+            // and back, and every window published in between is collected, not skipped.
+            _     <- src.page.set(1)
+            moved <- collect(rows)(_ == all.reverse.slice(2, 4))
+            _     <- src.page.set(0)
+            back  <- collect(rows)(_ == all.reverse.take(2))
+            stale <- rows.drain
+            windows = moved ++ back ++ stale
+        yield assert(!windows.contains(all.take(2)), s"the old first page came back: $windows")
+    }
+
+    /** Every value taken up to and including the first that satisfies `p`. */
+    private def collect[A](ch: Channel[A])(p: A => Boolean)(using Frame): Chunk[A] < (Async & Abort[Closed]) =
+        ch.take.map(v => if p(v) then Chunk(v) else collect(ch)(p).map(Chunk(v) ++ _))
 
     // ---- a source runs where it is bound ----
 
