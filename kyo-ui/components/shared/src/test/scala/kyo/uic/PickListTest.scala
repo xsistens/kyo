@@ -235,4 +235,49 @@ class PickListTest extends UicTest:
         yield assert(left == Seq("a", "b") && moved.isEmpty)
     }
 
+    // The two columns and their selections live somewhere else: the control shows them and hands a transfer over.
+    "columns and selections bound one way are reported on a transfer and not written" in {
+        for
+            src     <- Signal.initRef(Seq("a", "b"))
+            tgt     <- Signal.initRef(Seq("c"))
+            srcSel  <- Signal.initRef(Set("a"))
+            seenSrc <- Signal.initRef(Seq("-"))
+            seenTgt <- Signal.initRef(Seq("-"))
+            seenSel <- Signal.initRef(Set("-"))
+            ui = uic.PickList[String]()
+                .sourceItems(src.readOnly)(identity).onSourceItemsChange(seenSrc.set)
+                .targetItems(tgt.readOnly).onTargetItemsChange(seenTgt.set)
+                .sourceSelection(srcSel.readOnly).onSourceSelectionChange(seenSel.set)
+                .targetSelection(Set.empty[String]).onTargetSelectionChange(_ => ())
+                .render
+            move <- button(ui, "Move to Target")
+            _    <- click(move)
+            s    <- src.get
+            t    <- tgt.get
+            sel  <- srcSel.get
+            rs   <- seenSrc.get
+            rt   <- seenTgt.get
+            rsel <- seenSel.get
+        yield
+            assert(s == Seq("a", "b") && t == Seq("c") && sel == Set("a"), s"held $s, $t, $sel")
+            assert(rs == Seq("b") && rt == Seq("c", "a") && rsel.isEmpty, s"reported $rs, $rt, $rsel")
+    }
+
+    "one-way columns nothing hears say so" in {
+        for
+            src  <- Signal.initRef(Seq("a"))
+            deaf <- elementsWithClass(
+                uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(Seq.empty[String])
+                    .sourceSelection(Set.empty[String]).targetSelection(Set.empty[String]).render,
+                "p-uic-key-error"
+            )
+        yield
+            val text = deaf.map(textOf).mkString
+            assert(
+                text.contains("onSourceItemsChange") && text.contains("onTargetItemsChange") &&
+                    text.contains("onSourceSelectionChange") && text.contains("onTargetSelectionChange"),
+                s"nobody hears: $text"
+            )
+    }
+
 end PickListTest

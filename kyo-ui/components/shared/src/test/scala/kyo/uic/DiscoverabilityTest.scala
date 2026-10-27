@@ -1338,6 +1338,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         )
         // The page and the rows per page are state slots: a constant or a signal binds one way and a click is reported.
         typeCheck(
+            preamble + """def x(o: Signal[Seq[String]])(using Frame): (uic.OrderList[String], uic.PickList[String]) = (uic.OrderList[String]().items(o)(identity).onItemsChange(_ => ()).selection(Set.empty[String]).onSelectionChange(_ => ()), uic.PickList[String]().sourceItems(o)(identity).onSourceItemsChange(_ => ()).targetItems(Seq.empty[String]).onTargetItemsChange(_ => ()).sourceSelection(Set.empty[String]).onSourceSelectionChange(_ => ()).targetSelection(Set.empty[String]).onTargetSelectionChange(_ => ()))"""
+        )
+        typeCheck(
             preamble + """def x(s: Signal[Set[String]])(using Frame): (uic.MultiSelect[String], uic.Listbox[String], uic.Tree[String], uic.TreeSelect[String]) = (uic.MultiSelect[String]().selection(s).onChange(_ => ()), uic.Listbox[String]().selection(s).onChange(_ => ()), uic.Tree[String]().selection(s).onSelectionChange(_ => ()).expanded(Set("a")).onExpandedChange(_ => ()), uic.TreeSelect[String]().selection(s).onChange(_ => ()).expanded(s).onExpandedChange(_ => ()))"""
         )
         typeCheck(
@@ -1827,7 +1830,8 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(items: SignalRef[Seq[String]], sel: SignalRef[Set[String]])(using Frame): uic.OrderList[String] = uic.OrderList[String]().items(items)(identity).itemKey(identity).itemTemplate(s => span(s)).selection(sel).disabled(false).accessibleName("List")"""
         )
-        typeCheckFailure(preamble + """def x = uic.OrderList[String]().items(Seq("A"))""")
+        // A constant order binds one way now; the label is still required.
+        typeCheckFailure(preamble + """def x: uic.OrderList[String] = uic.OrderList[String]().items(Seq("A"))""")
         typeCheckFailure(
             preamble + """def x(items: SignalRef[Seq[String]]): uic.OrderList[String] = uic.OrderList[String]().items(items)"""
         )
@@ -1838,7 +1842,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(s: SignalRef[Seq[String]], t: SignalRef[Seq[String]], ss: SignalRef[Set[String]], ts: SignalRef[Set[String]])(using Frame): uic.PickList[String] = uic.PickList[String]().sourceItems(s)(identity).targetItems(t).itemKey(identity).itemTemplate(x => span(x)).sourceSelection(ss).targetSelection(ts).showSourceControls(false).showTargetControls(false).disabled(false)"""
         )
-        typeCheckFailure(preamble + """def x = uic.PickList[String]().sourceItems(Seq("A"))""")
+        typeCheckFailure(preamble + """def x: uic.PickList[String] = uic.PickList[String]().sourceItems(Seq("A"))""")
         typeCheckFailure(preamble + """def x(t: SignalRef[Seq[String]]) = uic.PickList[String]().targetItems(t)(identity)""")
         // The column bindings read as two of OrderList's one, not as a different model.
         typeCheckFailure(preamble + """def x(s: SignalRef[Seq[String]]) = uic.PickList[String]().source(s)(identity)""")
