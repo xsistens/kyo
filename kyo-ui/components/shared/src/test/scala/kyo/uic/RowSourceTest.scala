@@ -365,19 +365,27 @@ class RowSourceTest extends UicTest:
     "a reload fetches the page again and keeps the rows shown until the new ones land" in {
         for
             data               <- Signal.initRef[Seq[Row]](all)
-            (src, rows, calls) <- overData(data)
+            gate               <- AtomicRef.init(Absent: Maybe[Latch])
+            (src, rows, calls) <- overData(data, gate = Present(gate))
             _                  <- until(rows)(_ == all.take(2))
             before             <- calls.get
-            _                  <- data.set(all.reverse)
-            _                  <- src.reload
-            kept               <- src.rows.current
-            fresh              <- until(rows)(_ == all.reverse.take(2))
-            after              <- calls.get
-            page               <- src.page.get
+            // The fetch the reload makes is held, so what the reader sees while it is out can be read at all.
+            shut <- Latch.init(1)
+            _    <- gate.set(Present(shut))
+            _    <- data.set(all.reverse)
+            _    <- src.reload
+            kept <- src.rows.current
+            busy <- src.loading.current
+            _    <- shut.release
+            // Every window up to the new page: the old page or the new one, never an empty or a cut one between them.
+            windows <- collect(rows)(_ == all.reverse.take(2))
+            after   <- calls.get
+            page    <- src.page.get
         yield
             assert(kept == all.take(2), s"the old rows stay until the new ones arrive: $kept")
-            assert(fresh == all.reverse.take(2), "and the page is the server's new one")
-            assert(after > before, "which took a fetch, not the buffer")
+            assert(busy, "while the source says it is loading")
+            assert(windows.forall(w => w == all.take(2) || w == all.reverse.take(2)), s"nothing else in between: $windows")
+            assert(after > before, "the new page took a fetch, not the buffer")
             assert(page == 0, "on the page the reader was on")
     }
 
