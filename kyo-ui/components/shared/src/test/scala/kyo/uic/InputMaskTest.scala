@@ -58,4 +58,13 @@ class InputMaskTest extends UicTest:
         end for
     }
 
+    "a commit its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef("1")
+            again <- repaintsAfter(uic.InputMask("99").value(held.readOnly).onChange(_ => ()).render, held)(t =>
+                field(t).map(f => handled(f.onChange.getOrElse(throw new AssertionError("no change handler"))("12")))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end InputMaskTest

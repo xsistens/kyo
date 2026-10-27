@@ -82,4 +82,15 @@ class ReactiveValueTest extends UicTest:
             assert(bindingOf(uic.Slider().value(sig)) == "one-way")
             assert(bindingOf(uic.Slider().value(ref.readOnly)) == "one-way")
     }
+    "a one-way field paints what its owner holds again after a report, and only then" in {
+        for
+            held <- Signal.initRef("a")
+            field = ReactiveValue.repainting(held.readOnly)((v, repaint) => UI.div.cssClass("probe").onClick(repaint)(v))
+            again <- repaintsAfter(field, held)(t => elementWithClass(t, "probe").map(click))
+            idle  <- repaintsAfter(field, held)(_ => Kyo.unit)
+        yield
+            assert(again, "the report did not paint the field again")
+            assert(!idle, "the field painted again with no report at all")
+    }
+
 end ReactiveValueTest

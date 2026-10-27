@@ -121,6 +121,23 @@ private[uic] object ReactiveValue:
       */
     def heard[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
         slot.exists(_.writable.isDefined) || report.isDefined
+
+    /** Draws a field the reader edits over a ONE-WAY signal, so that an edit its owner does not take is painted away.
+      *
+      * The browser changes a native control (a tick, a caret's text, a slider's thumb) before the report reaches the owner,
+      * and an owner that declines leaves the signal where it was, so nothing renders and the control keeps what the owner
+      * never accepted. `body` gets the value and a `repaint` to run after each report: it bumps a count this mount owns,
+      * the region reads the signal beside it, and the field is drawn again from what the owner holds. The morph then puts
+      * the control back (a bound box through its `data-kyo-bound` marker, a field through its value). An owner that took
+      * the edit draws the same value again, which changes nothing on screen. A static projection draws the placeholder,
+      * which has no reader to repaint for.
+      */
+    def repainting[A](sig: Signal[A])(body: (A, UI.Action) => UI)(using CanEqual[A, A], Frame): UI =
+        UI.mounted {
+            Signal.initRef(0).map(paints =>
+                Reading.Live(sig).and(Reading.Live(paints)).render((a, _) => body(a, paints.updateAndGet(_ + 1).unit))
+            )
+        }.placeholder(Reading.Live(sig).render(a => body(a, ())))
 end ReactiveValue
 
 /** A two-way reactive binding: a writable `SignalRef`. IS-A [[ReactiveValue.Dyn]] (and hence a

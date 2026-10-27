@@ -161,14 +161,24 @@ final case class Input private (
     def inputMask(mask: String): Input = copy(inputMaskV = Present(mask))
 
     private[uic] def render(using Frame): UI =
-        val validity                        = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        def field(shown: Maybe[String]): UI = typeV match
+        val validity                                            = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        def field(shown: Maybe[String], repaint: UI.Action): UI = typeV match
             case InputType.Text =>
-                buildField(withConstraints(input), shown, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(
+                    withConstraints(input),
+                    shown,
+                    repaint,
+                    _.placeholder(_),
+                    _.onInput(_),
+                    _.onChange(_),
+                    (bb, e) => bb.onBlur(e),
+                    validity
+                )
             case InputType.Email =>
                 buildField(
                     withConstraints(emailInput),
                     shown,
+                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -176,11 +186,12 @@ final case class Input private (
                     validity
                 )
             case InputType.Number =>
-                buildField(numberInput, shown, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(numberInput, shown, repaint, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
             case InputType.Password =>
                 buildField(
                     withConstraints(passwordInput),
                     shown,
+                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -191,6 +202,7 @@ final case class Input private (
                 buildField(
                     withConstraints(telInput),
                     shown,
+                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -201,19 +213,21 @@ final case class Input private (
                 buildField(
                     withConstraints(urlInput),
                     shown,
+                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
                     (bb, e) => bb.onBlur(e),
                     validity
                 )
-        // A two-way ref is kyo-ui's own binding; a one-way signal re-renders the field, and the morph leaves the focused
-        // field's text alone, so the caret survives the owner writing back what the reader typed.
+        // A two-way ref is kyo-ui's own binding. A one-way signal draws the field from what its owner holds and paints it
+        // again after each report (ReactiveValue.repainting): an echo of what the reader typed leaves the focused field's
+        // caret alone, and an edit the owner did not take is put back.
         val built = valueBinding match
-            case Present(ReactiveVariable(_))    => field(Absent)
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => field(Present(v)))
-            case Present(ReactiveValue.Const(v)) => field(Present(v))
-            case Absent                          => field(Absent)
+            case Present(ReactiveVariable(_))    => field(Absent, ())
+            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => field(Present(v), repaint))
+            case Present(ReactiveValue.Const(v)) => field(Present(v), ())
+            case Absent                          => field(Absent, ())
         val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
         if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
@@ -231,6 +245,7 @@ final case class Input private (
     private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
         shown: Maybe[String],
+        repaint: UI.Action,
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
@@ -274,8 +289,8 @@ final case class Input private (
             case Present(TextValue.Const(v)) => b.aria("description", v)
             case Present(TextValue.Dyn(s))   => b.aria("description", s)
             case Absent                      => b
-        b = onInputF.map(f => setOnInput(b, f)).getOrElse(b)
-        b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
+        b = onInputF.map(f => setOnInput(b, v => f(v).andThen(repaint))).getOrElse(b)
+        b = onChangeF.map(f => setOnChange(b, v => f(v).andThen(repaint))).getOrElse(b)
         // onBlur carries no payload, so the current value is read from the binding
         // and the prepared effect is handed to the concrete factory's onBlur (passed
         // in like onInput/onChange, since neither is on the TextInput bound).

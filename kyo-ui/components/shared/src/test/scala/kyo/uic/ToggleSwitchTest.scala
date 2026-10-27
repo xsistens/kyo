@@ -42,4 +42,13 @@ class ToggleSwitchTest extends UicTest:
         end for
     }
 
+    "a toggle its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef(false)
+            again <- repaintsAfter(uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()).render, held)(t =>
+                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(true)))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end ToggleSwitchTest

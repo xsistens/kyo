@@ -157,16 +157,21 @@ final case class Password private (
     /** Resolves the bound value: the meter needs the CURRENT text, so with
       * `feedback(true)` the body renders under the signal; without feedback a
       * two-way ref binds directly (no re-render per keystroke), and a one-way
-      * signal re-renders the field with what it shows.
+      * signal draws the field from what it shows and paints it again after each
+      * report, so an edit its owner did not take is put back.
       */
     private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(_)) if !feedbackFlag => body("", rev, validity)
-            case Present(ReactiveValue.Dyn(sig))               => sig.render(v => body(v, rev, validity))
-            case Present(ReactiveValue.Const(v))               => body(v, rev, validity)
-            case Absent                                        => body("", rev, validity)
+            case Present(ReactiveVariable(_)) if !feedbackFlag => body("", rev, (), validity)
+            case Present(ReactiveVariable(ref))                => ref.render(v => body(v, rev, (), validity))
+            case Present(ReactiveValue.Dyn(sig))               =>
+                ReactiveValue.repainting(sig)((v, repaint) => body(v, rev, repaint, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, rev, (), validity)
+            case Absent                          => body("", rev, (), validity)
 
-    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
+    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], repaint: UI.Action, validity: FieldValidity)(using
+        Frame
+    ): UI =
         val revealed = rev.exists(_._2)
 
         // === the field (Input carries the shared text-field contract) ===========
@@ -197,9 +202,9 @@ final case class Password private (
                     end for
                 }
             case _ =>
-                onInputSF.foreach(f => in = in.onInput(f))
+                onInputSF.foreach(f => in = in.onInput(v => f(v).andThen(repaint)))
         end match
-        onChangeSF.foreach(f => in = in.onChange(f))
+        onChangeSF.foreach(f => in = in.onChange(v => f(v).andThen(repaint)))
         onBlurSF.foreach(f => in = in.onBlur(f))
         placeholderText match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
