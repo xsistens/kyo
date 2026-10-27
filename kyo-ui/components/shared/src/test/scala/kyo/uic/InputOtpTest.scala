@@ -55,4 +55,13 @@ class InputOtpTest extends UicTest:
         end for
     }
 
+    "a cell edit its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef("1")
+            again <- repaintsAfter(uic.InputOtp().length(3).value(held.readOnly).onChange(_ => ()).render, held)(t =>
+                cells(t).map(cs => handled(cs(1).onInput.getOrElse(throw new AssertionError("no input handler"))("7")))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end InputOtpTest

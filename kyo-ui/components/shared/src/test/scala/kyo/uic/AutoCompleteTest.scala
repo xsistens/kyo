@@ -348,6 +348,25 @@ class AutoCompleteTest extends UicTest:
         end for
     }
 
+    // The panel state is left as typing leaves it (open, nothing highlighted, the filtered list), and nothing matches, so
+    // no panel is mounted to publish on its own: only the repaint can make the region publish again.
+    "typing its owner does not take is painted away again" in {
+        for
+            openRef <- Signal.initRef(true)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            paints  <- Signal.initRef(0)
+            held    <- Signal.initRef("zz")
+            ui = field.value(held.readOnly).onInput(_ => ()).wired(openRef, hi, all, Present("ac"), paints = Present(paints))
+            again <- repaintsAfter(ui, openRef, hi, all, paints, held)(t =>
+                elementWithClass(t, "p-autocomplete-input").map {
+                    case i: UI.Ast.TextInput => handled(i.onInput.getOrElse(throw new AssertionError("no input handler"))("zzz"))
+                    case other               => throw new AssertionError(s"not a text field: $other")
+                }
+            )
+        yield assert(again, "the field kept what the reader typed, though its owner never took it")
+    }
+
 end AutoCompleteTest
 
 object AutoCompleteTest:

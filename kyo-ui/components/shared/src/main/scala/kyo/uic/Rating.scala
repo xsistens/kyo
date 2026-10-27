@@ -163,16 +163,20 @@ final case class Rating private (
             // bound to a field has no second source of truth. ReactiveVariable before Dyn,
             // since a two-way binding IS a Dyn.
             case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent, validity))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(d => body(math.rint(d).toInt, Absent, validity))
+            case Present(ReactiveValue.Dyn(sig)) =>
+                ReactiveValue.repainting(sig)((d, repaint) => body(math.rint(d).toInt, Absent, validity, repaint))
             case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent, validity)
             case Absent                          =>
                 valueBinding match
-                    case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref), validity))
-                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent, validity))
+                    case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity))
+                    // Bound one way, the stars are painted again after each report, so a pick the owner does not
+                    // take is put back on the native radios as well.
+                    case Present(ReactiveValue.Dyn(sig)) =>
+                        ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
                     case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
                     case Absent                          => body(0, Absent, validity)
 
-    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity)(using Frame): UI =
+    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity, repaint: UI.Action = ())(using Frame): UI =
         // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
         // focus, and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
         // that does. A radio group's tab stop is its checked radio, else its first.
@@ -181,7 +185,7 @@ final case class Rating private (
             val active = i <= value
             var opt    = div.cssClass("p-rating-option")
             if active then opt = opt.cssClass("p-rating-option-active")
-            if interactive then opt = opt.onClick(activate(i, value, ref))
+            if interactive then opt = opt.onClick(activate(i, value, ref).andThen(repaint))
 
             // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
             // keyboard semantics: the arrows move within the name group and select as they go,
@@ -216,7 +220,7 @@ final case class Rating private (
             // that star alone, which is exactly the star no click can come from.
             if interactive && i == value then
                 hidden = hidden.onKeyDown { e =>
-                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref) else ()
+                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref).andThen(repaint) else ()
                     eff
                 }
             end if

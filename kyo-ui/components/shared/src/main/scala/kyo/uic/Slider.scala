@@ -114,12 +114,13 @@ final case class Slider private (
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref), validity))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent, validity))
+            case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity))
+            // Bound one way, the thumb is painted again after each report, so a drag the owner does not take is put back.
+            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
             case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
             case Absent                          => body(minV, Absent, validity)
 
-    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity)(using Frame): UI =
+    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity, repaint: UI.Action = ())(using Frame): UI =
         val value = clamp(raw)
         val pct   =
             if maxV <= minV then 0.0
@@ -160,6 +161,7 @@ final case class Slider private (
                 for
                     _ <- write
                     r <- fire
+                    _ <- repaint
                 yield r
                 end for
             }

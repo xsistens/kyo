@@ -107,4 +107,12 @@ class RatingTest extends UicTest:
         yield assert(rs.forall(_.name.contains("stars-1")))
     }
 
+    "a star its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef(2)
+            again <-
+                repaintsAfter(uic.Rating().value(held.readOnly).onChange(_ => ()).render, held)(t => options(t).map(os => click(os(3))))
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end RatingTest

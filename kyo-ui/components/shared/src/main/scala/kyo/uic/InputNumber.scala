@@ -187,7 +187,9 @@ final case class InputNumber private (
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
             case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref), validity))
-            case Present(InputNumber.Value.Dyn(sig)) => sig.render(v => body(Present(v), Absent, validity))
+            // Bound one way, the field is painted again after each report, so a number the owner does not take is put back.
+            case Present(InputNumber.Value.Dyn(sig)) =>
+                ReactiveValue.repainting(sig)((v, repaint) => body(Present(v), Absent, validity, repaint = repaint))
             case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent, validity)
             // No `render` here on purpose: a text binding is kyo's own two-way channel on
             // the field, so the value travels without a subscription. Re-rendering the
@@ -213,7 +215,8 @@ final case class InputNumber private (
         value: Maybe[Double],
         ref: Maybe[SignalRef[Double]],
         validity: FieldValidity,
-        text: Maybe[SignalRef[String]] = Absent
+        text: Maybe[SignalRef[String]] = Absent,
+        repaint: UI.Action = ()
     )(using Frame): UI =
         // === the native number field ============================================
         var in = numberInput
@@ -258,7 +261,7 @@ final case class InputNumber private (
         // before the write-back (the browser only ENFORCES min/max on form submit). A
         // text-bound field is left out of it: its content is what the reader typed, and
         // normalising a Double back into it would rewrite `4.` to `4` under them.
-        if interactive && text.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref))
+        if interactive && text.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref).andThen(repaint))
         // onBlur carries no payload, so the current number is read from the bound ref
         // (or the resolved current value when unbound) and handed to the native blur.
         if interactive then
@@ -281,7 +284,7 @@ final case class InputNumber private (
                             case Present(f) => f(next)
                             case Absent     => ())
                     }
-                case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref)
+                case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref).andThen(repaint)
 
         def spinButton(dir: Int, cls: String, glyph: IconGlyph): UI =
             var b = button
