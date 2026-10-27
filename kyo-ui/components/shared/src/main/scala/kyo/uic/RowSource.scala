@@ -70,17 +70,20 @@ end Total
   *
   * ==The rule that makes it correct==
   *
-  * A fetch is never interrupted, only the waiting for it. Both follow from how the pieces
-  * underneath behave: `Signal.observe` runs its callback inside a scope PER VALUE and
-  * closes it the moment the value changes, so a fetch forked inside it with `Fiber.init`
-  * would be killed exactly when the reader moves to the page it was fetching. So every
-  * fetch is forked with `Fiber.initUnscoped` and only ever awaited from inside that scope,
-  * where an interruption costs nothing: the waiter dies, the fetch completes, and the next
-  * reader of that block finds it warm.
+  * A fetch is never interrupted, only the waiting for it. `Signal.observe` runs its
+  * callback for a value to the end before it moves on to the next one, and keeps a scope
+  * per value that it closes when the value changes. So a turn only STARTS its fetches and
+  * forks the waiting for them into that scope: a new range, query or reload closes it and
+  * is served at once, however long the fetch it leaves behind takes. Every fetch is forked
+  * with `Fiber.initUnscoped`, and a turn waits on a promise of its own that the fetch
+  * completes, never on the fetch: a fiber waiting on another passes its interrupt on, and
+  * the fetch belongs to the cache, so the next reader of that block finds it warm.
   *
-  * For the same reason the cache is filled SYNCHRONOUSLY on the observer's own fiber, and
-  * only the awaiting suspends. Two callers can therefore never start the same block twice,
-  * without a promise handshake to get wrong.
+  * Every block is started under the source's lock, by a turn starting its range or by one
+  * reaching ahead, so two of them can never start the same block twice. The same lock
+  * guards what a turn publishes: a turn writes only while its generation and its range are
+  * still the source's, so neither a turn from before a reload nor one for a range no longer
+  * asked for ever reaches the screen.
   *
   * ==What it does not do==
   *
@@ -142,6 +145,21 @@ final class RowSource[Q, A] private[uic] (
       * fiber forked with `UI.fork`, and the next run starts the feed again.
       */
     def run(using Frame): Unit < (Async & Scope) = runner.run
+
+    /** Fetches the range asked for again, for a set that changed behind the source (an edit on the server, an import).
+      *
+      * Every block the source holds is dropped, and so is what it knew about the length, so a page the reader goes back
+      * to is fetched again too. The rows on the screen stay, under the busy mask, until the new ones arrive, which is
+      * what a reader who asked for fresh data expects; for the source as it opened, use [[reset]]. A fetch that started
+      * before the reload never lands after it. Nothing is fetched until something runs the source.
+      */
+    def reload(using Frame): Unit < Async = runner.reload
+
+    /** The source as it opened: the first page, no rows, no length, loading, and every block dropped. A table over it
+      * shows its loading state again until the first page arrives; to keep the rows shown while they are fetched again,
+      * use [[reload]].
+      */
+    def reset(using Frame): Unit < Async = runner.reset
 
     /** Whether a feed is running, which is what a test of the runs' bookkeeping reads. */
     private[uic] def feeding(using Frame): Boolean < Sync = runner.feeding
@@ -306,8 +324,27 @@ object RowSource:
             holders    <- Signal.initRef(Set.empty[Long])
             ids        <- AtomicLong.init(0L)
             running    <- AtomicRef.init(Absent: Maybe[Fiber[Unit, Any]])
-            feed   = new Feed(query, fetch, cache, seen, sizeRef, config, ahead, windowRef, totalRef, loadingRef)
-            runner = new Run(query, feed, pageRef, sizeRef, demandRef, laid, mutex, holders, ids, running)
+            gen        <- Signal.initRef(0L)
+            gate       <- Meter.initMutexUnscoped
+            feed   = new Feed(query, fetch, cache, seen, sizeRef, config, ahead, windowRef, totalRef, loadingRef, gen, demandRef, gate)
+            runner = new Run(
+                query,
+                feed,
+                pageRef,
+                sizeRef,
+                demandRef,
+                laid,
+                mutex,
+                holders,
+                ids,
+                running,
+                cache,
+                seen,
+                gen,
+                windowRef,
+                totalRef,
+                loadingRef
+            )
         yield new RowSource(sizeRef.map(math.max(1, _)), pageSize, pageRef, demandRef, windowRef, totalRef, loadingRef, runner)
         end for
     end init
@@ -322,6 +359,8 @@ object RowSource:
         def run(using Frame): Unit < (Async & Scope)
         def feeding(using Frame): Boolean < Sync
         def holding(using Frame): Signal[Int]
+        def reload(using Frame): Unit < Async
+        def reset(using Frame): Unit < Async
     end Runner
 
     /** The running half: the page and size followed into the range, and the one feed every run shares.
@@ -339,7 +378,13 @@ object RowSource:
         mutex: Meter,
         holders: SignalRef[Set[Long]],
         ids: AtomicLong,
-        running: AtomicRef[Maybe[Fiber[Unit, Any]]]
+        running: AtomicRef[Maybe[Fiber[Unit, Any]]],
+        cacheRef: AtomicRef[Maybe[(Int, Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]])]],
+        seen: AtomicRef[Maybe[(Q, Int)]],
+        genRef: SignalRef[Long],
+        windowRef: SignalRef[Window[A]],
+        totalRef: SignalRef[Total],
+        loadingRef: SignalRef[Boolean]
     )(using CanEqual[Q, Q]) extends Runner:
 
         def run(using Frame): Unit < (Async & Scope) =
@@ -416,6 +461,35 @@ object RowSource:
 
         def holding(using Frame): Signal[Int] = holders.map(_.size)
 
+        /** Drops what the source holds about the set (every block, the floor under its length) and moves the generation
+          * on, which the feed takes as a turn of its own: the range asked for is served again from fresh fetches. The rows
+          * on the screen stay until they arrive.
+          */
+        def reload(using Frame): Unit < Async = feed.exclusive(forget)
+
+        /** [[reload]], from the source as it opened: the first page, no rows, no length, loading.
+          *
+          * All of it under the feed's lock, so no turn of the feed writes between the parts: one from before carries a
+          * generation that is no longer current, one the new generation starts for the old range asks for a range that is
+          * no longer asked for, and the feed writes for neither.
+          */
+        def reset(using Frame): Unit < Async =
+            feed.exclusive {
+                for
+                    _ <- forget
+                    s <- sizeRef.get.map(math.max(1, _))
+                    _ <- laid.set((0, s))
+                    _ <- pageRef.set(0)
+                    _ <- demandRef.set(pageRange(0, s))
+                    _ <- windowRef.set(Window(0, Seq.empty))
+                    _ <- totalRef.set(Total.Unknown(false))
+                    _ <- loadingRef.set(true)
+                yield ()
+            }
+
+        private def forget(using Frame): Unit < Sync =
+            cacheRef.set(Absent).andThen(seen.set(Absent)).andThen(genRef.updateAndGet(_ + 1).unit)
+
         /** Holds the feed for run `token`: the shared feed, started by the first run and again by any run that finds it
           * ended (a fetch failed).
           *
@@ -430,7 +504,7 @@ object RowSource:
                 val held = Sync.Unsafe.evalOrThrow(running.get)
                 held.filter(f => Sync.Unsafe.evalOrThrow(f.poll).isEmpty).getOrElse {
                     val f = Sync.Unsafe.evalOrThrow(
-                        Fiber.initUnscoped(query.combineLatest(demandRef).observe((q, d) => feed.serve(q, d)))
+                        Fiber.initUnscoped(feed.loop)
                     )
                     Sync.Unsafe.evalOrThrow(running.set(Present(f)))
                     f
@@ -470,7 +544,10 @@ object RowSource:
         ahead: Int,
         windowRef: SignalRef[Window[A]],
         totalRef: SignalRef[Total],
-        loadingRef: SignalRef[Boolean]
+        loadingRef: SignalRef[Boolean],
+        genRef: SignalRef[Long],
+        demandRef: SignalRef[Demand],
+        gate: Meter
     )(using CanEqual[Q, Q]):
         /** The cache, with room for `blocks` blocks at least.
           *
@@ -527,37 +604,114 @@ object RowSource:
                     Fiber.initUnscoped(fetch(q, at * block, block)).map(f => cache.add((q, block, at), f))
             }
 
-        /** One turn of the loop: cover the range, publish it, then reach one buffer out on
-          * either side. The reaching is the last thing, so a reader never waits on it.
+        /** The feed: one turn per query, range and generation, until a turn's fetch fails, which ends it with that failure
+          * for the runs to report.
+          *
+          * A turn starts its fetches and returns, and the waiting for them happens on a fiber of the turn's own, forked
+          * into the scope `observe` keeps for the value. A new value closes that scope, which stops the waiting and nothing
+          * else, so a new range, a new query or a reload is served at once, however long the fetch it leaves behind takes.
           */
-        def serve(q: Q, d: Demand)(using Frame): Unit < Async =
+        def loop(using Frame): Unit < Async =
+            Promise.init[Unit, Any].map { broke =>
+                Async.race(Seq(
+                    query.combineLatest(demandRef).combineLatest(genRef).observe { case ((q, d), g) => serve(q, d, g, broke) },
+                    broke.get
+                ))
+            }
+
+        /** One turn: start what the range needs under the lock, then wait, publish and reach one buffer out on either side
+          * on a fiber of the turn's own. The reaching is the last thing, so a reader never waits on it. `gen` is the
+          * generation the turn serves, which a reload moves on.
+          */
+        private def serve(q: Q, d: Demand, gen: Long, broke: Promise[Unit, Any])(using Frame): Unit < (Async & Scope) =
             sizeRef.get.map { size =>
                 val block = math.max(1, config.blockSize.getOrElse(math.max(1, size)))
                 val first = math.max(0, d.offset) / block
                 val last  = math.max(first, (math.max(0, d.offset) + math.max(1, d.limit) - 1) / block)
                 for
-                    cache  <- room(q, block, first, last)
-                    wanted <- Kyo.foreach((first to last).toList)(warm(cache, q, block, _))
-                    // Warm already means served: the mask is for a reader who has to wait.
-                    ready <- Kyo.foreach(wanted)(_.poll).map(_.forall(_.isDefined))
-                    _     <- loadingRef.set(!ready)
-                    parts <- Kyo.foreach(wanted)(_.get)
-                    total <- settle(q, block, first, parts)
-                    _     <- report(parts, block, first, total)
-                    // The total goes out BEFORE the rows, and the order is load-bearing: a
-                    // consumer that positions rows by the total, a virtual viewport above all,
-                    // would otherwise be handed rows at an offset the total does not reach yet
-                    // and draw them as though they were not there. Ahead is the harmless side
-                    // to be on: an extent that is already long enough costs a spacer that is
-                    // briefly too tall, where the other way round costs the rows themselves.
-                    _ <- totalRef.set(total)
-                    _ <- windowRef.set(Window(math.max(0, d.offset), slice(parts, block, first, d)))
-                    _ <- loadingRef.set(false)
-                    _ <- Kyo.foreach(neighbours(block, first, last, total))(warm(cache, q, block, _))
+                    started <- exclusive(room(q, block, first, last).map(cache =>
+                        Kyo.foreach((first to last).toList)(warm(cache, q, block, _)).map(cache -> _)
+                    ))
+                    (cache, wanted) = started
+                    waiter <- Fiber.init(await(q, d, gen, cache, block, first, last, wanted))
+                    // A turn stopped by the next value is the loop working; any other end of it is a fetch that failed,
+                    // and that ends the feed.
+                    _ <- waiter.onComplete {
+                        case Result.Panic(_: Interrupted) => Kyo.unit
+                        case Result.Panic(failure)        => broke.completeDiscard(Result.panic(failure))
+                        // A turn has no failure row of its own (a fetch is `< Async`), so it ends in a panic or not at all.
+                        case _ => Kyo.unit
+                    }
                 yield ()
                 end for
             }
         end serve
+
+        private def await(
+            q: Q,
+            d: Demand,
+            gen: Long,
+            cache: Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]],
+            block: Int,
+            first: Int,
+            last: Int,
+            wanted: List[Fiber[(Seq[A], Total), Any]]
+        )(using Frame): Unit < Async =
+            for
+                // Warm already means served: the mask is for a reader who has to wait.
+                ready <- Kyo.foreach(wanted)(_.poll).map(_.forall(_.isDefined))
+                _     <- ifCurrent(gen, d)(loadingRef.set(!ready))
+                parts <- Kyo.foreach(wanted)(detached)
+                // Rows fetched before a reload answer for the set as it was, and rows for a range no longer asked for
+                // answer nobody: neither may touch the floor, the total, the rows or the busy flag.
+                total <- ifCurrent(gen, d)(publish(q, d, block, first, parts))
+                _     <- total.fold(Kyo.unit)(report(parts, block, first, _))
+                _     <- total.fold(Kyo.unit: Unit < Async)(t =>
+                    exclusive(Kyo.foreachDiscard(neighbours(block, first, last, t))(warm(cache, q, block, _)))
+                )
+            yield ()
+
+        /** A fetch's result, waited for on a promise of this turn's own. Waiting on the fetch itself would pass the
+          * turn's interrupt on to it, and the fetch belongs to the cache, not to the turn that first asked for it.
+          */
+        private def detached(fetch: Fiber[(Seq[A], Total), Any])(using Frame): (Seq[A], Total) < Async =
+            Promise.init[(Seq[A], Total), Any].map(p => fetch.onComplete(p.completeDiscard(_)).andThen(p.get))
+
+        /** Runs `v` while turn `gen` for range `d` is still the one the source is on, under the lock [[exclusive]] takes.
+          *
+          * The check and the writes are one step under the lock, and [[Run.reset]] and [[Run.reload]] take it too, so a turn
+          * cannot pass the check and then write over what a reset has just cleared.
+          */
+        private def ifCurrent[B](gen: Long, d: Demand)(v: => B < Sync)(using Frame): Maybe[B] < Async =
+            exclusive {
+                genRef.get.map(now =>
+                    demandRef.get.map(asked => if now == gen && asked == d then v.map(Present(_)) else Absent: Maybe[B] < Sync)
+                )
+            }
+
+        /** Runs `v` under the lock every write of the source's state goes through. It is never closed, so `Closed` cannot
+          * occur here; if it ever did, that is a bug.
+          */
+        def exclusive[B](v: => B < Sync)(using Frame): B < Async =
+            Abort.run[Closed](gate.run(v)).map(_.getOrThrow)
+
+        /** The floor, the total and the rows of turn `d`, written in that order. */
+        private def publish(q: Q, d: Demand, block: Int, first: Int, parts: Seq[(Seq[A], Total)])(using
+            Frame
+        ): Total < Sync =
+            for
+                total <- settle(q, block, first, parts)
+                // The total goes out BEFORE the rows, and the order is load-bearing: a
+                // consumer that positions rows by the total, a virtual viewport above all,
+                // would otherwise be handed rows at an offset the total does not reach yet
+                // and draw them as though they were not there. Ahead is the harmless side
+                // to be on: an extent that is already long enough costs a spacer that is
+                // briefly too tall, where the other way round costs the rows themselves.
+                _ <- totalRef.set(total)
+                _ <- windowRef.set(Window(math.max(0, d.offset), slice(parts, block, first, d)))
+                _ <- loadingRef.set(false)
+            yield total
+        end publish
 
         /** What the blocks say together, with everything the source knows added to it.
           *
