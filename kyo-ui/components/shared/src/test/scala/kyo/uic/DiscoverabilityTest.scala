@@ -1332,7 +1332,11 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x(using Frame): uic.Timeline[String] = uic.Timeline[String]().events(Seq("a")).content(span(_)).opposite(span(_)).marker(_ => span("m")).align(uic.TimelineAlign.Alternate).layout(uic.TimelineLayout.Horizontal)"""
         )
         typeCheck(
-            preamble + """def x(r: SignalRef[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(10).page(r).onPage(_ => ())"""
+            preamble + """def x(r: SignalRef[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(10).page(r).onPageChange(_ => ())"""
+        )
+        // The page and the rows per page are state slots: a constant or a signal binds one way and a click is reported.
+        typeCheck(
+            preamble + """def x(r: Signal[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(r).page(0).onPageChange(_ => ()).onRowsChange(_ => ())"""
         )
         typeCheck(
             preamble + """def x(r: SignalRef[Int])(using Frame): uic.DataView[String] = uic.DataView[String]().items(Seq("a")).itemTemplate(s => span(s)).gridItemTemplate(s => span(s)).layout(uic.DataViewLayout.Grid).header(span("h")).footer(span("f")).paginate(5)(r).emptyContent("none")"""
@@ -1351,7 +1355,6 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     "Rating and SelectButton bind selection only via SignalRef (no bare values)" in {
         typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value("a")""")
         typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value(Set("a"))""")
-        typeCheckFailure(preamble + """def x = uic.Paginator().page(0)""")
         typeCheckFailure(preamble + """def x = uic.Stepper[String]().active(0)""")
     }
 

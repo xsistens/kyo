@@ -340,7 +340,7 @@ object ShowcaseCompile:
                 .marker(_ => uic.Icon(uic.Icons.check): UI),
 
             // standalone paginator + a paginated data view sharing the page ref idea
-            uic.Paginator().totalRecords(120).rows(10).page(pageIdx).onPage(notify),
+            uic.Paginator().totalRecords(120).rows(10).page(pageIdx).onPageChange(notify),
             uic.DataView[String]()
                 .items(Seq("Bamboo Watch", "Black Watch", "Blue Band"))
                 .itemTemplate(s => div(span(s)))
@@ -402,7 +402,7 @@ object ShowcaseCompile:
                 .rowsPerPageOptions(Seq(10, 20, 30))
                 .currentPageReport("Showing {first} to {last} of {totalRecords}")
                 .jumpToPageInput(true)
-                .onPage(notify),
+                .onPageChange(notify),
 
             // vertical, value-keyed stepper with a hard-disabled step
             uic.Stepper[String]()
