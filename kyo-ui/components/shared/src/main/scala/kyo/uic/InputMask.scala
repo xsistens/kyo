@@ -24,7 +24,7 @@ import kyo.*
   */
 final case class InputMask private (
     maskV: String,
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[BoolValue] = Absent,
@@ -45,11 +45,12 @@ final case class InputMask private (
     /** The mask template (`9` digit, `a` letter, `*` alphanumeric, else literal). */
     def mask(v: String): InputMask = copy(maskV = v)
 
-    /** Sets a constant value (already formatted, or raw; the client re-masks on edit). */
-    def value(v: String): InputMask = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds two-way to `ref`: edits write the MASKED value back, ref writes update the field. */
-    def value(ref: SignalRef[String]): InputMask = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    /** The value. A `SignalRef` binds TWO-WAY: an edit writes the MASKED value, and ref writes update the field. Any other
+      * signal binds ONE-WAY: the field shows it, and an edit only reports through [[onChange]] and [[onComplete]]; with
+      * neither, a card says the reader cannot change it. A constant (already formatted, or raw; the client re-masks on
+      * edit) is the starting text. `ref.readOnly` opts a ref out.
+      */
+    def value(v: String | Signal[String]): InputMask = copy(valueBinding = Present(ReactiveValue(v)))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = copy(placeholderText = v)
 
@@ -105,6 +106,7 @@ final case class InputMask private (
         // with the message row exactly as a plain Input does.
         var in = Input()
             .extraClass("p-inputmask") // Prime tags the masked field with this alongside p-inputtext
+            .unheardAs("InputMask", "onChange or onComplete")
             .inputMask(maskV)
             .size(sizeV)
             .variant(variantV)
@@ -125,11 +127,7 @@ final case class InputMask private (
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
             case Absent                      => ()
         end match
-        valueBinding match
-            case Present(Input.Value.Const(v)) => in = in.value(v)
-            case Present(Input.Value.Ref(r))   => in = in.value(r)
-            case Absent                        => ()
-        end match
+        valueBinding.foreach(v => in = in.value(v.bound))
         if onChangeF.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
                 val fireChange: UI.Action = onChangeF match

@@ -10,11 +10,11 @@ import kyo.UI.*
   * `<input type="checkbox">` provides the real boolean state, so the change
   * event and disabled state are inherited. Prime has no on/off state text;
   * place a plain `span` next to the switch instead. `handleIcon` fills Prime's
-  * handle slot with a per-state glyph riding inside the sliding handle. Two-way
+  * handle slot with a per-state glyph riding inside the sliding handle. The `checked`
   * binding mirrors [[CheckBox]].
   */
 final case class ToggleSwitch private (
-    checkedBinding: Maybe[CheckBox.Checked] = Absent,
+    checkedBinding: Maybe[BoolValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[Boolean] = Absent,
     requiredFlag: Maybe[Boolean] = Absent,
@@ -38,11 +38,12 @@ final case class ToggleSwitch private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Sets a constant on/off state. */
-    def checked(v: Boolean): ToggleSwitch = copy(checkedBinding = Present(CheckBox.Checked.Const(v)))
-
-    /** Binds two-way to `ref`: toggles write back into the ref, ref changes update the switch. */
-    def checked(ref: SignalRef[Boolean]): ToggleSwitch = copy(checkedBinding = Present(CheckBox.Checked.Ref(ref)))
+    /** The checked state. A `SignalRef` binds TWO-WAY: a toggle writes it, and its changes update the switch. Any other
+      * signal, or a constant, binds ONE-WAY: the switch shows it, and a toggle writes nothing and only reports through
+      * [[onChange]], so the app writes its own state and the switch follows. `ref.readOnly` opts a ref out. With no
+      * [[onChange]], a card says the reader cannot change it.
+      */
+    def checked(v: Boolean | Signal[Boolean]): ToggleSwitch = copy(checkedBinding = Present(ReactiveValue(v)))
 
     /** Disables the switch. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the
       * root's `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
@@ -86,21 +87,18 @@ final case class ToggleSwitch private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(checkedBinding match
-            case Present(CheckBox.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref)), validity))
-            case Present(CheckBox.Checked.Const(v)) => body(v, onChangeF, validity)
-            case Absent                             => body(false, onChangeF, validity))
+        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange.
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
+            else Absent
+        val field = validity.follow(checkedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, toggle, validity))
+            case Present(ReactiveValue.Const(v)) => body(v, toggle, validity)
+            case Absent                          => body(false, toggle, validity))
+        val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
+        if checkedBinding.isEmpty || inert || toggle.nonEmpty then field
+        else fragment(field, KeyDiagnostics.unheard("ToggleSwitch", "checked", "onChange"))
     end render
-
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
-        nb =>
-            onChangeF match
-                case Present(f) =>
-                    for
-                        _ <- ref.set(nb)
-                        r <- f(nb)
-                    yield r
-                case Absent => ref.set(nb)
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
@@ -130,10 +128,7 @@ final case class ToggleSwitch private (
         if !isReadonly then
             box = onBlurF match
                 case Present(f) =>
-                    box.onBlur(checkedBinding match
-                        case Present(CheckBox.Checked.Ref(r))   => r.use(f)
-                        case Present(CheckBox.Checked.Const(v)) => f(v)
-                        case Absent                             => f(false))
+                    box.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
                 case Absent => box
         end if
 

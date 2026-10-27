@@ -65,9 +65,12 @@ trait FormControl extends Node, HasElementId:
     // trait's contract, and the reason the slot started here.
 end FormControl
 
-/** A `String`-valued text field: two-way value binding plus a focus-loss trigger. */
+/** A `String`-valued text field: the value binding plus a focus-loss trigger. The binding is the union every value slot in
+  * the module takes: a constant, a writable `SignalRef[String]` (two-way, which is what `bind` passes), or any other
+  * `Signal[String]` (one-way).
+  */
 trait TextFormControl extends FormControl:
-    def value(ref: SignalRef[String]): Self
+    def value(v: String | Signal[String]): Self
     def onBlur(f: String => UI.Action)(using Frame): Self
 
 /** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself, over
@@ -115,10 +118,12 @@ trait OptionalFormControl[A] extends FormControl:
 end OptionalFormControl
 
 /** A `Boolean`-valued field (checkbox / switch / radio): checked binding plus
-  * focus-loss. `onBlur` reports the field's current checked state.
+  * focus-loss. `onBlur` reports the field's current checked state. The binding takes a
+  * constant, a writable `SignalRef[Boolean]` (two-way, which is what `bind` passes), or any
+  * other `Signal[Boolean]` (one-way).
   */
 trait BooleanFormControl extends FormControl:
-    def checked(ref: SignalRef[Boolean]): Self
+    def checked(v: Boolean | Signal[Boolean]): Self
     def onBlur(f: Boolean => UI.Action)(using Frame): Self
 
 /** A `Double`-valued numeric control (InputNumber, Slider, Knob, Rating): two-way value

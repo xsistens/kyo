@@ -8,10 +8,10 @@ import kyo.UI.*
   * `<textarea class="p-textarea">`). Closely mirrors [[Input]] but composes the
   * kyo `<textarea>` factory, so two-way binding (`value(SignalRef)` →
   * `Bound.Ref`), `onInput`/`onChange`, and the caret-preserving morph path are
-  * all inherited. Reuses [[Input.Value]] as the const-or-ref carrier.
+  * all inherited. The `value` binding is [[Input]]'s: a `SignalRef` two-way, any other signal one way.
   */
 final case class TextArea private (
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
     rowsV: Maybe[Int] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
@@ -47,11 +47,12 @@ final case class TextArea private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Sets a constant value. */
-    def value(v: String): TextArea = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds two-way to `ref`: edits write back into the ref, ref changes update the textarea. */
-    def value(ref: SignalRef[String]): TextArea = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the textarea. Any other signal
+      * binds ONE-WAY: the textarea shows it, and an edit writes nothing and only reports through [[onInput]] and
+      * [[onChange]]; with neither, a card says the reader cannot change it. A constant is the starting text, which the
+      * reader edits freely. `ref.readOnly` opts a ref out.
+      */
+    def value(v: String | Signal[String]): TextArea = copy(valueBinding = Present(ReactiveValue(v)))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = copy(placeholderText = v)
 
@@ -109,7 +110,21 @@ final case class TextArea private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        var b        = textarea.cssClass("p-textarea").cssClass("p-component")
+        // A two-way ref is kyo-ui's own binding; a one-way signal re-renders the field, and the morph leaves the focused
+        // field's text alone, so the caret survives the owner writing back what the reader typed.
+        val built = valueBinding match
+            case Present(ReactiveVariable(_))    => body(Absent, validity)
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(Present(v), validity))
+            case Present(ReactiveValue.Const(v)) => body(Present(v), validity)
+            case Absent                          => body(Absent, validity)
+        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
+            !readonlyFlag.constTrue && !disabledFlag.constTrue
+        if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard("TextArea", "value", "onInput or onChange"))
+        else validity.follow(built)
+    end render
+
+    private def body(shown: Maybe[String], validity: FieldValidity)(using Frame): UI =
+        var b = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
         sizeV match
@@ -122,9 +137,8 @@ final case class TextArea private (
         if fluidFlag then b = b.cssClass("p-textarea-fluid")
         if autoResizeFlag then b = b.cssClass("p-textarea-resizable").cssClass("p-uic-autoresize")
         valueBinding match
-            case Present(Input.Value.Const(v)) => b = b.value(v)
-            case Present(Input.Value.Ref(r))   => b = b.value(r)
-            case Absent                        => ()
+            case Present(ReactiveVariable(r)) => b = b.value(r)
+            case _                            => shown.foreach(v => b = b.value(v))
         end match
         b = placeholderText match
             case Present(TextValue.Const(v)) => b.placeholder(v)
@@ -147,14 +161,10 @@ final case class TextArea private (
         b = onInputF.map(f => b.onInput(f)).getOrElse(b)
         b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         b = onBlurF match
-            case Present(f) =>
-                b.onBlur(valueBinding match
-                    case Present(Input.Value.Ref(r))   => r.use(f)
-                    case Present(Input.Value.Const(v)) => f(v)
-                    case Absent                        => f(""))
-            case Absent => b
-        validity.follow(b)
-    end render
+            case Present(f) => b.onBlur(valueBinding.fold(f(""))(_.current.map(f)))
+            case Absent     => b
+        b
+    end body
 end TextArea
 
 object TextArea:

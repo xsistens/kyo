@@ -194,4 +194,32 @@ class ColorPickerTest extends UicTest:
         yield assert(!closed && opened && remembered == "#00ff00")
     }
 
+    "a color bound one way is shown, and a key reports the hex it asks for without writing it" in {
+        for
+            held <- Signal.initRef(red)
+            seen <- Signal.initRef(List.empty[String])
+            ui = uic.ColorPicker().inline(true).value(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render
+            all <- sliders(ui)
+            el = all.find(_.attrs.ariaAttrs.get("label").contains(plane)).get
+            _ <- press(el, UI.Keyboard.Home)
+            h <- held.get
+            s <- seen.get
+        yield assert(s == List("#ffffff") && h == red, s"reported $s, held $h")
+    }
+
+    "a color bound one way that nothing hears says so; onChange, a ref, a constant or disabled keep it quiet" in {
+        def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        for
+            held     <- Signal.initRef(red)
+            deaf     <- errors(uic.ColorPicker().inline(true).value(held.readOnly))
+            constant <- errors(uic.ColorPicker().inline(true).value(red))
+            change   <- errors(uic.ColorPicker().inline(true).value(held.readOnly).onChange(_ => ()))
+            twoWay   <- errors(uic.ColorPicker().inline(true).value(held))
+            off      <- errors(uic.ColorPicker().inline(true).value(held.readOnly).disabled(true))
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(constant.isEmpty && change.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+        end for
+    }
+
 end ColorPickerTest

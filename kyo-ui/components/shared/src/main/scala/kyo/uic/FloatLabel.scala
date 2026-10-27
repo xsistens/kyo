@@ -113,18 +113,18 @@ object FloatLabel:
                 def body(filled: Boolean): UI =
                     labelled((if filled then input.extraClass("p-filled") else input).render)
                 input.valueBinding match
-                    case Present(Input.Value.Ref(ref)) => ref.render(v => body(v.nonEmpty))
-                    case Present(Input.Value.Const(v)) => body(v.nonEmpty)
-                    case Absent                        => body(false)
+                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v.nonEmpty))
+                    case Present(ReactiveValue.Const(v)) => body(v.nonEmpty)
+                    case Absent                          => body(false)
                 end match
 
             case Host.Ta(textArea) =>
                 def body(filled: Boolean): UI =
                     labelled((if filled then textArea.extraClass("p-filled") else textArea).render)
                 textArea.valueBinding match
-                    case Present(Input.Value.Ref(ref)) => ref.render(v => body(v.nonEmpty))
-                    case Present(Input.Value.Const(v)) => body(v.nonEmpty)
-                    case Absent                        => body(false)
+                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v.nonEmpty))
+                    case Present(ReactiveValue.Const(v)) => body(v.nonEmpty)
+                    case Absent                          => body(false)
                 end match
 
             case Host.Ac(auto) =>

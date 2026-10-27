@@ -16,11 +16,11 @@ import kyo.UI.*
   * A [[TextFormControl]] over that hex string, so `uic.ColorPicker().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   *
-  * Server-honest: the value is a single hex string bound to a
-  * `SignalRef[String]`. HSB is DERIVED from the hex on every render (pure math
-  * in [[ColorPicker.hsvOf]]): the plane's tint, both handle positions, and the
-  * preview swatch all follow from the bound hex, so a ref write from anywhere
-  * moves the picker.
+  * Server-honest: the value is a single hex string bound to a signal (a
+  * `SignalRef[String]` two-way, any other signal one way). HSB is DERIVED from
+  * the hex on every render (pure math in [[ColorPicker.hsvOf]]): the plane's
+  * tint, both handle positions, and the preview swatch all follow from the bound
+  * hex, so a write to it from anywhere moves the picker.
   *
   * Keyboard: the plane and the hue bar are operated through real sliders, one
   * each, because each is one visible handle. On the plane the horizontal arrows
@@ -41,7 +41,7 @@ import kyo.UI.*
   * setPointerCapture, rAF-coalesced). A press/drag on the plane maps
   * `(x/rectW, 1 − y/rectH) → (saturation, brightness)`; on the hue bar,
   * `(1 − y/rectH)·360 → hue`. The new HSB is converted back to hex ON THE
-  * SERVER, written into the ref, and the normal re-render moves the handles and
+  * SERVER, written into the ref (or reported, one way), and the re-render moves the handles and
   * repaints the swatch.
   *
   * HONEST cost: this is a WAN round-trip PER FRAME while dragging. The client
@@ -60,7 +60,7 @@ import kyo.UI.*
   * of an inline one (its root where an inline picker has no slider, unbound or disabled).
   */
 final case class ColorPicker private (
-    valueBinding: Maybe[Input.Value] = Absent,
+    valueBinding: Maybe[TextValue] = Absent,
     inlineFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
@@ -80,11 +80,12 @@ final case class ColorPicker private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Sets a constant color (renders the plane/handles/swatch statically). */
-    def value(v: String): ColorPicker = copy(valueBinding = Present(Input.Value.Const(v)))
-
-    /** Binds two-way to `ref`: drags write the recomputed hex back, ref changes move the picker. */
-    def value(ref: SignalRef[String]): ColorPicker = copy(valueBinding = Present(Input.Value.Ref(ref)))
+    /** The color. A `SignalRef` binds TWO-WAY: drags write the recomputed hex back, ref changes move the picker. Any
+      * other signal binds ONE-WAY: the picker shows it, and a drag or key writes nothing and only reports the hex it asks
+      * for through [[onChange]]; without it, a card says the reader cannot change it. A constant renders the
+      * plane/handles/swatch statically. `ref.readOnly` opts a ref out.
+      */
+    def value(v: String | Signal[String]): ColorPicker = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** Renders the panel inline (`.p-colorpicker-panel-inline`) instead of the
       * default overlay behind a swatch trigger (Prime's `inline`).
@@ -105,7 +106,7 @@ final case class ColorPicker private (
     private[uic] def withInvalidMessage(v: Maybe[String]): ColorPicker                   = copy(invalidMsgV = v)
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ColorPicker = copy(invalidMsgDynV = v)
 
-    /** Fired with the NEW hex after the ref write-back. */
+    /** Fired with the NEW hex after the ref write-back (one-way, with the hex the reader asked for). */
     def onChange(f: String => UI.Action)(using Frame): ColorPicker = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the current hex; unlike onChange it fires even when the
@@ -125,24 +126,17 @@ final case class ColorPicker private (
             copy(disabledFlag = d).renderResolved
 
     private def renderResolved(using Frame): UI =
-        valueBinding match
-            case Present(Input.Value.Ref(ref)) => body(Present(ref), ColorPicker.DefaultHex)
-            case Present(Input.Value.Const(v)) => body(Absent, v)
-            case Absent                        => body(Absent, ColorPicker.DefaultHex)
+        val field = valueBinding match
+            case Present(ReactiveValue.Dyn(sig)) => body(Present(sig), ColorPicker.DefaultHex)
+            case Present(ReactiveValue.Const(v)) => body(Absent, v)
+            case Absent                          => body(Absent, ColorPicker.DefaultHex)
+        val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
+        if unheard then fragment(field, KeyDiagnostics.unheard("ColorPicker", "value", "onChange")) else field
+    end renderResolved
 
-    private def commit(hex: String, ref: Maybe[SignalRef[String]])(using Frame): UI.Action =
-        val write: UI.Action = ref match
-            case Present(r) => r.set(hex)
-            case Absent     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(hex)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
-    end commit
+    /** A hex the reader asked for: written where the binding is two-way, then reported. */
+    private def commit(hex: String)(using Frame): UI.Action =
+        ReactiveValue.change(valueBinding, hex, onChangeF)
 
     /** The saturation × brightness plane + the hue bar.
       *
@@ -150,8 +144,8 @@ final case class ColorPicker private (
       * elements (`.p-colorpicker-color-selector` / `.p-colorpicker-hue`), which
       * are OUTSIDE the reactive region: a per-frame re-render would otherwise
       * detach the pointer-captured element and break the drag stream. Only the
-      * tint + handle positions live in the inner `ref.render`. The handlers read
-      * the LIVE value via `ref.get` (not a closed-over render-time hex), so a
+      * tint + handle positions live in the inner `color.render`. The handlers read
+      * the LIVE value via `color.current` (not a closed-over render-time hex), so a
       * plane drag keeps the current hue and a hue drag keeps the current
       * saturation/brightness. The surface's reactive child + the tint background
       * are `pointer-events: none` (glue) so the pointer lands on the stable
@@ -177,12 +171,11 @@ final case class ColorPicker private (
       */
     private def slider(
         label: String,
-        r: SignalRef[String],
+        r: Signal[String],
         now: ((Double, Double, Double)) => Double,
         text: ((Double, Double, Double)) => String,
         max: Double,
         onKey: (Keyboard, (Double, Double, Double)) => Maybe[String],
-        ref: Maybe[SignalRef[String]],
         panel: Maybe[ColorPicker.Panel],
         seed: Boolean,
         elementId: Maybe[String] = Absent
@@ -201,12 +194,12 @@ final case class ColorPicker private (
         if seed then el = el.focusAuto(true).focusRestore(true)
         el = el.onKeyDown { e =>
             val eff: UI.Action = e.key match
-                case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false, ref)
-                case Keyboard.Escape                 => dismiss(panel, restore = true, ref)
+                case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false)
+                case Keyboard.Escape                 => dismiss(panel, restore = true)
                 case k                               =>
-                    r.get.map { cur =>
+                    r.current.map { cur =>
                         val moved: UI.Action = onKey(k, ColorPicker.hsvOf(cur)) match
-                            case Present(hex) => commit(hex, ref)
+                            case Present(hex) => commit(hex)
                             case Absent       => ()
                         moved
                     }
@@ -222,18 +215,16 @@ final case class ColorPicker private (
       * every arrow press, so there is nothing to confirm unless leaving by the other key can undo
       * it. An inline picker has no panel and no open value, so both keys are its host's.
       */
-    private def dismiss(panel: Maybe[ColorPicker.Panel], restore: Boolean, ref: Maybe[SignalRef[String]])(using
-        Frame
-    ): UI.Action =
+    private def dismiss(panel: Maybe[ColorPicker.Panel], restore: Boolean)(using Frame): UI.Action =
         panel match
             case Present(p) =>
                 val undo: UI.Action =
                     if !restore then ()
-                    else p.opened.get.map(hex => commit(hex, ref))
+                    else p.opened.get.map(hex => commit(hex))
                 undo.andThen(p.open.set(false))
             case Absent => ()
 
-    private def content(ref: Maybe[SignalRef[String]], fallbackHex: String, panel: Maybe[ColorPicker.Panel] = Absent)(
+    private def content(color: Maybe[Signal[String]], fallbackHex: String, panel: Maybe[ColorPicker.Panel] = Absent)(
         using Frame
     ): UI =
         def planeVisual(hex: String): UI =
@@ -249,29 +240,29 @@ final case class ColorPicker private (
                 .style(_.top(((1 - h / 360.0) * 100).pct))
         end hueVisual
 
-        val planeInner: UI = ref match
+        val planeInner: UI = color match
             case Present(r) => r.render(planeVisual)
             case Absent     => planeVisual(fallbackHex)
-        val hueInner: UI = ref match
+        val hueInner: UI = color match
             case Present(r) => r.render(hueVisual)
             case Absent     => hueVisual(fallbackHex)
 
         var selector = div.cssClass("p-colorpicker-color-selector")
         var hue      = div.cssClass("p-colorpicker-hue")
-        ref.foreach { r =>
+        color.foreach { r =>
             if interactive then
                 val onPlane = (e: PointerEvent) =>
-                    r.get.map { cur =>
+                    r.current.map { cur =>
                         val (h, _, _) = ColorPicker.hsvOf(cur)
                         val ns        = ColorPicker.clamp01(if e.rectW <= 0 then 0 else e.x / e.rectW)
                         val nv        = ColorPicker.clamp01(if e.rectH <= 0 then 1 else 1 - e.y / e.rectH)
-                        commit(ColorPicker.hexOf(h, ns, nv), ref)
+                        commit(ColorPicker.hexOf(h, ns, nv))
                     }
                 val onHue = (e: PointerEvent) =>
-                    r.get.map { cur =>
+                    r.current.map { cur =>
                         val (_, s, v) = ColorPicker.hsvOf(cur)
                         val nh        = ColorPicker.clamp01(if e.rectH <= 0 then 0 else 1 - e.y / e.rectH) * 360.0
-                        commit(ColorPicker.hexOf(nh, s, v), ref)
+                        commit(ColorPicker.hexOf(nh, s, v))
                     }
                 selector = selector.onPointerDown(onPlane).onPointerMove(onPlane)
                 hue = hue.onPointerDown(onHue).onPointerMove(onHue)
@@ -310,7 +301,7 @@ final case class ColorPicker private (
                 case _                                       => Absent
             end match
 
-        val axes: List[UI] = ref.toList.filter(_ => interactive).map { r =>
+        val axes: List[UI] = color.toList.filter(_ => interactive).map { r =>
             slider(
                 "Saturation and brightness",
                 r,
@@ -318,7 +309,6 @@ final case class ColorPicker private (
                 hsv => s"Saturation ${ColorPicker.short(hsv._2 * 100.0)}%, brightness ${ColorPicker.short(hsv._3 * 100.0)}%",
                 100.0,
                 planeKeys,
-                ref,
                 panel,
                 seed = panel.isDefined,
                 // Inline, the plane is the picker's first tab stop and so where the caller's id goes;
@@ -326,7 +316,7 @@ final case class ColorPicker private (
                 elementId = if panel.isEmpty then idV else Absent
             )
         }
-        val hueAxis: List[UI] = ref.toList.filter(_ => interactive).map { r =>
+        val hueAxis: List[UI] = color.toList.filter(_ => interactive).map { r =>
             slider(
                 "Hue",
                 r,
@@ -334,7 +324,6 @@ final case class ColorPicker private (
                 hsv => ColorPicker.short(hsv._1) + " degrees",
                 359.0,
                 hueKeys,
-                ref,
                 panel,
                 seed = false
             )
@@ -345,20 +334,20 @@ final case class ColorPicker private (
         )
     end content
 
-    private def body(ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
+    private def body(color: Maybe[Signal[String]], fallbackHex: String)(using Frame): UI =
         if inlineFlag then
             validated { validity =>
                 // Without a bound value or while disabled, an inline picker renders no slider, so
                 // nothing in it takes focus and the root is the one place the id can name.
-                shellRoot(validity, ownsId = ref.isEmpty || !interactive)(
+                shellRoot(validity, ownsId = color.isEmpty || !interactive)(
                     toChild(
                         div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
-                            toChild(content(ref, fallbackHex))
+                            toChild(content(color, fallbackHex))
                         )
                     )
                 )
             }
-        else overlayBody(ref, fallbackHex)
+        else overlayBody(color, fallbackHex)
     end body
 
     /** The root box shared by the inline and overlay paths, with the validity stamped on it. */
@@ -374,20 +363,17 @@ final case class ColorPicker private (
             case Absent                      => ()
         end match
         onBlurF.foreach { f =>
-            root = root.onBlur(valueBinding match
-                case Present(Input.Value.Ref(r))   => r.use(f)
-                case Present(Input.Value.Const(v)) => f(v)
-                case Absent                        => f(ColorPicker.DefaultHex))
+            root = root.onBlur(valueBinding.fold(f(ColorPicker.DefaultHex))(_.current.map(f)))
         }
         root
     end shellRoot
 
     /** The preview swatch trigger (`input.p-colorpicker-preview` per Prime; here a
       * `button` so it needs no value plumbing); its background IS the current hex.
-      * Bound to `ref` it re-renders reactively as the color changes.
+      * Bound to a signal it re-renders reactively as the color changes.
       */
-    private def previewSwatchOf(swatch: String => UI, ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
-        ref match
+    private def previewSwatchOf(swatch: String => UI, color: Maybe[Signal[String]], fallbackHex: String)(using Frame): UI =
+        color match
             case Present(r) => r.render(swatch)
             case Absent     => swatch(fallbackHex)
 
@@ -412,25 +398,25 @@ final case class ColorPicker private (
       * is an internal ref owned by a `UI.mounted` region (Select's pattern); the
       * static placeholder is the closed swatch.
       */
-    private def overlayBody(ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
+    private def overlayBody(color: Maybe[Signal[String]], fallbackHex: String)(using Frame): UI =
         val staticRoot: UI =
             validated { validity =>
                 shellRoot(validity, false, "p-uic-overlay-anchor")(
-                    toChild(previewSwatchOf(hex => previewSwatch(hex, ()), ref, fallbackHex))
+                    toChild(previewSwatchOf(hex => previewSwatch(hex, ()), color, fallbackHex))
                 )
             }
         UI.mounted {
             for
                 open   <- Signal.initRef(false)
                 opened <- Signal.initRef(fallbackHex)
-            yield wired(ColorPicker.Panel(open, opened), ref, fallbackHex)
+            yield wired(ColorPicker.Panel(open, opened), color, fallbackHex)
         }.placeholder(staticRoot)
     end overlayBody
 
     /** The subscription tree the overlay mount publishes, the seam the tests drive, since a
       * golden render shows a mount only as its placeholder.
       */
-    private[uic] def wired(panel: ColorPicker.Panel, ref: Maybe[SignalRef[String]], fallbackHex: String)(using
+    private[uic] def wired(panel: ColorPicker.Panel, color: Maybe[Signal[String]], fallbackHex: String)(using
         Frame
     ): UI =
         // Toggles rather than opens. A trigger that only ever opens is a trigger a reader cannot
@@ -443,8 +429,8 @@ final case class ColorPicker private (
                 panel.open.get.map { wasOpen =>
                     if wasOpen then panel.open.set(false)
                     else
-                        val remember: UI.Action = ref match
-                            case Present(r) => r.get.map(panel.opened.set)
+                        val remember: UI.Action = color match
+                            case Present(r) => r.current.map(panel.opened.set)
                             case Absent     => ()
                         remember.andThen(panel.open.set(true))
                 }
@@ -460,11 +446,11 @@ final case class ColorPicker private (
             .anchor(anchorV)
             .seedFocus(false)
             .matchWidth(false)(
-                div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex, Present(panel))))
+                div.cssClass("p-colorpicker-panel")(toChild(content(color, fallbackHex, Present(panel))))
             )
         validated { validity =>
             shellRoot(validity, false, "p-uic-overlay-anchor")(
-                toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
+                toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), color, fallbackHex)),
                 toChild(floating)
             )
         }
@@ -480,7 +466,7 @@ object ColorPicker:
     final private[uic] case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
 
     /** A color picker whose hex value binds two-way to `ref`. */
-    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(Input.Value.Ref(ref)))
+    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(ReactiveValue(ref)))
 
     /** An unbound color picker; set the value via [[ColorPicker.value]]. */
     def apply(): ColorPicker = new ColorPicker()
