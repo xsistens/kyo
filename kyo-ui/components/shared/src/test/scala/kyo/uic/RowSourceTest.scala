@@ -49,7 +49,8 @@ class RowSourceTest extends UicTest:
         config: RowSource.Config = RowSource.Config(),
         rows: String => Seq[Row] = _ => all,
         total: Maybe[Total] = Absent,
-        gate: Maybe[(Int, Latch)] = Absent
+        gate: Maybe[(Int, Latch)] = Absent,
+        running: Boolean = true
     )(using Frame): Probe < (Async & Scope) =
         for
             q     <- Signal.initRef("a")
@@ -66,6 +67,8 @@ class RowSourceTest extends UicTest:
                 yield (data.slice(offset, offset + limit), total.getOrElse(Total.Known(data.size)))
                 end for
             }
+            // What an app does that runs a source without a component: on the test's own scope.
+            _      <- (if running then src.run else Kyo.unit): Unit < (Async & Scope)
             rowsCh <- watch(src.rows)
             loadCh <- watch(src.loading)
             callCh <- watch(calls)
@@ -223,14 +226,15 @@ class RowSourceTest extends UicTest:
         yield assert(rows == all.slice(1, 5), "rows 1 to 4, out of blocks 0, 1 and 2")
     }
 
-    // The page observer once ran on a fork, so its first delivery landed some time AFTER `init`
-    // returned. Anything a viewport wrote in between was a range the observer then overwrote
-    // with page 0's, putting the reader back at the top of a list they had already scrolled. A
-    // table writes exactly there: the scroller reports its position on the first render after
-    // the source was built. It is registered inside `init` now and seeded, and this holds it so.
-    "a range written before the page observer starts is not reset to the first page" in {
+    // The page observer once ran on a fork, so its first delivery landed some time AFTER the
+    // source started. Anything a viewport wrote in between was a range the observer then
+    // overwrote with page 0's, putting the reader back at the top of a list they had already
+    // scrolled. A table writes exactly there: the scroller reports its position on the first
+    // render after the source was built. It is registered inside `run` now and seeded, and this
+    // holds it so.
+    "a range written as the source starts is not reset to the first page" in {
         // Built here rather than through `probe`, because the write has to be the FIRST thing
-        // after `init`: every step in between is another chance for the observer to have
+        // after `run`: every step in between is another chance for the observer to have
         // delivered already, and then there is no race left to lose. Which of the two wins is
         // down to the scheduler, so the scenario runs many times over: on the defect 49 of 50
         // runs lost the range, and a single run passed often enough to look green.
@@ -241,6 +245,7 @@ class RowSourceTest extends UicTest:
                     src <- RowSource.init(q, pageSize = 2) { (_, offset, limit) =>
                         (all.slice(offset, offset + limit), Total.Known(all.size))
                     }
+                    _    <- src.run
                     _    <- src.demand.set(RowSource.Demand(6, 2))
                     rows <- watch(src.rows)
                     // The source having served a window is the barrier: whatever the observer
@@ -304,6 +309,102 @@ class RowSourceTest extends UicTest:
         yield
             assert(held == Total.Unknown(true, 8), "the old query had been served eight rows")
             assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
+    }
+
+    // ---- a source runs where it is bound ----
+
+    // Opening a source allocates its state and nothing else, so a page can hold one as plainly as
+    // it holds a ref, and the component that binds it is what starts it. The ascription is the
+    // point: a source that needed a Scope to open could only be opened inside a mount.
+    "a source does nothing until it is run, then starts from where it was left" in {
+        for
+            q     <- Signal.initRef("a")
+            calls <- Signal.initRef(List.empty[Call])
+            src   <- (RowSource.init(q, pageSize = 2) { (query, offset, limit) =>
+                calls.getAndUpdate(_ :+ Call(query, offset / limit, limit))
+                    .andThen((all.slice(offset, offset + limit), Total.Known(all.size)))
+            }: RowSource[String, Row] < Sync)
+            _      <- src.page.set(3)
+            idle   <- src.demand.get
+            rows   <- watch(src.rows)
+            callCh <- watch(calls)
+            served <- Scope.run(src.run.andThen(until(rows)(_.nonEmpty)))
+            _      <- q.set("b")
+            c      <- Scope.run(src.run.andThen(until(callCh)(c => blocksOf(c, "b").nonEmpty)))
+        yield
+            assert(idle == RowSource.Demand(0, 2), "nothing follows the page while nothing runs")
+            assert(served == all.slice(6, 8), "and a run starts on the page that was written")
+            assert(!blocksOf(c, "a").contains(0), s"never on page 0: ${blocksOf(c, "a")}")
+    }
+
+    // A table and a list over one source each run it. The feed is one, and it lives as long as
+    // ANY of them does: the first to start it is not its owner.
+    "two runs share one feed, which outlives the first and stops with the last" in {
+        for
+            p        <- probe(running = false)
+            started  <- Latch.init(1)
+            leave    <- Latch.init(1)
+            first    <- Fiber.init(Scope.run(p.source.run.andThen(started.release).andThen(leave.await)))
+            _        <- started.await
+            outlived <- Scope.run {
+                for
+                    _ <- p.source.run
+                    _ <- until(p.rows)(_ == all.take(2))
+                    _ <- leave.release
+                    _ <- first.get
+                    _ <- p.source.page.set(2)
+                    r <- until(p.rows)(_ == all.slice(4, 6))
+                yield r
+            }
+            _       <- p.source.page.set(4)
+            stopped <- p.source.demand.get
+        yield
+            assert(outlived == all.slice(4, 6), "the second run kept the feed after the first had gone")
+            assert(stopped == RowSource.Demand(4, 2), s"and with both gone nothing follows the page: $stopped")
+    }
+
+    // A run is a node's mount, and a node can go at any moment, the moment a run is taking its place among the holders
+    // included. Whatever moment that is, the feed has to stop once every run is gone: a place counted with no release
+    // registered for it, or a feed started and never recorded, would keep fetching for a page nobody shows. Which moment
+    // a stop lands at is down to the scheduler, so the runs are many and each is stopped as soon as it is forked.
+    "runs stopped at any moment leave no feed running" in {
+        for
+            p      <- probe(running = false)
+            fibers <- Kyo.foreach(1 to 200) { i =>
+                for
+                    f <- Fiber.init(Scope.run(p.source.run.andThen(Async.never)))
+                    _ <- if i % 3 == 0 then Async.sleep(1.millis) else Kyo.unit
+                    _ <- f.interrupt
+                yield f
+            }
+            _ <- Kyo.foreachDiscard(fibers)(_.getResult.unit)
+            // A stopped fiber reports its end before its scope's finalizers are through, so the barrier is the holders
+            // the releases empty, not the fibers. A place that is never given back keeps this waiting, which fails too.
+            holding <- watch(p.source.holding)
+            _       <- until(holding)(_ == 0)
+            left    <- p.source.feeding
+        yield assert(!left, "a feed was left running after every run had gone")
+    }
+
+    // The size can change while nothing runs (the table that ran the source was unmounted), and
+    // the next run applies it the way a running source would have.
+    "a size written while nothing ran is applied by the next run" in {
+        for
+            size <- Signal.initRef(2)
+            p    <- probe(pageSize = size, running = false)
+            _    <- Scope.run {
+                for
+                    _ <- p.source.run
+                    _ <- p.source.page.set(4)
+                    _ <- until(p.rows)(_ == all.slice(8, 10))
+                yield ()
+            }
+            _    <- size.set(5)
+            rows <- Scope.run(p.source.run.andThen(until(p.rows)(_ == all.slice(5, 10))))
+            page <- p.source.page.get
+        yield
+            assert(rows == all.slice(5, 10), "a page of five that still shows row 8")
+            assert(page == 1, s"which is page 1, not $page")
     }
 
     // ---- a page size that changes ----

@@ -1283,6 +1283,7 @@ class DataTableTest extends UicTest:
             src   <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
                 (five.slice(offset, offset + limit), Total.Known(five.size))
             }
+            _    <- src.run
             seen <- Channel.init[Seq[Item]](16)
             _    <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _    <- served(seen)
@@ -1306,6 +1307,7 @@ class DataTableTest extends UicTest:
             src   <- RowSource.init(query, pageSize = size) { (_, offset, limit) =>
                 (five.slice(offset, offset + limit), Total.Known(five.size))
             }
+            _    <- src.run
             seen <- Channel.init[Seq[Item]](16)
             _    <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _    <- served(seen)
@@ -1318,6 +1320,32 @@ class DataTableTest extends UicTest:
             assert(names == Chunk("A", "B", "C", "D"), s"a page of four, not $names")
             assert(offered == List("1", "2"), "five rows of four are two pages")
             assert(current == List("1"))
+    }
+
+    // A page opens a source the way it opens a ref and hands it to the table, which runs it in its own mount: no mount
+    // of the page's own, and no copy of the table as that mount's placeholder. Until the table is mounted, its static
+    // render is the table loading, which is the placeholder the page used to copy by hand.
+    "a table over a source runs it in its own mount" in {
+        for
+            query <- Signal.initRef("a")
+            src   <- (RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+                (five.slice(offset, offset + limit), Total.Known(five.size))
+            }: RowSource[String, Item] < Sync)
+            seen <- Channel.init[Seq[Item]](16)
+            _    <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            ui = uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name)).source(src).render
+            before <- bodyTrs(ui).map(_.size)
+            busy   <- src.loading.current
+            names  <- Scope.run {
+                for
+                    _ <- live(ui)
+                    _ <- served(seen)
+                    n <- bodyNames(ui)
+                yield n
+            }
+        yield
+            assert(busy && before == 2, s"unmounted, the table holds the place of a page of two: $before rows, loading $busy")
+            assert(names == Chunk("A", "B"), s"mounted, it ran the source: $names")
     }
 
     // Before its first answer a source holds no rows and is loading, which is not the same as a
@@ -1544,6 +1572,7 @@ class DataTableTest extends UicTest:
             src   <- RowSource.init(query, pageSize = 3) { (_, _, _) =>
                 (Seq.empty[Item], Total.Known(0))
             }
+            _    <- src.run
             done <- Channel.init[Boolean](16)
             _    <- Fiber.init(src.loading.observe(v => done.put(v)))
             _    <- answered(done)
@@ -1769,6 +1798,7 @@ class DataTableTest extends UicTest:
         for
             query  <- Signal.initRef("a")
             src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
+            _      <- src.run
             seen   <- Channel.init[Seq[Item]](16)
             _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _      <- served(seen)
@@ -1793,6 +1823,7 @@ class DataTableTest extends UicTest:
         for
             query  <- Signal.initRef("a")
             src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
+            _      <- src.run
             seen   <- Channel.init[Seq[Item]](16)
             _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _      <- served(seen)
@@ -1817,6 +1848,7 @@ class DataTableTest extends UicTest:
             src   <- RowSource.init(query, pageSize = 6)((_, o, l) =>
                 (hundred.slice(o, o + l), Total.Unknown(o + l < hundred.size))
             )
+            _      <- src.run
             seen   <- Channel.init[Seq[Item]](16)
             _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
             _      <- served(seen)
