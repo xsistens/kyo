@@ -356,6 +356,12 @@ end PassGroup
   * predecessor at its place left, and drops the paints of its content; then it reveals the content in one paint, rendered from the live
   * state, which is why no paint it dropped is missing. After that, the [[PassGroup]]s below decide what shows, and it passes their
   * paints on; only under `Placeholder` does a later load bring its placeholder back, until that load is through.
+  *
+  * One paint it drops is not made good by its own reveal on every client: that of a boundary below that revealed in the meantime. Its
+  * live content is in the reveal paint, but a client that morphs the reveal over a placeholder of the same shape (a tab strip whose
+  * placeholder is the strip itself) finds that boundary's keyed slot already there under the same key and leaves it for the instance to
+  * paint, which it did, into the paint this gate dropped. So every gate below registers with the gate above it, and a reveal paints
+  * each of them that is revealed again, right after its own paint, all the way down.
   */
 final private[kyo] class BoundaryGate(
     outer: UIExchange,
@@ -369,6 +375,12 @@ final private[kyo] class BoundaryGate(
     import AllowUnsafe.embrace.danger
 
     def root: BoundaryGate = this
+
+    /** The waiting boundaries directly below this one, whose reveal paints this one drops while it waits (see the class doc). */
+    private val nested = AtomicRef.Unsafe.init(Set.empty[BoundaryGate])
+
+    /** The gate above this one, the one whose waiting drops this one's paints, if there is one. */
+    private val above: Maybe[BoundaryGate] = outer.gate.map(_.root)
 
     private val rewaits                    = AtomicInt.Unsafe.init(0)
     @volatile private var revealed         = initiallyRevealed
@@ -416,6 +428,7 @@ final private[kyo] class BoundaryGate(
     def close(using Frame): Unit < Sync =
         Sync.Unsafe.defer {
             closed.set(true)
+            above.foreach(g => discard(g.nested.getAndUpdate(_ - this)))
             val dropped = commands
             commands = Chunk.empty
             dropped
@@ -467,6 +480,14 @@ final private[kyo] class BoundaryGate(
 
     override def started(using Frame): Unit < Async = super.started.andThen(Sync.Unsafe.defer { begun = true })
 
+    /** Paints again every boundary below this one that revealed while this one waited, whose own reveal paint this one dropped (see
+      * the class doc), and so on down. It takes no lock of theirs: one of them may hold its own while it waits for this one's to paint.
+      */
+    private def repaintNested(using Frame): Unit < Async =
+        Kyo.foreachDiscard(nested.get().toSeq)(g => if g.isRevealed && !g.closed.get() then g.repaint else Kyo.unit)
+
+    private def repaint(using Frame): Unit < Async = displayedContent.map(paintRange).andThen(repaintNested)
+
     private def paintRange(ui: UI)(using Frame): Unit < Async =
         ReactiveUI.deliverMeasured(rui, if begun then UI.RenderCause.Signal else UI.RenderCause.Created, outer)(
             _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, ui)
@@ -482,7 +503,8 @@ final private[kyo] class BoundaryGate(
                     val waiting = commands
                     commands = Chunk.empty
                     waiting
-                }).map(Kyo.foreachDiscard(_)(sendOut))
+                    // The commands follow the nested paints, since they may be about what those paints bring.
+                }).map(waiting => repaintNested.andThen(Kyo.foreachDiscard(waiting)(sendOut)))
             else if passes.get() == 0 && !seedPainted then
                 (seed, policy) match
                     case (Present(snapshot), UI.PendingPolicy.KeepLatest) =>
@@ -494,4 +516,7 @@ final private[kyo] class BoundaryGate(
                     case _ => Kyo.unit
             else Kyo.unit
         }
+
+    // Last in the body, once every field is set: from here on the gate above may reveal and repaint this one at any moment.
+    above.foreach(g => discard(g.nested.getAndUpdate(_ + this)))
 end BoundaryGate
