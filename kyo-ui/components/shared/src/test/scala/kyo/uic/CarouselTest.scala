@@ -27,6 +27,45 @@ class CarouselTest extends UicTest:
             to   <- moved.get
         yield to
 
+    private def nextButton(ui: UI)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(ui, "p-carousel-next-button").map(_.headOption.getOrElse(throw new AssertionError("no next button")))
+
+    // The page lives somewhere else (a route, a parent): the carousel shows it and hands a turn over.
+    "a page bound one way is shown, and a turn is reported without being written" in {
+        for
+            held  <- Signal.initRef(0)
+            seen  <- Signal.initRef(-1)
+            start <- Signal.initRef(0.0)
+            ui = strip.page(held.readOnly).onPageChange(seen.set).wired(held.readOnly, "car", start, _ => ())
+            next <- nextButton(ui)
+            _    <- click(next)
+            h    <- held.get
+            s    <- seen.get
+        yield assert(h == 0 && s == 1, s"held $h, reported $s")
+    }
+
+    "a two-way page is written before the carousel reports it" in {
+        for
+            page  <- Signal.initRef(0)
+            seen  <- Signal.initRef((-1, -1))
+            start <- Signal.initRef(0.0)
+            ui = strip.page(page).onPageChange(p => page.get.map(h => seen.set((p, h)))).wired(page, "car", start, _ => ())
+            next <- nextButton(ui)
+            _    <- click(next)
+            s    <- seen.get
+        yield assert(s == (1, 1), s"reported, held: $s")
+    }
+
+    "a page bound one way with nothing to hear a turn says so" in {
+        for
+            held  <- Signal.initRef(0)
+            deaf  <- elementsWithClass(strip.page(held.readOnly).render, "p-uic-key-error")
+            heard <- elementsWithClass(strip.page(1).onPageChange(_ => ()).render, "p-uic-key-error")
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onPageChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+    }
+
     "ArrowRight moves to the next dot" in move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("car-d1")))
 
     "ArrowLeft moves back" in move(2, UI.Keyboard.ArrowLeft).map(to => assert(to == Present("car-d1")))
