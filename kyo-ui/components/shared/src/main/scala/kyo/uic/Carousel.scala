@@ -13,7 +13,10 @@ import kyo.UI.*
   * `li.p-carousel-indicator[.p-carousel-indicator-active]` dot buttons), so the
   * extracted `@primeuix` carousel CSS applies verbatim.
   *
-  * The `page` binds two-way to a `SignalRef[Int]` (0-based, clamped at render).
+  * The `page` is 0-based and clamped at render. A `SignalRef` binds two way: a turn
+  * writes it, then `onPageChange` hears the page. A plain `Signal` or a constant
+  * binds one way: the carousel shows that page and only reports a turn. Without a
+  * page the carousel is a static strip.
   *
   * Slide: the interactive path renders EVERY item once in a STABLE
   * strip (`.p-carousel-item-list`, id-stamped) sized `itemCount/numVisible`
@@ -67,7 +70,7 @@ final case class Carousel[A] private (
     itemList: List[A] = Nil,
     itemSources: List[List[A] | Signal[Seq[A]]] = Nil,
     templateF: Maybe[A => UI] = Absent,
-    pageRef: Maybe[SignalRef[Int]] = Absent,
+    pageSlot: Maybe[ReactiveValue[Int]] = Absent,
     numVisibleV: Int = 1,
     numScrollV: Int = 1,
     circularFlag: Boolean = false,
@@ -97,7 +100,7 @@ final case class Carousel[A] private (
     private[uic] def entries(using Frame): Reading[List[A]] = Reading.concat(itemSources)
 
     /** The items and the page, read as ONE region (see [[Reading]]): the page count and so the clamp follow the items. */
-    private def shown(r: SignalRef[Int])(using Frame): Reading[(List[A], Int)] = entries.and(Reading.Live(r))
+    private def shown(r: Signal[Int])(using Frame): Reading[(List[A], Int)] = entries.and(Reading.Live(r))
 
     /** The items as they are now, read when an autoplay step or a swipe needs their count. */
     private def current(using Frame): List[A] < Sync =
@@ -105,8 +108,12 @@ final case class Carousel[A] private (
             case Reading.Fixed(as) => as
             case Reading.Live(sig) => sig.current
 
-    /** Binds the 0-based page two-way (clamped into range at render). */
-    def page(ref: SignalRef[Int]): Carousel[A] = copy(pageRef = Present(ref))
+    /** The 0-based page (clamped into range at render). A `SignalRef` binds two way: a turn (a nav button, a dot, a
+      * swipe, an autoplay step) writes it, then [[onPageChange]] hears the page. A plain `Signal` or a constant binds one
+      * way: the carousel shows that page and only reports a turn. A one-way page with no [[onPageChange]] is reported in a
+      * card.
+      */
+    def page(v: Int | Signal[Int]): Carousel[A] = copy(pageSlot = Present(ReactiveValue[Int](v)))
 
     /** Items shown per page (default 1). */
     def numVisible(v: Int): Carousel[A] = copy(numVisibleV = math.max(1, v))
@@ -147,19 +154,20 @@ final case class Carousel[A] private (
       */
     def autoplay(intervalMs: Int): Carousel[A] = copy(autoplayMsV = math.max(0, intervalMs))
 
-    /** Fired with the new page after a nav/indicator/swipe/autoplay write. */
+    /** Fired with the page a turn (nav, indicator, swipe, autoplay) asks for, after a two-way [[page]] is written. */
     def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = copy(onPageChangeF = Present(Callback.of(f)))
 
     /** Prime's page count over `n` items: one page per `numScroll` step over the overhang. */
     private def pagesOf(n: Int): Int = Carousel.pageCount(numScrollV, numVisibleV, n)
 
     private[uic] def render(using Frame): UI =
-        pageRef match
-            case Present(r) =>
+        pageSlot match
+            case Present(slot) =>
+                val r: Signal[Int] = slot.dyn.getOrElse(Signal.initConst(slot.const.getOrElse(0)))
                 // The stable strip needs a session id (bindStyleById target, and the base every item and dot id
                 // derives from) and a swipe start-x ref, both minted once in the mount. The autoplay fiber is spawned
                 // here too, so its Scope is this mount, which cancels it on unmount.
-                UI.mounted {
+                val carousel = UI.mounted {
                     for
                         cmds     <- UI.commands
                         stripId  <- cmds.freshId
@@ -170,6 +178,19 @@ final case class Carousel[A] private (
                         interactive(r, stripId, startPos, id => cmds.focusId(id))
                     )
                 }.placeholder(shown(r).render((as, p) => copy(itemList = as).body(p)))
+                // A page bound one way that nothing hears: every turn the reader takes is painted away again.
+                if ReactiveValue.heard(pageSlot, onPageChangeF) then carousel
+                else
+                    fragment(
+                        KeyDiagnostics.card(
+                            "Carousel",
+                            "the page is bound one way and nothing hears a turn, so the reader cannot change it; add " +
+                                "onPageChange, or bind a SignalRef",
+                            Nil
+                        ),
+                        carousel
+                    )
+                end if
             case Absent => entries.render(as => copy(itemList = as).body(0))
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
@@ -179,7 +200,7 @@ final case class Carousel[A] private (
       * reported to the `onFailure` rules around the carousel, as a click's would be,
       * and autoplay goes on.
       */
-    private def autoplayLoop(r: SignalRef[Int])(using Frame): Unit < (Async & Scope) =
+    private def autoplayLoop(r: Signal[Int])(using Frame): Unit < (Async & Scope) =
         // Fixed items that make one page have nothing to cycle; a live list may grow into more, so it always gets the
         // fiber, and each step counts the pages it holds then.
         val idle = entries match
@@ -192,7 +213,7 @@ final case class Carousel[A] private (
                     for
                         _   <- Async.sleep(autoplayMsV.millis)
                         as  <- current
-                        cur <- r.get
+                        cur <- r.current
                         pages = pagesOf(as.size)
                         // always wrap, even when not circular
                         _ <- (if pages > 1 then advance((cur + 1) % pages) else (): UI.Action)
@@ -210,7 +231,7 @@ final case class Carousel[A] private (
       * item itself. The binding detaches when the mount's Scope closes. Captures `cmds`
       * so the inner effect needs no Env.
       */
-    private def slideTrigger(cmds: UI.Commands, stripId: String, r: SignalRef[Int])(using Frame): UI =
+    private def slideTrigger(cmds: UI.Commands, stripId: String, r: Signal[Int])(using Frame): UI =
         UI.mounted {
             cmds.bindStyleById(stripId, shown(r).signal.map((as, p) => stripStyle(p, as.size))).andThen(UI.empty)
         }.placeholder(UI.empty)
@@ -235,7 +256,7 @@ final case class Carousel[A] private (
       * are applied separately by [[slideTrigger]], so this stays a pure render.
       */
     private[uic] def wired(
-        ref: SignalRef[Int],
+        ref: Signal[Int],
         stripId: String,
         startPos: SignalRef[Double],
         focus: String => UI.Action = _ => ()
@@ -249,7 +270,7 @@ final case class Carousel[A] private (
       * replacing the strip.
       */
     private def interactive(
-        r: SignalRef[Int],
+        r: Signal[Int],
         stripId: String,
         startPos: SignalRef[Double],
         focus: String => UI.Action
@@ -314,7 +335,7 @@ final case class Carousel[A] private (
             if verticalFlag then strip.style(_.height(stripSpan(initial)))
             else strip.style(_.width(stripSpan(initial)))
         // Swipe: the stable strip carries the pointer handlers; the turn
-        // reads the LIVE page (r.get) and items on release, so the write patches the
+        // reads the LIVE page (r.current) and items on release, so the write patches the
         // transform in place and the strip slides without being re-rendered.
         strip = strip
             .onPointerDown((e: PointerEvent) => startPos.set(if verticalFlag then e.y else e.x))
@@ -322,7 +343,7 @@ final case class Carousel[A] private (
                 for
                     s0 <- startPos.get
                     as <- current
-                    p  <- r.get
+                    p  <- r.current
                 yield
                     val pages           = pagesOf(as.size)
                     val delta           = (if verticalFlag then e.y else e.x) - s0
@@ -482,16 +503,8 @@ final case class Carousel[A] private (
         advance(next)
     end setPage
 
-    /** Writes the page ref and fires `onPageChange` (the shared write). */
-    private def advance(next: Int)(using Frame): UI.Action =
-        val write: UI.Action = pageRef match
-            case Present(ref) => ref.set(next)
-            case Absent       => ()
-        val fire: UI.Action = onPageChangeF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        write.andThen(fire)
-    end advance
+    /** Writes a two-way page and fires `onPageChange` (the shared write). */
+    private def advance(next: Int)(using Frame): UI.Action = ReactiveValue.change(pageSlot, next, onPageChangeF)
 end Carousel
 
 object Carousel:
