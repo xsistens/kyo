@@ -232,7 +232,11 @@ final case class AutoComplete[A] private (
         /** Moves DOM focus to an id. The dropdown trigger is the only caller: it is its own tab
           * stop, and every key this component answers is answered by the field.
           */
-        focus: String => UI.Action
+        focus: String => UI.Action,
+        /** Paints the field again after a report, where the text is bound one way, so typing the owner does not take
+          * is put back (see [[ReactiveValue.repainting]]); nothing otherwise.
+          */
+        repaint: UI.Action
     )
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
@@ -297,12 +301,15 @@ final case class AutoComplete[A] private (
         else
             val field = UI.mounted {
                 for
-                    cmds <- UI.commands
-                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-                    open <- Signal.initRef(false)
-                    hi   <- Signal.initRef(-1)
-                    all  <- Signal.initRef(false)
-                yield wired(open, hi, all, Present(base), id => cmds.focusId(id))
+                    cmds   <- UI.commands
+                    base   <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                    open   <- Signal.initRef(false)
+                    hi     <- Signal.initRef(-1)
+                    all    <- Signal.initRef(false)
+                    paints <-
+                        if valueBinding.exists(v => v.dyn.isDefined && v.writable.isEmpty) then Signal.initRef(0).map(Present(_))
+                        else Kyo.lift(Absent)
+                yield wired(open, hi, all, Present(base), id => cmds.focusId(id), paints)
             }.placeholder(stat)
             val missing = unheardEdits
             if missing.isEmpty then field
@@ -340,15 +347,20 @@ final case class AutoComplete[A] private (
         hi: SignalRef[Int],
         all: SignalRef[Boolean],
         base: Maybe[String] = Absent,
-        focus: String => UI.Action = _ => ()
+        focus: String => UI.Action = _ => (),
+        paints: Maybe[SignalRef[Int]] = Absent
     )(
         using Frame
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = Reading.Live(open).and(Reading.Live(hi)).and(Reading.Live(all))
-        validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).render { case ((((o, h), a), cur), opts) =>
-            val self = copy(optionsV = opts)
-            self.body(cur, Present(self.State(open, o, hi, h, all, a, base, focus)), validity)
+        // `paints` is read beside the rest, so bumping it draws the field again from the text its owner holds.
+        val painted: Reading[Int] = paints.fold(Reading.Fixed(0))(Reading.Live(_))
+        val repaint: UI.Action    = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
+        validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).and(painted).render {
+            case (((((o, h), a), cur), opts), _) =>
+                val self = copy(optionsV = opts)
+                self.body(cur, Present(self.State(open, o, hi, h, all, a, base, focus, repaint)), validity)
         })
     end wired
 
@@ -458,6 +470,7 @@ final case class AutoComplete[A] private (
                     _ <- s.hi.set(-1)
                     _ <- s.open.set(true)
                     r <- user
+                    _ <- s.repaint
                 yield r
                 end for
             }
@@ -469,7 +482,7 @@ final case class AutoComplete[A] private (
             // (unbound falls back to the empty value).
             onBlurF.foreach(g => f = f.onBlur(valueBinding.fold(g(""))(_.current.map(g))))
         }
-        val field: UI = onChangeF.map(f.onChange(_)).getOrElse(f)
+        val field: UI = onChangeF.map(g => f.onChange(v => g(v).andThen(st.fold[UI.Action](())(_.repaint)))).getOrElse(f)
 
         // === in-field affordances ================================================
         def loaderSpan: UI =

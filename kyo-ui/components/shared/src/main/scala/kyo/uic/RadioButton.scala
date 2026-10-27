@@ -88,16 +88,19 @@ final case class RadioButton private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange.
-        val toggle: Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
+        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound one way, it paints the
+        // box again after the report, so a toggle the owner does not take is taken back (ReactiveValue.repainting).
+        def toggle(repaint: UI.Action): Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then
+                Present(b => ReactiveValue.change(checkedBinding, b, onChangeF).andThen(repaint))
             else Absent
         val field = validity.follow(checkedBinding match
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, toggle, validity))
-            case Present(ReactiveValue.Const(v)) => body(v, toggle, validity)
-            case Absent                          => body(false, toggle, validity))
+            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
+            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
+            case Present(ReactiveValue.Const(v)) => body(v, toggle(()), validity)
+            case Absent                          => body(false, toggle(()), validity))
         val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
-        if checkedBinding.isEmpty || inert || toggle.nonEmpty then field
+        if checkedBinding.isEmpty || inert || toggle(()).nonEmpty then field
         else fragment(field, KeyDiagnostics.unheard("RadioButton", "checked", "onChange"))
     end render
 

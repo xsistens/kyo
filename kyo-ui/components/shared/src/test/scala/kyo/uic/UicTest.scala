@@ -48,6 +48,58 @@ abstract class UicTest extends kyo.test.Test[Any]:
             }
         }
 
+    /** Runs `ui` under the engine, hands `act` the tree its mounts and regions last published (the whole of `ui` when
+      * none did), and answers whether a region published again after `act` ran. That is the one sign a field paints
+      * what its owner holds once more after a report the owner did not take: nothing in the markup changes.
+      *
+      * A region publishes while it settles too, so `act` runs only once every ref in `reads` has an observer parked on it
+      * again (`waiters`), which the engine does only after handling the value before: the barrier
+      * [[DataTableReuseTest]] uses. `within` only turns a wait that never ends into an answer instead of a hang; it is not
+      * what passes a test.
+      */
+    private[uic] def repaintsAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Boolean < Async =
+        val within = 5.seconds
+        Scope.run {
+            val published = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
+            UI.Commands.init(_ => Kyo.unit).map { cmds =>
+                kyo.internal.UICommands.commands.let(Present(cmds)) {
+                    for
+                        root <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)
+                        _    <- kyo.internal.ReactiveUI.subscribe(
+                            root,
+                            new kyo.internal.UIExchange:
+                                def onChange(
+                                    region: kyo.internal.ReactiveRegion,
+                                    path: Seq[String],
+                                    contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
+                                    parentContext: kyo.internal.ReactiveRegion.ParentContext,
+                                    previous: Maybe[UI],
+                                    changed: UI
+                                )(using Frame): Unit < Async = Sync.defer(discard(published.updateAndGet(changed :: _)))
+                        )
+                        // A mount publishes what it wired once its effect ran; act on that, not on the placeholder. A
+                        // field with no mount publishes nothing here, and is acted on as it rendered.
+                        _      <- settles(Sync.defer(published.get.nonEmpty), within)
+                        parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
+                        _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
+                        before <- Sync.defer(published.get)
+                        _      <- act(before.headOption.getOrElse(ui))
+                        again  <- settles(Sync.defer(published.get.size > before.size), within)
+                    yield again
+                }
+            }
+        }
+    end repaintsAfter
+
+    /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
+    private def settles(cond: => Boolean < Sync, within: Duration)(using Frame): Boolean < Async =
+        Abort.run[Unit](Retry[Unit](Schedule.fixed(10.millis).maxDuration(within))(
+            cond.map(ok => if ok then Kyo.unit else Abort.fail(()))
+        )).map(_.isSuccess)
+
     /** Every element of a rendered tree, with the reactive nodes resolved to their current content.
       *
       * Reactive is a subscription boundary, not a node the client sees, so a walk that stopped there would miss

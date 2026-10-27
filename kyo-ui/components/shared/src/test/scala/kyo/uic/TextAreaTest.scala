@@ -51,4 +51,13 @@ class TextAreaTest extends UicTest:
         end for
     }
 
+    "an edit its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef("a")
+            again <- repaintsAfter(uic.TextArea().value(held.readOnly).onInput(_ => ()).render, held)(t =>
+                field(t).map(f => handled(f.onInput.getOrElse(throw new AssertionError("no input handler"))("ab")))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end TextAreaTest

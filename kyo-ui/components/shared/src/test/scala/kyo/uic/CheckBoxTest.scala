@@ -57,4 +57,11 @@ class CheckBoxTest extends UicTest:
         end for
     }
 
+    "a toggle its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef(false)
+            again <- repaintsAfter(uic.CheckBox().checked(held.readOnly).onChange(_ => ()).render, held)(t => box(t).map(toggle(_, true)))
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end CheckBoxTest

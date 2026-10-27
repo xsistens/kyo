@@ -110,20 +110,20 @@ final case class TextArea private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        // A two-way ref is kyo-ui's own binding; a one-way signal re-renders the field, and the morph leaves the focused
-        // field's text alone, so the caret survives the owner writing back what the reader typed.
+        // A two-way ref is kyo-ui's own binding. A one-way signal draws the field from what its owner holds and paints it
+        // again after each report (ReactiveValue.repainting), so an edit the owner did not take is put back.
         val built = valueBinding match
-            case Present(ReactiveVariable(_))    => body(Absent, validity)
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(Present(v), validity))
-            case Present(ReactiveValue.Const(v)) => body(Present(v), validity)
-            case Absent                          => body(Absent, validity)
+            case Present(ReactiveVariable(_))    => body(Absent, (), validity)
+            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => body(Present(v), repaint, validity))
+            case Present(ReactiveValue.Const(v)) => body(Present(v), (), validity)
+            case Absent                          => body(Absent, (), validity)
         val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
         if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard("TextArea", "value", "onInput or onChange"))
         else validity.follow(built)
     end render
 
-    private def body(shown: Maybe[String], validity: FieldValidity)(using Frame): UI =
+    private def body(shown: Maybe[String], repaint: UI.Action, validity: FieldValidity)(using Frame): UI =
         var b = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
@@ -158,8 +158,8 @@ final case class TextArea private (
             case Present(TextValue.Dyn(s))   => b.aria("label", s)
             case Absent                      => b
         b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
-        b = onInputF.map(f => b.onInput(f)).getOrElse(b)
-        b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
+        b = onInputF.map(f => b.onInput(v => f(v).andThen(repaint))).getOrElse(b)
+        b = onChangeF.map(f => b.onChange(v => f(v).andThen(repaint))).getOrElse(b)
         b = onBlurF match
             case Present(f) => b.onBlur(valueBinding.fold(f(""))(_.current.map(f)))
             case Absent     => b

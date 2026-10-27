@@ -42,4 +42,13 @@ class RadioButtonTest extends UicTest:
         end for
     }
 
+    "a selection its owner does not take is painted away again" in {
+        for
+            held  <- Signal.initRef(false)
+            again <- repaintsAfter(uic.RadioButton().checked(held.readOnly).onChange(_ => ()).render, held)(t =>
+                radio(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end RadioButtonTest
