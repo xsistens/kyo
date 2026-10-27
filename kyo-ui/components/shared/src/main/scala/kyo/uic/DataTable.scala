@@ -588,7 +588,7 @@ final case class DataTable[A] private (
     cols: List[ColumnTree[A]] = Nil,
     sortSlot: Maybe[ReactiveValue[List[SortKey]]] = Absent,
     onSortF: Maybe[List[SortKey] => UI.Action] = Absent,
-    filterRef: Maybe[SignalRef[String]] = Absent,
+    filterSlot: Maybe[ReactiveValue[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
     // The page size as `paginate` was given it: a constant, a signal, or a ref the rows-per-page dropdown writes. While a
     // signal is bound, `pageSizeV` holds its value as of the render, written there by `renderWith`.
@@ -645,9 +645,11 @@ final case class DataTable[A] private (
     columnFiltersSlot: Maybe[ReactiveValue[Map[List[String], ColumnFilter]]] = Absent,
     onColumnFiltersF: Maybe[Map[List[String], ColumnFilter] => UI.Action] = Absent,
     filterDisplayV: FilterDisplay = FilterDisplay.Row,
-    columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
+    columnWidthsSlot: Maybe[ReactiveValue[Map[List[String], Double]]] = Absent,
+    onColumnWidthsF: Maybe[Map[List[String], Double] => UI.Action] = Absent,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
-    columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
+    columnOrderSlot: Maybe[ReactiveValue[List[List[String]]]] = Absent,
+    onColumnOrderF: Maybe[List[List[String]] => UI.Action] = Absent,
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
     orderedPaths: List[List[String]] = Nil,
@@ -730,10 +732,11 @@ final case class DataTable[A] private (
       */
     def removableSort(v: Boolean): DataTable[A] = copy(removableSortFlag = v)
 
-    /** Binds the global filter query: case-insensitive contains-match over the
-      * columns' text projections.
+    /** The global filter query: case-insensitive contains-match over the columns' text
+      * projections. The table never writes it, since the field a reader types it into is
+      * the caller's own, so a constant, a signal and a ref all just filter.
       */
-    def globalFilter(ref: SignalRef[String]): DataTable[A] = copy(filterRef = Present(ref))
+    def globalFilter(v: String | Signal[String]): DataTable[A] = copy(filterSlot = Present(ReactiveValue[String](v)))
 
     /** The per-column filters, keyed by the column path the sort spec already names a
       * column by, which gives the table its filter row: one input per [[Column.filterBy]]
@@ -781,13 +784,15 @@ final case class DataTable[A] private (
     def onColumnFiltersChange(f: Map[List[String], ColumnFilter] => UI.Action)(using Frame): DataTable[A] =
         copy(onColumnFiltersF = Present(Callback.of(f)))
 
-    /** Binds the column widths two-way, keyed by the column path the sort spec already
-      * names a column by, and gives every boundary between two resizable columns a drag
-      * handle.
+    /** The column widths, keyed by the column path the sort spec already names a column
+      * by, which gives every boundary between two resizable columns a drag handle.
       *
-      * A seeded map opens the table on the widths it names; what the reader drags is
-      * written straight back into it, so the widths outlive the table that rendered them
-      * and a caller who wants them remembered has them already.
+      * A seeded map opens the table on the widths it names. A `SignalRef` binds two way:
+      * every move of a drag writes the new widths into it, then [[onColumnWidthsChange]]
+      * hears them, so the widths outlive the table that rendered them. A plain `Signal` or
+      * a constant binds one way: the table lays out by it and reports every move, and the
+      * columns follow the drag as fast as the owner writes back. A one-way binding with no
+      * [[onColumnWidthsChange]] is reported in a card.
       *
       * A drag moves ONE boundary: the two columns it sits between trade width and the
       * total stays where it was, so the table never grows past the space it was given and
@@ -795,8 +800,12 @@ final case class DataTable[A] private (
       * right, and neither does one whose neighbour says [[Column.resizable]] is false.
       * [[columnResizeMode]] is what changes that.
       */
-    def columnWidths(ref: SignalRef[Map[List[String], Double]]): DataTable[A] =
-        copy(columnWidthsRef = Present(ref))
+    def columnWidths(v: Map[List[String], Double] | Signal[Map[List[String], Double]]): DataTable[A] =
+        copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v)))
+
+    /** Fired with the widths after every move of a boundary drag, after two-way [[columnWidths]] are written. */
+    def onColumnWidthsChange(f: Map[List[String], Double] => UI.Action)(using Frame): DataTable[A] =
+        copy(onColumnWidthsF = Present(Callback.of(f)))
 
     /** What a resize drag moves, Prime's `columnResizeMode`, and `Fit` by default.
       *
@@ -832,8 +841,14 @@ final case class DataTable[A] private (
       * cannot sit in two groups, and a drop that would leave a frozen column adrift is
       * not offered, since freezing is what the reader would silently lose.
       */
-    def columnOrder(ref: SignalRef[List[List[String]]]): DataTable[A] =
-        copy(columnOrderRef = Present(ref))
+    def columnOrder(v: List[List[String]] | Signal[List[List[String]]]): DataTable[A] =
+        copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v)))
+
+    /** Fired with the whole order a header drop asks for, after a two-way [[columnOrder]] is written. With a signal or a
+      * constant bound the table lays out by that and only reports the drop; a one-way order with no handler here is
+      * reported in a card.
+      */
+    def onColumnOrderChange(f: List[List[String]] => UI.Action)(using Frame): DataTable[A] = copy(onColumnOrderF = Present(Callback.of(f)))
 
     /** Slices the rows into pages of `size` and renders the embedded paginator; `page` is the 0-based page index
       * (clamped at render).
@@ -1106,9 +1121,9 @@ final case class DataTable[A] private (
     def csv(using Frame): String < Async =
         for
             sort  <- sortReading.signal.current
-            query <- currentOf(filterRef, "")
+            query <- queryReading.signal.current
             specs <- filtersReading.signal.current
-            order <- currentOf(columnOrderRef, List.empty[List[String]])
+            order <- orderReading.signal.current
             rows  <- currentRows
         yield
             // In the reader's column order too, since that is as much a part of what they
@@ -1126,14 +1141,14 @@ final case class DataTable[A] private (
     def state(using Frame): TableState < Async =
         for
             sort   <- sortReading.signal.current
-            query  <- currentOf(filterRef, "")
+            query  <- queryReading.signal.current
             specs  <- filtersReading.signal.current
             page   <- pageReading.signal.current
             sel    <- currentValue(selectedBinding, Set.empty[String])
             exp    <- currentValue(expandedBinding, Set.empty[String])
             groups <- groupsReading.signal.current
-            widths <- currentOf(columnWidthsRef, Map.empty[List[String], Double])
-            order  <- currentOf(columnOrderRef, List.empty[List[String]])
+            widths <- widthsReading.signal.current
+            order  <- orderReading.signal.current
         yield TableState(sort, query, specs, page, sel, exp, groups, widths, order)
 
     /** Puts a reader back where they were: writes each field of `s` into the ref it came
@@ -1158,26 +1173,20 @@ final case class DataTable[A] private (
             rows = (keys: Set[String]) =>
                 keys.flatMap(k => Maybe.fromOption(all.find(r => keyOf(r) == k)).orElse(byKey(k)).toList)
             _ <- writeIf(sortSlot.flatMap(_.writable), s.sort)
-            _ <- writeIf(filterRef, s.globalFilter)
+            _ <- writeIf(filterSlot.flatMap(_.writable), s.globalFilter)
             _ <- writeIf(columnFiltersSlot.flatMap(_.writable), s.columnFilters)
             _ <- writeIf(pageSlot.flatMap(_.writable), s.page)
             _ <- writeIf(selectedRef, rows(s.selected))
             _ <- writeIf(expandedTyped.flatMap(_.writable), rows(s.expanded))
             _ <- writeIf(expandedGroupsSlot.flatMap(_.writable), s.expandedGroups)
-            _ <- writeIf(columnWidthsRef, s.columnWidths)
-            _ <- writeIf(columnOrderRef, s.columnOrder)
+            _ <- writeIf(columnWidthsSlot.flatMap(_.writable), s.columnWidths)
+            _ <- writeIf(columnOrderSlot.flatMap(_.writable), s.columnOrder)
         yield ()
 
     private def writeIf[T](ref: Maybe[SignalRef[T]], v: T)(using Frame): Unit < Async =
         ref match
             case Present(r) => r.set(v)
             case Absent     => ()
-
-    /** One bound ref's current value, or the fallback where nothing is bound. */
-    private def currentOf[T](ref: Maybe[Signal[T]], fallback: T)(using Frame): T < Async =
-        ref match
-            case Present(r) => r.current
-            case Absent     => fallback
 
     /** The same for a slot bound as a [[ReactiveValue]], which may be one-way or constant.
       *
@@ -1813,7 +1822,7 @@ final case class DataTable[A] private (
       * and neither does a table whose columns are all pinned.
       */
     private def resizeOn: Boolean =
-        columnWidthsRef.isDefined && (resizeModeV match
+        columnWidthsSlot.isDefined && (resizeModeV match
             case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
             case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
 
@@ -1852,7 +1861,7 @@ final case class DataTable[A] private (
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        columnWidthsRef.isDefined && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
+        columnWidthsSlot.isDefined && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
             case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
             case ColumnResizeMode.Expand => true)
 
@@ -1874,12 +1883,12 @@ final case class DataTable[A] private (
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
       */
-    private def hasWidths: Boolean = columnWidthsRef.isDefined || leafCols.exists(_.widthV.isDefined)
+    private def hasWidths: Boolean = columnWidthsSlot.isDefined || leafCols.exists(_.widthV.isDefined)
 
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = columnOrderRef.isDefined && leafCols.count(_.reorderableFlag) > 1
+    private def reorderOn: Boolean = columnOrderSlot.isDefined && leafCols.count(_.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2117,12 +2126,13 @@ final case class DataTable[A] private (
       * sorts would take it.
       */
     private def endReorder(order: OrderState)(using Frame): UI.Action =
-        (order.drag, columnOrderRef) match
-            case (Present(ref), Present(target)) =>
+        (order.drag, columnOrderSlot) match
+            case (Present(ref), Present(_)) =>
                 ref.get.map {
                     case Present(d) if d.moved =>
                         val next             = reorderedPaths(d)
-                        val write: UI.Action = if next == effectiveOrder then () else target.set(next)
+                        val write: UI.Action =
+                            if next == effectiveOrder then () else ReactiveValue.change(columnOrderSlot, next, onColumnOrderF)
                         write.andThen(ref.set(Present(ColumnDrag(d.from, d.until, d.target, d.startX, done = true))))
                     case _ => ref.set(Absent)
                 }
@@ -2554,13 +2564,13 @@ final case class DataTable[A] private (
         given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]]            = CanEqual.derived
         given inputsEq: CanEqual[RowInputs[A], RowInputs[A]]                                      = CanEqual.derived
         val order: Reading[Maybe[List[List[String]]]]                                             =
-            columnOrderRef.fold(Reading.Fixed(Maybe.empty[List[List[String]]]))(r => Reading.Live(r.map(o => Present(o))))
+            columnOrderSlot.fold(Reading.Fixed(Maybe.empty[List[List[String]]]))(Reading.of(_).map(o => Present(o)))
         val columns = order.and(visibleReading).and(sortableReading)
         val view    = frozenRowsReading
             .and(sortReading)
-            .and(Reading.orElse(filterRef, ""))
+            .and(queryReading)
             .and(filtersReading)
-            .and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
+            .and(widthsReading)
             .and(pageReading)
         val live                                 = if rowInputsBelow then rowInputsSignal else Absent
         val rows: Reading[(RowInputs[A], Total)] =
@@ -2641,6 +2651,17 @@ final case class DataTable[A] private (
     private def pageSizeReading(using Frame): Reading[Int] =
         pageSizeSlot.fold(Reading.Fixed(pageSizeV.getOrElse(1)))(Reading.of(_).map(math.max(1, _)))
 
+    /** The global query as the table filters by it: the bound one, else none. */
+    private def queryReading(using Frame): Reading[String] = filterSlot.fold(Reading.Fixed(""))(Reading.of(_))
+
+    /** The widths as the table lays out by them: the bound map, else none. */
+    private def widthsReading(using Frame): Reading[Map[List[String], Double]] =
+        columnWidthsSlot.fold(Reading.Fixed(Map.empty[List[String], Double]))(Reading.of(_))
+
+    /** The column order as the table lays out by it: the bound list, else the authored one. */
+    private def orderReading(using Frame): Reading[List[List[String]]] =
+        columnOrderSlot.fold(Reading.Fixed(List.empty[List[String]]))(Reading.of(_))
+
     /** The page as the table pages by it: the bound one's value, else the first. */
     private def pageReading(using Frame): Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
 
@@ -2671,7 +2692,7 @@ final case class DataTable[A] private (
         if scrollingOn || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
         else if resizeModeV == ColumnResizeMode.Expand then
             given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]] = CanEqual.derived
-            val expanding = order.and(visibleReading).and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
+            val expanding                                                                  = order.and(visibleReading).and(widthsReading)
                 .map { case ((requested, vis), widths) =>
                     requested.fold(this)(reordered).shown(vis).resizeModeAt(SizeState(widths = widths)) == ColumnResizeMode.Expand
                 }
@@ -2727,7 +2748,7 @@ final case class DataTable[A] private (
         val head                                                                                  = HeadLive(
             sort = sortReading,
             specs = filtersReading,
-            widths = Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]),
+            widths = widthsReading,
             held = w0.order.drag.fold(Reading.Fixed(Absent: Maybe[ColumnDrag]))(Reading.Live(_))
         )
         def part(f: Drawn => UI): UI = inner.render(v => f(drawn(v)))
@@ -2966,7 +2987,7 @@ final case class DataTable[A] private (
             val count: Reading[Int] =
                 order.and(visibleReading)
                     .and(rowsAndTotal)
-                    .and(Reading.orElse(filterRef, ""))
+                    .and(queryReading)
                     .and(filtersReading)
                     .and(pageReading)
                     .and(pageSizeReading)
@@ -3099,7 +3120,7 @@ final case class DataTable[A] private (
         for
             rowsNow <- currentRows
             sort    <- sortReading.signal.current
-            query   <- currentOf(filterRef, "")
+            query   <- queryReading.signal.current
             specs   <- filtersReading.signal.current
             page    <- pageReading.signal.current
             groups  <- groupsReading.signal.current
@@ -3836,7 +3857,7 @@ final case class DataTable[A] private (
       */
     private def sizeCards(size: SizeState)(using Frame): List[UI] =
         val pinned =
-            if columnWidthsRef.isEmpty || resizeOn then Nil
+            if columnWidthsSlot.isEmpty || resizeOn then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3848,7 +3869,7 @@ final case class DataTable[A] private (
         // column is what a reader showing it again gets back, not a mistake.
         val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
         val unknown =
-            if columnWidthsRef.isEmpty then Nil
+            if columnWidthsSlot.isEmpty then Nil
             else size.widths.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
         val unknownCard =
             if unknown.isEmpty then Nil
@@ -3869,7 +3890,16 @@ final case class DataTable[A] private (
                         "needs one; these have none and the table resizes to fit instead",
                     unsized.map(_.mkString(" / "))
                 ))
-        pinned ++ unknownCard ++ expandCard
+        val unheard =
+            if !resizeOn || columnWidthsSlot.isEmpty || ReactiveValue.heard(columnWidthsSlot, onColumnWidthsF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the column widths are bound one way and nothing hears a drag, so the reader cannot change them; add " +
+                        "onColumnWidthsChange, or bind a SignalRef",
+                    Nil
+                ))
+        pinned ++ unknownCard ++ expandCard ++ unheard
     end sizeCards
 
     /** What a bound column order cannot do, which is the same three shapes the widths
@@ -3877,7 +3907,7 @@ final case class DataTable[A] private (
       * this header cannot take.
       */
     private def orderCards(order: OrderState)(using Frame): List[UI] =
-        if columnOrderRef.isEmpty then Nil
+        if columnOrderSlot.isEmpty then Nil
         else
             val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
             val nothing =
@@ -3916,7 +3946,16 @@ final case class DataTable[A] private (
                             "rendered together where the first of them was asked for",
                         split.map(_.mkString(" / ")).sorted
                     ))
-            nothing ++ strangers ++ torn
+            val unheard =
+                if !reorderOn || ReactiveValue.heard(columnOrderSlot, onColumnOrderF) then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "the column order is bound one way and nothing hears a drop, so the reader cannot change it; add " +
+                            "onColumnOrderChange, or bind a SignalRef",
+                        Nil
+                    ))
+            nothing ++ strangers ++ torn ++ unheard
         end if
     end orderCards
 
@@ -4766,18 +4805,18 @@ final case class DataTable[A] private (
     private def dragResize(path: List[String], next: Maybe[List[String]], e: PointerEvent, size: SizeState)(using
         Frame
     ): UI.Action =
-        (size.grab, columnWidthsRef) match
-            case (Present(g), Present(ref)) =>
+        (size.grab, columnWidthsSlot) match
+            case (Present(g), Present(_)) =>
                 g.get.map {
                     case Present(held) =>
-                        val delta = e.rectX + e.x - held.startX
-                        (resizeModeAt(size), next) match
+                        val delta                                                        = e.rectX + e.x - held.startX
+                        val step: Map[List[String], Double] => Map[List[String], Double] = (resizeModeAt(size), next) match
                             case (ColumnResizeMode.Fit, Present(n)) =>
                                 val (a, b) = DataTable.resizeTo(held.width, held.next, delta)
-                                ref.getAndUpdate(_ + (path -> a) + (n -> b))
+                                _ + (path -> a) + (n -> b)
                             case _ =>
-                                ref.getAndUpdate(_ + (path -> DataTable.expandTo(held.width, delta)))
-                        end match
+                                _ + (path -> DataTable.expandTo(held.width, delta))
+                        ReactiveValue.update(columnWidthsSlot, step, onColumnWidthsF)
                     case Absent => ()
                 }
             case _ => ()
@@ -4803,7 +4842,7 @@ final case class DataTable[A] private (
         if rows > 1 then cell = cell.rowspan(rows)
         // Only once the mount has run: the id exists to be measured, and stamping it in the
         // static projection would put the same one on every table of a page.
-        if size.live && (columnWidthsRef.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
+        if size.live && (columnWidthsSlot.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
         // Whether this boundary takes a grip follows the widths where they decide it: under `Expand` the table expands
         // only once every column is sized, which a drag may be what completes, so the class is a channel and the grip a
         // region over the widths alone. Under `Fit` the widths decide nothing here.

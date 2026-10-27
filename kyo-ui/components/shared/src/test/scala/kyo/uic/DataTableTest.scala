@@ -793,7 +793,11 @@ class DataTableTest extends UicTest:
       * stubbed: what the grab reads is the width the browser would report, and the test
       * supplies it so the arithmetic is the only thing under test.
       */
-    private def sized(widths: Map[String, Double], pinMiddle: Boolean = false)(using Frame) =
+    private def sized(
+        widths: Map[String, Double],
+        pinMiddle: Boolean = false,
+        bind: (uic.DataTable[Item], SignalRef[Map[List[String], Double]]) => uic.DataTable[Item] = (t, c) => t.columnWidths(c)
+    )(using Frame) =
         for
             rows <- Signal.initRef[Seq[Item]](items)
             cols <- Signal.initRef(Map.empty[List[String], Double])
@@ -807,18 +811,18 @@ class DataTableTest extends UicTest:
                         uic.column("Name")(_.name),
                         uic.column("Price")(_.price.toString).resizable(false),
                         uic.column("Id")(_.id)
-                    ).columnWidths(cols)
+                    )
                 else
                     base.columns(
                         uic.column("Name")(_.name),
                         uic.column("Price")(_.price.toString),
                         uic.column("Id")(_.id)
-                    ).columnWidths(cols)
+                    )
             // The stub answers by header id: `t-h0` is the first leaf column's cell. A grab
             // asks for every id it needs in one call, so the stub answers a list.
             val measure = (ids: Seq[String]) =>
                 Chunk.from(ids.map(id => UI.Rect(0, 0, widths.getOrElse(id, 0.0), 30, 1000, 800))): Chunk[UI.Rect] < Async
-            (table.wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols, grab)
+            (bind(table, cols).wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols, grab)
         end for
     end sized
 
@@ -1086,7 +1090,8 @@ class DataTableTest extends UicTest:
         pin: Boolean = false,
         freeze: Boolean = false,
         group: Boolean = false,
-        hide: Boolean = false
+        hide: Boolean = false,
+        bindOrder: (uic.DataTable[Item], SignalRef[List[List[String]]]) => uic.DataTable[Item] = (t, o) => t.columnOrder(o)
     )(using Frame) =
         for
             rows  <- Signal.initRef[Seq[Item]](items)
@@ -1130,7 +1135,7 @@ class DataTableTest extends UicTest:
                     UI.Rect(i * 100.0, 0, 100, 30, 1000, 800)
                 }): Chunk[UI.Rect] < Async
             (
-                table.columnOrder(order).wired("t", Map.empty, err, _ => (), Map.empty, measure, Absent, Present(move)),
+                bindOrder(table, order).wired("t", Map.empty, err, _ => (), Map.empty, measure, Absent, Present(move)),
                 order,
                 sort
             )
@@ -1150,6 +1155,73 @@ class DataTableTest extends UicTest:
             _ <- handled(move(pointerAt(to)))
             r <- handled(up(pointerAt(to)))
         yield r
+
+    // The layout lives somewhere else (a saved view, a parent): the table lays the columns out by it and hands a drag over.
+    "column widths bound one way are reported on every move of a drag and not written" in {
+        for
+            seen          <- Signal.initRef(Map.empty[List[String], Double])
+            (ui, cols, _) <-
+                sized(Map("t-h0" -> 200, "t-h1" -> 100), bind = (t, c) => t.columnWidths(c.readOnly).onColumnWidthsChange(seen.set))
+            handles <- resizers(ui)
+            _       <- drag(handles.head, 200, 240)
+            held    <- cols.get
+            s       <- seen.get
+        yield assert(held.isEmpty && s == Map(List("Name") -> 240.0, List("Price") -> 60.0), s"held $held, reported $s")
+    }
+
+    "two-way column widths are written before the table reports them" in {
+        for
+            seen          <- Signal.initRef((Map.empty[List[String], Double], Map.empty[List[String], Double]))
+            (ui, cols, _) <- sized(
+                Map("t-h0" -> 200, "t-h1" -> 100),
+                bind = (t, c) => t.columnWidths(c).onColumnWidthsChange(m => c.get.map(h => seen.set((m, h))))
+            )
+            handles <- resizers(ui)
+            _       <- drag(handles.head, 200, 240)
+            s       <- seen.get
+        yield assert(s._1 == s._2 && s._1.nonEmpty, s"reported, held: $s")
+    }
+
+    "a column order bound one way is reported on a drop and not written" in {
+        for
+            seen           <- Signal.initRef(List.empty[List[String]])
+            (ui, order, _) <- movable(bindOrder = (t, o) => t.columnOrder(o.readOnly).onColumnOrderChange(seen.set))
+            _              <- dragHeader(ui, "t-h0", 50, 210)
+            held           <- order.get
+            s              <- seen.get
+        yield assert(held.isEmpty && s == List(List("Price"), List("Name"), List("Id")), s"held $held, reported $s")
+    }
+
+    "a layout bound one way with nothing to hear the reader says so" in {
+        for
+            (widthsUi, _, _) <- sized(Map("t-h0" -> 200, "t-h1" -> 100), bind = (t, c) => t.columnWidths(c.readOnly))
+            (orderUi, _, _)  <- movable(bindOrder = (t, o) => t.columnOrder(o.readOnly))
+            widthCards       <- elementsWithClass(widthsUi, "p-uic-key-error")
+            orderCards       <- elementsWithClass(orderUi, "p-uic-key-error")
+        yield
+            assert(widthCards.map(textOf).mkString.contains("onColumnWidthsChange"), s"widths: ${widthCards.map(textOf)}")
+            assert(orderCards.map(textOf).mkString.contains("onColumnOrderChange"), s"order: ${orderCards.map(textOf)}")
+    }
+
+    "a constant global filter filters, and restore leaves one-way layout and query to their owner" in {
+        val table =
+            uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name), uic.column("Price")(_.price.toString))
+        for
+            shown  <- bodyNames(table.globalFilter("B").render)
+            query  <- Signal.initRef("")
+            widths <- Signal.initRef(Map.empty[List[String], Double])
+            order  <- Signal.initRef(List.empty[List[String]])
+            state = TableState(globalFilter = "A", columnWidths = Map(List("Name") -> 90.0), columnOrder = List(List("Price")))
+            _ <- table.globalFilter(query.readOnly).columnWidths(widths.readOnly).onColumnWidthsChange(_ => ())
+                .columnOrder(order.readOnly).onColumnOrderChange(_ => ()).restore(state)
+            q <- query.get
+            w <- widths.get
+            o <- order.get
+        yield
+            assert(shown == Chunk("B"), s"a constant query filters: $shown")
+            assert(q == "" && w.isEmpty && o.isEmpty, s"query $q, widths $w, order $o")
+        end for
+    }
 
     "dragging a header past another writes the new order" in {
         for
