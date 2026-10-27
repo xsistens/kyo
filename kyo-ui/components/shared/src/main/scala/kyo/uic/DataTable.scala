@@ -516,7 +516,7 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   *     the only thing that says which key wins.
   *   - `globalFilter(ref)`: case-insensitive contains-match over the columns'
   *     text projections.
-  *   - `paginate(size)(pageRef)`: slices the (filtered, sorted) rows and renders
+  *   - `paginate(size)(page)`: slices the (filtered, sorted) rows and renders
   *     the embedded Prime paginator; the page ref is 0-based and clamped.
   *   - `lazyRows(total)`: the rows are a WINDOW onto `total` rows filtered, sorted and
   *     paged somewhere else. The table renders them verbatim and paginates over the
@@ -585,10 +585,12 @@ final case class DataTable[A] private (
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
-    // A page size bound two-way: the paginator's rows-per-page dropdown writes it and the table pages by it. While it is
-    // bound, `pageSizeV` holds its value as of the render, written there by `renderWith`.
-    pageSizeRef: Maybe[SignalRef[Int]] = Absent,
-    pageRef: Maybe[SignalRef[Int]] = Absent,
+    // The page size as `paginate` was given it: a constant, a signal, or a ref the rows-per-page dropdown writes. While a
+    // signal is bound, `pageSizeV` holds its value as of the render, written there by `renderWith`.
+    pageSizeSlot: Maybe[ReactiveValue[Int]] = Absent,
+    pageSlot: Maybe[ReactiveValue[Int]] = Absent,
+    onPageF: Maybe[Int => UI.Action] = Absent,
+    onPageSizeF: Maybe[Int => UI.Action] = Absent,
     paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
@@ -800,21 +802,37 @@ final case class DataTable[A] private (
     def columnOrder(ref: SignalRef[List[List[String]]]): DataTable[A] =
         copy(columnOrderRef = Present(ref))
 
-    /** Slices the rows into pages of `size` and renders the embedded paginator;
-      * `ref` holds the 0-based page index (clamped at render).
+    /** Slices the rows into pages of `size` and renders the embedded paginator; `page` is the 0-based page index
+      * (clamped at render).
       *
-      * A `SignalRef` size binds two way: the paginator's rows-per-page dropdown
-      * ([[Paginator.rowsPerPageOptions]]) writes the reader's pick into it, and the table
-      * pages by whatever it holds. A constant size is one the reader cannot change, so the
-      * dropdown, if the paginator shows one, is drawn disabled.
+      * Each takes a constant, a signal or a ref. A `SignalRef` binds two way: a page click writes the page, and the
+      * paginator's rows-per-page dropdown ([[Paginator.rowsPerPageOptions]]) writes the size. A plain `Signal` binds one
+      * way: the table pages by it and hands the reader's pick to [[onPageChange]] or [[onPageSizeChange]] without
+      * writing, which is how a page held in a route or a parent is moved. A constant size with no [[onPageSizeChange]]
+      * is one the reader cannot change, so the dropdown, if the paginator shows one, is drawn disabled.
       */
-    def paginate(size: Int | SignalRef[Int])(ref: SignalRef[Int]): DataTable[A] =
-        size match
-            case n: Int =>
-                copy(pageSizeV = Present(math.max(1, n)), pageSizeRef = Absent, pageRef = Present(ref))
-            case r: SignalRef[Int] @unchecked =>
+    def paginate(size: Int | Signal[Int])(page: Int | Signal[Int]): DataTable[A] =
+        val pageV = Present(ReactiveValue[Int](page))
+        ReactiveValue[Int](size) match
+            case ReactiveValue.Const(n) =>
+                val clamped = math.max(1, n)
+                copy(pageSizeV = Present(clamped), pageSizeSlot = Present(ReactiveValue.Const(clamped)), pageSlot = pageV)
+            case bound =>
                 // The value is read with the rest of the table's state; one stands in until then, so that paging is on.
-                copy(pageSizeV = Present(1), pageSizeRef = Present(r), pageRef = Present(ref))
+                copy(pageSizeV = Present(1), pageSizeSlot = Present(bound), pageSlot = pageV)
+        end match
+    end paginate
+
+    /** Fired with the page the reader asked for (a page link, a navigation button, a jump control, or the page a
+      * rows-per-page pick moves to), after a two-way [[paginate]] page is written. The write-side counterpart of a
+      * one-way page.
+      */
+    def onPageChange(f: Int => UI.Action)(using Frame): DataTable[A] = copy(onPageF = Present(Callback.of(f)))
+
+    /** Fired with the rows per page the reader picked in the paginator's dropdown, after a two-way [[paginate]] size is
+      * written, and before the page the pick moves to is reported.
+      */
+    def onPageSizeChange(f: Int => UI.Action)(using Frame): DataTable[A] = copy(onPageSizeF = Present(Callback.of(f)))
 
     /** Configures the [[Paginator]] the table renders below its rows: which elements it
       * shows and in which order ([[Paginator.template]]), the current-page report, the
@@ -1077,7 +1095,7 @@ final case class DataTable[A] private (
             sort   <- currentOf(sortRef, List.empty[SortKey])
             query  <- currentOf(filterRef, "")
             specs  <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
-            page   <- currentOf(pageRef, 0)
+            page   <- pageReading.signal.current
             sel    <- currentValue(selectedBinding, Set.empty[String])
             exp    <- currentOf(expandedRef, Set.empty[String])
             groups <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
@@ -1109,7 +1127,7 @@ final case class DataTable[A] private (
             _ <- writeIf(sortRef, s.sort)
             _ <- writeIf(filterRef, s.globalFilter)
             _ <- writeIf(columnFiltersRef, s.columnFilters)
-            _ <- writeIf(pageRef, s.page)
+            _ <- writeIf(pageSlot.flatMap(_.writable), s.page)
             _ <- writeIf(selectedRef, rows(s.selected))
             _ <- writeIf(expandedTyped, rows(s.expanded))
             _ <- writeIf(expandedGroupsRef, s.expandedGroups)
@@ -2478,7 +2496,7 @@ final case class DataTable[A] private (
             .and(Reading.orElse(filterRef, ""))
             .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
             .and(Reading.orElse(columnWidthsRef, Map.empty[List[String], Double]))
-            .and(Reading.orElse(pageRef, 0))
+            .and(pageReading)
         val live                                 = if rowInputsBelow then rowInputsSignal else Absent
         val rows: Reading[(RowInputs[A], Total)] =
             if live.isDefined then Reading.Fixed((RowInputs[A](), Total.Unknown(false)))
@@ -2556,7 +2574,10 @@ final case class DataTable[A] private (
 
     /** The page size as the table pages by it: the bound one's value, else the constant (one where nothing pages). */
     private def pageSizeReading(using Frame): Reading[Int] =
-        pageSizeRef.fold(Reading.Fixed(pageSizeV.getOrElse(1)))(r => Reading.Live(r.map(math.max(1, _))))
+        pageSizeSlot.fold(Reading.Fixed(pageSizeV.getOrElse(1)))(Reading.of(_).map(math.max(1, _)))
+
+    /** The page as the table pages by it: the bound one's value, else the first. */
+    private def pageReading(using Frame): Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
 
     /** This table paging by `size`, where it pages at all. */
     private def sized(size: Int): DataTable[A] =
@@ -2879,7 +2900,7 @@ final case class DataTable[A] private (
                     .and(rowsAndTotal)
                     .and(Reading.orElse(filterRef, ""))
                     .and(Reading.orElse(columnFiltersRef, Map.empty[List[String], ColumnFilter]))
-                    .and(Reading.orElse(pageRef, 0))
+                    .and(pageReading)
                     .and(pageSizeReading)
                     .map { case ((((((requested, vis), (in, total)), query), specs), page), size) =>
                         requested.fold(this)(reordered).shown(vis).sized(size).countOf(in, query, specs, page, total)
@@ -2887,14 +2908,15 @@ final case class DataTable[A] private (
             var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
                 .totalRecords(count.slot)
                 .hostClass("p-datatable-paginator-bottom")
-            // The table owns how many rows a page holds: a bound size is what the rows-per-page dropdown writes, and a
-            // constant one leaves the dropdown nothing to write, whatever the caller handed the paginator.
-            pag = pageSizeRef match
-                case Present(ref) => pag.rows(ref)
-                case Absent       => pag.fixedRows(pageSizeV.get)
-            pageRef match
-                case Present(ref) => pag = pag.page(ref)
-                case Absent       => pag = pag.currentPage(0)
+            // The table owns the page and how many rows it holds, whatever the caller handed the paginator: it hands over
+            // its own bindings and its own events, so a pick is written where the table pages from and reported under the
+            // table's names.
+            pag = pageSizeSlot match
+                case Present(size) => pag.hostRows(size, onPageSizeF, "onPageSizeChange")
+                case Absent        => pag.fixedRows(pageSizeV.get)
+            pag = pageSlot match
+                case Present(page) => pag.hostPage(page, onPageF)
+                case Absent        => pag.currentPage(0)
             List(pag.render)
         end if
     end paginatorPart
@@ -3011,7 +3033,7 @@ final case class DataTable[A] private (
             sort    <- currentOf(sortRef, List.empty[SortKey])
             query   <- currentOf(filterRef, "")
             specs   <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
-            page    <- currentOf(pageRef, 0)
+            page    <- pageReading.signal.current
             groups  <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
         yield
             val rows   = rowsNow.toList

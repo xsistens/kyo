@@ -1336,6 +1336,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         )
         // The page and the rows per page are state slots: a constant or a signal binds one way and a click is reported.
         typeCheck(
+            preamble + """def x(page: Signal[Int])(using Frame): uic.DataTable[String] = uic.DataTable[String]().paginate(10)(page).onPageChange(_ => ()).onPageSizeChange(_ => ())"""
+        )
+        typeCheck(
+            preamble + """def x(using Frame): uic.DataView[String] = uic.DataView[String]().items(Seq("a")).itemTemplate(s => span(s)).paginate(5)(0).onPageChange(_ => ())"""
+        )
+        typeCheck(
             preamble + """def x(r: Signal[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(r).page(0).onPageChange(_ => ()).onRowsChange(_ => ())"""
         )
         typeCheck(
