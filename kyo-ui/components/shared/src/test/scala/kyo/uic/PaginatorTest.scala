@@ -98,4 +98,95 @@ class PaginatorTest extends UicTest:
         yield assert(r == 20 && p == 1, s"rows $r, page $p")
     }
 
+    private def pageLink(ui: UI, label: String)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(ui, "p-paginator-page").map(_.find(textOf(_) == label).getOrElse(
+            throw new AssertionError(s"no page link $label")
+        ))
+
+    private def selectedPage(ui: UI)(using Frame): String < Sync =
+        elementsWithClass(ui, "p-paginator-page-selected").map(_.map(textOf).mkString(","))
+
+    "a page bound one way shows the signal, and a click reports the page and writes nothing" in {
+        // The page lives somewhere else (a route, a parent): the paginator draws it and hands the reader's pick over.
+        for
+            held <- Signal.initRef(1)
+            seen <- Signal.initRef(-1)
+            ui = uic.Paginator().totalRecords(120).rows(10).page(held.readOnly).onPageChange(p => seen.set(p)).render
+            before <- selectedPage(ui)
+            link   <- pageLink(ui, "4")
+            _      <- click(link)
+            h      <- held.get
+            s      <- seen.get
+        yield
+            assert(before == "2", s"the page the signal holds is the one drawn selected: $before")
+            assert(h == 1 && s == 3, s"the signal still holds $h, the pick reported $s")
+        end for
+    }
+
+    "a constant page is drawn and a click is reported" in {
+        for
+            seen <- Signal.initRef(-1)
+            ui = uic.Paginator().totalRecords(120).rows(10).page(2).onPageChange(p => seen.set(p)).render
+            before <- selectedPage(ui)
+            link   <- pageLink(ui, "5")
+            _      <- click(link)
+            s      <- seen.get
+        yield assert(before == "3" && s == 4, s"selected $before, reported $s")
+    }
+
+    "a rows-per-page pick reports the rows and the page it moved to, after writing both" in {
+        // Page 4 of 10 rows starts at record 31; a page of 20 that shows it is page 2. The page moved, so it is reported
+        // as a page change like any other, and both refs hold the new values by the time either callback runs.
+        for
+            page     <- Signal.initRef(3)
+            rows     <- Signal.initRef(10)
+            seenRows <- Signal.initRef((-1, -1))
+            seenPage <- Signal.initRef((-1, -1))
+            _        <- uic.Paginator().totalRecords(120).rows(rows).page(page).rowsPerPageOptions(Seq(10, 20))
+                .onRowsChange(n => rows.get.map(r => seenRows.set((n, r))))
+                .onPageChange(p => page.get.map(q => seenPage.set((p, q))))
+                .rowsPicked(20)
+            r <- seenRows.get
+            p <- seenPage.get
+        yield assert(r == (20, 20) && p == (1, 1), s"rows reported, held $r; page reported, held $p")
+    }
+
+    "rows and page bound one way: a rows-per-page pick writes neither and reports both" in {
+        for
+            page     <- Signal.initRef(3)
+            rows     <- Signal.initRef(10)
+            seenRows <- Signal.initRef(-1)
+            seenPage <- Signal.initRef(-1)
+            pag = uic.Paginator().totalRecords(120).rows(rows.readOnly).page(page.readOnly).rowsPerPageOptions(Seq(10, 20))
+                .onRowsChange(seenRows.set).onPageChange(seenPage.set)
+            _     <- pag.rowsPicked(20)
+            r     <- rows.get
+            p     <- page.get
+            sr    <- seenRows.get
+            sp    <- seenPage.get
+            cards <- elementsWithClass(pag.render, "p-uic-key-error")
+        yield
+            assert(r == 10 && p == 3, s"the signals still hold rows $r, page $p")
+            assert(sr == 20 && sp == 1, s"reported rows $sr, page $sp")
+            assert(cards.isEmpty, s"both picks have somewhere to go: ${cards.map(textOf)}")
+        end for
+    }
+
+    "a one-way binding nobody hears is reported, and a constant rows count only disables its dropdown" in {
+        for
+            page <- Signal.initRef(0)
+            rows <- Signal.initRef(10)
+            deafPage = uic.Paginator().totalRecords(120).rows(10).page(page.readOnly).render
+            deafRows = uic.Paginator().totalRecords(120).rows(rows.readOnly).page(page).rowsPerPageOptions(Seq(10, 20)).render
+            fixed    = uic.Paginator().totalRecords(120).rows(10).page(page).rowsPerPageOptions(Seq(10, 20)).render
+            pageCard  <- elementsWithClass(deafPage, "p-uic-key-error")
+            rowsCard  <- elementsWithClass(deafRows, "p-uic-key-error")
+            fixedCard <- elementsWithClass(fixed, "p-uic-key-error")
+        yield
+            assert(pageCard.size == 1 && textOf(pageCard.head).contains("onPageChange"), s"page: ${pageCard.map(textOf)}")
+            assert(rowsCard.size == 1 && textOf(rowsCard.head).contains("onRowsChange"), s"rows: ${rowsCard.map(textOf)}")
+            assert(fixedCard.isEmpty, s"a constant rows count is one the reader cannot change: ${fixedCard.map(textOf)}")
+        end for
+    }
+
 end PaginatorTest

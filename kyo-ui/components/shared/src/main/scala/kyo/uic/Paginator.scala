@@ -31,20 +31,20 @@ end PaginatorElement
   * applies verbatim. This is the SAME markup DataTable and DataView embed
   * below their content.
   *
-  * `page(ref)` binds the 0-based page index two-way (clamped at render);
-  * clicking a target writes the ref back before firing `onPage`. Page links
-  * window to `pageLinkSize` (Prime default 5) centered on the current page,
-  * exactly PrimeVue's boundary math; like PrimeVue, the window just shifts (no
-  * ellipsis buttons: the extracted sheet styles none). `rows` can bind to a
-  * `SignalRef[Int]` so the rows-per-page dropdown (`rowsPerPageOptions`) can
-  * write it back; a rows change repositions to the page that keeps the first
-  * visible record visible.
+  * `page` and `rows` each take a constant, a signal or a ref. A ref binds two
+  * way: a click writes it, then [[onPageChange]] (or [[onRowsChange]]) hears the
+  * new value. A signal or a constant binds one way: the paginator draws it and only
+  * reports the reader's pick, so a page that lives in a route or a parent is moved
+  * there and comes back through the signal. Page links window to `pageLinkSize`
+  * (Prime default 5) centered on the current page, exactly PrimeVue's boundary
+  * math; like PrimeVue, the window just shifts (no ellipsis buttons: the extracted
+  * sheet styles none). A rows change repositions to the page that keeps the first
+  * visible record visible, and reports that page as a page change.
   */
 final case class Paginator private (
     totalV: ReactiveValue[Int] = ReactiveValue.Const(0),
-    rowsV: Int = 1,
-    rowsRef: Maybe[SignalRef[Int]] = Absent,
-    pageRef: Maybe[SignalRef[Int]] = Absent,
+    rowsV: ReactiveValue[Int] = ReactiveValue.Const(1),
+    pageV: Maybe[ReactiveValue[Int]] = Absent,
     currentPageV: Maybe[Int] = Absent,
     pageLinkSizeV: Int = 5,
     rppOptionsV: List[Int] = Nil,
@@ -52,7 +52,8 @@ final case class Paginator private (
     jtpInputFlag: Boolean = false,
     templateV: Maybe[List[PaginatorElement]] = Absent,
     hostClassesV: List[String] = Nil,
-    onPageF: Maybe[Int => UI.Action] = Absent
+    onPageF: Maybe[Int => UI.Action] = Absent,
+    onRowsF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Paginator
 
@@ -61,21 +62,28 @@ final case class Paginator private (
       */
     def totalRecords(n: Int | Signal[Int]): Paginator = copy(totalV = ReactiveValue(n))
 
-    /** Records per page (the page count is `ceil(totalRecords / rows)`). */
-    def rows(n: Int): Paginator = copy(rowsV = math.max(1, n))
-
-    /** Binds the records-per-page two-way to `ref` (floored at 1): the
-      * [[rowsPerPageOptions]] dropdown writes it back, and app writes re-render.
+    /** Records per page (floored at 1; the page count is `ceil(totalRecords / rows)`).
+      *
+      * A `SignalRef` binds two way: the [[rowsPerPageOptions]] dropdown writes the reader's pick into it. A plain
+      * `Signal` binds one way: the dropdown shows it and hands the pick to [[onRowsChange]] without writing. A constant
+      * is a count the reader cannot change unless [[onRowsChange]] is there to take the pick, so without one its
+      * dropdown is drawn disabled.
       */
-    def rows(ref: SignalRef[Int]): Paginator = copy(rowsRef = Present(ref))
+    def rows(n: Int | Signal[Int]): Paginator = copy(rowsV = ReactiveValue(n))
 
-    /** Package-internal: a host that owns the page size hands a constant one, dropping any ref a caller bound, since a
-      * dropdown writing a ref the host does not page by would page a list nobody is looking at.
+    /** Package-internal: a host that owns the page size hands a constant one, dropping any binding a caller made, since
+      * a dropdown writing a ref the host does not page by would page a list nobody is looking at.
       */
-    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = math.max(1, n), rowsRef = Absent)
+    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = ReactiveValue.Const(math.max(1, n)), onRowsF = Absent)
 
-    /** Binds the 0-based page index two-way to `ref` (clamped at render). */
-    def page(ref: SignalRef[Int]): Paginator = copy(pageRef = Present(ref))
+    /** The 0-based page index (clamped at render).
+      *
+      * A `SignalRef` binds two way: a click writes it, then [[onPageChange]] hears the page. A plain `Signal` or a
+      * constant binds one way: the paginator draws it and a click only reports to [[onPageChange]], which is how a page
+      * held in a route or a parent is moved. A one-way page with no [[onPageChange]] cannot move and is reported in a
+      * card.
+      */
+    def page(n: Int | Signal[Int]): Paginator = copy(pageV = Present(ReactiveValue(n)))
 
     /** At most this many page links render, centered on the current page (Prime's
       * `pageLinkSize`, default 5); all pages render when they fit the window.
@@ -121,8 +129,15 @@ final case class Paginator private (
       */
     def template(elements: PaginatorElement*): Paginator = copy(templateV = Present(elements.toList))
 
-    /** Fired with the target page index after the ref write-back. */
-    def onPage(f: Int => UI.Action)(using Frame): Paginator = copy(onPageF = Present(Callback.of(f)))
+    /** Fired with the page the reader asked for, after a two-way [[page]] is written: a page link, a navigation button,
+      * either jump control, and the page a rows-per-page pick moves to.
+      */
+    def onPageChange(f: Int => UI.Action)(using Frame): Paginator = copy(onPageF = Present(Callback.of(f)))
+
+    /** Fired with the rows per page the reader picked, after a two-way [[rows]] is written, and before the page the
+      * pick moves to is reported.
+      */
+    def onRowsChange(f: Int => UI.Action)(using Frame): Paginator = copy(onRowsF = Present(Callback.of(f)))
 
     /** Package-internal: host components (DataTable/DataView) stamp their
       * positional class (`p-datatable-paginator-bottom`, ...) on the root.
@@ -139,10 +154,9 @@ final case class Paginator private (
     private def pageReading(using Frame): Reading[Int] =
         currentPageV match
             case Present(cur) => Reading.Fixed(cur)
-            case Absent       => pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
+            case Absent       => pageV.fold(Reading.Fixed(0))(Reading.of(_))
 
-    private def rowsReading(using Frame): Reading[Int] =
-        rowsRef.fold(Reading.Fixed(rowsV))(ref => Reading.Live(ref.map(math.max(1, _))))
+    private def rowsReading(using Frame): Reading[Int] = Reading.of(rowsV).map(math.max(1, _))
 
     private def totalReading(using Frame): Reading[Int] = Reading.of(totalV).map(math.max(0, _))
 
@@ -181,11 +195,8 @@ final case class Paginator private (
                     .extraClass("p-paginator-rpp-dropdown")
                     .selection(rows.slot)
                     .accessibleName("Rows per page")
-                rowsRef match
-                    case Present(_) =>
-                        sel = sel.onChange(rowsChange)
-                    case Absent => sel = sel.disabled(true)
-                end match
+                if rowsPickable then sel = sel.onChange(rowsChange)
+                else sel = sel.disabled(true)
                 List(sel.render)
 
         // Prime's second way to reach a page directly: the same targets as the page links,
@@ -229,7 +240,7 @@ final case class Paginator private (
 
         var root = div.cssClass("p-paginator").cssClass("p-component")
         hostClassesV.foreach(c => root = root.cssClass(c))
-        val children: List[UI] = cards(layout) ++ layout.flatMap(elementUI)
+        val children: List[UI] = cards(layout) ++ unheard(layout) ++ layout.flatMap(elementUI)
         root.role("navigation")(children.map(toChild)*)
     end render
 
@@ -326,24 +337,35 @@ final case class Paginator private (
         end if
     end cards
 
-    /** Write the bound ref (when present), then fire `onPage`. Targets are valid
-      * by construction: nav/page clicks aim at rendered pages, the jump input
-      * clamps against the render-time page count.
+    /** Whether a rows-per-page pick reaches anybody: a two-way binding, or [[onRowsChange]]. */
+    private def rowsPickable: Boolean = ReactiveValue.heard(Present(rowsV), onRowsF)
+
+    /** One-way bindings a reader's pick cannot move: a page with no [[onPageChange]], and a signal of rows behind a
+      * shown rows-per-page dropdown with no [[onRowsChange]]. A host that draws the page itself (`currentPage`) owns its
+      * clicks, and a constant rows count is one the reader is not meant to change, so neither is reported.
+      */
+    private def unheard(layout: List[PaginatorElement])(using Frame): List[UI] =
+        val page =
+            if currentPageV.isDefined || pageV.isEmpty || ReactiveValue.heard(pageV, onPageF) then Nil
+            else List("page is bound one way and nothing hears a click: add onPageChange, or bind a SignalRef")
+        val rows =
+            val shown = rppOptionsV.nonEmpty && layout.contains(PaginatorElement.RowsPerPageDropdown)
+            rowsV match
+                case ReactiveValue.Const(_)      => Nil
+                case _ if !shown || rowsPickable => Nil
+                case _ => List("rows is bound one way and nothing hears a pick: add onRowsChange, or bind a SignalRef")
+            end match
+        end rows
+        val unheard = page ++ rows
+        if unheard.isEmpty then Nil
+        else List(KeyDiagnostics.card("Paginator", "a binding the reader cannot move", unheard))
+    end unheard
+
+    /** A page pick: written if [[page]] binds two way, then reported. Targets are valid by construction: nav and page
+      * clicks aim at rendered pages, the jump controls clamp against the render-time page count.
       */
     private def activate(target: Int)(using Frame): UI.Action =
-        val t                = math.max(0, target)
-        val write: UI.Action = pageRef match
-            case Present(ref) => ref.set(t)
-            case Absent       => ()
-        val fire: UI.Action = onPageF match
-            case Present(f) => f(t)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
-    end activate
+        ReactiveValue.change(pageV, math.max(0, target), onPageF)
 
     /** RPP pick: write the rows ref, then reposition to the page that keeps the
       * first visible record visible (clamped into the new range).
@@ -351,19 +373,12 @@ final case class Paginator private (
     private def changeRows(newRows: Int, at: View)(using Frame): UI.Action =
         if newRows < 1 then ()
         else
-            val newPages             = totalPages(at.total, newRows)
-            val target               = math.min(at.cur * at.rows / newRows, newPages - 1)
-            val writeRows: UI.Action = rowsRef match
-                case Present(ref) => ref.set(newRows)
-                case Absent       => ()
-            val writePage: UI.Action = pageRef match
-                case Present(ref) => ref.set(math.max(0, target))
-                case Absent       => ()
-            for
-                _ <- writeRows
-                r <- writePage
-            yield r
-            end for
+            val newPages = totalPages(at.total, newRows)
+            val target   = math.min(at.cur * at.rows / newRows, newPages - 1)
+            val page     = math.max(0, target)
+            // Typed: an untyped `if` over Unit and an action infers Any and hands the action back unrun.
+            val movePage: UI.Action = if page == at.cur then () else activate(page)
+            ReactiveValue.change(Present(rowsV), newRows, onRowsF).andThen(movePage)
 end Paginator
 
 object Paginator:

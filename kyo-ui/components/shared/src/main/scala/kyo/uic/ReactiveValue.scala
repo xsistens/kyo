@@ -24,6 +24,9 @@ sealed private[uic] trait ReactiveValue[A]:
       * else `Absent`.
       */
     private[uic] def dyn: Maybe[Signal[A]]
+
+    /** The ref a reader's change is written into, if this binds two way, else `Absent`. */
+    private[uic] def writable: Maybe[SignalRef[A]] = Absent
 end ReactiveValue
 
 private[uic] object ReactiveValue:
@@ -71,6 +74,21 @@ private[uic] object ReactiveValue:
         case r: SignalRef[A] @unchecked => ReactiveVariable(r)
         case s: Signal[A] @unchecked    => Dyn(s)
         case a: A @unchecked            => Const(a)
+
+    /** A reader's change to a state slot, as every slot takes it: a two-way binding is written first, then `report` hears
+      * the new value, whatever the binding is. A slot bound one way (a signal, a constant, or nothing at all) is not
+      * written, so `report` is how a caller that keeps the state elsewhere learns what the reader asked for.
+      */
+    def change[A](slot: Maybe[ReactiveValue[A]], next: A, report: Maybe[A => UI.Action])(using Frame): UI.Action =
+        val write: UI.Action = slot.flatMap(_.writable).fold[UI.Action](())(_.set(next))
+        write.andThen(report.fold[UI.Action](())(_(next)))
+    end change
+
+    /** Whether a reader's change to `slot` reaches anybody: a two-way binding, or a `report` to hand it to. A slot bound one
+      * way with nobody to report to paints the change away on the next render, which is what the cards say.
+      */
+    def heard[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
+        slot.exists(_.writable.isDefined) || report.isDefined
 end ReactiveValue
 
 /** A two-way reactive binding: a writable `SignalRef`. IS-A [[ReactiveValue.Dyn]] (and hence a
@@ -80,4 +98,5 @@ end ReactiveValue
   * read-only slots never construct one, and match it transparently as a `Dyn`.
   */
 final private[uic] case class ReactiveVariable[A](ref: SignalRef[A]) extends ReactiveValue.Dyn[A]:
-    def v: Signal[A] = ref
+    def v: Signal[A]                                        = ref
+    override private[uic] def writable: Maybe[SignalRef[A]] = Present(ref)

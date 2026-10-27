@@ -369,15 +369,6 @@ class MultiSelectTest extends UicTest:
             v <- Signal.initRef(Set.empty[MultiSelectTest.User])
         yield (o, q, v, base.selection(v).wired(o, h, q, Present("ms")))
 
-    /** All the text an element holds, however deeply. */
-    private def textOf(e: UI.Ast.Element)(using Frame): String =
-        def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
-        e.children.map(walk).mkString
-    end textOf
-
     private def shownNames(ui: UI)(using Frame): Chunk[String] < Sync =
         elementsWithClass(ui, "p-multiselect-option").map(_.map(textOf))
 
