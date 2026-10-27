@@ -22,6 +22,32 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case other             => throw new AssertionError(s"the handler failed: $other")
         }
 
+    /** Runs `ui` the way a transport does, its mount effects included, for as long as the enclosing `Scope` is open.
+      *
+      * The walks below show a mount as its placeholder, so they cannot see what a component starts in its own mount.
+      * This subscribes the tree with a command channel installed and every change dropped, which is enough for the
+      * mounts to run; what they publish is then read through the signals they feed.
+      */
+    private[uic] def live(ui: UI)(using Frame): Unit < (Async & Scope) =
+        UI.Commands.init(_ => Kyo.unit).map { cmds =>
+            kyo.internal.UICommands.commands.let(Present(cmds)) {
+                kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map { root =>
+                    kyo.internal.ReactiveUI.subscribe(
+                        root,
+                        new kyo.internal.UIExchange:
+                            def onChange(
+                                region: kyo.internal.ReactiveRegion,
+                                path: Seq[String],
+                                contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
+                                parentContext: kyo.internal.ReactiveRegion.ParentContext,
+                                previous: Maybe[UI],
+                                changed: UI
+                            )(using Frame): Unit < Async = Kyo.unit
+                    ).unit
+                }
+            }
+        }
+
     /** Every element of a rendered tree, with the reactive nodes resolved to their current content.
       *
       * Reactive is a subscription boundary, not a node the client sees, so a walk that stopped there would miss

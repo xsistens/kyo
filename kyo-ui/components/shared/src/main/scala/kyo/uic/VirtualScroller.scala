@@ -96,9 +96,9 @@ final case class VirtualScroller[A] private (
                 // The first range has to be asked for by someone, and no scroll has
                 // happened yet to ask for it.
                 _ <- (sourceV match
-                    case Present(src) => src.demand.set(viewport.demand(0.0))
+                    case Present(src) => src.demand.set(viewport.demand(0.0)).andThen(src.run)
                     case _            => ()
-                ): Unit < Async
+                ): Unit < (Async & Scope)
             yield wired(scroll)
         }.placeholder(shell(Absent)(placeholderWindow))
 

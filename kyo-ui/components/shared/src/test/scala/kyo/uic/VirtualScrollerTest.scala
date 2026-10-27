@@ -96,6 +96,25 @@ class VirtualScrollerTest extends UicTest:
         yield assert(regions == 1, s"a feed writes the window and the total together; nested regions repaint older state: $regions")
     }
 
+    "a scroller over a source runs it in its own mount" in {
+        for
+            query  <- Signal.initRef("a")
+            source <- (RowSource.init(query, pageSize = 6)((_, o, l) =>
+                ((o until math.min(o + l, 20)).map(_.toString), Total.Known(20))
+            ): RowSource[String, String] < Sync)
+            seen <- Channel.init[Seq[String]](16)
+            _    <- Fiber.init(source.rows.observe(v => seen.put(v)))
+            rows <- Scope.run {
+                live(uic.VirtualScroller(source).itemSize(40).height(200).overscan(0)(s => span(s)).render)
+                    .andThen(firstRows(seen))
+            }
+        yield assert(rows.headOption.contains("0"), s"the scroller's mount ran the source from the top: $rows")
+    }
+
+    /** The first non-empty window a source published. */
+    private def firstRows(ch: Channel[Seq[String]])(using Frame): Seq[String] < (Async & Abort[Closed]) =
+        ch.take.map(v => if v.nonEmpty then v else firstRows(ch))
+
     "a scroll asks the source for the range it is about to draw" in {
         for
             query  <- Signal.initRef("a")

@@ -1446,25 +1446,25 @@ The total is a `Total`, not a number, because plenty of sources cannot answer wi
 `RowSource` is the other half, and it is what a table binds in practice. It owns the fetching: a block cache keyed by the query, a prefetch of the neighbouring blocks, and the busy flag that stays down when a range was already there. `source(...)` binds its rows, its total, its busy flag and its paginator in one call.
 
 ```scala
-val lazyTable: UI =
-    UI.mounted {
-        for
-            text   <- Signal.initRef("")
-            sort   <- Signal.initRef(List.empty[uic.SortKey])
-            source <- uic.RowSource.init(text.combineLatest(sort), pageSize = 25) {
-                (key, offset, limit) => lookUp(key._1, key._2, offset, limit)
-            }
-        yield uic.DataTable[Product]()
-            .rowKey(_.id)
-            .columns(
-                uic.column("Name")(_.name).sortable(true),
-                uic.column("Category")(_.category).sortable(true),
-                uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
-            )
-            .sort(sort)
-            .source(source): UI
-    }
+val lazyTable: UI < Sync =
+    for
+        text   <- Signal.initRef("")
+        sort   <- Signal.initRef(List.empty[uic.SortKey])
+        source <- uic.RowSource.init(text.combineLatest(sort), pageSize = 25) {
+            (key, offset, limit) => lookUp(key._1, key._2, offset, limit)
+        }
+    yield uic.DataTable[Product]()
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).sortable(true),
+            uic.column("Category")(_.category).sortable(true),
+            uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
+        )
+        .sort(sort)
+        .source(source): UI
 ```
+
+Opening a source starts nothing. It allocates the refs and the cache, the way `Signal.initRef` allocates a ref, so it sits beside them with no mount around it. The table runs it in a mount of its own, and until that mount runs the table renders itself loading from the source's signals: a skeleton row per row of the page, the paginator at the real page size. So there is no placeholder to write, and no copy of the table to keep in step with the real one.
 
 The first argument is everything besides the range that decides which rows match: the search text, the sort spec, the filters. It is part of the cache key, so a sort click retires the old query's blocks without invalidating anything, and it is why the source needs no notion of what a sort even is.
 
@@ -1474,28 +1474,26 @@ The page size takes a `SignalRef[Int]` as well as a number, the way `paginate` d
 
 One rule inside is worth knowing, because it is what makes the buffer safe rather than merely fast: a fetch is never interrupted, only the waiting for it. `Signal.observe` closes its per-value scope the moment the value changes, so a fetch forked into that scope would be killed exactly when the reader arrives on the page it was fetching. Every fetch is therefore forked unscoped and only awaited from inside that scope, where an interruption costs nothing.
 
-A source lives on the scope of the `UI.mounted` that made it, so its feed stops when the node does, and a fetch that fails surfaces on the node rather than leaving stale rows standing. For anything the source does not fit, `rows(ref)`, `lazyRows(signal)` and `loading(signal)` are still there to bind by hand.
+A source fetches while something runs it (`source.run`, which the table and `VirtualScroller` call in their own mounts), and stops when the last of them is gone; runs that overlap share one feed, and the cache outlives them all, so a table mounted again finds its blocks still there. A fetch that fails surfaces on every node running the source rather than leaving stale rows standing. `run` is public for a page that drives a source with no component, and the refs (`page`, `pageSize`, `demand`) are there from the start for anything outside the table to write. For anything the source does not fit, `rows(ref)`, `lazyRows(signal)` and `loading(signal)` are still there to bind by hand: `source(...)` sets exactly those, and `paginate`, and nothing else.
 
 A table can also scroll instead of paginating. `scrollRows(itemSize)`, beside the `scrollHeight` that gives it a viewport, renders only the rows in view plus a few on either side; over a source it is the scroll that writes the demand, so nothing is held and the list costs the blocks the reader actually looked at.
 
 ```scala
-val infiniteTable: UI =
-    UI.mounted {
-        for
-            text   <- Signal.initRef("")
-            source <- uic.RowSource.init(text, pageSize = 40) {
-                (t, offset, limit) => lookUp(t, Nil, offset, limit)
-            }
-        yield uic.DataTable[Product]()
-            .rowKey(_.id)
-            .columns(
-                uic.column("Name")(_.name),
-                uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
-            )
-            .source(source)
-            .scrollHeight("400px")
-            .scrollRows(46): UI
-    }
+val infiniteTable: UI < Sync =
+    for
+        text   <- Signal.initRef("")
+        source <- uic.RowSource.init(text, pageSize = 40) {
+            (t, offset, limit) => lookUp(t, Nil, offset, limit)
+        }
+    yield uic.DataTable[Product]()
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name),
+            uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
+        )
+        .source(source)
+        .scrollHeight("400px")
+        .scrollRows(46): UI
 ```
 
 `itemSize` reaches the row as a height, which the browser reads as a floor: pick it at least as tall as the row renders on its own and every row is exactly it. How far it reaches comes from the `Total`: a known count spans the whole list, and an unknown one spans what has loaded plus one screen while anything follows, which is infinite scrolling without a mode for it. A row of the window that has not arrived yet is a row of `Skeleton` cells the same height, so the geometry never moves under the reader and the waiting is shown per row rather than behind a mask over the whole table.
@@ -1769,15 +1767,13 @@ val shell: UI < Async =
 Handed a `RowSource` instead of a sequence, it holds no list at all: it writes the visible range into the source on every scroll and draws what the source published, so a list of any length costs the blocks the reader actually looked at. Rows inside the window that have not arrived are drawn as `Skeleton` slots of the same height, which is what keeps the geometry from jumping while they load.
 
 ```scala
-val lazyList: UI =
-    UI.mounted {
-        for
-            query  <- Signal.initRef("")
-            source <- uic.RowSource.init(query, pageSize = 40) { (q, offset, limit) =>
-                lookUp(q, Nil, offset, limit)
-            }
-        yield uic.VirtualScroller(source).itemSize(48).height(400)(p => div(span(p.name))): UI
-    }
+val lazyList: UI < Sync =
+    for
+        query  <- Signal.initRef("")
+        source <- uic.RowSource.init(query, pageSize = 40) { (q, offset, limit) =>
+            lookUp(q, Nil, offset, limit)
+        }
+    yield uic.VirtualScroller(source).itemSize(48).height(400)(p => div(span(p.name))): UI
 ```
 
 The rows are placed at the offset the source PUBLISHED, not at the range the viewport asked for, and those two differ for exactly as long as a fetch is in flight. How far the scrollbar reaches comes from the `Total`: a known count spans the whole list, and an unknown one spans the furthest the source has served plus one screen while anything follows, which is infinite scrolling without a mode of its own. A block that reports nothing after it makes the length exact, so the scrollbar settles the moment the reader reaches the end.
