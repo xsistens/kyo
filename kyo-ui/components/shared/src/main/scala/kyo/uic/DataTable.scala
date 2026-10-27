@@ -4318,11 +4318,14 @@ final case class DataTable[A] private (
                     if columnFiltersSlot.exists(_.writable.isEmpty) then filter.typedOf(path) else Absent
                 given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
                 val typed: Reading[Maybe[String]]            = typedRef.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.Live(_))
-                cell(toChild(spec.and(open).and(typed).render { case ((cur, isOpen), kept) =>
+                cell(toChild(spec.and(open).and(typed).render { case ((held, isOpen), kept) =>
+                    // The filter as the reader sees it: the field, its validity and the mode menu all read this one, so a
+                    // mode picked before the owner caught up carries what the reader typed.
+                    val cur = kept.fold(held)(q => ColumnFilter(q, held.mode))
                     // A query this table cannot read as a value of its column's type is marked on its own input.
                     val unusable = !lazyOn && cur.active.nonEmpty && cf.predicate(cur).isEmpty
                     var input    = Input()
-                        .value(kept.getOrElse(cur.query))
+                        .value(cur.query)
                         .fluid(true)
                         .invalid(unusable)
                         .accessibleName(s"Filter by ${c.headerV}")

@@ -432,6 +432,33 @@ class DataTableTest extends UicTest:
         yield assert(late == "ab", s"the late answer to the first keystroke shows $late")
     }
 
+    // The mode menu reads the same filter the field shows: a mode picked while the owner has not caught up with the
+    // reader carries what the reader typed, not the owner's older answer.
+    "a mode picked over a one-way filter the owner has not caught up with keeps what the reader typed" in {
+        for
+            held  <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            seen  <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            typed <- Signal.initRef(Absent: Maybe[String])
+            menu  <- Signal.initRef(false)
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
+                .columnFilters(held.readOnly).onColumnFiltersChange(seen.set)
+                .wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu), filterTyped = Map(List("Name") -> typed))
+            field <- inputs(ui).map(_.head)
+            _     <- type_(field, "a")
+            _     <- type_(field, "ab")
+            _     <- held.set(nameFilter("a"))
+            _     <- menu.set(true)
+            open  <- elements(ui)
+            starts = open.find(e =>
+                e.attrs.cssClasses.contains("p-datatable-filter-constraint") &&
+                    e.children.collect { case t: UI.Ast.Text => t.value }.contains("Starts with")
+            ).getOrElse(throw new AssertionError("the menu shows no modes"))
+            _ <- click(starts)
+            s <- seen.get
+        yield assert(s == Map(List("Name") -> ColumnFilter("ab", MatchMode.StartsWith)), s"the pick reported $s")
+    }
+
     "once the reader leaves a one-way filter field it shows what the owner holds" in {
         for
             held   <- Signal.initRef(Map.empty[List[String], ColumnFilter])
