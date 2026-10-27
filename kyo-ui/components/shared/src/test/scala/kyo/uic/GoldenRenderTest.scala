@@ -4141,7 +4141,7 @@ class GoldenRenderTest extends UicTest:
                 "Prime's default order: report before jtp"
             )
             assert(unbound.contains("p-paginator-rpp-dropdown"), "rpp renders without a rows ref too")
-            assert(unbound.contains("p-disabled"), "rpp without a rows(SignalRef) binding renders disabled")
+            assert(unbound.contains("p-disabled"), "rpp over a constant rows count with no onRowsChange renders disabled")
     }
 
     "Stepper renders the vertical StepItem composition with the inline active panel" in {

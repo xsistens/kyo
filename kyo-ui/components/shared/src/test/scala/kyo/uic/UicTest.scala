@@ -243,6 +243,17 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def elementsWithClass(node: UI, cls: String)(using Frame): Chunk[UI.Ast.Element] < Sync =
         elements(node).map(_.filter(_.attrs.cssClasses.contains(cls)))
 
+    /** All the text an element holds, however deeply, which is how a button is found by its label rather than by a class
+      * the sheet does not give it.
+      */
+    private[uic] def textOf(e: UI.Ast.Element)(using Frame): String =
+        def walk(u: UI): String = u match
+            case t: UI.Ast.Text     => t.value
+            case el: UI.Ast.Element => el.children.map(walk).mkString
+            case _                  => ""
+        e.children.map(walk).mkString
+    end textOf
+
     /** Sends one key to `el`'s own handler, as the dispatcher would. */
     private[uic] def press(el: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
         using Frame

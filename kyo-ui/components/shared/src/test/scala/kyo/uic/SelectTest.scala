@@ -251,15 +251,6 @@ class SelectTest extends UicTest:
         yield assert(picked == "a" && !still, s"the select finished its own work; value=$picked open=$still")
     }
 
-    /** All the text an element holds, however deeply. */
-    private def textOf(e: UI.Ast.Element)(using Frame): String =
-        def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
-        e.children.map(walk).mkString
-    end textOf
-
     /** The select wired with its panel open, so its rows are on the tree. */
     private def opened(s: uic.Select[?])(using Frame): UI < Async =
         for

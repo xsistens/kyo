@@ -419,12 +419,4 @@ class ElementIdTest extends UicTest:
         }
     }
 
-    /** All the text an element holds, however deeply. */
-    private def textOf(e: UI.Ast.Element)(using Frame): String =
-        def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
-        e.children.map(walk).mkString
-    end textOf
 end ElementIdTest

@@ -4,14 +4,6 @@ import kyo.*
 
 class SplitButtonTest extends UicTest:
 
-    private def textOf(e: UI.Ast.Element)(using Frame): String =
-        def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
-        e.children.map(walk).mkString
-    end textOf
-
     "the rows follow a signal of items, so a page whose list changes keeps its split button" in {
         for
             rows <- Signal.initRef(Seq(MenuItem("Projects"), MenuItem("Viewer")))

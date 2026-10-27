@@ -2998,17 +2998,6 @@ class DataTableTest extends UicTest:
     private def buttonWith(node: UI, cls: String)(using Frame): UI.Ast.Element < Sync =
         elementWithClass(node, cls)
 
-    /** All the text an element holds, however deeply, which is how a button is found by
-      * its label rather than by a class the sheet does not give it.
-      */
-    private def textOf(e: UI.Ast.Element)(using Frame): String =
-        def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
-        e.children.map(walk).mkString
-    end textOf
-
     "the open filter menu is ONE region over the open state and the draft" in {
         // Opening writes the draft and the open state together; a draft region nested in the Overlay's own drew
         // the menu from a draft it closed over.
