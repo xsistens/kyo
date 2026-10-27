@@ -20,8 +20,11 @@ class MountedTest extends kyo.test.Test[Any]:
 
     /** @param keepsRows
       *   answers a list patch the way the DOM backend does: only the changed rows are painted, the kept ones stay in place
+      * @param beforePaint
+      *   runs before a paint is recorded, with its path and markup, and may suspend it there, as a slow transport would
       */
-    private class Recorder(keepsRows: Boolean = false) extends UIExchange:
+    private class Recorder(keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())
+        extends UIExchange:
         private val paints  = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
         private val holdLog = AtomicRef.Unsafe.init(Chunk.empty[(ReactiveRegion, Boolean)])(using AllowUnsafe.embrace.danger)
 
@@ -55,7 +58,9 @@ class MountedTest extends kyo.test.Test[Any]:
             previous: Maybe[UI],
             ui: UI
         )(using Frame): Unit < Async =
-            HtmlRenderer.render(ui, path).map(html => Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path, html))))))
+            HtmlRenderer.render(ui, path).map(html =>
+                beforePaint(path, html).andThen(Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path, html))))))
+            )
 
         /** The initial page, which a transport renders itself before subscribing. */
         def initial(ui: UI)(using Frame): Unit < Sync =
@@ -93,17 +98,17 @@ class MountedTest extends kyo.test.Test[Any]:
             assert(audit.get.checked.get > 0 && found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
         }
 
-    private def mount[A](ui: UI, keepsRows: Boolean = false)(
+    private def mount[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
     )(using Frame, kyo.test.AssertScope): A < Async =
-        mountSession(ui, keepsRows)((recorder, sub) => f(recorder, sub.handle))
+        mountSession(ui, keepsRows, beforePaint)((recorder, sub) => f(recorder, sub.handle))
 
     /** [[mount]] with the whole subscription. Once the session has ended, no verdict on an interrupted effect waits any more. */
-    private def mountSession[A](ui: UI, keepsRows: Boolean = false)(
+    private def mountSession[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, ReactiveUI.Subscription) => A < (Async & Scope)
     )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
-            val recorder = new Recorder(keepsRows)
+            val recorder = new Recorder(keepsRows, beforePaint)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -191,6 +196,53 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    // Two boundaries deep: a section revealed inside a waiting strip, with a boundary of its own revealed inside it. The strip's
+    // reveal paints both again. A paint of the section takes the section's lock and then the strip's, so a repaint that went
+    // down through the section's lock while holding the strip's waited on a section that waited on the strip. Under a slow CPU
+    // the demo's pages stopped there, most sections on their placeholder. Here the strip's reveal paint is held at the
+    // transport while the section paints. The sleeps only give the boundaries time to get where the scenario needs them: if
+    // they fall short a round passes without having met the case, it never fails because of them, and there are enough rounds.
+    "a reveal that paints two boundaries deep again while the boundary between them paints finishes" in {
+        Kyo.foreachDiscard(1 to 20) { _ =>
+            for
+                outerGate <- Promise.init[Unit, Any]
+                slowGate  <- Promise.init[Unit, Any]
+                midRan    <- Promise.init[Unit, Any]
+                bottomRan <- Promise.init[Unit, Any]
+                revealing <- Promise.init[Unit, Any]
+                release   <- Promise.init[Unit, Any]
+                tick      <- Signal.initRef(0)
+                bottom = UI.mounted(bottomRan.completeUnitDiscard.andThen(span("bottom-ready")))
+                    .keyed("bottom").placeholder(span("bottom-loading"))
+                mid = UI.mounted(midRan.completeUnitDiscard.andThen(div(tick.render(n => span(s"tick:$n")), bottom)))
+                    .keyed("mid").placeholder(span("mid-loading"))
+                slow       = UI.mounted(slowGate.get.andThen(span("slow-ready")))
+                ui         = div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), mid, slow))).placeholder(span("outer-loading")))
+                holdReveal = (path: Seq[String], html: String) =>
+                    if path == Seq("0") && html.contains("slow-ready") then revealing.completeUnitDiscard.andThen(release.get) else Kyo.unit
+                _ <- mount(ui, beforePaint = holdReveal) { (recorder, _) =>
+                    for
+                        _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                        _ <- outerGate.completeUnitDiscard
+                        _ <- midRan.get
+                        _ <- bottomRan.get
+                        _ <- Async.sleep(50.millis)
+                        _ <- slowGate.completeUnitDiscard
+                        _ <- revealing.get
+                        _ <- tick.set(1)
+                        _ <- Async.sleep(50.millis)
+                        _ <- release.completeUnitDiscard
+                        _ <- assertEventually(recorder.shown(Seq("0", "1", "1")).map(_.contains("bottom-ready")))
+                        // The reveal paint already shows the first tick, so only a later one tells whether the section still paints.
+                        _ <- tick.set(2)
+                        // Bounded only so that a section that stopped fails here rather than at the suite's timeout.
+                        _ <- assertEventually(recorder.shown(Seq("0", "1", "0")).map(_.contains("tick:2")), within = 10.seconds)
+                    yield ()
+                }
+            yield ()
+        }.andThen(succeed)
+    }
+
     // The same, with the inner boundary in a keyed list row, which is where a tab strip keeps its panels: inside a waiting
     // boundary a list goes the whole-region way, and its rows are resolved from the live state on the reveal too.
     "a boundary in a keyed row that revealed while the boundary around it was waiting shows its content after the reveal" in {
@@ -207,14 +259,14 @@ class MountedTest extends kyo.test.Test[Any]:
                 .placeholder(span("outer-loading")))
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _     <- showsEventually(recorder, Seq("0"), "outer-loading")
-                    _     <- outerGate.completeUnitDiscard
-                    _     <- innerGate.completeUnitDiscard
-                    _     <- innerRan.get
-                    _     <- slowGate.completeUnitDiscard
-                    _     <- showsEventually(recorder, Seq("0"), "slow-ready")
-                    shown <- recorder.shown(Seq("0"))
-                yield assert(shown.contains("inner-ready"), s"the page after the outer reveal: $shown")
+                    _ <- showsEventually(recorder, Seq("0"), "outer-loading")
+                    _ <- outerGate.completeUnitDiscard
+                    _ <- innerGate.completeUnitDiscard
+                    _ <- innerRan.get
+                    _ <- slowGate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0"), "slow-ready")
+                    _ <- showsEventually(recorder, Seq("0"), "inner-ready")
+                yield ()
             }
         yield succeed
     }

@@ -361,7 +361,7 @@ end PassGroup
   * live content is in the reveal paint, but a client that morphs the reveal over a placeholder of the same shape (a tab strip whose
   * placeholder is the strip itself) finds that boundary's keyed slot already there under the same key and leaves it for the instance to
   * paint, which it did, into the paint this gate dropped. So every gate below registers with the gate above it, and a reveal paints
-  * each of them that is revealed again, right after its own paint, all the way down.
+  * each of them that is revealed again, right after its own paint and through its own exchange, all the way down.
   */
 final private[kyo] class BoundaryGate(
     outer: UIExchange,
@@ -481,15 +481,24 @@ final private[kyo] class BoundaryGate(
     override def started(using Frame): Unit < Async = super.started.andThen(Sync.Unsafe.defer { begun = true })
 
     /** Paints again every boundary below this one that revealed while this one waited, whose own reveal paint this one dropped (see
-      * the class doc), and so on down. It takes no lock of theirs: one of them may hold its own while it waits for this one's to paint.
+      * the class doc), and so on down.
+      *
+      * Every one of them goes out through this gate's own exchange, as its reveal paint did, and none through the gates between. A
+      * boundary in between paints by taking its own lock and then this one's, so a repaint that went through its lock while holding
+      * this one's would wait on a boundary that waits on this one, and the page would stop there.
       */
-    private def repaintNested(using Frame): Unit < Async =
-        Kyo.foreachDiscard(nested.get().toSeq)(g => if g.isRevealed && !g.closed.get() then g.repaint else Kyo.unit)
+    private def repaintNested(using Frame): Unit < Async = repaintNestedThrough(outer)
 
-    private def repaint(using Frame): Unit < Async = displayedContent.map(paintRange).andThen(repaintNested)
+    private def repaintNestedThrough(through: UIExchange)(using Frame): Unit < Async =
+        Kyo.foreachDiscard(nested.get().toSeq)(g => if g.isRevealed && !g.closed.get() then g.repaintThrough(through) else Kyo.unit)
 
-    private def paintRange(ui: UI)(using Frame): Unit < Async =
-        ReactiveUI.deliverMeasured(rui, if begun then UI.RenderCause.Signal else UI.RenderCause.Created, outer)(
+    private def repaintThrough(through: UIExchange)(using Frame): Unit < Async =
+        displayedContent.map(paintRangeThrough(_, through)).andThen(repaintNestedThrough(through))
+
+    private def paintRange(ui: UI)(using Frame): Unit < Async = paintRangeThrough(ui, outer)
+
+    private def paintRangeThrough(ui: UI, through: UIExchange)(using Frame): Unit < Async =
+        ReactiveUI.deliverMeasured(rui, if begun then UI.RenderCause.Signal else UI.RenderCause.Created, through)(
             _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, ui)
         )
 
