@@ -463,9 +463,10 @@ object RowSource:
 
         /** Drops what the source holds about the set (every block, the floor under its length) and moves the generation
           * on, which the feed takes as a turn of its own: the range asked for is served again from fresh fetches. The rows
-          * on the screen stay until they arrive.
+          * on the screen stay until they arrive, and the source says it is loading from the reload on, not only once the
+          * feed's turn gets to it: nothing it holds is fresh until then.
           */
-        def reload(using Frame): Unit < Async = feed.exclusive(forget)
+        def reload(using Frame): Unit < Async = feed.exclusive(forget.andThen(loadingRef.set(true)))
 
         /** [[reload]], from the source as it opened: the first page, no rows, no length, loading.
           *
