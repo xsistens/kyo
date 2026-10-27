@@ -96,8 +96,10 @@ final case class Tree[K] private (
     // The roots `body` draws, resolved from `nodeSources` by the render.
     nodeList: List[TreeNode[K]] = Nil,
     nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
-    expandedRef: Maybe[SignalRef[Set[K]]] = Absent,
-    selectedRef: Maybe[SignalRef[Set[K]]] = Absent,
+    expandedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    selectedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    onExpandedF: Maybe[Set[K] => UI.Action] = Absent,
+    onSelectionF: Maybe[Set[K] => UI.Action] = Absent,
     onNodeToggleF: Maybe[K => UI.Action] = Absent,
     onItemClickF: Maybe[K => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
@@ -120,13 +122,26 @@ final case class Tree[K] private (
       */
     private[uic] def rooted(ns: List[TreeNode[K]]): Tree[K] = copy(nodeList = ns, nodeSources = ns)
 
-    /** Binds expansion two-way to `ref`: toggles update the set, ref changes re-render `aria-expanded`. */
-    def expanded(ref: SignalRef[Set[K]]): Tree[K] = copy(expandedRef = Present(ref))
-
-    /** Binds the selection two-way to the set of chosen node ids: clicking a node updates the set, ref changes re-render
-      * selection.
+    /** The expanded node ids. A `SignalRef` binds two way: toggles update the set, ref changes re-render `aria-expanded`.
+      * A plain `Signal` or a constant binds one way: the tree opens those nodes and a toggle only reports the set it asks
+      * for to [[onExpandedChange]]; with neither that nor [[onNodeToggle]] it is reported in a card.
       */
-    def selection(ref: SignalRef[Set[K]]): Tree[K] = copy(selectedRef = Present(ref))
+    def expanded(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(expandedSlot = Present(ReactiveValue[Set[K]](v)))
+
+    /** The chosen node ids. A `SignalRef` binds two way: clicking a node updates the set, ref changes re-render selection.
+      * A plain `Signal` or a constant binds one way: the tree marks those nodes and a click only reports the set it asks
+      * for to [[onSelectionChange]]; with neither that nor [[onItemClick]] it is reported in a card.
+      */
+    def selection(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(selectedSlot = Present(ReactiveValue[Set[K]](v)))
+
+    /** Fired with the nodes open after a toggle, after a two-way [[expanded]] is written, and before [[onNodeToggle]]. */
+    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(onExpandedF = Present(Callback.of(f)))
+
+    /** Fired with the nodes chosen after a click, after a two-way [[selection]] is written, and before [[onItemClick]].
+      * Unlike [[onItemClick]] it carries what the click made of the selection: the mode, the modifier and a checkbox's
+      * cascade included.
+      */
+    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(onSelectionF = Present(Callback.of(f)))
 
     /** Fired with the node id after a toggle (after the expansion write). */
     def onNodeToggle(f: K => UI.Action)(using Frame): Tree[K] = copy(onNodeToggleF = Present(Callback.of(f)))
@@ -180,7 +195,26 @@ final case class Tree[K] private (
     private[uic] def resolved(exp: Set[K], sel: Set[K], roving: Maybe[Roving] = Absent)(using Frame): UI =
         entries.render(ns => rooted(ns).body(exp, sel, roving))
 
-    private[uic] def render(using Frame): UI =
+    private[uic] def render(using Frame): UI = withUnheard(mountedTree)
+
+    /** Bindings made one way that nothing hears, ahead of the tree. A toggle also reaches [[onNodeToggle]] and a click
+      * [[onItemClick]], so either is an outlet as good as the change events.
+      */
+    private def withUnheard(tree: UI)(using Frame): UI =
+        val expansion =
+            if expandedSlot.isEmpty || ReactiveValue.heard(expandedSlot, onExpandedF.orElse(onNodeToggleF)) then Nil
+            else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef")
+        val selection =
+            if selectionModeV == SelectionMode.None || selectedSlot.isEmpty ||
+                ReactiveValue.heard(selectedSlot, onSelectionF.orElse(onItemClickF))
+            then Nil
+            else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef")
+        val unheard = expansion ++ selection
+        if unheard.isEmpty then tree
+        else fragment(KeyDiagnostics.card("Tree", "a binding the reader cannot move", unheard), tree)
+    end withUnheard
+
+    private def mountedTree(using Frame): UI =
         // One mount for the keyboard highlight and the id it addresses rows by, allocated
         // OUTSIDE the expansion and selection subscriptions: a mount inside a subscribed
         // region re-runs on every emission and would mint a new highlight per keystroke.
@@ -194,15 +228,15 @@ final case class Tree[K] private (
         }.placeholder(subscribed(Absent))
 
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
-    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))
+    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = withUnheard(subscribed(Present((hi, base))))
 
     /** The roots, the expansion, the selection and the highlight around one [[body]] render, read as ONE region (see
       * [[Reading]]): a key writes the highlight, the expansion and the selection together, and a nested region would
       * repaint the values it closed over.
       */
     private def subscribed(keyboard: Maybe[(SignalRef[Int], String)])(using Frame): UI =
-        val exp = expandedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
-        val sel = selectedRef.fold(Reading.Fixed(Set.empty[K]))(Reading.Live(_))
+        val exp = expandedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
+        val sel = selectedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
         val hi  = keyboard.fold(Reading.Fixed(-1))((ref, _) => Reading.Live(ref))
         entries.and(exp).and(sel).and(hi).render { case (((ns, e), s), h) =>
             rooted(ns).body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
@@ -392,9 +426,8 @@ final case class Tree[K] private (
 
     /** Toggling a node flips its id in the bound `expanded` set, then fires `onNodeToggle`. */
     private def toggleNode(id: K)(using Frame): UI.Action =
-        val setExpanded: UI.Action = expandedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
-            case Absent       => ()
+        val setExpanded: UI.Action =
+            ReactiveValue.update(expandedSlot, cur => if cur.contains(id) then cur - id else cur + id, onExpandedF)
         val fireToggle: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -409,14 +442,12 @@ final case class Tree[K] private (
       * mode, then fires `onItemClick`.
       */
     private def selectNode(id: K, meta: Boolean = false)(using Frame): UI.Action =
-        val setSelection: UI.Action = (selectedRef, selectionModeV) match
+        val setSelection: UI.Action = selectionModeV match
+            case SelectionMode.None => ()
             // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
             // this mode does not go through the shared one.
-            case (Present(ref), SelectionMode.Checkbox) =>
-                ref.getAndUpdate(cur => cascadeToggle(id, cur))
-            case (Present(ref), m) if m != SelectionMode.None =>
-                ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
-            case _ => ()
+            case SelectionMode.Checkbox => ReactiveValue.update(selectedSlot, cur => cascadeToggle(id, cur), onSelectionF)
+            case m => ReactiveValue.update(selectedSlot, cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur), onSelectionF)
         val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)
             case Absent     => ()

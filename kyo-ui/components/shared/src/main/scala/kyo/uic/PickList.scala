@@ -240,7 +240,7 @@ final case class PickList[A] private (
                 .disabled(disabledFlag)
                 .onHostKey(hostKeys)
             cursor.foreach(c => lb = lb.id(c.id))
-            selRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(r), xs, keyOf)))
+            selRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(ReactiveValue[Set[A]](r)), xs, keyOf)))
             templateF.foreach { f =>
                 val byKey = xs.map(a => keyOf(a) -> a).toMap
                 lb = lb.itemTemplate(li =>

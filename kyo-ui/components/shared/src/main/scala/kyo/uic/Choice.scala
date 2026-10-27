@@ -102,21 +102,34 @@ private[uic] object SingleChoice:
 end SingleChoice
 
 /** What a multi-choice field ([[MultiSelect]], [[MultiSelectButton]]) holds its choice in: the set of chosen
-  * options (`selection` over a `SignalRef[Set[A]]`).
+  * options, as the module's const-or-reactive [[ReactiveValue]].
   *
   * The [[SingleChoice]] rules at a set: the field works on keys, and a write puts back the options that carry the keys it
-  * names. A member the ref already holds stays as the app wrote it while its key stays chosen.
+  * names. A member the ref already holds stays as the app wrote it while its key stays chosen. A `SignalRef` binds two
+  * way; any other signal, or a constant, binds one way: a pick writes nothing and only reports the set it asks for.
   */
-final private[uic] case class MultiChoice[A](ref: SignalRef[Set[A]]):
+final private[uic] case class MultiChoice[A](v: ReactiveValue[Set[A]]):
+
+    /** The held options as a [[Reading]], for a host that reads them beside its other state in one region. */
+    def reading(using Frame): Reading[Set[A]] = Reading.of(v)
 
     /** Renders `f` with the held options. */
-    def render(f: Set[A] => UI)(using Frame): UI = ref.render(f)
+    def render(f: Set[A] => UI)(using Frame): UI = reading.render(f)
+
+    /** The held options as they are at this moment. */
+    def current(using Frame): Set[A] < Sync =
+        v match
+            case ReactiveValue.Dyn(sig) => sig.current
+            case ReactiveValue.Const(a) => a
 
     /** Runs `f` with the held options as they are at this moment. */
-    def read(f: Set[A] => UI.Action)(using Frame): UI.Action = ref.use(f)
+    def read(f: Set[A] => UI.Action)(using Frame): UI.Action = current.map(f)
 
-    /** Replaces the chosen keys `ks` with `f(ks)`, written back as the options among `options` that carry them, and answers
-      * the set now held where the keys changed.
+    /** Whether a pick reaches anybody: a two-way binding, or `report`. */
+    def heard[R](report: Maybe[R]): Boolean = ReactiveValue.heard(Present(v), report)
+
+    /** Replaces the chosen keys `ks` with `f(ks)`, written back as the options among `options` that carry them where the
+      * binding is two-way, and answers the set now held (or, one-way, asked for) where the keys changed.
       */
     def update(options: => Seq[A], key: A => String)(f: Set[String] => Set[String])(using Frame): Maybe[Set[A]] < Sync =
         def next(prev: Set[A]): Set[A] =
@@ -125,10 +138,13 @@ final private[uic] case class MultiChoice[A](ref: SignalRef[Set[A]]):
             val known = kept.map(key)
             kept ++ options.filter(a => now.contains(key(a)) && !known.contains(key(a)))
         end next
-        ref.getAndUpdate(next).map { prev =>
+        def changed(prev: Set[A]): Maybe[Set[A]] =
             val now = next(prev)
             if now.map(key) == prev.map(key) then Absent else Present(now)
-        }
+        v.writable match
+            case Present(ref) => ref.getAndUpdate(next).map(changed)
+            case Absent       => current.map(changed)
+        end match
     end update
 end MultiChoice
 
@@ -144,25 +160,49 @@ private[uic] trait SetBinding[K]:
     /** The held set as a signal, for a host that reads it beside its other state in one region. */
     def signal(using Frame): Signal[Set[K]]
     def read(f: Set[K] => UI.Action)(using Frame): UI.Action
-    def update(f: Set[K] => Set[K])(using Frame): UI.Action
+
+    /** Steps the held set, written where the binding is two-way, and answers the set now held (or, one-way, asked for)
+      * where the step changed it.
+      */
+    def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < Sync
+
+    /** Whether a step reaches anybody: a two-way binding, or `report`. */
+    def heard[R](report: Maybe[R]): Boolean
 end SetBinding
 
 private[uic] object SetBinding:
 
-    /** The app's own set, written as it is. */
-    def of[K](ref: SignalRef[Set[K]]): SetBinding[K] =
+    /** The app's own set: a ref is written as it is, a signal or a constant only shown. */
+    def of[K](v: ReactiveValue[Set[K]]): SetBinding[K] =
+        // Ids are compared by their own `equals`, as everywhere a model carries its id (see `ListItem`).
+        given CanEqual[Set[K], Set[K]] = CanEqual.derived
         new SetBinding[K]:
-            def render(f: Set[K] => UI)(using Frame): UI             = ref.render(f)
-            def signal(using Frame): Signal[Set[K]]                  = ref
-            def read(f: Set[K] => UI.Action)(using Frame): UI.Action = ref.use(f)
-            def update(f: Set[K] => Set[K])(using Frame): UI.Action  = ref.getAndUpdate(f).unit
+            def render(f: Set[K] => UI)(using Frame): UI             = Reading.of(v).render(f)
+            def signal(using Frame): Signal[Set[K]]                  = Reading.of(v).signal
+            def read(f: Set[K] => UI.Action)(using Frame): UI.Action = current.map(f)
+            def heard[R](report: Maybe[R]): Boolean                  = ReactiveValue.heard(Present(v), report)
+            private def current(using Frame): Set[K] < Sync          =
+                v match
+                    case ReactiveValue.Dyn(sig) => sig.current
+                    case ReactiveValue.Const(a) => a
+            def update(f: Set[K] => Set[K])(using Frame): Maybe[Set[K]] < Sync =
+                def changed(prev: Set[K]): Maybe[Set[K]] =
+                    val now = f(prev)
+                    if now == prev then Absent else Present(now)
+                v.writable match
+                    case Present(ref) => ref.getAndUpdate(f).map(changed)
+                    case Absent       => current.map(changed)
+            end update
+        end new
+    end of
 
     /** A typed set of options read and written through their keys, as [[MultiChoice]] does. */
     def keyed[A](choice: MultiChoice[A], options: => Seq[A], key: A => String): SetBinding[String] =
         new SetBinding[String]:
-            def render(f: Set[String] => UI)(using Frame): UI                 = choice.render(as => f(as.map(key)))
-            def signal(using Frame): Signal[Set[String]]                      = choice.ref.map(_.map(key))
-            def read(f: Set[String] => UI.Action)(using Frame): UI.Action     = choice.read(as => f(as.map(key)))
-            def update(f: Set[String] => Set[String])(using Frame): UI.Action =
-                choice.update(options, key)(f).unit
+            def render(f: Set[String] => UI)(using Frame): UI                                 = choice.render(as => f(as.map(key)))
+            def signal(using Frame): Signal[Set[String]]                                      = choice.reading.map(_.map(key)).signal
+            def read(f: Set[String] => UI.Action)(using Frame): UI.Action                     = choice.read(as => f(as.map(key)))
+            def update(f: Set[String] => Set[String])(using Frame): Maybe[Set[String]] < Sync =
+                choice.update(options, key)(f).map(_.map(_.map(key)))
+            def heard[R](report: Maybe[R]): Boolean = choice.heard(report)
 end SetBinding
