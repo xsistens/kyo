@@ -1188,6 +1188,71 @@ class DataTableTest extends UicTest:
             assert(after == List("1", "2"), "a query that matched fewer rows offers fewer pages")
     }
 
+    private def pageLinkOf(node: UI, label: String)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(node, "p-paginator-page").map(_.find(textOf(_) == label).getOrElse(
+            throw new AssertionError(s"no page link $label")
+        ))
+
+    // The page lives somewhere else (a route, a parent): the table pages by it, and a page click is handed over.
+    "a page bound one way pages by the signal, and a page click is reported without being written" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            held <- Signal.initRef(1)
+            seen <- Signal.initRef(-1)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(2)(held.readOnly).lazyRows(7).onPageChange(p => seen.set(p)).render
+            (_, current) <- pages(ui)
+            link         <- pageLinkOf(ui, "3")
+            _            <- click(link)
+            h            <- held.get
+            s            <- seen.get
+        yield
+            assert(current == List("2"), s"the page the signal holds is the one shown: $current")
+            assert(h == 1 && s == 2, s"the signal still holds $h, the click reported $s")
+    }
+
+    "a two-way page is written before the table reports it" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            page <- Signal.initRef(0)
+            seen <- Signal.initRef((-1, -1))
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(2)(page).lazyRows(7).onPageChange(p => page.get.map(held => seen.set((p, held)))).render
+            link <- pageLinkOf(ui, "4")
+            _    <- click(link)
+            s    <- seen.get
+        yield assert(s == (3, 3), s"reported, held: $s")
+    }
+
+    "a page size bound one way takes its picks through onPageSizeChange, and without it says so" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            size <- Signal.initRef(2)
+            page <- Signal.initRef(0)
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(size.readOnly)(page).lazyRows(7).paginator(_.rowsPerPageOptions(Seq(2, 4)))
+            heard    <- elementsWithClass(base.onPageSizeChange(_ => ()).render, "p-uic-key-error")
+            deaf     <- elementsWithClass(base.render, "p-uic-key-error")
+            dropdown <- elementWithClass(base.onPageSizeChange(_ => ()).render, "p-paginator-rpp-dropdown")
+        yield
+            assert(heard.isEmpty, s"a size with somewhere to go: ${heard.map(textOf)}")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onPageSizeChange"), s"a size nobody hears: ${deaf.map(textOf)}")
+            assert(!dropdown.attrs.cssClasses.contains("p-disabled"), "a size someone hears is one the reader can pick")
+    }
+
+    "restore writes a two-way page and leaves a one-way page to its owner" in {
+        for
+            rows   <- Signal.initRef[Seq[Item]](unsorted)
+            twoWay <- Signal.initRef(0)
+            oneWay <- Signal.initRef(0)
+            table = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).lazyRows(7)
+            _ <- table.paginate(2)(twoWay).restore(TableState(page = 3))
+            _ <- table.paginate(2)(oneWay.readOnly).onPageChange(_ => ()).restore(TableState(page = 3))
+            t <- twoWay.get
+            o <- oneWay.get
+        yield assert(t == 3 && o == 0, s"two-way $t, one-way $o")
+    }
+
     // The ordering is not what sorts a prepared table, so the column has to say it sorts;
     // the default cannot be yes, or every column would offer a sort nobody asked for.
     "a column of a lazily loaded table sorts once it says so" in {
