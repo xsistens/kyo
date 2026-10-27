@@ -607,10 +607,12 @@ final case class DataTable[A] private (
     onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
     csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
-    expandedTyped: Maybe[SignalRef[Set[A]]] = Absent,
+    expandedTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
+    onExpandedF: Maybe[Set[A] => UI.Action] = Absent,
     expansionF: Maybe[A => UI] = Absent,
     groupsV: List[RowGroup[A]] = Nil,
-    expandedGroupsRef: Maybe[SignalRef[Set[GroupPath]]] = Absent,
+    expandedGroupsSlot: Maybe[ReactiveValue[Set[GroupPath]]] = Absent,
+    onExpandedGroupsF: Maybe[Set[GroupPath] => UI.Action] = Absent,
     removableSortFlag: Boolean = true,
     stripedFlag: Boolean = false,
     gridlinesFlag: Boolean = false,
@@ -1128,8 +1130,8 @@ final case class DataTable[A] private (
             specs  <- filtersReading.signal.current
             page   <- pageReading.signal.current
             sel    <- currentValue(selectedBinding, Set.empty[String])
-            exp    <- currentOf(expandedRef, Set.empty[String])
-            groups <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
+            exp    <- currentValue(expandedBinding, Set.empty[String])
+            groups <- groupsReading.signal.current
             widths <- currentOf(columnWidthsRef, Map.empty[List[String], Double])
             order  <- currentOf(columnOrderRef, List.empty[List[String]])
         yield TableState(sort, query, specs, page, sel, exp, groups, widths, order)
@@ -1160,8 +1162,8 @@ final case class DataTable[A] private (
             _ <- writeIf(columnFiltersSlot.flatMap(_.writable), s.columnFilters)
             _ <- writeIf(pageSlot.flatMap(_.writable), s.page)
             _ <- writeIf(selectedRef, rows(s.selected))
-            _ <- writeIf(expandedTyped, rows(s.expanded))
-            _ <- writeIf(expandedGroupsRef, s.expandedGroups)
+            _ <- writeIf(expandedTyped.flatMap(_.writable), rows(s.expanded))
+            _ <- writeIf(expandedGroupsSlot.flatMap(_.writable), s.expandedGroups)
             _ <- writeIf(columnWidthsRef, s.columnWidths)
             _ <- writeIf(columnOrderRef, s.columnOrder)
         yield ()
@@ -1214,10 +1216,17 @@ final case class DataTable[A] private (
       */
     def rowClasses(f: A => Seq[String]): DataTable[A] = copy(rowClassF = Present(f))
 
-    /** Binds row expansion two-way to `ref`, the set of expanded rows matched by [[rowKey]]; pair with
-      * [[rowExpansionTemplate]].
+    /** The expanded rows, matched by [[rowKey]]; pair with [[rowExpansionTemplate]].
+      *
+      * A `SignalRef` binds two way: a row toggle writes it, then [[onExpandedChange]] hears the new set. A plain
+      * `Signal` or a constant binds one way: the table opens those rows and only reports a toggle, which is how
+      * expansion held in a route or a parent is changed there. A one-way binding with no [[onExpandedChange]] is
+      * reported in a card.
       */
-    def expanded(ref: SignalRef[Set[A]]): DataTable[A] = copy(expandedTyped = Present(ref))
+    def expanded(v: Set[A] | Signal[Set[A]]): DataTable[A] = copy(expandedTyped = Present(ReactiveValue[Set[A]](v)))
+
+    /** Fired with the rows open after a row toggle, after a two-way [[expanded]] is written. */
+    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = copy(onExpandedF = Present(Callback.of(f)))
 
     /** Content of the full-colspan expansion row below an expanded data row; setting
       * it auto-adds the expander-button column.
@@ -1351,8 +1360,11 @@ final case class DataTable[A] private (
         copy(groupsV = groupsV ++ gs.map(g => (g: RowGroup[A])).toList)
     end groupBy
 
-    /** Makes the groups collapsible and binds the set of EXPANDED paths two-way, so an
-      * empty set starts with every group collapsed. Each level's header row grows a toggle
+    /** Makes the groups collapsible over the set of EXPANDED paths, so an empty set
+      * starts with every group collapsed. A `SignalRef` binds two way: a header toggle
+      * writes it, then [[onExpandedGroupsChange]] hears the new set. A plain `Signal` or a
+      * constant binds one way: the table opens those groups and only reports a toggle. A
+      * one-way binding with no [[onExpandedGroupsChange]] is reported in a card. Each level's header row grows a toggle
       * button; a collapsed group hides everything nested inside it, its own summary row
       * included, and keeps its slice of the page, since [[paginate]] slices rows before
       * they are grouped.
@@ -1362,7 +1374,12 @@ final case class DataTable[A] private (
       * category that sells one, and collapsing it in one place must not collapse it in the
       * others. A level with [[RowGroup.showHeader]] off has no toggle and stays open.
       */
-    def expandedGroups(ref: SignalRef[Set[GroupPath]]): DataTable[A] = copy(expandedGroupsRef = Present(ref))
+    def expandedGroups(v: Set[GroupPath] | Signal[Set[GroupPath]]): DataTable[A] =
+        copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v)))
+
+    /** Fired with the groups open after a group header toggle, after two-way [[expandedGroups]] are written. */
+    def onExpandedGroupsChange(f: Set[GroupPath] => UI.Action)(using Frame): DataTable[A] =
+        copy(onExpandedGroupsF = Present(Callback.of(f)))
 
     /** Zebra striping (`.p-datatable-striped` + `.p-row-odd` rows). */
     def stripedRows(v: Boolean): DataTable[A] = copy(stripedFlag = v)
@@ -1539,7 +1556,17 @@ final case class DataTable[A] private (
 
     private def contextRowRef(using Frame): Maybe[Signal[Maybe[String]]]   = contextTyped.map(_.map(_.map(keyOf)))
     private def selectedCellsRef(using Frame): Maybe[Signal[Set[CellKey]]] = cellsTyped.map(_.map(_.map(cellKey)))
-    private def expandedRef(using Frame): Maybe[Signal[Set[String]]]       = expandedTyped.map(_.map(keysOf))
+
+    /** The expansion as keys, whichever way it was bound. */
+    private def expandedBinding(using Frame): Maybe[ReactiveValue[Set[String]]] =
+        expandedTyped.map {
+            case ReactiveValue.Const(rows) => ReactiveValue.Const(keysOf(rows))
+            case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(keysOf))
+        }
+
+    /** The open groups as the table reads them: the bound set, else none. */
+    private def groupsReading(using Frame): Reading[Set[GroupPath]] =
+        expandedGroupsSlot.fold(Reading.Fixed(Set.empty[GroupPath]))(Reading.of(_))
     private def editingRowsRef(using Frame): Maybe[Signal[Set[String]]]    = editingRowsTyped.map(_.map(keysOf))
     private def editingCellRef(using Frame): Maybe[Signal[Maybe[CellKey]]] = editingCellTyped.map(_.map(_.map(cellKey)))
 
@@ -1633,6 +1660,8 @@ final case class DataTable[A] private (
         val base = RowInputs[A](
             rows = rowsV,
             sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
+            exp = expandedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
+            groups = expandedGroupsSlot.flatMap(_.const).getOrElse(Set.empty[GroupPath]),
             waiting = BoolValue.const(loadingV).getOrElse(false),
             total = lazyTotalV.flatMap(_.const).getOrElse(Total.Unknown(false))
         )
@@ -1656,8 +1685,8 @@ final case class DataTable[A] private (
         val a = fold[Set[String]](r, selSig, (i, v) => i.copy(sel = v))
         val b = fold[Maybe[String]](a, contextRowRef.map(x => x), (i, v) => i.copy(ctx = v))
         val c = fold[Set[CellKey]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
-        val d = fold[Set[String]](c, expandedRef.map(x => x), (i, v) => i.copy(exp = v))
-        val e = fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
+        val d = fold[Set[String]](c, expandedBinding.flatMap(_.dyn), (i, v) => i.copy(exp = v))
+        val e = fold[Set[GroupPath]](d, expandedGroupsSlot.flatMap(_.dyn), (i, v) => i.copy(groups = v))
         val f = fold[Boolean](e, loadingSignal, (i, v) => i.copy(waiting = v))
         fold[Total](f, totalSignal, (i, v) => i.copy(total = v))
     end rowInputsSignal
@@ -1683,8 +1712,8 @@ final case class DataTable[A] private (
             .and(sel)
             .and(Reading.orElse(contextRowRef, Absent: Maybe[String]))
             .and(Reading.orElse(selectedCellsRef, Set.empty[CellKey]))
-            .and(Reading.orElse(expandedRef, Set.empty[String]))
-            .and(Reading.orElse(expandedGroupsRef, Set.empty[GroupPath]))
+            .and(expandedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
+            .and(groupsReading)
             .and(loadingV.fold(Reading.Fixed(false))(Reading.of(_)))
             .map { case (((((((rows, offset), s), ctx), cells), exp), groups), waiting) =>
                 RowInputs(rows, offset, s, ctx, cells, exp, groups, waiting)
@@ -3049,7 +3078,7 @@ final case class DataTable[A] private (
         : BodyView[A] =
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group renders
         // none of its own, so stepping by the paged index would land on a row nobody can see.
-        val shown = RowGroup.visible(pg.rows, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
+        val shown = RowGroup.visible(pg.rows, groupsV, Nil, openGroups, expandedGroupsSlot.isDefined)
         BodyView(
             selectKeys = sorted.filter(selectableAt).map(keyOf).toIndexedSeq,
             navRows = shown.toVector,
@@ -3073,7 +3102,7 @@ final case class DataTable[A] private (
             query   <- currentOf(filterRef, "")
             specs   <- filtersReading.signal.current
             page    <- pageReading.signal.current
-            groups  <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
+            groups  <- groupsReading.signal.current
         yield
             val rows   = rowsNow.toList
             val reads  = if lazyOn then Nil else filterReads(specs)
@@ -3531,7 +3560,7 @@ final case class DataTable[A] private (
                     size
                 ) ++ frozenCards(size) ++ orderCards(
                     order
-                ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(
+                ) ++ rowsCards ++ selectionCards ++ expansionCards ++ scrollCards ++ moveCards(
                     sort,
                     query,
                     filter.specs
@@ -3923,6 +3952,23 @@ final case class DataTable[A] private (
     /** A selection restriction over a table that has no selection restricts nothing, and
       * reads at the call site as though it does.
       */
+    /** Expansion bound one way that nothing hears: the toggles take presses that open nothing. */
+    private def expansionCards(using Frame): List[UI] =
+        val rows =
+            if expansionF.isEmpty || expandedTyped.isEmpty || ReactiveValue.heard(expandedTyped, onExpandedF) then Nil
+            else List("expanded is bound one way and nothing hears a row toggle: add onExpandedChange, or bind a SignalRef")
+        val groups =
+            if !groupsV.exists(_.showHeaderFlag) || expandedGroupsSlot.isEmpty ||
+                ReactiveValue.heard(expandedGroupsSlot, onExpandedGroupsF)
+            then Nil
+            else
+                List("expandedGroups is bound one way and nothing hears a group toggle: add onExpandedGroupsChange, or bind " +
+                    "a SignalRef")
+        val unheard = rows ++ groups
+        if unheard.isEmpty then Nil
+        else List(KeyDiagnostics.card("DataTable", "a binding the reader cannot move", unheard))
+    end expansionCards
+
     private def selectionCards(using Frame): List[UI] =
         val limited =
             if selectableF.isEmpty || selectionModeV != SelectionMode.None then Nil
@@ -4897,7 +4943,7 @@ final case class DataTable[A] private (
                     // A level without a header row has nowhere to put a toggle, so it can
                     // never be collapsed: collapsing it would hide its rows with no way
                     // back.
-                    val collapsible = expandedGroupsRef.isDefined && level.showHeaderFlag
+                    val collapsible = expandedGroupsSlot.isDefined && level.showHeaderFlag
                     val open        = !collapsible || openGroups.contains(groupPath)
 
                     val headerRow: List[RowSpec[A]] =
@@ -5033,9 +5079,7 @@ final case class DataTable[A] private (
     end groupHeaderRow
 
     private def toggleGroup(path: GroupPath)(using Frame): UI.Action =
-        expandedGroupsRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(path) then cur - path else cur + path)
-            case Absent       => ()
+        ReactiveValue.update(expandedGroupsSlot, cur => if cur.contains(path) then cur - path else cur + path, onExpandedGroupsF)
 
     /** One data row (plus its expansion row while expanded). */
     private def dataRow(spec: RowSpec.Data[A])(using Frame): UI =
@@ -5398,10 +5442,15 @@ final case class DataTable[A] private (
         end match
     end renderTr
 
+    /** A row toggle, over rows rather than keys: a two-way binding is stepped atomically, a one-way one from the rows it
+      * shows, and [[onExpandedChange]] hears the rows open after it either way.
+      */
     private def toggleExpand(id: String)(using Frame): UI.Action =
-        expandedTyped match
-            case Present(ref) => updateRows(ref)(cur => if cur.contains(id) then cur - id else cur + id)
-            case Absent       => ()
+        val step: Set[String] => Set[String] = cur => if cur.contains(id) then cur - id else cur + id
+        currentRows.map { all =>
+            ReactiveValue.update(expandedTyped, prev => rowsFor(step(keysOf(prev)), prev, all), onExpandedF)
+        }
+    end toggleExpand
 
     /** A click on a cell: replace the set with it, or toggle it in, by the mode. */
     private def toggleCell(cell: CellKey)(using Frame): UI.Action =

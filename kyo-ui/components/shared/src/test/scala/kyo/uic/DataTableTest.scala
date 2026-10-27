@@ -496,6 +496,95 @@ class DataTableTest extends UicTest:
         end for
     }
 
+    private def expandable(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .rowExpansionTemplate(i => span(s"more ${i.name}"))
+
+    private def expansionTexts(ui: UI)(using Frame): Chunk[String] < Sync =
+        elementsWithClass(ui, "p-datatable-row-expansion").map(_.map(textOf))
+
+    // Which rows are open lives somewhere else (a route, a parent): the table opens those and hands a toggle over.
+    "rows expanded one way follow the signal, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(Set(items(1)))
+            seen <- Signal.initRef(Set.empty[Item])
+            ui = expandable.expanded(held.readOnly).onExpandedChange(seen.set).render
+            open    <- expansionTexts(ui)
+            toggles <- elementsWithClass(ui, "p-datatable-row-toggle-button")
+            _       <- click(toggles(0))
+            h       <- held.get
+            s       <- seen.get
+        yield
+            assert(open == Chunk("more B"), s"the open rows follow the signal: $open")
+            assert(h == Set(items(1)) && s == Set(items(0), items(1)), s"held $h, reported $s")
+        end for
+    }
+
+    "two-way expansion is written before the table reports it" in {
+        for
+            exp  <- Signal.initRef(Set.empty[Item])
+            seen <- Signal.initRef((Set.empty[Item], Set.empty[Item]))
+            ui = expandable.expanded(exp).onExpandedChange(next => exp.get.map(h => seen.set((next, h)))).render
+            toggles <- elementsWithClass(ui, "p-datatable-row-toggle-button")
+            _       <- click(toggles(1))
+            s       <- seen.get
+        yield assert(s == (Set(items(1)), Set(items(1))), s"reported, held: $s")
+    }
+
+    "expansion bound one way with nothing to hear a toggle says so" in {
+        for
+            held  <- Signal.initRef(Set.empty[Item])
+            deaf  <- elementsWithClass(expandable.expanded(held.readOnly).render, "p-uic-key-error")
+            heard <- elementsWithClass(expandable.expanded(held.readOnly).onExpandedChange(_ => ()).render, "p-uic-key-error")
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onExpandedChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+    }
+
+    private def grouped(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .groupBy(uic.RowGroup((i: Item) => i.name))
+
+    "groups expanded one way follow the signal, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(Set(GroupPath(List("B"))))
+            seen <- Signal.initRef(Set.empty[GroupPath])
+            ui = grouped.expandedGroups(held.readOnly).onExpandedGroupsChange(seen.set).render
+            shown   <- bodyNames(ui)
+            toggles <- elementsWithClass(ui, "p-datatable-row-toggle-button")
+            _       <- click(toggles(0))
+            h       <- held.get
+            s       <- seen.get
+            deaf    <- elementsWithClass(grouped.expandedGroups(held.readOnly).render, "p-uic-key-error")
+        yield
+            // The body reads both group headers, A and B, and the rows of the open group alone.
+            assert(shown == Chunk("A", "B", "B"), s"only the open group shows its rows: $shown")
+            assert(h == Set(GroupPath(List("B"))), s"the signal still holds $h")
+            assert(s == Set(GroupPath(List("A")), GroupPath(List("B"))), s"the toggle reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onExpandedGroupsChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "restore writes two-way expansion and leaves one-way expansion to its owner" in {
+        for
+            twoWay  <- Signal.initRef(Set.empty[Item])
+            oneWay  <- Signal.initRef(Set.empty[Item])
+            gTwoWay <- Signal.initRef(Set.empty[GroupPath])
+            gOneWay <- Signal.initRef(Set.empty[GroupPath])
+            state = TableState(expanded = Set("1"), expandedGroups = Set(GroupPath(List("A"))))
+            _ <- expandable.expanded(twoWay).restore(state, k => Maybe.fromOption(items.find(_.id == k)))
+            _ <- expandable.expanded(oneWay.readOnly).onExpandedChange(_ => ()).restore(state, k => Maybe.fromOption(items.find(_.id == k)))
+            _ <- grouped.expandedGroups(gTwoWay).restore(state)
+            _ <- grouped.expandedGroups(gOneWay.readOnly).onExpandedGroupsChange(_ => ()).restore(state)
+            t <- twoWay.get
+            o <- oneWay.get
+            gt <- gTwoWay.get
+            go <- gOneWay.get
+        yield
+            assert(t == Set(items(0)) && o.isEmpty, s"rows: two-way $t, one-way $o")
+            assert(gt == Set(GroupPath(List("A"))) && go.isEmpty, s"groups: two-way $gt, one-way $go")
+    }
+
     /** The row names the table currently renders, read off its body cells. */
     /** One node's own elements, with a reactive or fragment layer resolved away: a windowed
       * body wraps its rows in one, since the rows are what a scroll replaces and the row
