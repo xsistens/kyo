@@ -53,7 +53,9 @@ final case class Paginator private (
     templateV: Maybe[List[PaginatorElement]] = Absent,
     hostClassesV: List[String] = Nil,
     onPageF: Maybe[Int => UI.Action] = Absent,
-    onRowsF: Maybe[Int => UI.Action] = Absent
+    onRowsF: Maybe[Int => UI.Action] = Absent,
+    // What a host calls the rows event, so the card for a one-way rows count names the setter its caller has.
+    rowsEventName: String = "onRowsChange"
 ) extends Node:
     type Self = Paginator
 
@@ -148,6 +150,16 @@ final case class Paginator private (
       * subscription supply the resolved page directly (no nested subscription).
       */
     private[uic] def currentPage(cur: Int): Paginator = copy(currentPageV = Present(cur))
+
+    /** Package-internal: a host that owns the page (a table, a data view) hands its binding and its own page event over. An
+      * event the caller set on the paginator itself stays where the host has none.
+      */
+    private[uic] def hostPage(v: ReactiveValue[Int], report: Maybe[Int => UI.Action]): Paginator =
+        copy(pageV = Present(v), onPageF = report.orElse(onPageF))
+
+    /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
+    private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
+        copy(rowsV = v, onRowsF = report.orElse(onRowsF), rowsEventName = eventName)
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
@@ -353,7 +365,7 @@ final case class Paginator private (
             rowsV match
                 case ReactiveValue.Const(_)      => Nil
                 case _ if !shown || rowsPickable => Nil
-                case _ => List("rows is bound one way and nothing hears a pick: add onRowsChange, or bind a SignalRef")
+                case _ => List(s"rows is bound one way and nothing hears a pick: add $rowsEventName, or bind a SignalRef")
             end match
         end rows
         val unheard = page ++ rows

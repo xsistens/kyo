@@ -24,8 +24,9 @@ end DataViewLayout
   * `itemTemplate`) in the grid layout. Item layout inside the content is
   * template-owned, exactly like Prime. `layout` is a static enum; apps that
   * want a live list/grid switcher re-render with the other value (pair it
-  * with a [[SelectButton]]). `paginate(rows)(pageRef)` slices the items and
-  * embeds the paginator bound two-way to the 0-based page ref.
+  * with a [[SelectButton]]). `paginate(rows)(page)` slices the items and
+  * embeds the paginator over the 0-based page: a ref binds two way, a signal or
+  * a constant one way, with the reader's pick reported to `onPageChange`.
   *
   * A list that GROWS (a stream of pages, a search that refines) supplies the
   * data as `items(Signal[Chunk[A]])` instead. The rows then become a kyo-ui list
@@ -56,7 +57,8 @@ final case class DataView[A] private (
     headerV: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
     pageSizeV: Maybe[Int] = Absent,
-    pageRef: Maybe[SignalRef[Int]] = Absent,
+    pageSlot: Maybe[ReactiveValue[Int]] = Absent,
+    onPageF: Maybe[Int => UI.Action] = Absent,
     emptyContentV: Maybe[EmptyContent] = Absent,
     loadingV: Maybe[BoolValue] = Absent
 ) extends Node, HasEmptyContent:
@@ -109,11 +111,15 @@ final case class DataView[A] private (
     /** Footer slot (`div.p-dataview-footer`). */
     def footer(ui: UI): DataView[A] = copy(footerV = Present(ui))
 
-    /** Slices the items into pages of `size` and embeds the [[Paginator]];
-      * `ref` holds the 0-based page index (clamped at render).
+    /** Slices the items into pages of `size` and embeds the [[Paginator]]; `page` is the 0-based page index (clamped at
+      * render). A `SignalRef` binds two way: a page click writes it. A plain `Signal` or a constant binds one way: the view
+      * shows that page and hands the reader's pick to [[onPageChange]] without writing.
       */
-    def paginate(size: Int)(ref: SignalRef[Int]): DataView[A] =
-        copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
+    def paginate(size: Int)(page: Int | Signal[Int]): DataView[A] =
+        copy(pageSizeV = Present(math.max(1, size)), pageSlot = Present(ReactiveValue[Int](page)))
+
+    /** Fired with the page the reader asked for, after a two-way [[paginate]] page is written. */
+    def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = copy(onPageF = Present(Callback.of(f)))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataView[A] = copy(emptyContentV = v)
 
@@ -132,7 +138,7 @@ final case class DataView[A] private (
       * and the total from the items, both in place.
       */
     private[uic] def render(using Frame): UI =
-        val page: Reading[Int] = pageRef.fold(Reading.Fixed(0))(Reading.Live(_))
+        val page: Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
 
         // A list region; the empty state gets its OWN region over the narrowest projection there is (`isEmpty`), so
         // `emptyContent` survives without putting the rows behind a region that repaints them whenever the list changes
@@ -161,7 +167,7 @@ final case class DataView[A] private (
                 .totalRecords(itemsSigV.fold(itemsV.size: Int | Signal[Int])(_.map(_.size)))
                 .rows(size)
                 .hostClass("p-dataview-paginator-bottom")
-            pageRef.foreach(ref => pag = pag.page(ref))
+            pageSlot.foreach(p => pag = pag.hostPage(p, onPageF))
             pag.render
         }
 

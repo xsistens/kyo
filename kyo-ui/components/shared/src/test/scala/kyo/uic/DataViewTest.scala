@@ -18,6 +18,22 @@ class DataViewTest extends UicTest:
             .paginate(10)(page)
             .render
 
+    "a page bound one way shows the signal's page, and a click is reported without being written" in {
+        for
+            held <- Signal.initRef(2)
+            seen <- Signal.initRef(-1)
+            ui = DataView[Int]().items(1 to 30).itemTemplate(i => UI.div.cssClass("row")(i.toString))
+                .paginate(10)(held.readOnly).onPageChange(p => seen.set(p)).render
+            first <- elementsWithClass(ui, "row").map(_.headOption.map(textOf))
+            link  <- elementsWithClass(ui, "p-paginator-page").map(_.find(textOf(_) == "1").get)
+            _     <- click(link)
+            h     <- held.get
+            s     <- seen.get
+        yield
+            assert(first == Some("21"), s"the third page starts at $first")
+            assert(h == 2 && s == 0, s"the signal still holds $h, the click reported $s")
+    }
+
     "a page change redraws the rows, not the header, the footer or the paginator" in {
         for
             page <- Signal.initRef(0)
