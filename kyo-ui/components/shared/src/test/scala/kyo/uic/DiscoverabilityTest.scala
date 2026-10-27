@@ -1844,7 +1844,8 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(r: SignalRef[Int])(using Frame): uic.Carousel[String] = uic.Carousel[String]().items(Seq("A"))(s => span(s)).page(r).numVisible(3).numScroll(3).circular(true).vertical(true).verticalViewHeight("330px").showItemNavigators(false).showIndicators(false).autoplay(3000).onPageChange(_ => ())"""
         )
-        typeCheckFailure(preamble + """def x = uic.Carousel[String]().page(0)""")
+        // The page is a state slot: a constant or a signal binds one way, and a turn is reported to onPageChange.
+        typeCheck(preamble + """def x(using Frame): uic.Carousel[String] = uic.Carousel[String]().page(0).onPageChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.Carousel[String]().autoplayInterval(3000)""")
         typeCheckFailure(preamble + """def x: uic.Carousel[String] = uic.Carousel[String]().items(Seq("A"))""")
     }
