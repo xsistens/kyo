@@ -110,4 +110,49 @@ class OrderListTest extends UicTest:
         yield assert(order == Seq("a", "b"))
     }
 
+    // The order and the selection live somewhere else: the list shows them and hands a move or a pick over.
+    "an order and a selection bound one way are reported and not written" in {
+        for
+            xs        <- Signal.initRef(Seq("a", "b", "c"))
+            sel       <- Signal.initRef(Set("a"))
+            seenOrder <- Signal.initRef(Seq.empty[String])
+            seenSel   <- Signal.initRef(Set.empty[String])
+            ui = uic.OrderList[String]().items(xs.readOnly)(identity).onItemsChange(seenOrder.set)
+                .selection(sel.readOnly).onSelectionChange(seenSel.set).render
+            down <- button(ui, "Move Down")
+            _    <- click(down)
+            rows <- elementsWithClass(ui, "p-listbox-option")
+            _    <- click(rows(2))
+            o    <- xs.get
+            s    <- sel.get
+            so   <- seenOrder.get
+            ss   <- seenSel.get
+        yield
+            assert(o == Seq("a", "b", "c") && so == Seq("b", "a", "c"), s"order held $o, reported $so")
+            assert(s == Set("a") && ss == Set("a", "c"), s"selection held $s, reported $ss")
+    }
+
+    "a two-way order is written before the list reports it" in {
+        for
+            xs   <- Signal.initRef(Seq("a", "b", "c"))
+            sel  <- Signal.initRef(Set("c"))
+            seen <- Signal.initRef((Seq.empty[String], Seq.empty[String]))
+            ui = uic.OrderList[String]().items(xs)(identity).onItemsChange(n => xs.get.map(h => seen.set((n, h)))).selection(sel).render
+            up <- button(ui, "Move Up")
+            _  <- click(up)
+            s  <- seen.get
+        yield assert(s == (Seq("a", "c", "b"), Seq("a", "c", "b")), s"reported, held: $s")
+    }
+
+    "one-way bindings nothing hears say so" in {
+        for
+            xs   <- Signal.initRef(Seq("a", "b"))
+            sel  <- Signal.initRef(Set("a"))
+            deaf <-
+                elementsWithClass(uic.OrderList[String]().items(xs.readOnly)(identity).selection(sel.readOnly).render, "p-uic-key-error")
+        yield
+            val text = deaf.map(textOf).mkString
+            assert(text.contains("onItemsChange") && text.contains("onSelectionChange"), s"nobody hears: $text")
+    }
+
 end OrderListTest

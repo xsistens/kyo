@@ -25,6 +25,18 @@ sealed private[uic] trait ReactiveValue[A]:
       */
     private[uic] def dyn: Maybe[Signal[A]]
 
+    /** The value as it is at this moment. */
+    private[uic] def current(using Frame): A < Sync =
+        this match
+            case ReactiveValue.Const(a) => a
+            case ReactiveValue.Dyn(sig) => sig.current
+
+    /** The value as a signal, a constant one for a constant. */
+    private[uic] def signal(using CanEqual[A, A], Frame): Signal[A] =
+        this match
+            case ReactiveValue.Const(a) => Signal.initConst(a)
+            case ReactiveValue.Dyn(sig) => sig
+
     /** The binding as the caller gave it, for a host that hands it on to a component it embeds. */
     private[uic] def bound: A | Signal[A] =
         this match

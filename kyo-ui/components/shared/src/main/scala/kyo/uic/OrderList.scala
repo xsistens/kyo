@@ -10,11 +10,13 @@ import kyo.UI.*
   * [[Listbox]]), so the extracted `@primeuix` orderlist + listbox CSS applies
   * verbatim.
   *
-  * The ITEM ORDER is the model: `items` binds a `SignalRef[Seq[A]]` two-way:
-  * the move buttons write the reordered Seq back (Prime's exact move-up/-top/
-  * -down/-bottom semantics), and external ref writes re-render the list. The
-  * `selection` ref (a `Set[A]` of the items themselves, matched by `itemKey`,
-  * falling back to the label) drives which rows move; all four buttons go `aria-disabled` while the selection is empty
+  * The ITEM ORDER is the model: `items` takes a constant, a signal or a ref. A
+  * ref binds two way: the move buttons write the reordered Seq back (Prime's exact
+  * move-up/-top/-down/-bottom semantics) and `onItemsChange` hears it; a signal or a
+  * constant binds one way, and a move only reports the order it asks for. The
+  * `selection` (a `Set[A]` of the items themselves, matched by `itemKey`, falling
+  * back to the label, bound the same three ways and reported to
+  * `onSelectionChange`) drives which rows move; all four buttons go `aria-disabled` while the selection is empty
   * (Prime's `moveDisabled`) rather than natively disabled, so a button never
   * leaves the tab order under a reader who is standing on it, and natively
   * disabled only when the whole control is. Rendering goes through the real
@@ -22,24 +24,29 @@ import kyo.UI.*
   * option slot onto the typed items.
   */
 final case class OrderList[A] private (
-    itemsRef: Maybe[SignalRef[Seq[A]]] = Absent,
+    itemsSlot: Maybe[ReactiveValue[Seq[A]]] = Absent,
+    onItemsF: Maybe[Seq[A] => UI.Action] = Absent,
     labelF: Maybe[A => String] = Absent,
     keyF: Maybe[A => String] = Absent,
     templateF: Maybe[A => UI] = Absent,
-    selectedRef: Maybe[SignalRef[Set[A]]] = Absent,
+    selectedSlot: Maybe[ReactiveValue[Set[A]]] = Absent,
+    onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
     disabledFlag: Boolean = false,
     metaKeyFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node, HasAccessibleName:
     type Self = OrderList[A]
 
-    /** Binds the ordered items two-way: the move buttons write the reordered Seq
-      * back; `label` is the row text (and the default selection key). One column,
-      * so one binding. [[PickList]] is the two-column member of the pair and
-      * spells the same thing `sourceItems` / `targetItems`.
+    /** The ordered items; `label` is the row text (and the default selection key). A `SignalRef` binds two way: the
+      * move buttons write the reordered Seq back, then [[onItemsChange]] hears it. A plain `Signal` or a constant binds
+      * one way: the list shows it and a move only reports the order it asks for. One column, so one binding. [[PickList]]
+      * is the two-column member of the pair and spells the same thing `sourceItems` / `targetItems`.
       */
-    def items(ref: SignalRef[Seq[A]])(label: A => String): OrderList[A] =
-        copy(itemsRef = Present(ref), labelF = Present(label))
+    def items(v: Seq[A] | Signal[Seq[A]])(label: A => String): OrderList[A] =
+        copy(itemsSlot = Present(ReactiveValue[Seq[A]](v)), labelF = Present(label))
+
+    /** Fired with the order a move asks for, after a two-way [[items]] is written. */
+    def onItemsChange(f: Seq[A] => UI.Action)(using Frame): OrderList[A] = copy(onItemsF = Present(Callback.of(f)))
 
     /** Stable item identity: the selection key (defaults to the label). */
     def itemKey(f: A => String): OrderList[A] = copy(keyF = Present(f))
@@ -47,10 +54,14 @@ final case class OrderList[A] private (
     /** Custom row content (Prime's option slot), replacing the plain label text. */
     def itemTemplate(f: A => UI): OrderList[A] = copy(templateF = Present(f))
 
-    /** Binds the selection two-way to the set of chosen items, matched by [[itemKey]]; the selected rows are the ones
-      * the move buttons act on.
+    /** The set of chosen items, matched by [[itemKey]]; the selected rows are the ones the move buttons act on. A
+      * `SignalRef` binds two way; a plain `Signal` or a constant binds one way, and a click only reports the set it asks
+      * for to [[onSelectionChange]].
       */
-    def selection(ref: SignalRef[Set[A]]): OrderList[A] = copy(selectedRef = Present(ref))
+    def selection(v: Set[A] | Signal[Set[A]]): OrderList[A] = copy(selectedSlot = Present(ReactiveValue[Set[A]](v)))
+
+    /** Fired with the items chosen after a click, after a two-way [[selection]] is written. */
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): OrderList[A] = copy(onSelectionF = Present(Callback.of(f)))
 
     /** Disables the whole control: the listbox dims and the buttons lock. */
     def disabled(v: Boolean): OrderList[A] = copy(disabledFlag = v)
@@ -82,12 +93,11 @@ final case class OrderList[A] private (
       * [[PickList]] carries the same shape and is where that stopped being theoretical.
       */
     private def snapshot(cursor: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
-        val items = itemsRef match
-            case Present(r) => r: Signal[Seq[A]]
-            case Absent     => Signal.initConst(Seq.empty[A])
-        val sel = selectedRef match
-            case Present(r) => r.map(_.map(keyOf))
-            case Absent     => Signal.initConst(Set.empty[String])
+        val items = itemsSlot.fold(Signal.initConst(Seq.empty[A]))(_.signal)
+        val sel   = selectedSlot match
+            case Present(ReactiveValue.Dyn(sig)) => sig.map(_.map(keyOf))
+            case Present(ReactiveValue.Const(c)) => Signal.initConst(c.map(keyOf))
+            case Absent                          => Signal.initConst(Set.empty[String])
         val hi = cursor match
             case Present(c) => c.highlight: Signal[Int]
             case Absent     => Signal.initConst(-1)
@@ -118,20 +128,21 @@ final case class OrderList[A] private (
     private def body(xs: Seq[A], sel: Set[String], cursor: Maybe[ListReorder.Cursor] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
-        val moveDisabled = disabledFlag || sel.isEmpty || itemsRef.isEmpty
+        val moveDisabled          = disabledFlag || sel.isEmpty || itemsSlot.isEmpty
+        def chosen(a: A): Boolean = sel.contains(keyOf(a))
 
         // The same moves the rail makes, on the list the reader is standing in: the buttons are the
         // pointer's way to them and these are the keyboard's, so both act on the SELECTION. There is
         // no second column here, so no chord transfers anything.
         val hostKeys: UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
             ListReorder.onKey(e.key, e.modifiers, Absent).map { move =>
-                val eff: UI.Action = move match
-                    case ListReorder.Move.Step(down) =>
-                        reorder(if down then ListReorder.moveDown else ListReorder.moveUp)
-                    case ListReorder.Move.Edge(down) =>
-                        reorder(if down then ListReorder.moveBottom else ListReorder.moveTop)
-                    case ListReorder.Move.Out(_) => ()
-                Listbox.HostKey(keepingCursor(cursor, xs, focused, eff))
+                val step: Maybe[(List[A], A => Boolean) => List[A]] = move match
+                    case ListReorder.Move.Step(down) => Present(if down then ListReorder.moveDown else ListReorder.moveUp)
+                    case ListReorder.Move.Edge(down) => Present(if down then ListReorder.moveBottom else ListReorder.moveTop)
+                    case ListReorder.Move.Out(_)     => Absent
+                step match
+                    case Present(m) => Listbox.HostKey(keepingCursor(cursor, xs, focused, m(xs.toList, chosen), reorder(m)))
+                    case Absent     => Listbox.HostKey(())
             }
 
         // `ariaDisabled` rather than the native attribute, for the reason [[Button.ariaDisabled]]
@@ -166,7 +177,7 @@ final case class OrderList[A] private (
             .disabled(disabledFlag)
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
-        selectedRef.foreach(r => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(ReactiveValue[Set[A]](r)), xs, keyOf)))
+        selectedSlot.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, onSelectionF)))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)
@@ -182,40 +193,44 @@ final case class OrderList[A] private (
         }
         val listUI: UI = lb.resolved(sel, "", cursor.map(_.highlight), focused)
 
-        div.cssClass("p-orderlist").cssClass("p-component")(toChild(controls), toChild(listUI))
+        div.cssClass("p-orderlist").cssClass("p-component")((unheard :+ controls :+ listUI).map(toChild)*)
     end body
 
-    /** Runs `eff` and puts the highlight back on the row it was on.
+    /** Bindings made one way that nothing hears: every move or click is painted away again. */
+    private def unheard(using Frame): List[UI] =
+        val missing =
+            (if itemsSlot.isEmpty || ReactiveValue.heard(itemsSlot, onItemsF) then Nil
+             else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
+                (if selectedSlot.isEmpty || ReactiveValue.heard(selectedSlot, onSelectionF) then Nil
+                 else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
+        if missing.isEmpty then Nil else List(KeyDiagnostics.card("OrderList", "a binding the reader cannot move", missing))
+    end unheard
+
+    /** Runs `eff` and puts the highlight back on the row it was on in `after`, the list the move asks for.
       *
       * A move rewrites the list under a reader whose focus is on it, and an index that no longer
-      * names the same row is a highlight that jumps. [[PickList]] carries the same helper, where
-      * the row can also leave the column entirely.
+      * names the same row is a highlight that jumps. The list is the one the move asks for, not the
+      * one the binding holds afterwards: a one-way owner may write it back later, or not at all.
+      * [[PickList]] carries the same helper, where the row can also leave the column entirely.
       */
-    private def keepingCursor(cursor: Maybe[ListReorder.Cursor], xs: Seq[A], hi: Int, eff: UI.Action)(using
+    private def keepingCursor(cursor: Maybe[ListReorder.Cursor], xs: Seq[A], hi: Int, after: Seq[A], eff: UI.Action)(using
         Frame
     ): UI.Action =
-        (cursor, itemsRef) match
-            case (Present(c), Present(r)) if xs.isDefinedAt(hi) =>
-                val id = keyOf(xs(hi))
-                for
-                    _     <- eff
-                    after <- r.get
-                    moved = after.indexWhere(a => keyOf(a) == id)
-                    _ <- c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1))
-                yield ()
-                end for
+        cursor match
+            case Present(c) if itemsSlot.isDefined && xs.isDefinedAt(hi) =>
+                val id    = keyOf(xs(hi))
+                val moved = after.indexWhere(a => keyOf(a) == id)
+                eff.andThen(c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1)))
             case _ => eff
 
-    /** A move button writes the reordered Seq through the bound items ref, keyed on
-      * the current selection.
-      */
+    /** A move steps the bound items, keyed on the current selection: written if they bind two way, then reported. */
     private def reorder(move: (List[A], A => Boolean) => List[A])(using Frame): UI.Action =
-        (itemsRef, selectedRef) match
-            case (Present(ir), Present(sr)) =>
-                for
-                    sel <- sr.get.map(_.map(keyOf))
-                    _   <- ir.getAndUpdate(xs => move(xs.toList, a => sel.contains(keyOf(a))))
-                yield ()
+        selectedSlot match
+            case Present(s) if itemsSlot.isDefined =>
+                s.current.map { held =>
+                    val sel = held.map(keyOf)
+                    ReactiveValue.update(itemsSlot, xs => move(xs.toList, a => sel.contains(keyOf(a))), onItemsF)
+                }
             case _ => ()
 end OrderList
 
