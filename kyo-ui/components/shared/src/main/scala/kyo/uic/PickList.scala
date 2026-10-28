@@ -97,7 +97,13 @@ final case class PickList[A] private (
         onItems: Maybe[Seq[A] => UI.Action],
         sel: Maybe[ReactiveValue[Set[A]]],
         onSel: Maybe[Set[A] => UI.Action]
-    )
+    ):
+        /** A constant column nobody hears is fixed: it shows its rows, and nothing moves or transfers them. */
+        def itemsFixed: Boolean = ReactiveValue.fixed(items, onItems)
+
+        /** A constant selection nobody hears is fixed: the column shows it, and no click picks a row. */
+        def selFixed: Boolean = ReactiveValue.fixed(sel, onSel)
+    end Col
 
     private def sourceCol: Col = Col(sourceSlot, onSourceItemsF, sourceSelectedSlot, onSourceSelectionF)
     private def targetCol: Col = Col(targetSlot, onTargetItemsF, targetSelectedSlot, onTargetSelectionF)
@@ -128,6 +134,7 @@ final case class PickList[A] private (
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequences and sets that hold them are compared structurally, and `A` needs no equality of
     // its own for that (it has none to require, since any type can be a row here).
+    private given CanEqual[A, A]                                         = CanEqual.derived
     private given CanEqual[Seq[A], Seq[A]]                               = CanEqual.derived
     private given CanEqual[Columns, Columns]                             = CanEqual.derived
     private given CanEqual[Selections, Selections]                       = CanEqual.derived
@@ -179,11 +186,21 @@ final case class PickList[A] private (
                 targetId <- cmds.freshId
                 sourceHi <- Signal.initRef(-1)
                 targetHi <- Signal.initRef(-1)
-            yield wired(
+                // Unbound, the list keeps its columns and what the reader picks in them itself.
+                src    <- owned(sourceSlot, Seq.empty[A])
+                tgt    <- owned(targetSlot, Seq.empty[A])
+                srcSel <- owned(sourceSelectedSlot, Set.empty[A])
+                tgtSel <- owned(targetSelectedSlot, Set.empty[A])
+                self = copy(sourceSlot = src, targetSlot = tgt, sourceSelectedSlot = srcSel, targetSelectedSlot = tgtSel)
+            yield self.wired(
                 Present(ListReorder.Cursor(sourceHi, sourceId)),
                 Present(ListReorder.Cursor(targetHi, targetId))
             )
         }.placeholder(wired(Absent, Absent))
+
+    /** The slot as bound, or a ref of the list's own starting at `initial` where nothing bound it. */
+    private def owned[T](slot: Maybe[ReactiveValue[T]], initial: T)(using CanEqual[T, T], Frame): Maybe[ReactiveValue[T]] < Sync =
+        if slot.isDefined then slot else Signal.initRef(initial).map(r => Maybe(ReactiveValue[T](r)))
 
     /** The tree the mount publishes, the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.
@@ -204,13 +221,16 @@ final case class PickList[A] private (
       * instead of by the attribute. The whole control being `disabled` is different: nothing about
       * that changes under the reader, so it stays native.
       */
-    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, act: => UI.Action)(using Frame): UI =
+    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, fixed: Boolean, act: => UI.Action)(using Frame): UI =
         var b = Button()
             .icon(glyph)
             .severity(Severity.Secondary)
             .accessibleName(name)
         if disabledFlag then b = b.disabled(true)
+        // A move over a fixed column is shown and does nothing.
+        else if fixed then b = b.ariaDisabled(true)
         else b = b.ariaDisabled(off).onClick(if off then () else act)
+        end if
         b.render
     end moveButton
 
@@ -241,6 +261,9 @@ final case class PickList[A] private (
         ): UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
             def chosen(a: A): Boolean = sel.contains(keyOf(a))
             ListReorder.onKey(e.key, e.modifiers, Present(toward)).map { move =>
+                val blocked = move match
+                    case ListReorder.Move.Out(_) => col.itemsFixed || other.itemsFixed
+                    case _                       => col.itemsFixed
                 // The column the move asks for, which is where the highlight follows its row: a one-way owner may write
                 // the column back later, or not at all.
                 val planned: (UI.Action, Seq[A]) = move match
@@ -253,16 +276,16 @@ final case class PickList[A] private (
                     case ListReorder.Move.Out(all) =>
                         if all then (transferAll(col, other), Seq.empty)
                         else (transferSelected(col, other), xs.filterNot(chosen))
-                Listbox.HostKey(keepingCursor(cursor, col, xs, hi, planned._2, planned._1))
+                if blocked then Listbox.HostKey(()) else Listbox.HostKey(keepingCursor(cursor, col, xs, hi, planned._2, planned._1))
             }
         end keys
 
         def reorderRail(cls: String, col: Col, off: Boolean): UI =
             div.cssClass("p-picklist-controls").cssClass(cls)(
-                toChild(moveButton(Icons.angleUp, "Move Up", off, reorder(col, ListReorder.moveUp))),
-                toChild(moveButton(Icons.angleDoubleUp, "Move Top", off, reorder(col, ListReorder.moveTop))),
-                toChild(moveButton(Icons.angleDown, "Move Down", off, reorder(col, ListReorder.moveDown))),
-                toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", off, reorder(col, ListReorder.moveBottom)))
+                toChild(moveButton(Icons.angleUp, "Move Up", off, col.itemsFixed, reorder(col, ListReorder.moveUp))),
+                toChild(moveButton(Icons.angleDoubleUp, "Move Top", off, col.itemsFixed, reorder(col, ListReorder.moveTop))),
+                toChild(moveButton(Icons.angleDown, "Move Down", off, col.itemsFixed, reorder(col, ListReorder.moveDown))),
+                toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", off, col.itemsFixed, reorder(col, ListReorder.moveBottom)))
             )
 
         def column(
@@ -279,6 +302,7 @@ final case class PickList[A] private (
                 .selectionMode(SelectionMode.Multiple)
                 .metaKeySelection(metaKeyFlag)
                 .disabled(disabledFlag)
+                .fixed(col.selFixed)
                 .onHostKey(hostKeys)
             cursor.foreach(c => lb = lb.id(c.id))
             col.sel.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, col.onSel)))
@@ -295,11 +319,19 @@ final case class PickList[A] private (
             )
         end column
 
-        val transfer: UI = div.cssClass("p-picklist-controls").cssClass("p-picklist-transfer-controls")(
-            toChild(moveButton(Icons.angleRight, "Move to Target", srcMoveOff, transferSelected(sourceCol, targetCol))),
-            toChild(moveButton(Icons.angleDoubleRight, "Move All to Target", src.isEmpty, transferAll(sourceCol, targetCol))),
-            toChild(moveButton(Icons.angleLeft, "Move to Source", tgtMoveOff, transferSelected(targetCol, sourceCol))),
-            toChild(moveButton(Icons.angleDoubleLeft, "Move All to Source", tgt.isEmpty, transferAll(targetCol, sourceCol)))
+        // A transfer changes both columns, so either being fixed holds it.
+        val transferFixed = sourceCol.itemsFixed || targetCol.itemsFixed
+        val transfer: UI  = div.cssClass("p-picklist-controls").cssClass("p-picklist-transfer-controls")(
+            toChild(moveButton(Icons.angleRight, "Move to Target", srcMoveOff, transferFixed, transferSelected(sourceCol, targetCol))),
+            toChild(moveButton(
+                Icons.angleDoubleRight,
+                "Move All to Target",
+                src.isEmpty,
+                transferFixed,
+                transferAll(sourceCol, targetCol)
+            )),
+            toChild(moveButton(Icons.angleLeft, "Move to Source", tgtMoveOff, transferFixed, transferSelected(targetCol, sourceCol))),
+            toChild(moveButton(Icons.angleDoubleLeft, "Move All to Source", tgt.isEmpty, transferFixed, transferAll(targetCol, sourceCol)))
         )
 
         val sourceRail: List[UI] =
@@ -343,7 +375,7 @@ final case class PickList[A] private (
       */
     private def unheard(using Frame): List[UI] =
         def missing[T, R](slot: Maybe[ReactiveValue[T]], report: Maybe[R], setter: String, event: String): List[String] =
-            if disabledFlag || slot.isEmpty || ReactiveValue.heard(slot, report) then Nil
+            if disabledFlag || !ReactiveValue.deaf(slot, report) then Nil
             else List(s"$setter is bound one way and nothing hears a change: add $event, or bind a SignalRef")
         val all =
             missing(sourceSlot, onSourceItemsF, "sourceItems", "onSourceItemsChange") ++

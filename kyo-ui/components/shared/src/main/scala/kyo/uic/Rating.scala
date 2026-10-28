@@ -132,6 +132,14 @@ final case class Rating private (
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: drawn read-only. Unbound, the rating keeps the stars the reader picks itself.
+        val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
+        if shown.exists(_.const.isDefined) && onChangeF.isEmpty && !readonlyFlag then copy(readonlyFlag = true).render
+        else if shown.isEmpty then ReactiveValue.owned(0)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
+        else renderLive
+    end render
+
+    private def renderLive(using Frame): UI =
         // The radios' `name` is what the browser groups them by, and the grouping is what gives
         // this control its single tab stop and its arrows. Without one every star was its own
         // group: five tab stops, no arrows, and nothing stopping two of them from being checked.
@@ -149,7 +157,7 @@ final case class Rating private (
         val unheard = shown.exists(b => b.dyn.isDefined && b.writable.isEmpty) && onChangeF.isEmpty && !readonlyFlag &&
             !disabledFlag.constTrue
         if unheard then fragment(field, KeyDiagnostics.unheard("Rating", "value", "onChange")) else field
-    end render
+    end renderLive
 
     /** The tree the mount publishes once it has a name to group the radios by, the seam golden
       * tests render directly, since a mount shows only its placeholder there.

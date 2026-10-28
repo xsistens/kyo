@@ -172,4 +172,27 @@ class CarouselTest extends UicTest:
         end for
     }
 
+    "a constant page nobody hears is fixed: no button turns it, and no card" in {
+        for
+            buttons <- elementsWithClass(strip.page(1).render, "p-carousel-next-button")
+            card    <- elementsWithClass(strip.page(1).render, "p-uic-key-error")
+        yield
+            assert(buttons.forall(b => !declaresClick(b)), "a fixed carousel turns nowhere")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound carousel keeps the page the reader turns to" in {
+        def onSecond(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-carousel-indicator").map(is =>
+                is.indexWhere(_.attrs.cssClasses.contains("p-carousel-indicator-active")) == 1
+            )
+        for
+            after <- publishedAfterReady(
+                strip.render,
+                t => elementsWithClass(t, "p-carousel-next-button").map(_.exists(declaresClick)),
+                until = onSecond
+            )(t => nextButton(t).map(click))
+        yield assert(after.nonEmpty, "the carousel never showed the page the reader turned to")
+    }
+
 end CarouselTest

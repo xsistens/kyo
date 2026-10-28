@@ -129,4 +129,23 @@ class RatingTest extends UicTest:
         end for
     }
 
+    "a constant nobody hears is fixed: read-only, and no card" in {
+        for
+            root <- elementWithClass(uic.Rating().value(2).render, "p-rating")
+            card <- elementsWithClass(uic.Rating().value(2).render, "p-uic-key-error")
+        yield
+            assert(root.attrs.ariaAttrs.get("readonly").contains("true"), "a fixed rating says it is read-only")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound rating keeps the stars the reader picks" in {
+        def fourChecked(t: UI): Boolean < Sync =
+            radios(t).map(rs => rs.size == 5 && rs(3).checked.exists { case UI.Bound.Const(c) => c; case _ => false })
+        for
+            after <- publishedAfterReady(uic.Rating().render, t => options(t).map(_.exists(declaresClick)), until = fourChecked)(t =>
+                options(t).map(os => click(os(3)))
+            )
+        yield assert(after.nonEmpty, "the rating never showed the stars the reader picked")
+    }
+
 end RatingTest

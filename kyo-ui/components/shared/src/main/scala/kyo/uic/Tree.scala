@@ -202,17 +202,23 @@ final case class Tree[K] private (
       */
     private def withUnheard(tree: UI)(using Frame): UI =
         val expansion =
-            if expandedSlot.isEmpty || ReactiveValue.heard(expandedSlot, onExpandedF.orElse(onNodeToggleF)) then Nil
+            if !ReactiveValue.deaf(expandedSlot, onExpandedF.orElse(onNodeToggleF)) then Nil
             else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef")
         val selection =
-            if selectionModeV == SelectionMode.None || selectedSlot.isEmpty ||
-                ReactiveValue.heard(selectedSlot, onSelectionF.orElse(onItemClickF))
+            if selectionModeV == SelectionMode.None || !ReactiveValue.deaf(selectedSlot, onSelectionF.orElse(onItemClickF))
             then Nil
             else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef")
         val unheard = expansion ++ selection
         if unheard.isEmpty then tree
         else fragment(KeyDiagnostics.card("Tree", "a binding the reader cannot move", unheard), tree)
     end withUnheard
+
+    /** A constant expansion nobody hears is fixed: the branches show it, and no toggle opens or closes one. */
+    private def expansionFixed: Boolean = ReactiveValue.fixed(expandedSlot, onExpandedF.orElse(onNodeToggleF))
+
+    /** A constant selection nobody hears is fixed: the nodes show it, and no click or key picks one. */
+    private def selectionFixed: Boolean =
+        selectionModeV != SelectionMode.None && ReactiveValue.fixed(selectedSlot, onSelectionF.orElse(onItemClickF))
 
     private def mountedTree(using Frame): UI =
         // One mount for the keyboard highlight and the id it addresses rows by, allocated
@@ -224,7 +230,15 @@ final case class Tree[K] private (
                 cmds <- UI.commands
                 base <- cmds.freshId
                 hi   <- Signal.initRef(-1)
-            yield wired(hi, base)
+                // Unbound, the tree keeps what the reader opens, and picks where it selects, itself.
+                exp <-
+                    if expandedSlot.isEmpty then Signal.initRef(Set.empty[K]).map(r => Maybe(ReactiveValue[Set[K]](r)))
+                    else Kyo.lift(expandedSlot)
+                sel <-
+                    if selectedSlot.isEmpty && selectionModeV != SelectionMode.None then
+                        Signal.initRef(Set.empty[K]).map(r => Maybe(ReactiveValue[Set[K]](r)))
+                    else Kyo.lift(selectedSlot)
+            yield copy(expandedSlot = exp, selectedSlot = sel).wired(hi, base)
         }.placeholder(subscribed(Absent))
 
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
@@ -362,7 +376,7 @@ final case class Tree[K] private (
             .jsProp("type", "button")
             .aria("hidden", "true")
             .tabIndex(-1)
-        if hasChildren then toggleBtn = toggleBtn.onClick(toggleNode(node.id))
+        if hasChildren && !expansionFixed then toggleBtn = toggleBtn.onClick(toggleNode(node.id))
         val toggle: UI = toggleBtn(
             toChild(GlyphSvg(if isExpanded then Icons.chevronDown else Icons.chevronRight, "p-tree-node-toggle-icon"))
         )
@@ -378,7 +392,7 @@ final case class Tree[K] private (
                 if isSelected then cb = cb.cssClass("p-checkbox-checked")
                 if selectionModeV == SelectionMode.Checkbox then
                     cb = cb.aria("checked", if isSelected then "true" else if isIndeterminate then "mixed" else "false")
-                if selectable then cb = cb.onClick(selectNode(node.id))
+                if selectable && !selectionFixed then cb = cb.onClick(selectNode(node.id))
                 val icon: List[UI] =
                     if isSelected then List(GlyphSvg(Icons.check, "p-checkbox-icon"))
                     else if isIndeterminate then List(GlyphSvg(Icons.minus, "p-checkbox-icon"))
@@ -392,7 +406,7 @@ final case class Tree[K] private (
         // button presses. The label stretches across the free row width
         // (.p-tree-node-label { flex: 1 } remainder), so the row still feels clickable.
         var label = span.cssClass("p-tree-node-label")
-        if selectable then
+        if selectable && !selectionFixed then
             label = label.onClick((e: MouseEvent) => selectNode(node.id, e.modifiers.meta || e.modifiers.ctrl))
         val labelEl: UI = label(node.text)
 
@@ -426,6 +440,10 @@ final case class Tree[K] private (
 
     /** Toggling a node flips its id in the bound `expanded` set, then fires `onNodeToggle`. */
     private def toggleNode(id: K)(using Frame): UI.Action =
+        // A fixed expansion takes no toggle, from the keys either.
+        if expansionFixed then () else toggleNodeLive(id)
+
+    private def toggleNodeLive(id: K)(using Frame): UI.Action =
         val setExpanded: UI.Action =
             ReactiveValue.update(expandedSlot, cur => if cur.contains(id) then cur - id else cur + id, onExpandedF)
         val fireToggle: UI.Action = onNodeToggleF match
@@ -436,12 +454,16 @@ final case class Tree[K] private (
             r <- fireToggle
         yield r
         end for
-    end toggleNode
+    end toggleNodeLive
 
     /** Clicking a node's content updates the bound `selected` set per the selection
       * mode, then fires `onItemClick`.
       */
     private def selectNode(id: K, meta: Boolean = false)(using Frame): UI.Action =
+        // A fixed selection takes no pick, from the keys either.
+        if selectionFixed then () else selectNodeLive(id, meta)
+
+    private def selectNodeLive(id: K, meta: Boolean)(using Frame): UI.Action =
         val setSelection: UI.Action = selectionModeV match
             case SelectionMode.None => ()
             // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
@@ -456,7 +478,7 @@ final case class Tree[K] private (
             r <- fireClick
         yield r
         end for
-    end selectNode
+    end selectNodeLive
 
     /** The node's own id plus every descendant id (its whole subtree). */
     private[uic] def subtreeIds(node: TreeNode[K]): Set[K] =

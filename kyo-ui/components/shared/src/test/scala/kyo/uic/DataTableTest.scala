@@ -3726,4 +3726,60 @@ class DataTableTest extends UicTest:
         yield assert(after.head.name == "Ada" && still.isEmpty, s"the table finished its own work; editing=$still")
     }
 
+    private def bare(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).sortBy(_.name),
+            uic.column("Price")(_.price.toString)
+        )
+
+    "constants nobody hears are fixed: no header sorts, no row picks, no toggle opens, and no card" in {
+        val fixed = bare.sort(List.empty[uic.SortKey]).selectionMode(uic.SelectionMode.Single).selection(Set(items(0)))
+            .expanded(Set(items(0))).rowExpansionTemplate(i => span(i.name))
+        for
+            headers <- elementsWithClass(fixed.render, "p-datatable-sortable-column")
+            rows    <- elementsWithClass(fixed.render, "p-datatable-selectable-row")
+            toggles <- elementsWithClass(fixed.render, "p-datatable-row-toggle-button")
+            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(headers.isEmpty, "a fixed sort offers no header")
+            assert(rows.isEmpty, "a fixed selection offers no row")
+            assert(toggles.nonEmpty && toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
+            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound sort is the table's own, so a header press sorts" in {
+        // The header's sort state rides the attribute channel, which no region publishes.
+        for
+            sorted <- attrPatchedAfter(bare.render, t => elementsWithClass(t, "p-datatable-sortable-column").map(_.exists(declaresClick)))(
+                t => elementWithClass(t, "p-datatable-sortable-column").map(click)
+            )((name, value) => name == "aria-sort" && value == "ascending")
+        yield assert(sorted, "the table never sorted by the header the reader pressed")
+    }
+
+    "an unbound selection is the table's own, so a row press picks the row" in {
+        for
+            after <- publishedAfterReady(
+                bare.selectionMode(uic.SelectionMode.Single).render,
+                t => elementsWithClass(t, "p-datatable-selectable-row").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-datatable-row-selected").map(_.nonEmpty)
+            )(t => elementsWithClass(t, "p-datatable-selectable-row").map(rs => click(rs.head)))
+        yield assert(after.nonEmpty, "the table never showed the row the reader picked")
+    }
+
+    "an unbound expansion is the table's own, so a toggle opens the row" in {
+        for
+            after <- publishedAfterReady(
+                bare.rowExpansionTemplate(i => span(i.name)).render,
+                t => elementsWithClass(t, "p-datatable-row-toggle-button").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-datatable-row-expansion").map(_.nonEmpty)
+            )(t => elementsWithClass(t, "p-datatable-row-toggle-button").map(ts => click(ts.head)))
+        yield assert(after.nonEmpty, "the table never opened the row the reader toggled")
+    }
+
+    "a column that filters with nothing bound keeps the filters itself, and says nothing" in {
+        for card <- elementsWithClass(bare.columns(uic.column("Name")(_.name).filterBy).render, "p-uic-key-error")
+        yield assert(card.isEmpty, s"an unbound filter is the table's own: ${card.map(textOf)}")
+    }
+
 end DataTableTest

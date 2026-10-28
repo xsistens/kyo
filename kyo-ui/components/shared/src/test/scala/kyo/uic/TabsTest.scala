@@ -186,7 +186,8 @@ class TabsTest extends UicTest:
                 navStrip.selected("one").onTabSelect(_ => ()).render,
                 "p-tab"
             )
-            noUrls <- elementsWithClass(strip.selected("one").render, "p-tab")
+            // An unbound strip is the reader's to switch; a constant nobody hears would be fixed, and switch nothing.
+            noUrls <- elementsWithClass(strip.render, "p-tab")
         yield
             assert(plain(0).attrs.onClick.isEmpty, "a pure navigation strip stays a plain link")
             assert(withSelect(0).attrs.onClick.isDefined, "onTabSelect is honoured when asked for")
@@ -356,6 +357,31 @@ class TabsTest extends UicTest:
             }
             succeed
         end for
+    }
+
+    "a selection nobody hears says so when it is a signal, and is fixed when it is a constant" in {
+        for
+            held  <- Signal.initRef("one")
+            deaf  <- elementsWithClass(strip.selected(held.readOnly).render, "p-uic-key-error")
+            heard <- elementsWithClass(strip.selected(held.readOnly).onTabSelect(_ => ()).render, "p-uic-key-error")
+            fixed <- elementsWithClass(strip.selected("one").render, "p-tab")
+            quiet <- elementsWithClass(strip.selected("one").render, "p-uic-key-error")
+        yield
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onTabSelect"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(heard.isEmpty, "somebody hears")
+            assert(fixed.nonEmpty && fixed.forall(h => !declaresClick(h)), "a fixed strip switches nothing")
+            assert(quiet.isEmpty, s"a fixed constant: ${quiet.map(textOf)}")
+        end for
+    }
+
+    "an unbound strip keeps the tab the reader picks" in {
+        for
+            after <- publishedAfterReady(
+                strip.render,
+                t => elementsWithClass(t, "p-tab").map(_.exists(declaresClick)),
+                until = t => activeId(t).map(_.contains(2))
+            )(t => elementsWithClass(t, "p-tab").map(hs => click(hs(2))))
+        yield assert(after.nonEmpty, "the strip never showed the tab the reader picked")
     }
 
 end TabsTest

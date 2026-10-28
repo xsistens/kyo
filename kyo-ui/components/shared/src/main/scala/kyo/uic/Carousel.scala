@@ -79,7 +79,8 @@ final case class Carousel[A] private (
     showItemNavigatorsFlag: Boolean = true,
     showIndicatorsFlag: Boolean = true,
     autoplayMsV: Int = 0,
-    onPageChangeF: Maybe[Int => UI.Action] = Absent
+    onPageChangeF: Maybe[Int => UI.Action] = Absent,
+    fixedFlag: Boolean = false
 ) extends Node:
     type Self = Carousel[A]
 
@@ -162,6 +163,12 @@ final case class Carousel[A] private (
 
     private[uic] def render(using Frame): UI =
         pageSlot match
+            // Unbound, the carousel keeps the page the reader turns to itself, starting on the first.
+            case Absent =>
+                ReactiveValue.owned(0)(own => copy(pageSlot = Present(own)).render)(entries.render(as => copy(itemList = as).body(0)))
+            // A constant nobody hears is fixed: drawn on its page, turned by nothing.
+            case Present(slot) if ReactiveValue.fixed(pageSlot, onPageChangeF) =>
+                entries.render(as => copy(itemList = as, fixedFlag = true).body(slot.const.getOrElse(0)))
             case Present(slot) =>
                 val r: Signal[Int] = slot.dyn.getOrElse(Signal.initConst(slot.const.getOrElse(0)))
                 // The stable strip needs a session id (bindStyleById target, and the base every item and dot id
@@ -178,8 +185,8 @@ final case class Carousel[A] private (
                         interactive(r, stripId, startPos, id => cmds.focusId(id))
                     )
                 }.placeholder(shown(r).render((as, p) => copy(itemList = as).body(p)))
-                // A page bound one way that nothing hears: every turn the reader takes is painted away again.
-                if ReactiveValue.heard(pageSlot, onPageChangeF) then carousel
+                // A signal nobody hears: every turn the reader takes is painted away again.
+                if !ReactiveValue.deaf(pageSlot, onPageChangeF) then carousel
                 else
                     fragment(
                         KeyDiagnostics.card(
@@ -191,7 +198,6 @@ final case class Carousel[A] private (
                         carousel
                     )
                 end if
-            case Absent => entries.render(as => copy(itemList = as).body(0))
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
       * cancels it on unmount, so it never leaks and never busy-blocks: it sleeps
@@ -435,16 +441,17 @@ final case class Carousel[A] private (
 
     /** A prev/next navigator (Prime's secondary text rounded Button). */
     private def navButton(cls: String, glyph: IconGlyph, name: String, off: Boolean, target: Int, pages: Int)(using Frame): UI =
-        Button()
+        val b = Button()
             .icon(glyph)
             .severity(Severity.Secondary)
             .variant(ButtonVariant.Text)
             .rounded(true)
             .accessibleName(name)
             .disabled(off)
-            .onClick(setPage(target, pages))
             .extraClass(cls)
-            .render
+        // A fixed carousel shows its navigators and turns nothing with them.
+        (if fixedFlag then b else b.onClick(setPage(target, pages))).render
+    end navButton
 
     /** One id per indicator dot, derived from the strip's own minted id. */
     private def dotIds(stripId: String, pages: Int): Seq[String] = (0 until pages).map(i => s"$stripId-d$i")
@@ -468,7 +475,7 @@ final case class Carousel[A] private (
                     .aria("label", s"Page ${i + 1}")
                     .tabIndex(if i == page then 0 else -1)
                 if i == page then btn = btn.aria("current", "page")
-                btn = btn.onClick(setPage(i, pages))
+                if !fixedFlag then btn = btn.onClick(setPage(i, pages))
                 if ids.isDefinedAt(i) then
                     btn = btn.id(ids(i)).onKeyDown { e =>
                         // A dot IS a button, so Enter and Space are the browser's; this moves
