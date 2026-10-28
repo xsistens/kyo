@@ -37,6 +37,7 @@ final case class Slider private (
     integerFlag: Boolean = false,
     orientationV: Orientation = Orientation.Horizontal,
     disabledFlag: Maybe[BoolValue] = Absent,
+    readonlyFlag: Boolean = false,
     invalidV: Maybe[BoolValue] = Absent,
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
@@ -89,6 +90,11 @@ final case class Slider private (
       */
     def disabled(v: Boolean | Signal[Boolean]): Slider = copy(disabledFlag = Present(ReactiveValue(v)))
 
+    /** `readonly`: the slider keeps its value and its normal look and stays reachable, so a reader can land on it and read
+      * it, and no drag or key moves it. The browser's own move is declined in the client, like a readonly CheckBox.
+      */
+    def readonly(v: Boolean): Slider = copy(readonlyFlag = v)
+
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = copy(accNameV = v)
 
     private[uic] def withInvalid(v: Maybe[BoolValue]): Slider                       = copy(invalidV = v)
@@ -109,13 +115,19 @@ final case class Slider private (
         if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
+        if ReactiveValue.fixed(valueBinding, onChangeF) && !readonlyFlag then copy(readonlyFlag = true).render
+        else if valueBinding.isEmpty then ReactiveValue.owned(minV)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
+        else renderLive
+
+    private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
-        // A value bound one way that nothing hears: every change the reader makes is painted away again.
-        if valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF) && !disabledFlag.constTrue then
+        // A signal nobody hears: every change the reader makes is painted away again.
+        if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue then
             fragment(field, KeyDiagnostics.unheard("Slider", "value", "onChange"))
         else field
-    end render
+    end renderLive
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
@@ -154,6 +166,7 @@ final case class Slider private (
             case Absent                      => ()
         end match
         if disabledFlag.constTrue then in = in.disabled(true)
+        else if readonlyFlag then in = in.aria("readonly", "true").preventActivation
         else
             in = in.onChange { d =>
                 val next             = clamp(d)

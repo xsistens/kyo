@@ -65,4 +65,41 @@ class TreeTest extends UicTest:
             assert(byOld.isEmpty, s"the older events hear: ${byOld.map(textOf)}")
     }
 
+    "constants nobody hears are fixed: no toggle opens, no click picks, and no card" in {
+        val fixed = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(Set("src")).selection(Set("main"))
+        for
+            toggles <- elementsWithClass(fixed.render, "p-tree-node-toggle-button")
+            labels  <- elementsWithClass(fixed.render, "p-tree-node-label")
+            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(toggles.nonEmpty && toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
+            assert(labels.nonEmpty && labels.forall(l => !declaresClick(l)), "a fixed selection picks nothing")
+            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound tree keeps what the reader opens and picks" in {
+        def opened(t: UI): Boolean < Sync = elementsWithClass(t, "p-tree-node-label").map(_.exists(l => textOf(l) == "main"))
+        def picked(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-tree-node-selected").map(_.exists(n => textOf(n).contains("build.sbt")))
+        val free = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single)
+        for
+            open <- publishedAfterReady(
+                free.render,
+                t => elementsWithClass(t, "p-tree-node-toggle-button").map(_.exists(declaresClick)),
+                until = opened
+            )(t => elementsWithClass(t, "p-tree-node-toggle-button").map(bs => click(bs.head)))
+            pick <- publishedAfterReady(
+                free.render,
+                t => elementsWithClass(t, "p-tree-node-label").map(_.exists(declaresClick)),
+                until = picked
+            )(t =>
+                labelOf(t, "build.sbt").map(click)
+            )
+        yield
+            assert(open.nonEmpty, "the tree never showed the branch the reader opened")
+            assert(pick.nonEmpty, "the tree never showed the node the reader picked")
+        end for
+    }
+
 end TreeTest

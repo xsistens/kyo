@@ -33,4 +33,29 @@ class InputNumberTest extends UicTest:
         end for
     }
 
+    "a constant nobody hears is fixed: read-only, and no card" in {
+        for
+            n    <- number(uic.InputNumber().value(3.0).render)
+            card <- elementsWithClass(uic.InputNumber().value(3.0).render, "p-uic-key-error")
+        yield
+            assert(n.readOnly.contains(true) && n.onChangeNumeric.isEmpty, "a fixed field takes no number")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound field keeps what the spin buttons make of it" in {
+        def holds(text: String)(t: UI): Boolean < Sync =
+            elements(t).map(_.collectFirst { case n: UI.Ast.NumberInput => n.value }).map {
+                case Some(Present(UI.Bound.Ref(r)))   => r.get.map(_ == text)
+                case Some(Present(UI.Bound.Const(v))) => Kyo.lift(v == text)
+                case _                                => Kyo.lift(false)
+            }
+        for
+            after <- publishedAfterReady(
+                uic.InputNumber().showButtons(true).render,
+                t => elementsWithClass(t, "p-inputnumber-increment-button").map(_.exists(declaresClick)),
+                until = holds("1")
+            )(t => elementWithClass(t, "p-inputnumber-increment-button").map(click))
+        yield assert(after.nonEmpty, "the field never showed what the spin button made of it")
+    }
+
 end InputNumberTest

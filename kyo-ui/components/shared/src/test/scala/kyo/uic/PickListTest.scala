@@ -265,10 +265,13 @@ class PickListTest extends UicTest:
 
     "one-way columns nothing hears say so" in {
         for
-            src  <- Signal.initRef(Seq("a"))
+            src <- Signal.initRef(Seq("a"))
+            tgt <- Signal.initRef(Seq.empty[String])
+            sel <- Signal.initRef(Set.empty[String])
+            // Signals, all four: a constant nobody hears is fixed rather than a mistake, and says nothing.
             deaf <- elementsWithClass(
-                uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(Seq.empty[String])
-                    .sourceSelection(Set.empty[String]).targetSelection(Set.empty[String]).render,
+                uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(tgt.readOnly)
+                    .sourceSelection(sel.readOnly).targetSelection(sel.readOnly).render,
                 "p-uic-key-error"
             )
         yield
@@ -288,6 +291,41 @@ class PickListTest extends UicTest:
                 "p-uic-key-error"
             )
         yield assert(off.isEmpty, s"nobody can change them: ${off.map(textOf)}")
+    }
+
+    "constants nobody hears are fixed: no button moves or transfers, no click picks, and no card" in {
+        val fixed = uic.PickList[String]().sourceItems(Seq("a", "b"))(identity).targetItems(Seq("c"))
+            .sourceSelection(Set("a")).targetSelection(Set.empty[String])
+        for
+            buttons <- elementsWithClass(fixed.render, "p-button")
+            rows    <- elementsWithClass(fixed.render, "p-listbox-option")
+            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(buttons.nonEmpty && buttons.forall(b => !declaresClick(b)), "fixed columns move nothing")
+            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "fixed selections pick nothing")
+            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound target and selection are the list's own, so a pick transfers into its own column" in {
+        def onTheRight(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-picklist-target-list-container").map(_.exists(c => textOf(c).contains("a")))
+        for
+            src   <- Signal.initRef(Seq("a", "b"))
+            after <- publishedAfterReady(
+                uic.PickList[String]().sourceItems(src)(identity).render,
+                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
+                until = onTheRight
+            )(
+                t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "a"),
+                t =>
+                    // A button that is off still carries an empty click, so the live one is the one not marked off.
+                    elements(t).map(_.find(e =>
+                        e.attrs.ariaAttrs.get("label").contains("Move to Target") && !e.attrs.ariaAttrs.get("disabled").contains("true")
+                    ).map(click).getOrElse(throw new AssertionError("no live transfer button")))
+            )
+        yield assert(after.nonEmpty, "the target column never showed what the reader transferred")
+        end for
     }
 
 end PickListTest

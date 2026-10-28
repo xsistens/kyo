@@ -140,13 +140,19 @@ final case class Knob private (
         if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: drawn read-only. Unbound, the knob keeps where the reader turns it itself.
+        if ReactiveValue.fixed(valueBinding, onChangeF) && !readonlyFlag then copy(readonlyFlag = true).render
+        else if valueBinding.isEmpty then ReactiveValue.owned(minV)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
+        else renderLive
+
+    private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
-        // A value bound one way that nothing hears: every change the reader makes is painted away again.
-        if valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue
+        // A signal nobody hears: every change the reader makes is painted away again.
+        if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue
         then fragment(field, KeyDiagnostics.unheard("Knob", "value", "onChange"))
         else field
-    end render
+    end renderLive
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match

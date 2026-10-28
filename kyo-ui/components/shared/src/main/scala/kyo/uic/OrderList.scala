@@ -82,6 +82,7 @@ final case class OrderList[A] private (
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequence and the set are compared structurally, and `A` needs no equality of its own for
     // that (it has none to require, since any type can be a row here).
+    private given CanEqual[A, A]                                         = CanEqual.derived
     private given CanEqual[Seq[A], Seq[A]]                               = CanEqual.derived
     private given CanEqual[(Seq[A], Set[String]), (Seq[A], Set[String])] = CanEqual.derived
     private given CanEqual[Snapshot, Snapshot]                           = CanEqual.derived
@@ -116,7 +117,11 @@ final case class OrderList[A] private (
                 cmds <- UI.commands
                 id   <- cmds.freshId
                 hi   <- Signal.initRef(-1)
-            yield wired(Present(ListReorder.Cursor(hi, id)))
+                // Unbound, the list keeps the rows the reader picks itself.
+                sel <-
+                    if selectedSlot.isEmpty then Signal.initRef(Set.empty[A]).map(r => Maybe(ReactiveValue[Set[A]](r)))
+                    else Kyo.lift(selectedSlot)
+            yield copy(selectedSlot = sel).wired(Present(ListReorder.Cursor(hi, id)))
         }.placeholder(wired(Absent))
 
     /** The tree the mount publishes: the seam the tests drive, since a golden render shows a mount
@@ -141,8 +146,8 @@ final case class OrderList[A] private (
                     case ListReorder.Move.Edge(down) => Present(if down then ListReorder.moveBottom else ListReorder.moveTop)
                     case ListReorder.Move.Out(_)     => Absent
                 step match
-                    case Present(m) => Listbox.HostKey(keepingCursor(cursor, xs, focused, m(xs.toList, chosen), reorder(m)))
-                    case Absent     => Listbox.HostKey(())
+                    case Present(m) if !itemsFixed => Listbox.HostKey(keepingCursor(cursor, xs, focused, m(xs.toList, chosen), reorder(m)))
+                    case _                         => Listbox.HostKey(())
             }
 
         // `ariaDisabled` rather than the native attribute, for the reason [[Button.ariaDisabled]]
@@ -156,7 +161,10 @@ final case class OrderList[A] private (
                 .severity(Severity.Secondary)
                 .accessibleName(name)
             if disabledFlag then b = b.disabled(true)
+            // A fixed order shows its rail and moves nothing with it.
+            else if itemsFixed then b = b.ariaDisabled(true)
             else b = b.ariaDisabled(moveDisabled).onClick(if moveDisabled then () else reorder(move))
+            end if
             b.render
         end moveButton
 
@@ -175,6 +183,7 @@ final case class OrderList[A] private (
             .selectionMode(SelectionMode.Multiple)
             .metaKeySelection(metaKeyFlag)
             .disabled(disabledFlag)
+            .fixed(ReactiveValue.fixed(selectedSlot, onSelectionF))
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
         selectedSlot.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, onSelectionF)))
@@ -203,12 +212,15 @@ final case class OrderList[A] private (
         val missing =
             if disabledFlag then Nil
             else
-                (if itemsSlot.isEmpty || ReactiveValue.heard(itemsSlot, onItemsF) then Nil
+                (if !ReactiveValue.deaf(itemsSlot, onItemsF) then Nil
                  else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
-                    (if selectedSlot.isEmpty || ReactiveValue.heard(selectedSlot, onSelectionF) then Nil
+                    (if !ReactiveValue.deaf(selectedSlot, onSelectionF) then Nil
                      else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
         if missing.isEmpty then Nil else List(KeyDiagnostics.card("OrderList", "a binding the reader cannot move", missing))
     end unheard
+
+    /** A constant order nobody hears is fixed: the list shows it, and no button or key moves a row. */
+    private def itemsFixed: Boolean = ReactiveValue.fixed(itemsSlot, onItemsF)
 
     /** Runs `eff` and puts the highlight back on the row it was on in `after`, the list the move asks for.
       *

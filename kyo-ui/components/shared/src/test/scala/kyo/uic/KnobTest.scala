@@ -36,4 +36,24 @@ class KnobTest extends UicTest:
         end for
     }
 
+    "a constant nobody hears is fixed: read-only, turned by nothing, and no card" in {
+        for
+            root <- elementWithClass(uic.Knob().value(10.0).render, "p-knob")
+            card <- elementsWithClass(uic.Knob().value(10.0).render, "p-uic-key-error")
+        yield
+            assert(root.attrs.onPointerDown.isEmpty, "a fixed dial takes no pointer")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound knob keeps where the reader turns it" in {
+        def reads50(t: UI): Boolean < Sync = elementsWithClass(t, "p-knob-text").map(_.exists(e => textOf(e) == "50"))
+        for
+            after <- publishedAfterReady(
+                uic.Knob().render,
+                t => elementsWithClass(t, "p-knob").map(_.exists(_.attrs.onPointerDown.nonEmpty)),
+                until = reads50
+            )(t => elementWithClass(t, "p-knob").map(r => handled(r.attrs.onPointerDown.get(top))))
+        yield assert(after.nonEmpty, "the knob never showed where the reader turned it")
+    }
+
 end KnobTest

@@ -1584,8 +1584,30 @@ final case class DataTable[A] private (
         currentRows.map(all => ref.getAndUpdate(prev => rowsFor(f(keysOf(prev)), prev, all)).unit)
 
     private def rowClickSelects: Boolean =
-        selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple ||
-            selectionModeV == SelectionMode.Radio
+        (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple ||
+            selectionModeV == SelectionMode.Radio) && !selectionFixed
+
+    /** A constant sort nobody hears is fixed: the rows show it, and no header offers to change it. */
+    private def sortFixed: Boolean = ReactiveValue.fixed(sortSlot, onSortF)
+
+    /** Constant filters nobody hears are fixed: the rows show them filtered, and no filter row offers to change them. */
+    private def filtersFixed: Boolean = ReactiveValue.fixed(columnFiltersSlot, onColumnFiltersF)
+
+    /** Constant widths nobody hears are fixed: the columns keep them, and no boundary offers a drag. */
+    private def widthsFixed: Boolean = ReactiveValue.fixed(columnWidthsSlot, onColumnWidthsF)
+
+    /** A constant order nobody hears is fixed: the columns keep it, and no header offers a drag. */
+    private def orderFixed: Boolean = ReactiveValue.fixed(columnOrderSlot, onColumnOrderF)
+
+    /** A constant expansion nobody hears is fixed: the rows show it, and no toggle opens or closes one. */
+    private def expansionFixed: Boolean = ReactiveValue.fixed(expandedTyped, onExpandedF)
+
+    /** Constant open groups nobody hears are fixed: the groups show them, and no header toggle offers to change them. */
+    private def groupsFixed: Boolean = ReactiveValue.fixed(expandedGroupsSlot, onExpandedGroupsF)
+
+    /** A constant selection nobody hears is fixed: the rows show it, and no press, box or key picks one. */
+    private def selectionFixed: Boolean =
+        selectionModeV != SelectionMode.None && ReactiveValue.fixed(selectedTyped, onSelectionF.orElse(onRowClickF))
 
     private def checkboxColumn: Boolean = selectionModeV == SelectionMode.Checkbox
 
@@ -1809,7 +1831,7 @@ final case class DataTable[A] private (
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
       */
-    private def filterBound: Boolean = columnFiltersSlot.isDefined && leafCols.exists(_.isFilterable)
+    private def filterBound: Boolean = columnFiltersSlot.isDefined && !filtersFixed && leafCols.exists(_.isFilterable)
 
     /** Whether the filters are edited in a second header row. */
     private def filterRowOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Row
@@ -1822,7 +1844,7 @@ final case class DataTable[A] private (
       * and neither does a table whose columns are all pinned.
       */
     private def resizeOn: Boolean =
-        columnWidthsSlot.isDefined && (resizeModeV match
+        columnWidthsSlot.isDefined && !widthsFixed && (resizeModeV match
             case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
             case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
 
@@ -1861,7 +1883,7 @@ final case class DataTable[A] private (
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        columnWidthsSlot.isDefined && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
+        columnWidthsSlot.isDefined && !widthsFixed && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
             case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
             case ColumnResizeMode.Expand => true)
 
@@ -1888,7 +1910,7 @@ final case class DataTable[A] private (
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = columnOrderSlot.isDefined && leafCols.count(_.reorderableFlag) > 1
+    private def reorderOn: Boolean = columnOrderSlot.isDefined && !orderFixed && leafCols.count(_.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2353,6 +2375,38 @@ final case class DataTable[A] private (
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
+        // Unbound, the table keeps what the reader sorts, filters, opens and picks itself, wherever a column or a mode
+        // already says the reader may: `sortBy`, `filterBy`, `rowExpansionTemplate`, `selectionMode`.
+        val ownsSort      = sortSlot.isEmpty && leafPaths.exists((_, c) => canSortBy(c))
+        val ownsFilters   = columnFiltersSlot.isEmpty && (leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable))
+        val ownsExpansion = expandedTyped.isEmpty && expansionF.isDefined
+        val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None
+        if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection then renderBound
+        else
+            UI.mounted {
+                for
+                    sort <-
+                        if ownsSort then Signal.initRef(List.empty[SortKey]).map(r => Maybe(ReactiveValue[List[SortKey]](r)))
+                        else Kyo.lift(sortSlot)
+                    filters <-
+                        if ownsFilters then
+                            Signal.initRef(Map.empty[List[String], ColumnFilter])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Map[List[String], ColumnFilter]](r)))
+                        else Kyo.lift(columnFiltersSlot)
+                    exp <-
+                        if ownsExpansion then
+                            Signal.initRef(Set.empty[A])(using summon[Frame], CanEqual.derived).map(r => Maybe(ReactiveValue[Set[A]](r)))
+                        else Kyo.lift(expandedTyped)
+                    sel <-
+                        if ownsSelection then
+                            Signal.initRef(Set.empty[A])(using summon[Frame], CanEqual.derived).map(r => Maybe(ReactiveValue[Set[A]](r)))
+                        else Kyo.lift(selectedTyped)
+                yield copy(sortSlot = sort, columnFiltersSlot = filters, expandedTyped = exp, selectedTyped = sel).renderBound
+            }.placeholder(renderBound)
+        end if
+    end render
+
+    private def renderBound(using Frame): UI =
         def static: UI =
             renderWith(Reading.Fixed(()), (), navOn = false) { _ =>
                 DataTable.Wiring[A](
@@ -2463,7 +2517,7 @@ final case class DataTable[A] private (
                 case Absent      => mount
             end match
         end if
-    end render
+    end renderBound
 
     /** An invisible sibling that starts watching the header once the table is IN the DOM.
       *
@@ -3761,7 +3815,7 @@ final case class DataTable[A] private (
                     noOrdering
                 ))
         val unheardCard =
-            if sortable.isEmpty || ReactiveValue.heard(sortSlot, onSortF) || sortSlot.isEmpty then Nil
+            if sortable.isEmpty || !ReactiveValue.deaf(sortSlot, onSortF) then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3790,15 +3844,6 @@ final case class DataTable[A] private (
                     "DataTable",
                     "columnFilters is bound but no column can be filtered, so the filter row has nothing to hold; " +
                         "add Column.filterBy",
-                    Nil
-                ))
-        val nowhere =
-            if !filterable || columnFiltersSlot.isDefined then Nil
-            else
-                List(KeyDiagnostics.card(
-                    "DataTable",
-                    "a column carries filterBy and no columnFilters ref is bound, so there is nowhere to put what " +
-                        "the reader types and no filter row to type it into; bind columnFilters",
                     Nil
                 ))
         // The paths, not the visible ones: a filter on a hidden column is deliberately
@@ -3832,7 +3877,7 @@ final case class DataTable[A] private (
                     crowded
                 ))
         val unheard =
-            if !filterable || columnFiltersSlot.isEmpty || ReactiveValue.heard(columnFiltersSlot, onColumnFiltersF) then Nil
+            if !filterable || !ReactiveValue.deaf(columnFiltersSlot, onColumnFiltersF) then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3840,7 +3885,7 @@ final case class DataTable[A] private (
                         "reader cannot change them; add onColumnFiltersChange, or bind a SignalRef",
                     Nil
                 ))
-        nothing ++ nowhere ++ unknownCard ++ crowdedCard ++ unheard
+        nothing ++ unknownCard ++ crowdedCard ++ unheard
     end filterCards
 
     /** The loud cards for an editing binding that cannot do anything.
@@ -3891,7 +3936,7 @@ final case class DataTable[A] private (
                     unsized.map(_.mkString(" / "))
                 ))
         val unheard =
-            if !resizeOn || columnWidthsSlot.isEmpty || ReactiveValue.heard(columnWidthsSlot, onColumnWidthsF) then Nil
+            if !resizeOn || !ReactiveValue.deaf(columnWidthsSlot, onColumnWidthsF) then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3947,7 +3992,7 @@ final case class DataTable[A] private (
                         split.map(_.mkString(" / ")).sorted
                     ))
             val unheard =
-                if !reorderOn || ReactiveValue.heard(columnOrderSlot, onColumnOrderF) then Nil
+                if !reorderOn || !ReactiveValue.deaf(columnOrderSlot, onColumnOrderF) then Nil
                 else
                     List(KeyDiagnostics.card(
                         "DataTable",
@@ -3994,12 +4039,10 @@ final case class DataTable[A] private (
     /** Expansion bound one way that nothing hears: the toggles take presses that open nothing. */
     private def expansionCards(using Frame): List[UI] =
         val rows =
-            if expansionF.isEmpty || expandedTyped.isEmpty || ReactiveValue.heard(expandedTyped, onExpandedF) then Nil
+            if expansionF.isEmpty || !ReactiveValue.deaf(expandedTyped, onExpandedF) then Nil
             else List("expanded is bound one way and nothing hears a row toggle: add onExpandedChange, or bind a SignalRef")
         val groups =
-            if !groupsV.exists(_.showHeaderFlag) || expandedGroupsSlot.isEmpty ||
-                ReactiveValue.heard(expandedGroupsSlot, onExpandedGroupsF)
-            then Nil
+            if !groupsV.exists(_.showHeaderFlag) || !ReactiveValue.deaf(expandedGroupsSlot, onExpandedGroupsF) then Nil
             else
                 List("expandedGroups is bound one way and nothing hears a group toggle: add onExpandedGroupsChange, or bind " +
                     "a SignalRef")
@@ -4052,7 +4095,8 @@ final case class DataTable[A] private (
         // the set and applies the change themselves. `onSelectionChange` is the outlet that
         // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
         // a range or a replacement became.
-        val oneWay     = selectedTyped.isDefined && selectedRef.isEmpty
+        // A signal, not a constant: a constant nobody hears is fixed, and draws nothing to pick.
+        val oneWay     = selectedTyped.exists(_.dyn.isDefined) && selectedRef.isEmpty
         val noOutlet   = onSelectionF.isEmpty
         val unwritable =
             if !oneWay || !noOutlet || selectionModeV != SelectionMode.Checkbox then Nil
@@ -4333,11 +4377,9 @@ final case class DataTable[A] private (
         val toggle: UI.Action =
             currentValue(selectedBinding, Set.empty[String])
                 .map(cur => applySelection(if allSelected then cur -- keys else cur ++ keys))
-        CheckBox()
-            .checked(allSelected)
-            .accessibleName("Select All")
-            .onChange(_ => toggle)
-            .render
+        val box = CheckBox().checked(allSelected).accessibleName("Select All")
+        // A fixed selection shows the box, read-only.
+        (if selectionFixed then box else box.onChange(_ => toggle)).render
     end selectAllBox
 
     /** One cell of the header matrix: a leaf renders its column header, a group a plain
@@ -4834,7 +4876,7 @@ final case class DataTable[A] private (
         filter: FilterState
     )(using Frame): UI =
         given CanEqual[SortDirection, SortDirection] = CanEqual.derived
-        val sortable                                 = sorts && sortSlot.isDefined
+        val sortable                                 = sorts && sortSlot.isDefined && !sortFixed
         val direction: Reading[SortDirection]        =
             live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
@@ -4872,7 +4914,7 @@ final case class DataTable[A] private (
         // column carries the attribute. One rule for the static page and the live one, so the attribute never has to
         // leave the cell. A column locked against the reader's clicks is still one a sort can name.
         cell = classWhen(cell, "p-datatable-column-sorted", direction.map(_.isSorting))
-        if sortSlot.isDefined && canSortBy(c) then
+        if sortSlot.isDefined && !sortFixed && canSortBy(c) then
             given CanEqual[String, String] = CanEqual.derived
             direction.map {
                 case SortDirection.Ascending  => "ascending"
@@ -5101,14 +5143,14 @@ final case class DataTable[A] private (
             if !collapsible then Nil
             else
                 val glyph = if open then Icons.chevronDown else Icons.chevronRight
-                List(
-                    button
-                        .cssClass("p-datatable-row-toggle-button")
-                        .jsProp("type", "button")
-                        .aria("expanded", open.toString)
-                        .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
-                        .onClick(toggleGroup(path))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
-                )
+                var b     = button
+                    .cssClass("p-datatable-row-toggle-button")
+                    .jsProp("type", "button")
+                    .aria("expanded", open.toString)
+                    .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
+                // Fixed open groups show their toggle and open or close nothing with it.
+                if !groupsFixed then b = b.onClick(toggleGroup(path))
+                List(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
         val content: UI = level.headerF match
             case Present(f) => f(path, rows)
             case Absent     => stringToUI(path.key)
@@ -5152,14 +5194,14 @@ final case class DataTable[A] private (
             if !expanderColumn then Nil
             else
                 val glyph = if isExp then Icons.chevronDown else Icons.chevronRight
-                val cell  = td(
-                    button
-                        .cssClass("p-datatable-row-toggle-button")
-                        .jsProp("type", "button")
-                        .aria("expanded", isExp.toString)
-                        .aria("label", if isExp then "Row Collapse" else "Row Expand")
-                        .onClick(toggleExpand(id))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
-                )
+                var b     = button
+                    .cssClass("p-datatable-row-toggle-button")
+                    .jsProp("type", "button")
+                    .aria("expanded", isExp.toString)
+                    .aria("label", if isExp then "Row Collapse" else "Row Expand")
+                // A fixed expansion shows its toggle and opens or closes nothing with it.
+                if !expansionFixed then b = b.onClick(toggleExpand(id))
+                val cell = td(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
                 List(freeze(cell, frozen.leadAt(expanderSlot)))
 
         // Checkbox selection reuses Prime's checkbox anatomy (as Tree does).
@@ -5168,7 +5210,7 @@ final case class DataTable[A] private (
             else
                 var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
                 if isSel then cb = cb.cssClass("p-checkbox-checked")
-                if canSelect then cb = cb.onClick(toggleSelect(id))
+                if canSelect && !selectionFixed then cb = cb.onClick(toggleSelect(id))
                 else cb = cb.cssClass("p-disabled")
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 val cell           = td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))

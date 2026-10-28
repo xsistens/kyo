@@ -43,7 +43,7 @@ end PaginatorElement
   */
 final case class Paginator private (
     totalV: ReactiveValue[Int] = ReactiveValue.Const(0),
-    rowsV: ReactiveValue[Int] = ReactiveValue.Const(1),
+    rowsV: Maybe[ReactiveValue[Int]] = Absent,
     pageV: Maybe[ReactiveValue[Int]] = Absent,
     currentPageV: Maybe[Int] = Absent,
     pageLinkSizeV: Int = 5,
@@ -71,12 +71,12 @@ final case class Paginator private (
       * is a count the reader cannot change unless [[onRowsChange]] is there to take the pick, so without one its
       * dropdown is drawn disabled.
       */
-    def rows(n: Int | Signal[Int]): Paginator = copy(rowsV = ReactiveValue(n))
+    def rows(n: Int | Signal[Int]): Paginator = copy(rowsV = Present(ReactiveValue(n)))
 
     /** Package-internal: a host that owns the page size hands a constant one, dropping any binding a caller made, since
       * a dropdown writing a ref the host does not page by would page a list nobody is looking at.
       */
-    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = ReactiveValue.Const(math.max(1, n)), onRowsF = Absent)
+    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = Present(ReactiveValue.Const(math.max(1, n))), onRowsF = Absent)
 
     /** The 0-based page index (clamped at render).
       *
@@ -159,7 +159,7 @@ final case class Paginator private (
 
     /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
     private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
-        copy(rowsV = v, onRowsF = report.orElse(onRowsF), rowsEventName = eventName)
+        copy(rowsV = Present(v), onRowsF = report.orElse(onRowsF), rowsEventName = eventName)
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
@@ -168,7 +168,13 @@ final case class Paginator private (
             case Present(cur) => Reading.Fixed(cur)
             case Absent       => pageV.fold(Reading.Fixed(0))(Reading.of(_))
 
-    private def rowsReading(using Frame): Reading[Int] = Reading.of(rowsV).map(math.max(1, _))
+    private def rowsReading(using Frame): Reading[Int] = Reading.of(rowsSlot).map(math.max(1, _))
+
+    /** The rows a page holds: one where nothing set them, which is where an unbound paginator's own count starts too. */
+    private def rowsSlot: ReactiveValue[Int] = rowsV.getOrElse(ReactiveValue.Const(1))
+
+    /** A constant page nobody hears is fixed: the links show it and go nowhere. A host drawing the page owns its clicks. */
+    private def pageFixed: Boolean = currentPageV.isEmpty && ReactiveValue.fixed(pageV, onPageF)
 
     private def totalReading(using Frame): Reading[Int] = Reading.of(totalV).map(math.max(0, _))
 
@@ -185,6 +191,24 @@ final case class Paginator private (
     private[uic] def jumpChange(using Frame): Maybe[Int] => UI.Action = _.fold[UI.Action](())(activate)
 
     private[uic] def render(using Frame): UI =
+        // Standing alone and unbound, the paginator keeps the page the reader goes to, and the rows they pick, itself. A
+        // host that draws the page (`currentPage`) or hands its own slots on is bound, and keeps nothing of its own.
+        val ownsPage = currentPageV.isEmpty && pageV.isEmpty
+        val ownsRows = rowsV.isEmpty
+        if !ownsPage && !ownsRows then renderLive
+        else
+            UI.mounted {
+                for
+                    page <-
+                        if ownsPage then Signal.initRef(0).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(pageV)
+                    rows <-
+                        if ownsRows then Signal.initRef(1).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(rowsV)
+                yield copy(pageV = page, rowsV = rows).renderLive
+            }.placeholder(renderLive)
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         val page: Reading[Int] = pageReading
         val rows: Reading[Int] = rowsReading
         val total              = totalReading
@@ -215,15 +239,13 @@ final case class Paginator private (
         // as a list rather than a row of buttons, which is what a hundred pages need. Its options are the pages: it
         // reads the pages the rows and the total give as a signal, and shows the page one way, so it is built once.
         val jtpDropdown: List[UI] =
-            List(
-                Select[Int]()
-                    .options(shape.map[Seq[Int]]((r, t) => (0 until totalPages(t, r)).toList).slot)(p => (p + 1).toString)
-                    .extraClass("p-paginator-jtp-dropdown")
-                    .selection(state.map((p, s) => View.clamp(p, totalPages(s._2, s._1))).slot)
-                    .accessibleName("Jump to page")
-                    .onChange(jumpChange)
-                    .render
-            )
+            val sel = Select[Int]()
+                .options(shape.map[Seq[Int]]((r, t) => (0 until totalPages(t, r)).toList).slot)(p => (p + 1).toString)
+                .extraClass("p-paginator-jtp-dropdown")
+                .selection(state.map((p, s) => View.clamp(p, totalPages(s._2, s._1))).slot)
+                .accessibleName("Jump to page")
+            List((if pageFixed then sel.disabled(true) else sel.onChange(jumpChange)).render)
+        end jtpDropdown
 
         def elementUI(e: PaginatorElement): List[UI] = e match
             case PaginatorElement.FirstPageLink =>
@@ -254,7 +276,7 @@ final case class Paginator private (
         hostClassesV.foreach(c => root = root.cssClass(c))
         val children: List[UI] = cards(layout) ++ unheard(layout) ++ layout.flatMap(elementUI)
         root.role("navigation")(children.map(toChild)*)
-    end render
+    end renderLive
 
     /** What the parts that follow the page are drawn from: the page clamped into the page count the rows and the total
       * give.
@@ -269,6 +291,7 @@ final case class Paginator private (
     private def navButton(cls: String, glyph: IconGlyph, target: Int, isDisabled: Boolean, label: String)(using Frame): UI =
         var b = button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label", label)
         if isDisabled then b = b.cssClass("p-disabled").disabled(true)
+        else if pageFixed then b = b.aria("disabled", "true")
         else b = b.onClick(activate(target))
         b(toChild(GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon")))
     end navButton
@@ -283,6 +306,7 @@ final case class Paginator private (
         val buttons: List[UI] = (start to endRaw).toList.map { pi =>
             var b = button.cssClass("p-paginator-page").jsProp("type", "button").aria("label", s"Page ${pi + 1}")
             if pi == v.cur then b = b.cssClass("p-paginator-page-selected").aria("current", "page")
+            else if pageFixed then b = b.aria("disabled", "true")
             else b = b.onClick(activate(pi))
             b((pi + 1).toString)
         }
@@ -305,14 +329,16 @@ final case class Paginator private (
     private def jtpField(v: View)(using Frame): UI =
         span.cssClass("p-paginator-jtp-input")(
             toChild(
-                Input()
-                    .value((v.cur + 1).toString)
-                    .accessibleName("Jump to page")
-                    .onChange { s =>
-                        val target = s.trim.toIntOption.map(_ - 1).getOrElse(v.cur)
-                        activate(View.clamp(target, v.pages))
-                    }
-                    .render
+                if pageFixed then Input().value((v.cur + 1).toString).accessibleName("Jump to page").readonly(true).render
+                else
+                    Input()
+                        .value((v.cur + 1).toString)
+                        .accessibleName("Jump to page")
+                        .onChange { s =>
+                            val target = s.trim.toIntOption.map(_ - 1).getOrElse(v.cur)
+                            activate(View.clamp(target, v.pages))
+                        }
+                        .render
             )
         )
 
@@ -350,7 +376,7 @@ final case class Paginator private (
     end cards
 
     /** Whether a rows-per-page pick reaches anybody: a two-way binding, or [[onRowsChange]]. */
-    private def rowsPickable: Boolean = ReactiveValue.heard(Present(rowsV), onRowsF)
+    private def rowsPickable: Boolean = ReactiveValue.heard(Present(rowsSlot), onRowsF)
 
     /** One-way bindings a reader's pick cannot move: a page with no [[onPageChange]], and a signal of rows behind a
       * shown rows-per-page dropdown with no [[onRowsChange]]. A host that draws the page itself (`currentPage`) owns its
@@ -358,15 +384,12 @@ final case class Paginator private (
       */
     private def unheard(layout: List[PaginatorElement])(using Frame): List[UI] =
         val page =
-            if currentPageV.isDefined || pageV.isEmpty || ReactiveValue.heard(pageV, onPageF) then Nil
+            if currentPageV.isDefined || !ReactiveValue.deaf(pageV, onPageF) then Nil
             else List("page is bound one way and nothing hears a click: add onPageChange, or bind a SignalRef")
         val rows =
             val shown = rppOptionsV.nonEmpty && layout.contains(PaginatorElement.RowsPerPageDropdown)
-            rowsV match
-                case ReactiveValue.Const(_)      => Nil
-                case _ if !shown || rowsPickable => Nil
-                case _ => List(s"rows is bound one way and nothing hears a pick: add $rowsEventName, or bind a SignalRef")
-            end match
+            if !shown || !ReactiveValue.deaf(rowsV, onRowsF) then Nil
+            else List(s"rows is bound one way and nothing hears a pick: add $rowsEventName, or bind a SignalRef")
         end rows
         val unheard = page ++ rows
         if unheard.isEmpty then Nil
@@ -390,7 +413,7 @@ final case class Paginator private (
             val page     = math.max(0, target)
             // Typed: an untyped `if` over Unit and an action infers Any and hands the action back unrun.
             val movePage: UI.Action = if page == at.cur then () else activate(page)
-            ReactiveValue.change(Present(rowsV), newRows, onRowsF).andThen(movePage)
+            ReactiveValue.change(rowsV, newRows, onRowsF).andThen(movePage)
 end Paginator
 
 object Paginator:
