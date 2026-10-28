@@ -613,6 +613,7 @@ final case class DataTable[A] private (
     groupsV: List[RowGroup[A]] = Nil,
     expandedGroupsSlot: Maybe[ReactiveValue[Set[GroupPath]]] = Absent,
     onExpandedGroupsF: Maybe[Set[GroupPath] => UI.Action] = Absent,
+    ownGroupsFlag: Boolean = false,
     removableSortFlag: Boolean = true,
     stripedFlag: Boolean = false,
     gridlinesFlag: Boolean = false,
@@ -647,9 +648,11 @@ final case class DataTable[A] private (
     filterDisplayV: FilterDisplay = FilterDisplay.Row,
     columnWidthsSlot: Maybe[ReactiveValue[Map[List[String], Double]]] = Absent,
     onColumnWidthsF: Maybe[Map[List[String], Double] => UI.Action] = Absent,
+    ownWidthsFlag: Boolean = false,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderSlot: Maybe[ReactiveValue[List[List[String]]]] = Absent,
     onColumnOrderF: Maybe[List[List[String]] => UI.Action] = Absent,
+    ownOrderFlag: Boolean = false,
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
     orderedPaths: List[List[String]] = Nil,
@@ -801,7 +804,13 @@ final case class DataTable[A] private (
       * [[columnResizeMode]] is what changes that.
       */
     def columnWidths(v: Map[List[String], Double] | Signal[Map[List[String], Double]]): DataTable[A] =
-        copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v)))
+        copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v)), ownWidthsFlag = false)
+
+    /** Turns the boundary drag on with the widths kept by the table itself, for as long as it is shown: the
+      * [[columnWidths]] drag with no ref to hand over, for a page that does not read the widths. [[onColumnWidthsChange]]
+      * still hears every move.
+      */
+    def columnWidths(): DataTable[A] = copy(columnWidthsSlot = Absent, ownWidthsFlag = true)
 
     /** Fired with the widths after every move of a boundary drag, after two-way [[columnWidths]] are written. */
     def onColumnWidthsChange(f: Map[List[String], Double] => UI.Action)(using Frame): DataTable[A] =
@@ -842,7 +851,13 @@ final case class DataTable[A] private (
       * not offered, since freezing is what the reader would silently lose.
       */
     def columnOrder(v: List[List[String]] | Signal[List[List[String]]]): DataTable[A] =
-        copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v)))
+        copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v)), ownOrderFlag = false)
+
+    /** Turns the header drag on with the order kept by the table itself, for as long as it is shown: the [[columnOrder]]
+      * drag with no ref to hand over, for a page that does not read the order. [[onColumnOrderChange]] still hears every
+      * drop.
+      */
+    def columnOrder(): DataTable[A] = copy(columnOrderSlot = Absent, ownOrderFlag = true)
 
     /** Fired with the whole order a header drop asks for, after a two-way [[columnOrder]] is written. With a signal or a
       * constant bound the table lays out by that and only reports the drop; a one-way order with no handler here is
@@ -1384,7 +1399,13 @@ final case class DataTable[A] private (
       * others. A level with [[RowGroup.showHeader]] off has no toggle and stays open.
       */
     def expandedGroups(v: Set[GroupPath] | Signal[Set[GroupPath]]): DataTable[A] =
-        copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v)))
+        copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v)), ownGroupsFlag = false)
+
+    /** Makes the groups collapsible with the open ones kept by the table itself, for as long as it is shown, starting
+      * with every group collapsed: the [[expandedGroups]] toggles with no ref to hand over, for a page that does not read
+      * them. [[onExpandedGroupsChange]] still hears every toggle.
+      */
+    def expandedGroups(): DataTable[A] = copy(expandedGroupsSlot = Absent, ownGroupsFlag = true)
 
     /** Fired with the groups open after a group header toggle, after two-way [[expandedGroups]] are written. */
     def onExpandedGroupsChange(f: Set[GroupPath] => UI.Action)(using Frame): DataTable[A] =
@@ -1844,7 +1865,7 @@ final case class DataTable[A] private (
       * and neither does a table whose columns are all pinned.
       */
     private def resizeOn: Boolean =
-        columnWidthsSlot.isDefined && !widthsFixed && (resizeModeV match
+        widthsOn && !widthsFixed && (resizeModeV match
             case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
             case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
 
@@ -1883,7 +1904,7 @@ final case class DataTable[A] private (
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        columnWidthsSlot.isDefined && !widthsFixed && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
+        widthsOn && !widthsFixed && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
             case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
             case ColumnResizeMode.Expand => true)
 
@@ -1902,15 +1923,26 @@ final case class DataTable[A] private (
     private def filterPanelId(prefix: String, path: List[String]): String =
         s"$prefix-filter${filterableLeaves.indexWhere(_._1 == path)}-panel"
 
+    /** Whether the page asked for the boundary drag, by binding the widths or by keeping them in the table. Before the
+      * mount runs, a table that keeps them has no ref yet and draws the drag all the same, so the layout does not move.
+      */
+    private def widthsOn: Boolean = columnWidthsSlot.isDefined || ownWidthsFlag
+
+    /** Whether the page asked for the header drag, by binding the order or by keeping it in the table. */
+    private def orderOn: Boolean = columnOrderSlot.isDefined || ownOrderFlag
+
+    /** Whether the page asked for collapsible groups, by binding the open ones or by keeping them in the table. */
+    private def groupsOn: Boolean = expandedGroupsSlot.isDefined || ownGroupsFlag
+
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
       */
-    private def hasWidths: Boolean = columnWidthsSlot.isDefined || leafCols.exists(_.widthV.isDefined)
+    private def hasWidths: Boolean = widthsOn || leafCols.exists(_.widthV.isDefined)
 
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = columnOrderSlot.isDefined && !orderFixed && leafCols.count(_.reorderableFlag) > 1
+    private def reorderOn: Boolean = orderOn && !orderFixed && leafCols.count(_.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2381,7 +2413,13 @@ final case class DataTable[A] private (
         val ownsFilters   = columnFiltersSlot.isEmpty && (leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable))
         val ownsExpansion = expandedTyped.isEmpty && expansionF.isDefined
         val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None
-        if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection then renderBound
+        // The layout the reader drags and the groups they open are kept only where the page asked for the feature
+        // with no ref: `columnWidths()`, `columnOrder()`, `expandedGroups()`.
+        val ownsWidths = columnWidthsSlot.isEmpty && ownWidthsFlag
+        val ownsOrder  = columnOrderSlot.isEmpty && ownOrderFlag
+        val ownsGroups = expandedGroupsSlot.isEmpty && ownGroupsFlag
+        if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups then
+            renderBound
         else
             UI.mounted {
                 for
@@ -2401,7 +2439,30 @@ final case class DataTable[A] private (
                         if ownsSelection then
                             Signal.initRef(Set.empty[A])(using summon[Frame], CanEqual.derived).map(r => Maybe(ReactiveValue[Set[A]](r)))
                         else Kyo.lift(selectedTyped)
-                yield copy(sortSlot = sort, columnFiltersSlot = filters, expandedTyped = exp, selectedTyped = sel).renderBound
+                    widths <-
+                        if ownsWidths then
+                            Signal.initRef(Map.empty[List[String], Double])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Map[List[String], Double]](r)))
+                        else Kyo.lift(columnWidthsSlot)
+                    order <-
+                        if ownsOrder then
+                            Signal.initRef(List.empty[List[String]])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[List[List[String]]](r)))
+                        else Kyo.lift(columnOrderSlot)
+                    groups <-
+                        if ownsGroups then
+                            Signal.initRef(Set.empty[GroupPath])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Set[GroupPath]](r)))
+                        else Kyo.lift(expandedGroupsSlot)
+                yield copy(
+                    sortSlot = sort,
+                    columnFiltersSlot = filters,
+                    expandedTyped = exp,
+                    selectedTyped = sel,
+                    columnWidthsSlot = widths,
+                    columnOrderSlot = order,
+                    expandedGroupsSlot = groups
+                ).renderBound
             }.placeholder(renderBound)
         end if
     end render
@@ -3153,7 +3214,7 @@ final case class DataTable[A] private (
         : BodyView[A] =
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group renders
         // none of its own, so stepping by the paged index would land on a row nobody can see.
-        val shown = RowGroup.visible(pg.rows, groupsV, Nil, openGroups, expandedGroupsSlot.isDefined)
+        val shown = RowGroup.visible(pg.rows, groupsV, Nil, openGroups, groupsOn)
         BodyView(
             selectKeys = sorted.filter(selectableAt).map(keyOf).toIndexedSeq,
             navRows = shown.toVector,
@@ -3902,7 +3963,7 @@ final case class DataTable[A] private (
       */
     private def sizeCards(size: SizeState)(using Frame): List[UI] =
         val pinned =
-            if columnWidthsSlot.isEmpty || resizeOn then Nil
+            if !widthsOn || resizeOn then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -3914,7 +3975,7 @@ final case class DataTable[A] private (
         // column is what a reader showing it again gets back, not a mistake.
         val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
         val unknown =
-            if columnWidthsSlot.isEmpty then Nil
+            if !widthsOn then Nil
             else size.widths.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
         val unknownCard =
             if unknown.isEmpty then Nil
@@ -3952,7 +4013,7 @@ final case class DataTable[A] private (
       * this header cannot take.
       */
     private def orderCards(order: OrderState)(using Frame): List[UI] =
-        if columnOrderSlot.isEmpty then Nil
+        if !orderOn then Nil
         else
             val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
             val nothing =
@@ -4884,7 +4945,7 @@ final case class DataTable[A] private (
         if rows > 1 then cell = cell.rowspan(rows)
         // Only once the mount has run: the id exists to be measured, and stamping it in the
         // static projection would put the same one on every table of a page.
-        if size.live && (columnWidthsSlot.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
+        if size.live && (widthsOn || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
         // Whether this boundary takes a grip follows the widths where they decide it: under `Expand` the table expands
         // only once every column is sized, which a drag may be what completes, so the class is a channel and the grip a
         // region over the widths alone. Under `Fit` the widths decide nothing here.
@@ -5024,7 +5085,7 @@ final case class DataTable[A] private (
                     // A level without a header row has nowhere to put a toggle, so it can
                     // never be collapsed: collapsing it would hide its rows with no way
                     // back.
-                    val collapsible = expandedGroupsSlot.isDefined && level.showHeaderFlag
+                    val collapsible = groupsOn && level.showHeaderFlag
                     val open        = !collapsible || openGroups.contains(groupPath)
 
                     val headerRow: List[RowSpec[A]] =
