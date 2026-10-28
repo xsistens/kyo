@@ -72,10 +72,19 @@ private[uic] enum SingleChoice[A]:
     end update
 
     /** Whether a reader's pick reaches anybody: a two-way binding, or a `report` to hand it to ([[ReactiveValue.heard]]). */
-    def heard[R](report: Maybe[R]): Boolean =
+    def heard[R](report: Maybe[R]): Boolean = ReactiveValue.heard(Present(bound), report)
+
+    /** A constant nobody hears, which the field draws read-only ([[ReactiveValue.fixed]]). */
+    def fixed[R](report: Maybe[R]): Boolean = ReactiveValue.fixed(Present(bound), report)
+
+    /** A signal nobody hears, which the field names on a card ([[ReactiveValue.deaf]]). */
+    def deaf[R](report: Maybe[R]): Boolean = ReactiveValue.deaf(Present(bound), report)
+
+    /** The binding itself, whichever shape of choice it is. */
+    private def bound: ReactiveValue[?] =
         this match
-            case Value(v)    => ReactiveValue.heard(Present(v), report)
-            case Optional(v) => ReactiveValue.heard(Present(v), report)
+            case Value(v)    => v
+            case Optional(v) => v
 
     /** Whether the binding can hold none, which is what a clear writes (or, one-way, reports). */
     def clearable: Boolean =
@@ -134,6 +143,12 @@ final private[uic] case class MultiChoice[A](v: ReactiveValue[Set[A]]):
     /** Whether a pick reaches anybody: a two-way binding, or `report`. */
     def heard[R](report: Maybe[R]): Boolean = ReactiveValue.heard(Present(v), report)
 
+    /** A constant nobody hears, which the field draws read-only ([[ReactiveValue.fixed]]). */
+    def fixed[R](report: Maybe[R]): Boolean = ReactiveValue.fixed(Present(v), report)
+
+    /** A signal nobody hears, which the field names on a card ([[ReactiveValue.deaf]]). */
+    def deaf[R](report: Maybe[R]): Boolean = ReactiveValue.deaf(Present(v), report)
+
     /** Replaces the chosen keys `ks` with `f(ks)`, written back as the options among `options` that carry them where the
       * binding is two-way, and answers the set now held (or, one-way, asked for) where the keys changed.
       */
@@ -174,6 +189,12 @@ private[uic] trait SetBinding[K]:
 
     /** Whether a step reaches anybody: a two-way binding, or `report`. */
     def heard[R](report: Maybe[R]): Boolean
+
+    /** A constant nobody hears, which the host draws read-only ([[ReactiveValue.fixed]]). */
+    def fixed[R](report: Maybe[R]): Boolean
+
+    /** A signal nobody hears, which the host names on a card ([[ReactiveValue.deaf]]). */
+    def deaf[R](report: Maybe[R]): Boolean
 end SetBinding
 
 private[uic] object SetBinding:
@@ -187,6 +208,8 @@ private[uic] object SetBinding:
             def signal(using Frame): Signal[Set[K]]                  = Reading.of(v).signal
             def read(f: Set[K] => UI.Action)(using Frame): UI.Action = current.map(f)
             def heard[R](report: Maybe[R]): Boolean                  = ReactiveValue.heard(Present(v), report)
+            def fixed[R](report: Maybe[R]): Boolean                  = ReactiveValue.fixed(Present(v), report)
+            def deaf[R](report: Maybe[R]): Boolean                   = ReactiveValue.deaf(Present(v), report)
             private def current(using Frame): Set[K] < Sync          =
                 v match
                     case ReactiveValue.Dyn(sig) => sig.current
@@ -222,4 +245,6 @@ private[uic] object SetBinding:
                     case Absent       => Absent
                 }
             def heard[R](other: Maybe[R]): Boolean = choice.heard(report.orElse(other))
+            def fixed[R](other: Maybe[R]): Boolean = choice.fixed(report.orElse(other))
+            def deaf[R](other: Maybe[R]): Boolean  = choice.deaf(report.orElse(other))
 end SetBinding

@@ -535,6 +535,34 @@ class MultiSelectTest extends UicTest:
         yield assert(opened && kept == "grace", s"the query is not the panel's to clear while the filter is off ($kept)")
     }
 
+    "a constant nobody hears is fixed: no panel to open, and no card" in {
+        val fixed = multi.selection(Set(fruit(0)))
+        for
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+            field <- elementWithClass(fixed.render, "p-multiselect")
+        yield
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
+        end for
+    }
+
+    "an unbound multiselect keeps the options the reader picks" in {
+        for
+            after <- publishedAfterReady(
+                multi.render,
+                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("ms") && declaresClick(e))),
+                until = t => elementsWithClass(t, "p-multiselect-label").map(_.exists(e => textOf(e).contains(fruit(0).name)))
+            )(
+                t => clickBubbling(t)(_.attrs.identifier.contains("ms")),
+                t =>
+                    clickBubbling(t)((e: UI.Ast.Element) =>
+                        e.attrs.cssClasses.contains("p-multiselect-option") && textOf(e).contains(fruit(0).name)
+                    )
+            )
+        yield assert(after.nonEmpty, "the field never showed the option the reader picked")
+    }
+
 end MultiSelectTest
 
 object MultiSelectTest:

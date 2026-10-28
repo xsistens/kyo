@@ -58,4 +58,23 @@ class RadioButtonTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant nobody hears is fixed: read-only, nothing to toggle, and no card" in {
+        for
+            b    <- radio(uic.RadioButton().checked(true).render)
+            card <- elementsWithClass(uic.RadioButton().checked(true).render, "p-uic-key-error")
+        yield
+            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
+            assert(b.onChange.isEmpty, "with no handler behind it")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound one keeps its own state, so a toggle shows in what it draws" in {
+        for
+            after <- publishedAfter(uic.RadioButton().onChange(_ => ()).render)(t =>
+                radio(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
+            )
+            shown <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-radiobutton-checked"))
+        yield assert(shown.nonEmpty, "what it draws stayed off after the reader turned it on")
+    }
+
 end RadioButtonTest

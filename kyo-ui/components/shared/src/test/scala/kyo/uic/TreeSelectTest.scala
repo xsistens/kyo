@@ -238,4 +238,29 @@ class TreeSelectTest extends UicTest:
         end for
     }
 
+    "a constant nobody hears is fixed: no panel to open, and no card" in {
+        val fixed = treeSelect.selection(Set("src"))
+        for
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+            field <- elementWithClass(fixed.render, "p-treeselect")
+        yield
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
+        end for
+    }
+
+    "an unbound tree select keeps the node the reader picks" in {
+        for
+            after <- publishedAfterReady(
+                treeSelect.render,
+                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("ts") && declaresClick(e))),
+                until = t => elementsWithClass(t, "p-treeselect-label").map(_.exists(e => textOf(e) == "build.sbt"))
+            )(
+                t => clickBubbling(t)(_.attrs.identifier.contains("ts")),
+                t => clickBubbling(t)(saying("p-tree-node-label", "build.sbt"))
+            )
+        yield assert(after.nonEmpty, "the field never showed the node the reader picked")
+    }
+
 end TreeSelectTest

@@ -61,9 +61,46 @@ abstract class UicTest extends kyo.test.Test[Any]:
         Frame,
         kyo.test.AssertScope
     ): Boolean < Async =
+        publishedAfter(ui, reads*)(act).map(_.nonEmpty)
+
+    /** [[repaintsAfter]], answering with what the field published last once `act` made it publish again, so a test can
+      * read what it now shows.
+      */
+    private[uic] def publishedAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Maybe[UI] < Async =
+        publishedAfterEach(ui, reads*)(act)
+
+    /** [[publishedAfter]] for several gestures in a row (open a panel, then pick in it): each acts on what the field
+      * published last and waits for it to publish again, and the answer is what it published after the last one, or
+      * `Absent` as soon as one gesture made it publish nothing.
+      */
+    private[uic] def publishedAfterEach(ui: UI, reads: Signal.SignalRef[?]*)(acts: (UI => Any < Async)*)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Maybe[UI] < Async =
+        publishedAfterReady(ui, _ => true, reads = reads)(acts*)
+
+    /** [[publishedAfterEach]] that first waits for what the field published last to satisfy `ready`: a field built of
+      * nested mounts publishes the outer one before the inner one has wired what a gesture reaches. A gesture sees every
+      * tree published so far, newest first, since a panel published by a mount of its own is not inside the tree its
+      * field published, and it is tried again until it finds what it acts on, since that panel may not be published yet.
+      * After the last gesture the answer waits for `until` to hold over everything published since that gesture (a field
+      * and the panel it opens publish as separate regions, in either order), and is that, newest first, or `Absent` if it
+      * never does.
+      */
+    private[uic] def publishedAfterReady(
+        ui: UI,
+        ready: UI => Boolean < Sync,
+        until: UI => Boolean < Sync = _ => true,
+        reads: Seq[Signal.SignalRef[?]] = Nil
+    )(acts: (UI => Any < Async)*)(using Frame, kyo.test.AssertScope): Maybe[UI] < Async =
         val within = 5.seconds
         Scope.run {
-            val published = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
+            val published                = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
+            def all: UI < Sync           = Sync.defer(published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*))
+            def since(n: Int): UI < Sync = Sync.defer(published.get).map(now => UI.fragment(now.take(now.size - n)*))
             UI.Commands.init(_ => Kyo.unit).map { cmds =>
                 kyo.internal.UICommands.commands.let(Present(cmds)) {
                     for
@@ -85,17 +122,31 @@ abstract class UicTest extends kyo.test.Test[Any]:
                         _      <- settles(Sync.defer(published.get.nonEmpty), within)
                         parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
                         _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
-                        before <- Sync.defer(published.get)
-                        _      <- act(before.headOption.getOrElse(ui))
-                        again  <- settles(Sync.defer(published.get.size > before.size), within)
-                    yield again
+                        set <- settles(Sync.defer(published.get.headOption).map(_.fold(Kyo.lift(false))(ready)), within)
+                        _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
+                        last <- Kyo.foldLeft(acts)(0) { (_, act) =>
+                            for
+                                before <- Sync.defer(published.get.size)
+                                done   <- settles(
+                                    all.map(t => Abort.run[AssertionError](Abort.catching[AssertionError](act(t))).map(_.isSuccess)),
+                                    within
+                                )
+                                _ = if !done then throw new AssertionError("a gesture never found what it acts on")
+                            yield before
+                        }
+                        holds <- settles(
+                            Sync.defer(published.get.size > last).map(grew => if grew then since(last).map(until) else Kyo.lift(false)),
+                            within
+                        )
+                        answer <- since(last)
+                    yield if holds then Present(answer) else Absent
                 }
             }
         }
-    end repaintsAfter
+    end publishedAfterReady
 
     /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
-    private def settles(cond: => Boolean < Sync, within: Duration)(using Frame): Boolean < Async =
+    private def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
         Abort.run[Unit](Retry[Unit](Schedule.fixed(10.millis).maxDuration(within))(
             cond.map(ok => if ok then Kyo.unit else Abort.fail(()))
         )).map(_.isSuccess)

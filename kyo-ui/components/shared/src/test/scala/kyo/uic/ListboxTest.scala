@@ -117,4 +117,26 @@ class ListboxTest extends UicTest:
         yield assert(s == (Set("b"), Set("b")), s"reported, held: $s")
     }
 
+    "a constant nobody hears is fixed: its options click nothing, and no card" in {
+        val fixed = fruit.selectionMode(uic.SelectionMode.Multiple).selection(Set("a"))
+        for
+            rows <- elementsWithClass(fixed.render, "p-listbox-option")
+            card <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "a fixed list picks nothing")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound list keeps the options the reader picks" in {
+        val free = fruit.selectionMode(uic.SelectionMode.Multiple).metaKeySelection(false)
+        for
+            after <- publishedAfterReady(
+                free.render,
+                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-listbox-option-selected").map(_.exists(e => textOf(e) == "Banana"))
+            )(t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "Banana"))
+        yield assert(after.nonEmpty, "the list never showed the option the reader picked")
+    }
+
 end ListboxTest
