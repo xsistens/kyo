@@ -27,11 +27,11 @@ end PopupAccessibleRole
   * `@primeuix` dialog CSS applies verbatim. The dialog keeps its proven fixed
   * backdrop approach: no floating-overlay primitive is involved.
   *
-  * Visibility binds two-way to a `SignalRef[Boolean]`: writes to the ref open and
-  * close the dialog, Escape and (optionally) a backdrop click write `false` back.
-  * Every internal close path (header close button, Escape, backdrop click) also
-  * fires the `onClose` callback after the ref write. The hard parts are delegated
-  * to kyo-ui primitives rather than rebuilt: visibility is a `when(openRef)`
+  * Visibility is the dialog's own unless [[open]] binds it, and an unbound
+  * dialog starts open. Every internal close path (header close button, Escape,
+  * a backdrop click) asks for false and reports it to [[onOpenChange]]. The hard
+  * parts are delegated to kyo-ui primitives rather than rebuilt: visibility is a
+  * `when(open)`
   * reactive boundary, and keyboard containment uses the element-level `focusTrap`
   * the kyo renderer already implements.
   *
@@ -52,7 +52,8 @@ end PopupAccessibleRole
   * region, root first; the box must therefore stand down).
   */
 final case class Dialog private (
-    openRef: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     headerText: Maybe[TextValue] = Absent,
     headerContent: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
@@ -69,14 +70,25 @@ final case class Dialog private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     accessibleDescriptionRefV: Maybe[String] = Absent,
     accessibleRoleV: PopupAccessibleRole = PopupAccessibleRole.Dialog,
-    onCloseEff: Maybe[UI.Action] = Absent,
     boxClassesV: List[String] = Nil,
+    quietFlag: Boolean = false,
     kids: List[UI] = Nil
 ) extends Node, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Dialog
 
-    /** Binds visibility two-way to `ref`: the only way to open/close the dialog. */
-    def open(ref: SignalRef[Boolean]): Dialog = copy(openRef = Present(ref))
+    /** Binds visibility. A `SignalRef` binds two way: writes open and close the dialog, and every close the reader
+      * asks for (the close button, Escape, a backdrop click) writes false, then [[onOpenChange]] hears it. A plain
+      * `Signal` binds one way: the dialog follows it and only reports a close. A constant nobody hears is fixed: an open
+      * dialog stays, its close button reachable and inert. Unbound, the dialog keeps the state itself and starts open,
+      * the way an HTML `dialog` with `open` does, so it shows until the reader closes it. A signal nothing hears is
+      * reported in a card.
+      */
+    def open(v: Boolean | Signal[Boolean]): Dialog = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
+      * External writes fire nothing.
+      */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Dialog = copy(onOpenF = Present(Callback.of(f)))
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
@@ -145,17 +157,15 @@ final case class Dialog private (
     /** ARIA role of the dialog box (default [[PopupAccessibleRole.Dialog]]). */
     def accessibleRole(v: PopupAccessibleRole): Dialog = copy(accessibleRoleV = v)
 
-    /** Runs `action` whenever the dialog closes itself (close button, Escape,
-      * backdrop click), after the `open` ref is written to `false`. External ref
-      * writes do NOT fire it.
-      */
-    def onClose(action: => UI.Action)(using Frame): Dialog =
-        copy(onCloseEff = Present(Callback(action)))
-
     /** Package-internal class hook: hosts (ConfirmDialog) stamp Prime's skin
       * class (`p-confirmdialog`) onto the dialog box element.
       */
     private[uic] def boxClass(cls: String): Dialog = copy(boxClassesV = boxClassesV :+ cls)
+
+    /** Package-internal: a host that reports its own binding mistakes (ConfirmDialog, whose choices are heard apart)
+      * keeps the dialog from reporting the same binding a second time.
+      */
+    private[uic] def quiet: Dialog = copy(quietFlag = true)
 
     /** Adds content children. */
     def apply(cs: UI*): Dialog = copy(kids = kids ++ cs)
@@ -181,14 +191,39 @@ final case class Dialog private (
         case _                => Icons.infoCircle
 
     private[uic] def render(using Frame): UI =
-        openRef match
-            case Absent       => UI.empty
-            case Present(ref) =>
-                // Every internal close path funnels through here: ref write, then callback.
-                val close: UI.Action =
-                    onCloseEff match
-                        case Present(e) => ref.set(false).map(_ => e)
-                        case Absent     => ref.set(false)
+        openSlot match
+            // Unbound, the dialog keeps its visibility itself and starts open. Before the mount runs it draws from a
+            // signal, so the static page does not call its close button fixed.
+            case Absent =>
+                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
+                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
+                )
+            // A signal nobody hears: every close the reader asks for is painted away again.
+            case _ if !quietFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "Dialog",
+                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
+                            "onOpenChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    drawn
+                )
+            case _ => drawn
+    end render
+
+    private def drawn(using Frame): UI =
+        openSlot match
+            case Absent        => UI.empty
+            case Present(slot) =>
+                // A constant nobody hears is fixed: the dialog stays, and no close path is wired.
+                val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+                // Every internal close path funnels through here: a two-way binding is written, then the close reported.
+                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                // Shown while the binding says so: a constant needs no region, a signal is one boundary.
+                def shown(ui: => UI): UI = slot.const match
+                    case Present(v) => if v then ui else UI.empty
+                    case Absent     => when(slot.signal)(ui)
 
                 val titleChildren: List[UI] = headerContent match
                     case Present(c) => List(c)
@@ -211,7 +246,7 @@ final case class Dialog private (
                                 toChild(GlyphSvg(severityGlyph(s), "p-icon"))
                             )
                         }
-                        val closeBtn: UI = button
+                        val closeShell = button
                             .cssClass("p-dialog-close-button")
                             .cssClass("p-button")
                             .cssClass("p-component")
@@ -221,7 +256,10 @@ final case class Dialog private (
                             .cssClass("p-button-text")
                             .jsProp("type", "button")
                             .aria("label", "Close")
-                            .onClick(close)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        val closeBtn: UI =
+                            (if fixed then closeShell.aria("disabled", "true") else closeShell.onClick(close)) (
+                                toChild(GlyphSvg(Icons.times, "p-icon"))
+                            )
                         val actions: UI = div.cssClass("p-dialog-header-actions")(toChild(closeBtn))
                         var hdr         = div.cssClass("p-dialog-header")
                         drag.foreach { (down, move) =>
@@ -269,11 +307,13 @@ final case class Dialog private (
                         case Absent                      => ()
                     end match
                     accessibleDescriptionRefV.foreach(n => box = box.aria("describedby", n))
-                    box = box.onKeyDown { e =>
-                        e.key match
-                            case Keyboard.Escape => close
-                            case _               => ()
-                    }
+                    if !fixed then
+                        box = box.onKeyDown { e =>
+                            e.key match
+                                case Keyboard.Escape => close
+                                case _               => ()
+                        }
+                    end if
                     var sty = Style.empty
                     pos.foreach((x, y) => sty = sty.translate(x.px, y.px))
                     size.foreach((w, h) => sty = sty.width(w.px).height(h.px))
@@ -293,11 +333,11 @@ final case class Dialog private (
                         .cssClass("p-overlay-mask")
                         .enterTransition("p-uic-enter-fade")
                         .leaveTransition("p-overlay-mask-leave-active")
-                    if closeOnBackdrop then base.onClickSelf(close)(boxUI) else base(boxUI)
+                    if closeOnBackdrop && !fixed then base.onClickSelf(close)(boxUI) else base(boxUI)
                 end maskAround
 
                 if !draggableFlag && !resizableFlag then
-                    when(ref)(maskAround(buildBox(Absent, animate = true, Absent, Absent, headerBlock(Absent) ++ contentUI ++ footerUI)))
+                    shown(maskAround(buildBox(Absent, animate = true, Absent, Absent, headerBlock(Absent) ++ contentUI ++ footerUI)))
                 else
                     // Draggable/resizable (pointer-drag plus a self-measure on grab).
                     // The box position/size live in refs owned by this per-open mount; the
@@ -306,7 +346,7 @@ final case class Dialog private (
                     // reused by the positional diff, so capture never detaches.
                     val staticPlaceholder =
                         maskAround(buildBox(Absent, animate = true, Absent, Absent, headerBlock(Absent) ++ contentUI ++ footerUI))
-                    when(ref)(
+                    shown(
                         UI.mounted {
                             for
                                 cmds   <- UI.commands
@@ -362,6 +402,8 @@ final case class Dialog private (
                         }.placeholder(staticPlaceholder)
                     )
                 end if
+        end match
+    end drawn
 end Dialog
 
 object Dialog:

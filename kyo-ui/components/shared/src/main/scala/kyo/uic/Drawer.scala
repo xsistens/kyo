@@ -42,10 +42,11 @@ end DrawerPosition
   * height: 100% }`, ...).
   *
   * [[Dialog]]'s edge-docked sibling, NOT an [[Overlay]] consumer: visibility
-  * is a `when(openRef)` reactive boundary over a full-viewport mask, exactly
-  * the proven Dialog machinery. Escape and (with `dismissable`, default true)
-  * a mask click write `false` back; every internal close path (close button,
-  * Escape, mask click) also fires `onClose` after the ref write. Focus story
+  * is a `when(open)` reactive boundary over a full-viewport mask, exactly
+  * the proven Dialog machinery, and an unbound drawer keeps it itself and
+  * starts open. Every internal close path (close button, Escape and, with
+  * `dismissable`, default true, a mask click) asks for false and reports it to
+  * [[onOpenChange]]. Focus story
   * like Dialog (kyo's declarative `data-kyo-focus-*` contract): the panel
   * carries `focusAuto` (opening seeds focus, so Escape dismisses without any
   * prior click) and `focusRestore` (closing returns focus to the opener),
@@ -67,7 +68,8 @@ end DrawerPosition
   * deferred too: the mask always renders.
   */
 final case class Drawer private (
-    openRef: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     positionV: DrawerPosition = DrawerPosition.Left,
     headerText: Maybe[TextValue] = Absent,
     headerContent: Maybe[UI] = Absent,
@@ -78,13 +80,22 @@ final case class Drawer private (
     preventFocusRestoreFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
-    onCloseEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasAccessibleNameRef:
     type Self = Drawer
 
-    /** Binds visibility two-way to `ref`, the only way to open/close the drawer. */
-    def open(ref: SignalRef[Boolean]): Drawer = copy(openRef = Present(ref))
+    /** Binds visibility. A `SignalRef` binds two way: writes open and close the drawer, and every close the reader
+      * asks for (the close button, Escape, a mask click) writes false, then [[onOpenChange]] hears it. A plain `Signal` binds one way: the drawer
+      * follows it and only reports a close. A constant nobody hears is fixed: an open drawer stays, its close button
+      * reachable and inert. Unbound, the drawer keeps the state itself and starts open, so it shows until the reader
+      * closes it. A signal nothing hears is reported in a card.
+      */
+    def open(v: Boolean | Signal[Boolean]): Drawer = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
+      * External writes fire nothing.
+      */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Drawer = copy(onOpenF = Present(Callback.of(f)))
 
     /** Which edge the panel docks to (default [[DrawerPosition.Left]], as in Prime). */
     def position(v: DrawerPosition): Drawer = copy(positionV = v)
@@ -123,25 +134,43 @@ final case class Drawer private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Drawer = copy(accessibleNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Drawer = copy(accessibleNameRefV = v)
 
-    /** Runs `action` whenever the drawer closes itself (close button, Escape,
-      * mask click), after the `open` ref is written to `false`. External ref
-      * writes do NOT fire it.
-      */
-    def onClose(action: => UI.Action)(using Frame): Drawer =
-        copy(onCloseEff = Present(Callback(action)))
-
     /** Adds content children. */
     def apply(cs: UI*): Drawer = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        openRef match
-            case Absent       => UI.empty
-            case Present(ref) =>
-                // Every internal close path funnels through here: ref write, then callback.
-                val close: UI.Action =
-                    onCloseEff match
-                        case Present(e) => ref.set(false).map(_ => e)
-                        case Absent     => ref.set(false)
+        openSlot match
+            // Unbound, the drawer keeps its visibility itself and starts open. Before the mount runs it draws from a
+            // signal, so the static page does not call its close button fixed.
+            case Absent =>
+                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
+                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
+                )
+            // A signal nobody hears: every close the reader asks for is painted away again.
+            case _ if ReactiveValue.deaf(openSlot, onOpenF) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "Drawer",
+                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
+                            "onOpenChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    drawn
+                )
+            case _ => drawn
+    end render
+
+    private def drawn(using Frame): UI =
+        openSlot match
+            case Absent        => UI.empty
+            case Present(slot) =>
+                // A constant nobody hears is fixed: the drawer stays, and no close path is wired.
+                val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+                // Every internal close path funnels through here: a two-way binding is written, then the close reported.
+                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                // Shown while the binding says so: a constant needs no region, a signal is one boundary.
+                def shown(ui: => UI): UI = slot.const match
+                    case Present(v) => if v then ui else UI.empty
+                    case Absent     => when(slot.signal)(ui)
 
                 val titleChildren: List[UI] = headerContent match
                     case Present(c) => List(c)
@@ -153,19 +182,18 @@ final case class Drawer private (
 
                 val closeBtn: List[UI] =
                     if showCloseIconFlag then
-                        List(
-                            button
-                                .cssClass("p-drawer-close-button")
-                                .cssClass("p-button")
-                                .cssClass("p-component")
-                                .cssClass("p-button-icon-only")
-                                .cssClass("p-button-secondary")
-                                .cssClass("p-button-rounded")
-                                .cssClass("p-button-text")
-                                .jsProp("type", "button")
-                                .aria("label", "Close")
-                                .onClick(close)(toChild(GlyphSvg(Icons.times, "p-icon")))
-                        )
+                        val shell = button
+                            .cssClass("p-drawer-close-button")
+                            .cssClass("p-button")
+                            .cssClass("p-component")
+                            .cssClass("p-button-icon-only")
+                            .cssClass("p-button-secondary")
+                            .cssClass("p-button-rounded")
+                            .cssClass("p-button-text")
+                            .jsProp("type", "button")
+                            .aria("label", "Close")
+                        val pressable = if fixed then shell.aria("disabled", "true") else shell.onClick(close)
+                        List(pressable(toChild(GlyphSvg(Icons.times, "p-icon"))))
                     else Nil
 
                 // Prime renders the header row even without a title, since it docks the
@@ -201,11 +229,13 @@ final case class Drawer private (
                     case Absent                      => ()
                 end match
                 accessibleNameRefV.foreach(n => box = box.aria("labelledby", n))
-                box = box.onKeyDown { e =>
-                    e.key match
-                        case Keyboard.Escape => close
-                        case _               => ()
-                }
+                if !fixed then
+                    box = box.onKeyDown { e =>
+                        e.key match
+                            case Keyboard.Escape => close
+                            case _               => ()
+                    }
+                end if
                 val boxUI = box((headerUI ++ contentUI ++ footerUI).map(toChild)*)
 
                 // Enter/leave: the mask fades in via a transient from-state
@@ -221,10 +251,12 @@ final case class Drawer private (
                         .cssClass(s"p-drawer-${positionV.token}")
                         .enterTransition("p-uic-enter-fade")
                         .leaveTransition("p-overlay-mask-leave-active")
-                    if dismissableFlag then base.onClickSelf(close)(boxUI) else base(boxUI)
+                    if dismissableFlag && !fixed then base.onClickSelf(close)(boxUI) else base(boxUI)
                 end mask
 
-                when(ref)(mask)
+                shown(mask)
+        end match
+    end drawn
 end Drawer
 
 object Drawer:

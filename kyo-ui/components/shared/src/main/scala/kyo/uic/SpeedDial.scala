@@ -67,7 +67,8 @@ final case class SpeedDial private (
     itemsV: List[MenuItem] = Nil,
     entriesV: List[MenuItemLiveEntry] = Nil,
     directionV: SpeedDialDirection = SpeedDialDirection.Up,
-    openRefV: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     disabledFlag: Boolean = false,
     accNameV: Maybe[String] = Absent
 ) extends Node:
@@ -81,10 +82,15 @@ final case class SpeedDial private (
     /** Fan direction (default `Up`). */
     def direction(v: SpeedDialDirection): SpeedDial = copy(directionV = v)
 
-    /** Binds the fan visibility two-way to `ref` (optional; self-managed
-      * otherwise).
+    /** Binds the fan visibility. A `SignalRef` binds two way: the toggle, the arrow into the fan, an action, Escape and
+      * Tab write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the fan follows it and
+      * only reports. A constant nobody hears is fixed: the fan stays as it is and the toggle, still reachable, changes
+      * nothing. Unbound, the dial keeps the state itself, starting closed. A signal nothing hears is reported in a card.
       */
-    def open(ref: SignalRef[Boolean]): SpeedDial = copy(openRefV = Present(ref))
+    def open(v: Boolean | Signal[Boolean]): SpeedDial = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the fan visibility the reader asks for, after a two-way [[open]] is written. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): SpeedDial = copy(onOpenF = Present(Callback.of(f)))
 
     /** Disables the toggle (and thereby the fan). */
     def disabled(v: Boolean): SpeedDial = copy(disabledFlag = v)
@@ -93,23 +99,42 @@ final case class SpeedDial private (
     def accessibleName(v: String): SpeedDial = copy(accNameV = Present(v))
 
     private[uic] def render(using Frame): UI =
-        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(false, Absent, "", _ => ()))
-        UI.mounted {
+        val shownAt  = openSlot.flatMap(_.const).getOrElse(false)
+        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(shownAt, Absent, "", _ => ()))
+        val dial     = UI.mounted {
             for
                 cmds <- UI.commands
                 base <- cmds.freshId
-                open <- openRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(false)
-            yield wired(open, base, id => cmds.focusId(id))
+                // Unbound, the dial keeps the fan state itself, starting closed.
+                open <- openSlot match
+                    case Present(slot) => Kyo.lift(slot)
+                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
+            yield copy(openSlot = Present(open)).wiredOver(open, base, id => cmds.focusId(id))
         }.placeholder(stat)
+        // A signal nobody hears: every toggle the reader makes is painted away again.
+        if !ReactiveValue.deaf(openSlot, onOpenF) then dial
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "SpeedDial",
+                    "the fan is bound open one way and nothing hears a toggle, so the reader cannot change it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                dial
+            )
+        end if
     end render
 
-    /** The subscription tree the mount publishes (golden-test seam). */
+    /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
+        copy(openSlot = Present(ReactiveValue[Boolean](open))).wiredOver(ReactiveValue[Boolean](open), base, focus)
+
+    /** The subscription tree over the fan state however it is bound. */
+    private def wiredOver(open: ReactiveValue[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
         // ONE region (see [[Reading]]).
-        MenuRender.readItems(entriesV).and(Reading.Live(open)).render((items, o) =>
+        MenuRender.readItems(entriesV).and(Reading.of(open)).render((items, o) =>
             copy(itemsV = items).body(o, Present(open), base, focus)
         )
 
@@ -119,19 +144,16 @@ final case class SpeedDial private (
       */
     private def actions: List[MenuItem] = itemsV.filterNot(_.separatorFlag)
 
-    private def body(isOpen: Boolean, open: Maybe[SignalRef[Boolean]], base: String, focus: String => UI.Action)(using
+    private def body(isOpen: Boolean, open: Maybe[ReactiveValue[Boolean]], base: String, focus: String => UI.Action)(using
         Frame
     ): UI =
-        // Explicitly typed effect: an untyped match would infer `Any` and land the
-        // effect inert in the by-name handler.
-        val toggle: UI.Action =
-            open match
-                case Present(r) => r.getAndUpdate(!_)
-                case Absent     => ()
-        def close: UI.Action =
-            open match
-                case Present(r) => r.set(false)
-                case Absent     => ()
+        // The placeholder has no state to change (`open` Absent): every write below is then a no-op.
+        val live               = open.isDefined
+        val toggle: UI.Action  = if live then ReactiveValue.update(openSlot, !_, onOpenF) else ()
+        def close: UI.Action   = if live then ReactiveValue.change(openSlot, false, onOpenF) else ()
+        def openFan: UI.Action = if live then ReactiveValue.change(openSlot, true, onOpenF) else ()
+        // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
+        val fixed = ReactiveValue.fixed(openSlot, onOpenF)
 
         val acts = actions
         // The positions the keyboard may land on: a disabled action is natively disabled, so it
@@ -150,10 +172,11 @@ final case class SpeedDial private (
             .ariaRaw("haspopup", "menu")
             .ariaRaw("expanded", isOpen.toString)
             .disabled(disabledFlag)
+        if fixed then toggleBtn = toggleBtn.ariaDisabled(true)
         // The ids come from the mount, so the placeholder render has none to point at and says
         // nothing rather than naming an element called `-list`.
         if base.nonEmpty then toggleBtn = toggleBtn.ariaRaw("controls", listId)
-        if !disabledFlag then
+        if !disabledFlag && !fixed then
             toggleBtn = toggleBtn.onClick(toggle).onKeyDownRaw { e =>
                 // Enter and Space are the browser's, since this IS a `<button>` and its click
                 // already toggles. The arrow that points into the fan opens it, and the seed
@@ -162,10 +185,7 @@ final case class SpeedDial private (
                 val eff: UI.Action =
                     if e.key == directionV.opening && navigable.nonEmpty then
                         if isOpen then focus(itemId(first))
-                        else
-                            open match
-                                case Present(r) => r.set(true)
-                                case Absent     => ()
+                        else openFan
                     else if (e.key == Keyboard.Escape || e.key == Keyboard.Tab) && isOpen then close
                     else ()
                 eff
@@ -180,15 +200,14 @@ final case class SpeedDial private (
             else
                 acts.zipWithIndex.map { (it, i) =>
                     def activate: UI.Action =
-                        open match
-                            case Present(r) =>
-                                for
-                                    _ <- it.actionV match
-                                        case Present(eff) => eff
-                                        case Absent       => (): UI.Action
-                                    _ <- r.set(false)
-                                yield ()
-                            case Absent => ()
+                        if !live then ()
+                        else
+                            for
+                                _ <- it.actionV match
+                                    case Present(eff) => eff
+                                    case Absent       => (): UI.Action
+                                _ <- close
+                            yield ()
                     var btn = Button()
                         .rounded(true)
                         .severity(Severity.Secondary)

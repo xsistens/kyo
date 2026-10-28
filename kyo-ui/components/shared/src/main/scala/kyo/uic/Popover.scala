@@ -9,15 +9,15 @@ import kyo.UI.*
   * `.p-popover:before/:after` border triangles), so the extracted `@primeuix`
   * popover CSS applies verbatim.
   *
-  * Built ON the [[Overlay]] primitive: visibility binds two-way to `open`, an
-  * outside click or Escape closes (`dismissable(false)` turns both off), and the
+  * Built ON the [[Overlay]] primitive: visibility is the popover's own unless
+  * [[open]] binds it, an outside click or Escape closes (`dismissable(false)` turns both off), and the
   * panel seeds focus on open / restores it on close (`seedFocus(false)` opts
   * out). `trigger(ui)` renders the toggling trigger and the panel together
   * inside the anchor wrapper (`div.p-uic-overlay-anchor.p-uic-popover-anchor`);
   * while open, a click on the trigger area lands on the Overlay backdrop and
   * closes (Prime's toggle semantics). Without a trigger the popover renders just
   * the floating panel: place it inside your own `position: relative` anchor
-  * (stamp `p-uic-overlay-anchor`) and open the ref yourself.
+  * (stamp `p-uic-overlay-anchor`) and bind [[open]] yourself.
   *
   * The panel opens below the anchor by default; `anchor(TopStart|TopEnd)` opens
   * it above and stamps Prime's `.p-popover-flipped` (the arrow moves to the
@@ -32,7 +32,8 @@ import kyo.UI.*
   * expectation inside popover content that must escape it.
   */
 final case class Popover private (
-    openRef: SignalRef[Boolean],
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     triggerV: Maybe[UI] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     dismissableV: Boolean = true,
@@ -43,8 +44,19 @@ final case class Popover private (
 ) extends Node:
     type Self = Popover
 
+    /** Binds visibility. A `SignalRef` binds two way: the trigger, Escape and an outside click write it, then
+      * [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the popover follows it and only reports. A
+      * constant nobody hears is fixed: the panel stays as it is and neither the trigger nor a dismissal changes it.
+      * Unbound, the popover keeps the state itself: closed with a [[trigger]] to open it, open without one, so it shows
+      * until the reader dismisses it. A signal nothing hears is reported in a card.
+      */
+    def open(v: Boolean | Signal[Boolean]): Popover = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the visibility the reader asks for, after a two-way [[open]] is written. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = copy(onOpenF = Present(Callback.of(f)))
+
     /** The toggling trigger: renders `ui` inside the anchor wrapper with a click
-      * handler that toggles the bound ref (open ⇄ closed).
+      * handler that asks for the other state (open ⇄ closed).
       */
     def trigger(ui: UI): Popover = copy(triggerV = Present(ui))
 
@@ -78,8 +90,22 @@ final case class Popover private (
     def apply(cs: UI*): Popover = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
+        openSlot match
+            // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise.
+            case Absent =>
+                val start = triggerV.isEmpty
+                // Before the mount runs it draws from a signal standing in for that state, which is nobody's mistake.
+                ReactiveValue.owned(start)(own => copy(openSlot = Present(own)).drawn(quiet = false))(
+                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(start)))).drawn(quiet = true)
+                )
+            case _ => drawn(quiet = false)
+    end render
+
+    private def drawn(quiet: Boolean)(using Frame): UI =
         val flipped = anchorV == OverlayAnchor.TopStart || anchorV == OverlayAnchor.TopEnd
-        var overlay = Overlay(openRef)
+        val bound   = openSlot.fold[Boolean | Signal[Boolean]](false)(_.bound)
+        var overlay = Overlay(bound)
+            .reportedAs("Popover")
             .anchor(anchorV)
             .portal(portalV)
             .scroll(scrollV)
@@ -89,28 +115,31 @@ final case class Popover private (
             .seedFocus(seedFocusV)
             .panelClass("p-popover")
             .panelClass("p-component")
+        onOpenF.foreach(f => overlay = overlay.onOpenChange(f))
+        if quiet then overlay = overlay.quiet
         if flipped then overlay = overlay.panelClass("p-popover-flipped")
         val panel: UI =
             overlay(div.cssClass("p-popover-content")(kids.map(toChild)*)).render
-
         triggerV match
             case Present(t) =>
+                // A constant nobody hears is fixed: the trigger stays, and toggles nothing.
+                val shell = span.cssClass("p-uic-popover-trigger")
+                val press =
+                    if ReactiveValue.fixed(openSlot, onOpenF) then shell
+                    else shell.onClick(ReactiveValue.update(openSlot, !_, onOpenF))
                 div.cssClass("p-uic-overlay-anchor").cssClass("p-uic-popover-anchor")(
-                    toChild(
-                        span
-                            .cssClass("p-uic-popover-trigger")
-                            .onClick(openRef.getAndUpdate(!_))(toChild(t))
-                    ),
+                    toChild(press(toChild(t))),
                     toChild(panel)
                 )
             case Absent => panel
         end match
-    end render
+    end drawn
 end Popover
 
 object Popover:
-    /** A popover whose visibility binds two-way to `open`: writes to the ref open
-      * and close the panel; Escape and outside clicks write `false` back.
-      */
-    def apply(open: SignalRef[Boolean]): Popover = new Popover(open)
+    /** A popover over the visibility `open` (see [[Popover.open]]). */
+    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(openSlot = Present(ReactiveValue(open)))
+
+    /** An unbound popover: it keeps its visibility itself (see [[Popover.open]]). */
+    def apply(): Popover = new Popover()
 end Popover

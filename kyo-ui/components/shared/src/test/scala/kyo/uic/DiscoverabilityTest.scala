@@ -387,8 +387,8 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.RadioButton("a").wrappingType(uic.WrappingType.Normal)""")
     }
 
-    "Dialog opens only via SignalRef (no plain Boolean)" in {
-        typeCheckFailure(preamble + """def x = uic.Dialog().open(true)""")
+    "Dialog binds its visibility to a Boolean, a Signal or a ref" in {
+        typeCheck(preamble + """def x(s: Signal[Boolean])(using Frame): uic.Dialog = uic.Dialog().open(s).onOpenChange(_ => ())""")
     }
 
     "chained setters keep the concrete type" in {
@@ -493,11 +493,11 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Tooltip("hint").autoHide(false)""")
     }
 
-    "Popover opens only via SignalRef; dismissable/seedFocus/anchor; no JS-only props" in {
+    "Popover binds its visibility like Overlay, or keeps it; dismissable/seedFocus/anchor; no JS-only props" in {
         typeCheck(
             preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Popover = uic.Popover(r).trigger(span("open")).dismissable(false).seedFocus(false).anchor(uic.OverlayAnchor.TopEnd)"""
         )
-        typeCheckFailure(preamble + """def x = uic.Popover(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.Popover = uic.Popover().trigger(span("t")).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Boolean]) = uic.Popover(r).showCloseIcon(true)""")
     }
 
@@ -571,11 +571,15 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Message().hideCloseButton(true)""")
     }
 
-    "onClose belongs to the surfaces that own their visibility; a notify-only dismissal is onDismissed" in {
-        // Dialog/Drawer/Toast hold the ref, write false into it, then run the effect.
-        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Dialog = uic.Dialog().open(r).onClose(())""")
-        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Drawer = uic.Drawer().open(r).onClose(())""")
-        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Toast = uic.Toast().open(r).onClose(())""")
+    "a surface that owns its visibility reports it on one channel; a notify-only dismissal is onDismissed" in {
+        // Dialog/Drawer/Toast write a two-way binding first, then report the visibility asked for. An open and a close
+        // are never both, so there is no onClose beside it.
+        typeCheck(preamble + """def x(using Frame): uic.Dialog = uic.Dialog().open(true).onOpenChange(_ => ())""")
+        typeCheck(preamble + """def x(using Frame): uic.Drawer = uic.Drawer().open(true).onOpenChange(_ => ())""")
+        typeCheck(preamble + """def x(using Frame): uic.Toast = uic.Toast().open(true).onOpenChange(_ => ())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Dialog().onClose(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Drawer().onClose(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Toast().onClose(())""")
         // Message owns no ref: it notifies and nothing disappears, so it carries the
         // past-tense name instead and `onClose` is not on it at all.
         typeCheck(preamble + """def x(using Frame): uic.Message = uic.Message().closable(true).onDismissed(())""")
@@ -627,11 +631,11 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Toolbar().content(span("a"))""")
     }
 
-    "Toast opens only via SignalRef[Boolean]; positions via OverlayPosition (ToastPlacement retired)" in {
+    "Toast binds its visibility like Dialog; positions via OverlayPosition (ToastPlacement retired)" in {
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean]) = uic.Toast().open(o).position(uic.OverlayPosition.BottomRight).severity(uic.Severity.Success).summary("s").detail("d").closable(true).duration(2000)"""
         )
-        typeCheckFailure(preamble + """def x = uic.Toast().open(true)""")
+        typeCheck(preamble + """def x: uic.Toast = uic.Toast().open(true)""")
         typeCheckFailure(preamble + """def x = uic.ToastPlacement.TopEnd""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Toast().open(o).placement(uic.OverlayPosition.TopRight)""")
     }
@@ -1533,12 +1537,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
 
     // ---- Overlay primitive + Select floating panel ----
 
-    "Overlay opens only via SignalRef; chained setters keep the concrete type" in {
+    "Overlay binds its visibility to a Boolean, a Signal or a ref; chained setters keep the concrete type" in {
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.Overlay = uic.Overlay(o).anchor(uic.OverlayAnchor.TopEnd).matchWidth(false).maxHeight("20rem").dismissOnOutsideClick(false).dismissOnEscape(false).seedFocus(false)(span("content"))"""
         )
         typeCheck(preamble + """def x(o: SignalRef[Boolean]): uic.Overlay = uic.Overlay(o).maxHeight(240)""")
-        typeCheckFailure(preamble + """def x = uic.Overlay(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.Overlay = uic.Overlay(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Overlay(o).placeholder("p")""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Overlay(o).severity(uic.Severity.Danger)""")
     }
@@ -1624,7 +1628,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.SplitButton("a").open(true)""")
         typeCheckFailure(preamble + """def x = uic.SplitButton("a").placeholder("p")""")
         typeCheckFailure(preamble + """def x = uic.SpeedDial().direction("up")""")
-        typeCheckFailure(preamble + """def x = uic.SpeedDial().open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.SpeedDial = uic.SpeedDial().open(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.SpeedDial().mask(true)""")
     }
 
@@ -1714,11 +1718,11 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x: uic.TreeSelect[String] = uic.TreeSelect[String]().options(Seq("A"))""")
     }
 
-    "Drawer opens only via SignalRef; position is typed; Overlay-only props are rejected" in {
+    "Drawer binds its visibility like Dialog; position is typed; Overlay-only props are rejected" in {
         typeCheck(
-            preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.Drawer = uic.Drawer().open(o).position(uic.DrawerPosition.Right).header("H").footer(span("f")).dismissable(false).showCloseIcon(false).onClose(())(p("content"))"""
+            preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.Drawer = uic.Drawer().open(o).position(uic.DrawerPosition.Right).header("H").footer(span("f")).dismissable(false).showCloseIcon(false).onOpenChange(_ => ())(p("content"))"""
         )
-        typeCheckFailure(preamble + """def x = uic.Drawer().open(true)""")
+        typeCheck(preamble + """def x: uic.Drawer = uic.Drawer().open(true)""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Drawer().open(o).position("left")""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Drawer().open(o).anchor(uic.OverlayAnchor.TopEnd)""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Drawer().open(o).maximized(true)""")
@@ -1757,11 +1761,11 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         )
     }
 
-    "ConfirmDialog opens only via SignalRef; Dialog-internals stay hidden" in {
+    "ConfirmDialog binds its visibility like Dialog; Dialog-internals stay hidden" in {
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean], a: Any < Async)(using Frame): uic.ConfirmDialog = uic.ConfirmDialog(o).header("H").message("M").icon(uic.Icons.exclamationTriangle).acceptLabel("Del").rejectLabel("Keep").acceptSeverity(uic.Severity.Danger).onAccept(a).onReject(a)"""
         )
-        typeCheckFailure(preamble + """def x = uic.ConfirmDialog().open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.ConfirmDialog = uic.ConfirmDialog(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.ConfirmDialog(o).maximized(true)""")
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.ConfirmDialog(o).footer(span("f"))""")
     }

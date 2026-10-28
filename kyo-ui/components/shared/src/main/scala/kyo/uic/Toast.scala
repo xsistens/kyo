@@ -12,8 +12,9 @@ import kyo.UI.*
   * `button.p-toast-close-button`), so the extracted `@primeuix` toast CSS
   * applies verbatim.
   *
-  * Visibility is gated by a `SignalRef[Boolean]` exactly like [[Dialog]] (a
-  * `when(ref)` reactive boundary). One `Toast` owns no fiber at all (see [[Node]]
+  * Visibility is gated exactly like [[Dialog]] (a `when(open)` reactive
+  * boundary), and an unbound toast keeps it itself and starts open. One `Toast`
+  * owns no fiber at all (see [[Node]]
   * on fiber ownership): the auto-dismiss `duration` is emitted as
   * `data-uic-duration` (ms) for the client runtime, and the dismissal timer, which
   * has to outlive the render, is the caller's: `ref.set(true)` then
@@ -25,20 +26,30 @@ import kyo.UI.*
   * Env/Layer service whose `render` region stacks queued messages.
   */
 final case class Toast private (
-    openRef: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     durationMs: Int = 3000,
     positionV: OverlayPosition = OverlayPosition.TopRight,
     severityV: Severity = Severity.Info,
     summaryV: Maybe[TextValue] = Absent,
     detailV: Maybe[TextValue] = Absent,
     closableFlag: Boolean = false,
-    onCloseEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
     type Self = Toast
 
-    /** Binds visibility to `ref`, the only way to show/hide the toast. */
-    def open(ref: SignalRef[Boolean]): Toast = copy(openRef = Present(ref))
+    /** Binds visibility. A `SignalRef` binds two way: writes open and close the toast, and every close the reader
+      * asks for (the close button) writes false, then [[onOpenChange]] hears it. A plain `Signal` binds one way: the toast
+      * follows it and only reports a close. A constant nobody hears is fixed: an open toast stays, its close button
+      * reachable and inert. Unbound, the toast keeps the state itself and starts open, so it shows until the reader
+      * closes it. A signal nothing hears is reported in a card.
+      */
+    def open(v: Boolean | Signal[Boolean]): Toast = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
+      * External writes fire nothing.
+      */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Toast = copy(onOpenF = Present(Callback.of(f)))
 
     /** Auto-dismiss duration in milliseconds (emitted as `data-uic-duration`;
       * Prime's `life`).
@@ -64,12 +75,8 @@ final case class Toast private (
       */
     def detail(v: String | Signal[String]): Toast = copy(detailV = Present(ReactiveValue(v)))
 
-    /** Renders Prime's close button; pressing it writes the bound ref to `false`. */
+    /** Renders Prime's close button; pressing it asks for `false` (see [[open]]). */
     def closable(v: Boolean): Toast = copy(closableFlag = v)
-
-    /** Runs `action` after the close button writes the ref to `false`. */
-    def onClose(action: => UI.Action)(using Frame): Toast =
-        copy(onCloseEff = Present(Callback(action)))
 
     /** Adds custom body children, rendered after summary/detail inside the text slot. */
     def apply(cs: UI*): Toast = copy(kids = kids ++ cs)
@@ -81,13 +88,39 @@ final case class Toast private (
     private def severityIcon: IconGlyph = Toast.severityIcon(severityV)
 
     private[uic] def render(using Frame): UI =
-        openRef match
-            case Absent       => UI.empty
-            case Present(ref) =>
-                val close: UI.Action =
-                    onCloseEff match
-                        case Present(e) => ref.set(false).map(_ => e)
-                        case Absent     => ref.set(false)
+        openSlot match
+            // Unbound, the toast keeps its visibility itself and starts open. Before the mount runs it draws from a
+            // signal, so the static page does not call its close button fixed.
+            case Absent =>
+                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
+                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
+                )
+            // A signal nobody hears, on a toast the reader can close: every close is painted away again. A toast with no
+            // close button has nothing to hear.
+            case _ if closableFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "Toast",
+                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
+                            "onOpenChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    drawn
+                )
+            case _ => drawn
+    end render
+
+    private def drawn(using Frame): UI =
+        openSlot match
+            case Absent        => UI.empty
+            case Present(slot) =>
+                // A constant nobody hears is fixed: the toast stays, and its close button closes nothing.
+                val fixed            = ReactiveValue.fixed(openSlot, onOpenF)
+                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                // Shown while the binding says so: a constant needs no region, a signal is one boundary.
+                def shown(ui: => UI): UI = slot.const match
+                    case Present(v) => if v then ui else UI.empty
+                    case Absent     => when(slot.signal)(ui)
 
                 val icon: UI            = GlyphSvg(severityIcon, "p-toast-message-icon")
                 val textParts: List[UI] =
@@ -104,15 +137,11 @@ final case class Toast private (
                 val closeBtn: List[UI] =
                     if !closableFlag then Nil
                     else
-                        List(
-                            button
-                                .cssClass("p-toast-close-button")
-                                .jsProp("type", "button")
-                                .aria("label", "Close")
-                                .onClick(close)(toChild(GlyphSvg(Icons.times, "p-toast-close-icon")))
-                        )
+                        val shell     = button.cssClass("p-toast-close-button").jsProp("type", "button").aria("label", "Close")
+                        val pressable = if fixed then shell.aria("disabled", "true") else shell.onClick(close)
+                        List(pressable(toChild(GlyphSvg(Icons.times, "p-toast-close-icon"))))
 
-                when(ref)(
+                shown(
                     div
                         .cssClass("p-toast")
                         .cssClass("p-component")
@@ -138,6 +167,8 @@ final case class Toast private (
                             )
                         )
                 )
+        end match
+    end drawn
 end Toast
 
 object Toast:

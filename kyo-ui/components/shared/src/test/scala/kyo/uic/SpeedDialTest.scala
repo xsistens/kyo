@@ -218,4 +218,47 @@ class SpeedDialTest extends UicTest:
         yield assert(!root.attrs.dataAttrs.contains("kyo-scroll-keys"))
     }
 
+    private def toggles(t: UI)(using Frame) = elementsWithClass(t, "p-speeddial-button")
+
+    /** The dial as its mount publishes it, the toggle wired. */
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, t => toggles(t).map(_.nonEmpty))().map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    "a constant nobody hears is fixed: the toggle stays reachable, opens nothing, and says so" in {
+        for
+            t    <- mounted(dial().open(false).render)
+            b    <- elementWithClass(t, "p-speeddial-button")
+            card <- elementsWithClass(dial().open(false).render, "p-uic-key-error")
+        yield
+            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the toggle is inert and says so")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a signal bound one way is followed, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mounted(dial().open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            b    <- elementWithClass(t, "p-speeddial-button")
+            _    <- click(b)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(dial().open(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(!h && s == Present(true), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a ref is written before the dial reports it" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef((false, false))
+            t    <- mounted(dial().open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            b    <- elementWithClass(t, "p-speeddial-button")
+            _    <- click(b)
+            s    <- seen.get
+        yield assert(s == (true, true), s"reported, held: $s")
+    }
+
 end SpeedDialTest
