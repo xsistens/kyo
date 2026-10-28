@@ -61,7 +61,8 @@ final case class Select[A] private (
     optionDisabledF: Maybe[A => Boolean] = Absent,
     choice: Maybe[SingleChoice[A]] = Absent,
     itemTemplateF: Maybe[A => UI] = Absent,
-    openRefV: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
     filterableV: Maybe[BoolValue] = Absent,
     filterF: Maybe[(A, String) => Boolean] = Absent,
@@ -199,11 +200,16 @@ final case class Select[A] private (
     @targetName("selectionMaybe")
     def selection(v: Maybe[A] | Signal[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ReactiveValue(v))))
 
-    /** Binds the panel visibility two-way to `ref` (optional; the panel is
-      * self-managed otherwise): writes open and close it, trigger/outside-click/
-      * Escape write back.
+    /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick, Escape, Tab and an outside click
+      * write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel follows it and the
+      * select only reports. A constant nobody hears is fixed: `false` draws the select read-only, `true` keeps the panel
+      * open whatever the reader does. Unbound, the select keeps the state itself, starting closed. A signal nothing
+      * hears is reported in a card.
       */
-    def open(ref: SignalRef[Boolean]): Select[A] = copy(openRefV = Present(ref))
+    def open(v: Boolean | Signal[Boolean]): Select[A] = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = copy(onOpenF = Present(Callback.of(f)))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = copy(placeholderV = v)
 
@@ -360,7 +366,7 @@ final case class Select[A] private (
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
-        open: SignalRef[Boolean],
+        open: ReactiveValue[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
@@ -376,12 +382,30 @@ final case class Select[A] private (
           * has no highlight to announce.
           */
         idBase: Maybe[String]
-    )
+    ):
+        /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
+        def setOpen(v: Boolean)(using Frame): UI.Action = ReactiveValue.change(Present(open), v, onOpenF)
+    end State
 
     private[uic] def render(using Frame): UI =
-        // A constant nobody hears is fixed: drawn read-only, reachable and readable with no panel to open.
-        if choice.exists(_.fixed(onChangeF.orElse(onPickF))) && !readonlyFlag then copy(readonlyFlag = true).render
+        // A constant nobody hears is fixed: drawn read-only, reachable and readable with no panel to open. A panel fixed
+        // closed is the same: nothing the reader does may open it.
+        val openFixedShut = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+        if (choice.exists(_.fixed(onChangeF.orElse(onPickF))) || openFixedShut) && !readonlyFlag then copy(readonlyFlag = true).render
+        // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
+        else if ReactiveValue.deaf(openSlot, onOpenF) then
+            fragment(
+                KeyDiagnostics.card(
+                    "Select",
+                    "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                renderLive
+            )
         else renderLive
+        end if
+    end render
 
     private def renderLive(using Frame): UI =
         // The interaction state (open/highlight/filter) lives in signals allocated
@@ -397,9 +421,10 @@ final case class Select[A] private (
             for
                 cmds <- UI.commands
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-                open <- openRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(false)
+                // Unbound, the select keeps the panel state itself, starting closed.
+                open <- openSlot match
+                    case Present(slot) => Kyo.lift(slot)
+                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
                 hi <- Signal.initRef(-1)
                 // Same shape as `open` above: an app-owned query ref takes over the
                 // slot the component would otherwise allocate for itself.
@@ -411,7 +436,7 @@ final case class Select[A] private (
                     if choice.isEmpty && currentV.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
-            yield self.wired(open, hi, q, Present(base))
+            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -422,13 +447,21 @@ final case class Select[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
+        val slot = ReactiveValue[Boolean](open)
+        copy(openSlot = Present(slot)).wiredOver(slot, hi, q, base)
+    end wired
+
+    /** [[wired]] over the panel state however it is bound. */
+    private def wiredOver(open: ReactiveValue[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String])(
+        using Frame
+    ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(open)).and(Reading.Live(hi)).and(Reading.Live(q))
+        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.Live(q))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
             self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
-    end wired
+    end wiredOver
 
     /** What the field shows whatever its panel does: the held option, whether the options are still loading, and the
       * placeholder. Hosts supply `currentV` resolved, a bound ref is read live, an unbound select is empty. Read beside
@@ -480,18 +513,18 @@ final case class Select[A] private (
 
         // Writes the picked option, fires onChange where that changed it, closes the panel.
         def pick(a: A)(s: State): UI.Action =
-            write(Present(a)).andThen(s.open.set(false))
+            write(Present(a)).andThen(s.setOpen(false))
 
         // Opens with the highlight seeded on the selected option and a fresh query.
         def openPanel(s: State): UI.Action =
             for
                 _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
-                _ <- s.open.set(true)
+                _ <- s.setOpen(true)
             yield ()
 
         def toggle(s: State): UI.Action =
-            if s.isOpen then s.open.set(false) else openPanel(s)
+            if s.isOpen then s.setOpen(false) else openPanel(s)
 
         // === closed trigger ======================================================
         val showPlaceholder = held.isEmpty && placeholder.isDefined
@@ -695,11 +728,11 @@ final case class Select[A] private (
         pick: A => State => UI.Action
     )(e: KeyboardEvent)(using Frame): UI.Action =
         val caretOwns = s.filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
-        if e.key == Keyboard.Tab then s.open.set(false)
+        if e.key == Keyboard.Tab then s.setOpen(false)
         else if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
-                case Present(step) if step.dismiss => s.open.set(false)
+                case Present(step) if step.dismiss => s.setOpen(false)
                 case Present(step)                 =>
                     val picked: UI.Action =
                         if step.activate && shown.isDefinedAt(step.focus) then pick(shown(step.focus))(s) else ()
@@ -829,7 +862,7 @@ final case class Select[A] private (
                 )
             else Nil
 
-        Overlay(s.open)
+        Overlay.hosted(s.open, onOpenF)
             .portal(portalFlag)
             .scroll(scrollV)
             .panelClass("p-select-overlay")

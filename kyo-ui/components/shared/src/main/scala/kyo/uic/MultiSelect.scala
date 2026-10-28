@@ -61,7 +61,8 @@ final case class MultiSelect[A] private (
     keyF: Maybe[A => String] = Absent,
     optionDisabledF: Maybe[A => Boolean] = Absent,
     choice: Maybe[MultiChoice[A]] = Absent,
-    openRefV: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
     displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
     maxSelectedLabelsV: Maybe[Int] = Absent,
@@ -147,10 +148,24 @@ final case class MultiSelect[A] private (
       */
     def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 
-    /** Binds the panel visibility two-way to `ref` (optional; the panel is
-      * self-managed otherwise).
+    /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
+      * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
+      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only,
+      * `true` keeps the panel open whatever the reader does. Unbound, the field keeps the state itself, starting
+      * closed. A signal nothing hears is reported in a card.
       */
-    def open(ref: SignalRef[Boolean]): MultiSelect[A] = copy(openRefV = Present(ref))
+    def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = copy(onOpenF = Present(Callback.of(f)))
+
+    /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
+    private def askOpen(open: ReactiveValue[Boolean], v: Boolean)(using Frame): UI.Action =
+        ReactiveValue.change(Present(open), v, onOpenF)
+
+    /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
+    private def openFixedShut: Boolean =
+        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = copy(placeholderV = v)
 
@@ -295,7 +310,7 @@ final case class MultiSelect[A] private (
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
-        open: SignalRef[Boolean],
+        open: ReactiveValue[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
@@ -312,6 +327,22 @@ final case class MultiSelect[A] private (
     )
 
     private[uic] def render(using Frame): UI =
+        // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
+        if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "MultiSelect",
+                    "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                renderLive
+            )
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount; static projections render the same closed
         // anatomy inert (the Select precedent).
@@ -324,9 +355,10 @@ final case class MultiSelect[A] private (
             for
                 cmds <- UI.commands
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-                open <- openRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(false)
+                // Unbound, the field keeps the panel state itself, starting closed.
+                open <- openSlot match
+                    case Present(slot) => Kyo.lift(slot)
+                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
                 hi <- Signal.initRef(-1)
                 // Same shape as `open` above: an app-owned query ref takes over the
                 // slot the component would otherwise allocate for itself.
@@ -338,26 +370,34 @@ final case class MultiSelect[A] private (
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
                 self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
-            yield self.wired(open, hi, q, Present(base))
+            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
         }.placeholder(stat)
-    end render
+    end renderLive
 
     /** A constant nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to open and
       * no chip to remove.
       */
-    private def fixed: Boolean = choice.exists(_.fixed(onChangeF))
+    private def fixed: Boolean = openFixedShut || choice.exists(_.fixed(onChangeF))
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
+        val slot = ReactiveValue[Boolean](open)
+        copy(openSlot = Present(slot)).wiredOver(slot, hi, q, base)
+    end wired
+
+    /** [[wired]] over the panel state however it is bound. */
+    private def wiredOver(open: ReactiveValue[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String])(
+        using Frame
+    ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(open)).and(Reading.Live(hi)).and(Reading.Live(q))
+        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.Live(q))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
             self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
-    end wired
+    end wiredOver
 
     /** What the field shows whatever its panel does: the chosen options, whether the options are still loading, and the
       * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
@@ -423,11 +463,11 @@ final case class MultiSelect[A] private (
             for
                 _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
-                _ <- s.open.set(true)
+                _ <- askOpen(s.open, true)
             yield ()
 
         def toggle(s: State): UI.Action =
-            if s.isOpen then s.open.set(false) else openPanel(s)
+            if s.isOpen then askOpen(s.open, false) else openPanel(s)
 
         // === closed trigger ======================================================
         val overMax         = maxSelectedLabelsV.exists(m => selected.size > m)
@@ -746,7 +786,7 @@ final case class MultiSelect[A] private (
             if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(headerKids.map(toChild)*))
             else Nil
 
-        Overlay(s.open)
+        Overlay.hosted(s.open, onOpenF)
             .panelClass("p-multiselect-overlay")
             .panelClass("p-component")
             // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
@@ -800,12 +840,12 @@ final case class MultiSelect[A] private (
                 case Keyboard.Char(c) => c.toLower == 'a'
                 case _                => false)
         if fromToggleAll then ()
-        else if e.key == Keyboard.Tab then s.open.set(false)
+        else if e.key == Keyboard.Tab then askOpen(s.open, false)
         else if selectsAll then toggleAll
         else if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
-                case Present(step) if step.dismiss => s.open.set(false)
+                case Present(step) if step.dismiss => askOpen(s.open, false)
                 case Present(step)                 =>
                     val toggled: UI.Action =
                         if step.activate && shown.isDefinedAt(step.focus) then toggleOption(shown(step.focus)) else ()

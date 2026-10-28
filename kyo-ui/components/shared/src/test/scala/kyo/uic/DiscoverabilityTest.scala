@@ -1547,11 +1547,11 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Overlay(o).severity(uic.Severity.Danger)""")
     }
 
-    "Select panel surface: filterable/showClear/checkmark are Booleans, open only via SignalRef" in {
+    "Select panel surface: filterable/showClear/checkmark are Booleans, open binds by rule A" in {
         typeCheck(
             preamble + """def x(r: SignalRef[Maybe[String]], o: SignalRef[Boolean]): uic.Select[String] = uic.Select[String]().options(Seq("A")).selection(r).open(o).filterable(true).showClear(true).checkmark(true).emptyContent("none")"""
         )
-        typeCheckFailure(preamble + """def x = uic.Select[String]().open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.Select[String] = uic.Select[String]().open(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.Select[String]().filterable(1)""")
     }
 
@@ -1646,7 +1646,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.MultiSelect[String]().value(r)""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.MultiSelect[(String, String)]().selection(r)""")
         typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().value(Set("a"))""")
-        typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.MultiSelect[String] = uic.MultiSelect[String]().open(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().checkmark(true)""")
     }
 
@@ -1715,7 +1715,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.TreeSelect[String]().selection(r)""")
         // The key-typed `value` binding is gone.
         typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.TreeSelect[String]().value(r)""")
-        typeCheckFailure(preamble + """def x = uic.TreeSelect[String]().open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.TreeSelect[String] = uic.TreeSelect[String]().open(true).onOpenChange(_ => ())""")
         // Without the label projection the options are not a picker: the call is only a function still waiting for it.
         typeCheckFailure(preamble + """def x: uic.TreeSelect[String] = uic.TreeSelect[String]().options(Seq("A"))""")
     }
