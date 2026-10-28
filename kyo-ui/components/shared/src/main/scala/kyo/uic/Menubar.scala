@@ -115,7 +115,7 @@ final case class Menubar private (
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Horizontal, focus, e.key) match
-                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, Absent, step)
+                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, (), step)
                         case Absent        => ()
                 case Absent => ()
 

@@ -1593,15 +1593,17 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.MenuItem("a").cssClass("mine")""")
     }
 
-    "Menu/TieredMenu popup only via SignalRef; items are MenuItem (no string rows)" in {
+    "Menu/TieredMenu popup binds like Overlay, or keeps its own; items are MenuItem (no string rows)" in {
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.Menu = uic.Menu().items(uic.MenuItem("New"), uic.MenuItem.separator).popup(o)"""
         )
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.TieredMenu = uic.TieredMenu().items(uic.MenuItem("File").items(uic.MenuItem("New"))).popup(o)"""
         )
-        typeCheckFailure(preamble + """def x = uic.Menu().popup(true)""")
-        typeCheckFailure(preamble + """def x = uic.TieredMenu().popup(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.Menu = uic.Menu().popup(true).onPopupChange(_ => ())""")
+        typeCheck(preamble + """def x: uic.Menu = uic.Menu().popup()""")
+        typeCheck(preamble + """def x(using Frame): uic.TieredMenu = uic.TieredMenu().popup(true).onPopupChange(_ => ())""")
+        typeCheck(preamble + """def x: uic.TieredMenu = uic.TieredMenu().popup()""")
         typeCheckFailure(preamble + """def x = uic.Menu().items("New")""")
         typeCheckFailure(preamble + """def x = uic.Menu().item("New", "n")""")
     }
@@ -1625,7 +1627,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.SpeedDial = uic.SpeedDial().items(uic.MenuItem("Add").icon(uic.Icons.plus).onSelect(())).direction(uic.SpeedDialDirection.Down).open(o).disabled(true).accessibleName("Actions")"""
         )
-        typeCheckFailure(preamble + """def x = uic.SplitButton("a").open(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.SplitButton = uic.SplitButton("a").open(true).onOpenChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.SplitButton("a").placeholder("p")""")
         typeCheckFailure(preamble + """def x = uic.SpeedDial().direction("up")""")
         typeCheck(preamble + """def x(using Frame): uic.SpeedDial = uic.SpeedDial().open(true).onOpenChange(_ => ())""")

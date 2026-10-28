@@ -471,8 +471,9 @@ private[uic] object MenuRender:
 
     /** Applies a [[MenuNav.Step]] to a keyboard host's signals: threads the
       * `OpenOp` through [[Submenus.View.openExactly]], and, on `activate` (run the focused
-      * leaf's action) or `dismiss`, collapses the submenu tree, closes the popup
-      * if any, and clears the highlight. Plain movement just writes the new focus
+      * leaf's action) or `dismiss`, collapses the submenu tree, runs the host's `closePopup`
+      * (what closing means is the host's: a binding written and reported, or nothing inline),
+      * and clears the highlight. Plain movement just writes the new focus
       * path. Shared by every nested menu host (TieredMenu, ContextMenu, Menubar,
       * MegaMenu).
       */
@@ -480,7 +481,7 @@ private[uic] object MenuRender:
         items: List[MenuItem],
         submenus: Maybe[Submenus.View],
         focusRef: Anchored.View[List[Int]],
-        popupRef: Maybe[SignalRef[Boolean]],
+        closePopup: UI.Action,
         step: MenuNav.Step
     )(using Frame): UI.Action =
         val finish                                 = step.activate || step.dismiss
@@ -499,17 +500,11 @@ private[uic] object MenuRender:
                 MenuNav.itemAt(items, step.focus).flatMap(_.actionV) match
                     case Present(eff) => eff
                     case _            => ()
-        val closePopup: UI.Action =
-            if !finish then ()
-            else
-                popupRef match
-                    case Present(r) => r.set(false)
-                    case Absent     => ()
         for
             _ <- applyOpen
             _ <- runActivate
             _ <- if finish then openTo(Absent) else (): UI.Action
-            _ <- closePopup
+            _ <- if finish then closePopup else (): UI.Action
             _ <- focusRef.set(if finish then Nil else step.focus)
         yield ()
         end for
