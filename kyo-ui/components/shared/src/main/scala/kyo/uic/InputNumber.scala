@@ -181,6 +181,18 @@ final case class InputNumber private (
     end clamp
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader types and spins
+        // itself, through the same text channel a text binding uses, so it starts empty as before.
+        val constant = valueBinding.exists { case InputNumber.Value.Const(_) => true; case _ => false }
+        if constant && onChangeF.isEmpty && !readonlyFlag then copy(readonlyFlag = true).render
+        else if valueBinding.isEmpty then
+            UI.mounted(Signal.initRef("").map(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive))
+                .placeholder(renderLive)
+        else renderLive
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A value bound one way that nothing hears: every change the reader makes is painted away again.
@@ -189,7 +201,7 @@ final case class InputNumber private (
         then fragment(field, KeyDiagnostics.unheard("InputNumber", "value", "onChange"))
         else field
         end if
-    end render
+    end renderLive
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match

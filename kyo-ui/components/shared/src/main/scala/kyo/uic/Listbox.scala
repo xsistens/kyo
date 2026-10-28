@@ -316,6 +316,11 @@ final case class Listbox[K] private (
     private def interactive: Boolean =
         !disabledFlag && !fixedFlag && (selectionModeV != SelectionMode.None || onItemClickF.isDefined)
 
+    /** Package-internal: a host whose selection is a constant nobody hears draws the list fixed, its options picking
+      * nothing ([[ReactiveValue.fixed]]).
+      */
+    private[uic] def fixed(v: Boolean): Listbox[K] = copy(fixedFlag = v)
+
     /** Package-internal: hosts (OrderList/PickList) that already subscribe to the
       * same selection ref in an enclosing render supply the resolved set directly;
       * a second nested subscription to the same ref would race the inner update
@@ -336,7 +341,8 @@ final case class Listbox[K] private (
     private[uic] def render(using Frame): UI =
         // A constant selection nobody hears is fixed: the list shows it, read-only, and its options pick nothing.
         val fixed = selectionModeV != SelectionMode.None && selectedRef.exists(_.fixed(onChangeF.orElse(onItemClickF)))
-        copy(fixedFlag = fixed).renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
+        // A host that asked for a fixed list keeps it fixed, whatever the list's own binding says.
+        copy(fixedFlag = fixedFlag || fixed).renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
     end render
 
     /** One mount for the two signals this listbox owns: the keyboard highlight, and the

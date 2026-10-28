@@ -141,7 +141,8 @@ final case class Tabs[K] private (
     selectedBinding: Maybe[ReactiveValue[K]] = Absent,
     onTabSelectF: Maybe[K => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    lazyPanelsFlag: Boolean = false
+    lazyPanelsFlag: Boolean = false,
+    fixedFlag: Boolean = false
 ) extends Node, HasElementId:
     type Self = Tabs[K]
 
@@ -195,6 +196,17 @@ final case class Tabs[K] private (
     private[uic] def elementId: Maybe[String] = idV
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: the strip shows that tab and switches to no other.
+        if ReactiveValue.fixed(selectedBinding, onTabSelectF) && !fixedFlag then copy(fixedFlag = true).render
+        else
+            val strip = renderLive
+            // A signal nobody hears: every tab the reader picks is painted away again.
+            if !ReactiveValue.deaf(selectedBinding, onTabSelectF) then strip
+            else fragment(KeyDiagnostics.unheard("Tabs", "selected", "onTabSelect"), strip)
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         UI.mounted {
             UI.commands.map { cmds =>
                 // A caller's base wins, and only without one does the mount mint it. Same rule as [[Menu]]'s base: the ARIA
@@ -202,7 +214,17 @@ final case class Tabs[K] private (
                 val base: String < Sync = idV match
                     case Present(b) => b
                     case Absent     => cmds.freshId
-                base.map(b => wired(b, id => cmds.focusId(id)))
+                // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
+                val first: Maybe[K] < Sync = entries match
+                    case Reading.Fixed(ts) => Maybe.fromOption(ts.headOption.map(_.id))
+                    case Reading.Live(sig) => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.id)))
+                val self: Tabs[K] < Sync =
+                    if selectedBinding.isDefined then this
+                    else
+                        first.map(_.fold(Kyo.lift(this))(id =>
+                            Signal.initRef(id).map(r => copy(selectedBinding = Present(ReactiveValue(r))))
+                        ))
+                base.map(b => self.map(_.wired(b, id => cmds.focusId(id))))
             }
         }
             // With a base the ids are known without a mount, so the placeholder carries them
@@ -289,7 +311,7 @@ final case class Tabs[K] private (
             // on any anchor that declares one (DomBackend, "the handler, not the href,
             // drives the action"), which also takes the middle-click and the
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
-            if t.urlV.isEmpty || onTabSelectF.isDefined then
+            if (t.urlV.isEmpty || onTabSelectF.isDefined) && !fixedFlag then
                 out = out.onClick(select(t.id, write = t.urlV.isEmpty))
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only

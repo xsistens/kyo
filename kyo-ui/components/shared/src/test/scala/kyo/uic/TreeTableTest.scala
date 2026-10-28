@@ -349,4 +349,41 @@ class TreeTableTest extends UicTest:
         )
     }
 
+    "constants nobody hears are fixed: no header sorts, no toggle opens, no row picks, and no card" in {
+        val fixed = parentTable.columns(uic.column("Born")(_.name).sortBy(_.name)).sort(List(uic.SortKey.ascending("Born")))
+            .expanded(Set(r1)).selectionMode(uic.SelectionMode.Single).selection(Set(r2))
+        for
+            headers <- elementsWithClass(fixed.render, "p-treetable-sortable-column")
+            toggles <- elementsWithClass(fixed.render, "p-treetable-node-toggle-button")
+            rows    <- elementsWithClass(fixed.render, "p-treetable-selectable-row")
+            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(headers.isEmpty, "a fixed sort offers no header to press")
+            assert(toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
+            assert(rows.isEmpty, "a fixed selection picks no row")
+            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound tree table keeps what the reader opens" in {
+        for
+            after <- publishedAfterReady(
+                parentTable.render,
+                t => elementsWithClass(t, "p-treetable-node-toggle-button").map(_.exists(declaresClick)),
+                until = t => names(t).map(_.exists(_.contains("Kay")))
+            )(t => elementsWithClass(t, "p-treetable-node-toggle-button").map(bs => click(bs.find(declaresClick).get)))
+        yield assert(after.nonEmpty, "the table never showed the branch the reader opened")
+    }
+
+    "an unbound tree table sorts by the header the reader presses" in {
+        for
+            after <- publishedAfterReady(
+                table.render,
+                t => elementsWithClass(t, "p-treetable-sortable-column").map(_.exists(declaresClick)),
+                until = t =>
+                    elementsWithClass(t, "p-treetable-sortable-column").map(_.exists(_.attrs.ariaAttrs.get("sort").contains("ascending")))
+            )(t => elementWithClass(t, "p-treetable-sortable-column").map(click))
+        yield assert(after.nonEmpty, "the table never sorted by the header the reader pressed")
+    }
+
 end TreeTableTest

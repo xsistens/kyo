@@ -96,11 +96,55 @@ abstract class UicTest extends kyo.test.Test[Any]:
         until: UI => Boolean < Sync = _ => true,
         reads: Seq[Signal.SignalRef[?]] = Nil
     )(acts: (UI => Any < Async)*)(using Frame, kyo.test.AssertScope): Maybe[UI] < Async =
+        drive(ui, ready, reads, acts) { d =>
+            for
+                holds <- settles(
+                    Sync.defer(d.published.get.size > d.publishedBefore).map(grew =>
+                        if grew then d.since.map(until) else Kyo.lift(false)
+                    ),
+                    d.within
+                )
+                answer <- d.since
+            yield if holds then Present(answer) else Absent
+        }
+
+    /** [[publishedAfterReady]] for what reaches the page as an attribute patch rather than a region: whether, after the
+      * gestures, the field patched an attribute `holds` accepts, as `(name, value)`. A header's sort state, say, rides
+      * that channel and never publishes a region of its own.
+      */
+    private[uic] def attrPatchedAfter(ui: UI, ready: UI => Boolean < Sync)(acts: (UI => Any < Async)*)(
+        holds: ((String, String)) => Boolean
+    )(using Frame, kyo.test.AssertScope): Boolean < Async =
+        drive(ui, ready, Nil, acts)(d =>
+            settles(Sync.defer(d.patched.get.take(d.patched.get.size - d.patchedBefore).exists(holds)), d.within)
+        )
+
+    /** What [[drive]] hands its `finish`: everything the field published and patched, and how much of each came before
+      * the last gesture.
+      */
+    final private class Driven(
+        val published: java.util.concurrent.atomic.AtomicReference[List[UI]],
+        val patched: java.util.concurrent.atomic.AtomicReference[List[(String, String)]],
+        val publishedBefore: Int,
+        val patchedBefore: Int,
+        val within: Duration
+    )(using Frame):
+        /** Every tree published since the last gesture, newest first. */
+        def since: UI < Sync =
+            Sync.defer(published.get).map(now => UI.fragment(now.take(now.size - publishedBefore)*))
+    end Driven
+
+    /** Runs `ui` under the engine, waits for it to be `ready`, runs the gestures (each tried again until it finds what it
+      * acts on, and each seeing every tree published so far, newest first), then hands `finish` what came of them.
+      */
+    private def drive[R](ui: UI, ready: UI => Boolean < Sync, reads: Seq[Signal.SignalRef[?]], acts: Seq[UI => Any < Async])(
+        finish: Driven => R < Async
+    )(using Frame, kyo.test.AssertScope): R < Async =
         val within = 5.seconds
         Scope.run {
-            val published                = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
-            def all: UI < Sync           = Sync.defer(published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*))
-            def since(n: Int): UI < Sync = Sync.defer(published.get).map(now => UI.fragment(now.take(now.size - n)*))
+            val published      = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
+            val patched        = new java.util.concurrent.atomic.AtomicReference[List[(String, String)]](Nil)
+            def all: UI < Sync = Sync.defer(published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*))
             UI.Commands.init(_ => Kyo.unit).map { cmds =>
                 kyo.internal.UICommands.commands.let(Present(cmds)) {
                     for
@@ -116,17 +160,19 @@ abstract class UicTest extends kyo.test.Test[Any]:
                                     previous: Maybe[UI],
                                     changed: UI
                                 )(using Frame): Unit < Async = Sync.defer(discard(published.updateAndGet(changed :: _)))
+                                override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                                    Sync.defer(discard(patched.updateAndGet((name, value) :: _)))
                         )
                         // A mount publishes what it wired once its effect ran; act on that, not on the placeholder. A
                         // field with no mount publishes nothing here, and is acted on as it rendered.
                         _      <- settles(Sync.defer(published.get.nonEmpty), within)
                         parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
                         _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
-                        set <- settles(Sync.defer(published.get.headOption).map(_.fold(Kyo.lift(false))(ready)), within)
+                        set <- settles(all.map(ready), within)
                         _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
-                        last <- Kyo.foldLeft(acts)(0) { (_, act) =>
+                        last <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
                             for
-                                before <- Sync.defer(published.get.size)
+                                before <- Sync.defer((published.get.size, patched.get.size))
                                 done   <- settles(
                                     all.map(t => Abort.run[AssertionError](Abort.catching[AssertionError](act(t))).map(_.isSuccess)),
                                     within
@@ -134,16 +180,12 @@ abstract class UicTest extends kyo.test.Test[Any]:
                                 _ = if !done then throw new AssertionError("a gesture never found what it acts on")
                             yield before
                         }
-                        holds <- settles(
-                            Sync.defer(published.get.size > last).map(grew => if grew then since(last).map(until) else Kyo.lift(false)),
-                            within
-                        )
-                        answer <- since(last)
-                    yield if holds then Present(answer) else Absent
+                        r <- finish(Driven(published, patched, last._1, last._2, within))
+                    yield r
                 }
             }
         }
-    end publishedAfterReady
+    end drive
 
     /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
     private def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =

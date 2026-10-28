@@ -189,4 +189,39 @@ class PaginatorTest extends UicTest:
         end for
     }
 
+    "a constant page nobody hears is fixed: its links say so, go nowhere, and no card" in {
+        val fixed = uic.Paginator().totalRecords(120).rows(10).page(2)
+        for
+            links <- elementsWithClass(fixed.render, "p-paginator-page")
+            next  <- elementWithClass(fixed.render, "p-paginator-next")
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(links.forall(l => !declaresClick(l)) && !declaresClick(next), "a fixed paginator goes nowhere")
+            assert(next.attrs.ariaAttrs.get("disabled").contains("true"), "and its buttons say so")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound paginator keeps the page the reader goes to" in {
+        for
+            after <- publishedAfterReady(
+                uic.Paginator().totalRecords(120).rows(10).render,
+                t => elementsWithClass(t, "p-paginator-next").map(_.exists(declaresClick)),
+                until = t => selectedPage(t).map(_ == "2")
+            )(t => elementsWithClass(t, "p-paginator-next").map(ns => click(ns.head)))
+        yield assert(after.nonEmpty, "the paginator never showed the page the reader went to")
+    }
+
+    "an unbound rows count is the reader's to pick, so its dropdown is live" in {
+        for
+            after <- publishedAfterReady(
+                uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render,
+                t =>
+                    elementsWithClass(t, "p-paginator-rpp-dropdown").map(ds =>
+                        ds.nonEmpty && ds.forall(d => !d.attrs.cssClasses.contains("p-disabled"))
+                    )
+            )()
+        yield assert(after.nonEmpty, "the dropdown was never live")
+    }
+
 end PaginatorTest

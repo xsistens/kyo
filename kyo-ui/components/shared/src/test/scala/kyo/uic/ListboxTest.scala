@@ -139,4 +139,11 @@ class ListboxTest extends UicTest:
         yield assert(after.nonEmpty, "the list never showed the option the reader picked")
     }
 
+    "a host's fixed list stays fixed through render, whatever the list's own binding says" in {
+        for
+            ref  <- Signal.initRef(Set("a"))
+            rows <- elementsWithClass(fruit.selectionMode(uic.SelectionMode.Multiple).selection(ref).fixed(true).render, "p-listbox-option")
+        yield assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "the host asked for a fixed list")
+    }
+
 end ListboxTest

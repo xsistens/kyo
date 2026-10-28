@@ -162,4 +162,28 @@ class OrderListTest extends UicTest:
         yield assert(off.isEmpty, s"nobody can change it: ${off.map(textOf)}")
     }
 
+    "constants nobody hears are fixed: no button moves, no click picks, and no card" in {
+        val fixed = uic.OrderList[String]().items(Seq("a", "b", "c"))(identity).selection(Set("b"))
+        for
+            moves <- elementsWithClass(fixed.render, "p-button")
+            rows  <- elementsWithClass(fixed.render, "p-listbox-option")
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(moves.nonEmpty && moves.forall(m => !declaresClick(m)), "a fixed order moves nothing")
+            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "a fixed selection picks nothing")
+            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound selection is the list's own, so a click picks the row" in {
+        for
+            xs    <- Signal.initRef(Seq("a", "b", "c"))
+            after <- publishedAfterReady(
+                uic.OrderList[String]().items(xs)(identity).render,
+                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-listbox-option-selected").map(_.exists(r => textOf(r) == "b"))
+            )(t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "b"))
+        yield assert(after.nonEmpty, "the list never showed the row the reader picked")
+    }
+
 end OrderListTest

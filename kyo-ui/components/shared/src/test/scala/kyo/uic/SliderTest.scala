@@ -33,4 +33,34 @@ class SliderTest extends UicTest:
         end for
     }
 
+    "readonly keeps the value where it is: the native input is declined, says so, and reports nothing" in {
+        for r <- range(uic.Slider().value(30.0).onChange(_ => ()).readonly(true).render)
+        yield
+            assert(r.attrs.dataAttrs.get("kyo-inert").contains("1"), "the browser's own move is declined")
+            assert(r.attrs.ariaAttrs.get("readonly").contains("true"), "and it says it is read-only")
+            assert(r.onChange.isEmpty, "with no handler behind it")
+    }
+
+    "a constant nobody hears is fixed: read-only, and no card" in {
+        for
+            r    <- range(uic.Slider().value(30.0).render)
+            card <- elementsWithClass(uic.Slider().value(30.0).render, "p-uic-key-error")
+        yield
+            assert(r.attrs.ariaAttrs.get("readonly").contains("true") && r.onChange.isEmpty, "a fixed slider moves nothing")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound slider keeps where the reader puts it" in {
+        def at(v: Double)(t: UI): Boolean < Sync =
+            elements(t).map(_.exists {
+                case r: UI.Ast.RangeInput => r.value.exists { case UI.Bound.Const(x) => x == v; case _ => false }
+                case _                    => false
+            })
+        for
+            after <- publishedAfterReady(uic.Slider().render, t => range(t).map(_.onChange.nonEmpty), until = at(60.0))(t =>
+                range(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no change handler"))(60.0)))
+            )
+        yield assert(after.nonEmpty, "the slider never showed where the reader put it")
+    }
+
 end SliderTest
