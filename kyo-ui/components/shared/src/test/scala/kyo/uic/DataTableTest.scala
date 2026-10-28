@@ -3782,4 +3782,79 @@ class DataTableTest extends UicTest:
         yield assert(card.isEmpty, s"an unbound filter is the table's own: ${card.map(textOf)}")
     }
 
+    private def threeColumns(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name),
+            uic.column("Price")(_.price.toString),
+            uic.column("Id")(_.id)
+        )
+
+    // The drag itself measures the columns, which this harness does not answer; that path is the two-way ref's, held above.
+    "columnWidths() with no ref turns the boundary drag on, keeps the widths itself, and says nothing" in {
+        val table = threeColumns.columnWidths()
+        for
+            static <- resizers(table.render)
+            card   <- elementsWithClass(table.render, "p-uic-key-error")
+            live   <- publishedAfterReady(table.render, t => resizers(t).map(_.exists(_.attrs.onPointerDown.isDefined)))()
+            off    <- resizers(threeColumns.render)
+        yield
+            assert(static.size == 2, s"the page as first rendered already shows both boundaries: ${static.size}")
+            assert(live.nonEmpty, "the mounted table offers a grab on its boundaries")
+            assert(card.isEmpty, s"widths the table keeps itself: ${card.map(textOf)}")
+            assert(off.isEmpty, "a table nobody asked for the drag offers none")
+        end for
+    }
+
+    "columnOrder() with no ref turns the header drag on, keeps the order itself, and says nothing" in {
+        val table         = threeColumns.columnOrder()
+        def movers(t: UI) = elementsWithClass(t, "p-datatable-reorderable-column")
+        for
+            static <- movers(table.render)
+            card   <- elementsWithClass(table.render, "p-uic-key-error")
+            live   <- publishedAfterReady(table.render, t => movers(t).map(_.exists(_.attrs.onPointerDown.isDefined)))()
+            off    <- movers(threeColumns.render)
+        yield
+            assert(static.size == 3, s"the page as first rendered already marks every header: ${static.size}")
+            assert(live.nonEmpty, "the mounted table offers a grab on its headers")
+            assert(card.isEmpty, s"an order the table keeps itself: ${card.map(textOf)}")
+            assert(off.isEmpty, "a table nobody asked for the drag offers none")
+        end for
+    }
+
+    "expandedGroups() with no ref keeps the open groups itself, so a toggle opens the group" in {
+        val table          = grouped.expandedGroups()
+        def toggles(t: UI) = elementsWithClass(t, "p-datatable-row-toggle-button")
+        for
+            closed <- bodyNames(table.render)
+            card   <- elementsWithClass(table.render, "p-uic-key-error")
+            after  <- publishedAfterReady(
+                table.render,
+                t => toggles(t).map(_.exists(declaresClick)),
+                until = t =>
+                    for
+                        ts    <- toggles(t)
+                        names <- bodyNames(t)
+                    yield ts.exists(_.attrs.ariaAttrs.get("expanded").contains("true")) || names.count(_ == "A") == 2
+            )(t => toggles(t).map(ts => click(ts.head)))
+        yield
+            assert(closed == Chunk("A", "B"), s"every group starts collapsed: $closed")
+            assert(after.nonEmpty, "the table never opened the group the reader toggled")
+            assert(card.isEmpty, s"groups the table keeps itself: ${card.map(textOf)}")
+        end for
+    }
+
+    "the last call wins between a ref and the table's own" in {
+        for
+            held  <- Signal.initRef(Map(List("Name") -> 120.0))
+            card  <- elementsWithClass(threeColumns.columnWidths(held.readOnly).columnWidths().render, "p-uic-key-error")
+            bound <- elementsWithClass(threeColumns.columnWidths().columnWidths(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(card.isEmpty, s"the table's own replaces the one-way binding: ${card.map(textOf)}")
+            assert(
+                bound.map(textOf).mkString.contains("onColumnWidthsChange"),
+                s"the binding replaces the table's own: ${bound.map(textOf)}"
+            )
+        end for
+    }
+
 end DataTableTest
