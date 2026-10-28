@@ -346,4 +346,57 @@ class CascadeSelectTest extends UicTest:
         yield assert(after.nonEmpty, "the field never showed the leaf the reader picked")
     }
 
+    private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-cascadeselect-overlay").map(_.nonEmpty)
+
+    /** The field as its mount publishes it, the trigger wired. */
+    private def mountedField(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, t => elementsWithClass(t, "p-cascadeselect-dropdown").map(_.nonEmpty))()
+            .map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-cascadeselect-dropdown")
+
+    "a panel fixed shut draws the field read-only, and says nothing" in {
+        for
+            field <- elementWithClass(cascade.open(false).render, "p-cascadeselect")
+            card  <- elementsWithClass(cascade.open(false).render, "p-uic-key-error")
+        yield
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "nothing may open it")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a panel fixed open stays: nothing outside dismisses it" in {
+        for
+            t     <- mountedField(cascade.open(true).render)
+            shown <- opened(t)
+            out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+        yield
+            assert(shown, "the panel shows")
+            assert(out.isEmpty, "no backdrop takes an outside click")
+    }
+
+    "a panel bound one way is followed, and a press is reported without being written" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mountedField(cascade.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            _    <- clickBubbling(t)(onDropdown)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(cascade.open(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(!h && s == Present(true), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a panel ref is written before the field reports it" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef((false, false))
+            t    <- mountedField(cascade.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            _    <- clickBubbling(t)(onDropdown)
+            s    <- seen.get
+        yield assert(s == (true, true), s"reported, held: $s")
+    }
+
 end CascadeSelectTest
