@@ -61,13 +61,12 @@ final case class DatePicker[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    openRef: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
     referenceDateV: Maybe[A] = Absent,
     onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
     onValuesChangeF: Maybe[Set[A] => UI.Action] = Absent,
     onRangeChangeF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
-    onOpenF: Maybe[() => UI.Action] = Absent,
-    onCloseF: Maybe[() => UI.Action] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
     onValuesBlurF: Maybe[Set[A] => UI.Action] = Absent,
     onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
@@ -177,8 +176,13 @@ final case class DatePicker[A] private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker[A] = copy(accNameRefV = v)
 
-    /** Binds the calendar's visibility two-way to `ref` (as [[Dialog.open]] does). */
-    def open(ref: SignalRef[Boolean]): DatePicker[A] = copy(openRef = Present(ref))
+    /** Binds the calendar's visibility. A `SignalRef` binds two way: the field, the dropdown button, a completing pick,
+      * the button bar, Escape and an outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal`
+      * binds one way: the calendar follows it and the picker only reports. A constant nobody hears is fixed: `false`
+      * draws the picker read-only, `true` keeps the calendar open whatever the reader does. Unbound, the picker keeps the
+      * state itself, closed (an [[inline]] calendar open). A signal nothing hears is reported in a card.
+      */
+    def open(v: Boolean | Signal[Boolean]): DatePicker[A] = copy(openSlot = Present(ReactiveValue(v)))
 
     /** The page to show while neither a `month` ref nor a held value says which. Keeps the render pure. */
     def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = copy(referenceDateV = Present(v))
@@ -196,15 +200,11 @@ final case class DatePicker[A] private (
     private[uic] def withBlurRange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): DatePicker[A] =
         copy(onRangeBlurF = Present(Callback.of2(f)))
 
-    /** Fired when the calendar opens through the component (the field, the dropdown button). An external write to a bound
-      * `open` ref is not intercepted.
+    /** Fired with the visibility the reader asks for, true when the field or the dropdown button opens the calendar and
+      * false when the button, a completing pick, the button bar or Escape closes it, after a two-way [[open]] is written.
+      * One event for both, since an open and a close are never both. External writes fire nothing.
       */
-    def onOpen(f: => UI.Action)(using Frame): DatePicker[A] = copy(onOpenF = Present(() => Callback(f)))
-
-    /** Fired when the calendar closes through the component (the dropdown button, a completing pick, the button bar,
-      * Escape). An external write to a bound `open` ref is not intercepted.
-      */
-    def onClose(f: => UI.Action)(using Frame): DatePicker[A] = copy(onCloseF = Present(() => Callback(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): DatePicker[A] = copy(onOpenF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the value held; unlike `onChange` it fires whether or not anything was edited. The
       * form-validation layer wires its `Blur` trigger here.
@@ -233,14 +233,36 @@ final case class DatePicker[A] private (
       * change patches the cells already in the document rather than inserting new ones.
       */
     private[uic] def render(using Frame): UI =
+        // A calendar bound shut by a constant nobody hears: nothing the reader does may open it, so the picker is read-only.
+        val openFixedShut = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+        if openFixedShut && !readonlyFlag then copy(readonlyFlag = true).render
+        // A calendar bound one way that nothing hears: every open and close the reader asks for is painted away again.
+        else if ReactiveValue.deaf(openSlot, onOpenF) then
+            fragment(
+                KeyDiagnostics.card(
+                    "DatePicker",
+                    "the calendar is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                renderLive
+            )
+        else renderLive
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         // The static projection (SSG, the SSR page GET) is the same anatomy, inert: an inline
         // calendar still draws its month, a floating one still draws its closed field.
         val stat: UI =
             if inlineFlag then
-                val panel = openRef match
-                    case Present(o) => when(o)(calendarStatic)
-                    case Absent     => calendarStatic
-                assemble(openRef, Absent, floating = false, panel)
+                val panel = openSlot match
+                    case Present(o) =>
+                        o.const match
+                            case Present(v) => if v then calendarStatic else UI.empty
+                            case Absent     => when(o.signal)(calendarStatic)
+                    case Absent => calendarStatic
+                assemble(openSlot, Absent, floating = false, panel)
             else assemble(Absent, Absent, floating = true, UI.empty)
         if !interactive then stat
         else
@@ -255,9 +277,10 @@ final case class DatePicker[A] private (
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     => Signal.initRef(Maybe.empty[A]).map(r => DatePicker.Binding.Single(r): DatePicker.Binding[A])
-                    oref <- openRef match
-                        case Present(r) => Kyo.lift(r)
-                        case Absent     => Signal.initRef(inlineFlag)
+                    // Unbound, the picker keeps the calendar's visibility itself: closed, or open when it is inline.
+                    oref <- openSlot match
+                        case Present(o) => Kyo.lift(o)
+                        case Absent     => Signal.initRef(inlineFlag).map(r => ReactiveValue[Boolean](r))
                     mref <- monthRef match
                         case Present(r) => Kyo.lift(DatePicker.ShownMonth.Bound(r))
                         case Absent     => Signal.initRef("").map(DatePicker.ShownMonth.Own(_))
@@ -273,7 +296,7 @@ final case class DatePicker[A] private (
                 end for
             }.placeholder(stat)
         end if
-    end render
+    end renderLive
 
     /** The host the mount publishes, and the seam golden tests render directly (a full top-down re-render shows mounted
       * regions as placeholders).
@@ -297,7 +320,7 @@ final case class DatePicker[A] private (
         // [[Reading]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
         // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
         val calendar =
-            Reading.Live(oref).and(Reading.Live(mref.signal)).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
+            Reading.of(oref).and(Reading.Live(mref.signal)).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
         val panel: UI =
             calendar.render { case ((((open, mv), cv), sd), (view, snap)) =>
                 if !open then UI.empty
@@ -305,7 +328,7 @@ final case class DatePicker[A] private (
                     val n    = nav(mv, cv, sd)
                     val grid =
                         panelUI(view, if mv.isEmpty then Absent else Present(mv), snap, Present(oref), Present(n), inline = inlineFlag)
-                    if inlineFlag then grid else Overlay(oref).seedFocus(false)(grid).renderShown(Present(s"$base-panel"))
+                    if inlineFlag then grid else Overlay.hosted(oref, onOpenF).seedFocus(false)(grid).renderShown(Present(s"$base-panel"))
                 end if
             }
         assemble(Present(oref), Present(nav("", "", false)), floating = !inlineFlag, panel, openSignal = Present(oref))
@@ -313,11 +336,11 @@ final case class DatePicker[A] private (
 
     /** Field + dropdown button + panel host inside the `.p-datepicker` root. */
     private def assemble(
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav],
         floating: Boolean,
         panel: UI,
-        openSignal: Maybe[SignalRef[Boolean]] = Absent
+        openSignal: Maybe[ReactiveValue[Boolean]] = Absent
     )(using Frame): UI =
         val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field: UI = bindingV match
@@ -355,7 +378,7 @@ final case class DatePicker[A] private (
         // Reactive rather than a render-time branch: the anchor class was the only thing the field's own subtree needed the
         // open state for, and re-rendering the field on every open made the focus return on Escape a race.
         openSignal match
-            case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig)
+            case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig.bound)
             case _                        => ()
         validity.follow(el(toChild(field), toChild(dropdown), toChild(panel)))
     end assemble
@@ -367,7 +390,7 @@ final case class DatePicker[A] private (
     private def fieldUI(
         text: String,
         editable: Boolean,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav],
         floating: Boolean,
         validity: FieldValidity
@@ -463,10 +486,10 @@ final case class DatePicker[A] private (
       * command would race the insert. So the press raises the seed flag instead, the grid renders `focusAuto` while it is up,
       * and the client focuses the grid in the same patch that inserts it.
       */
-    private def enterGrid(oref: SignalRef[Boolean], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
+    private def enterGrid(oref: ReactiveValue[Boolean], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         for
             _      <- seedGrid(nav)
-            isOpen <- oref.get
+            isOpen <- oref.current
             _      <-
                 if !isOpen then openPanel(oref)
                 else
@@ -485,24 +508,13 @@ final case class DatePicker[A] private (
             case Present(n) => n.seed.set(true)
             case Absent     => ()
 
-    /** Toggles the panel via the bound ref, firing onOpen/onClose on the transition. */
-    private def togglePanel(oref: SignalRef[Boolean])(using Frame): UI.Action =
-        for
-            wasOpen <- oref.getAndUpdate(!_)
-            _       <- if wasOpen then fire(onCloseF) else fire(onOpenF)
-        yield ()
+    /** Asks for the other visibility: written into a two-way binding, then reported to `onOpenChange`. */
+    private def togglePanel(oref: ReactiveValue[Boolean])(using Frame): UI.Action =
+        ReactiveValue.update(Present(oref), !_, onOpenF)
 
-    /** Opens the panel (firing `onOpen` on an actual transition). */
-    private def openPanel(oref: SignalRef[Boolean])(using Frame): UI.Action =
-        for
-            wasOpen <- oref.getAndSet(true)
-            r       <- if wasOpen then (): UI.Action else fire(onOpenF)
-        yield r
-
-    private def fire(f: Maybe[() => UI.Action])(using Frame): UI.Action =
-        f match
-            case Present(g) => g()
-            case Absent     => ()
+    /** Asks for the calendar open, where it is not already. */
+    private def openPanel(oref: ReactiveValue[Boolean])(using Frame): UI.Action =
+        oref.current.map(isOpen => if isOpen then (): UI.Action else ReactiveValue.change(Present(oref), true, onOpenF))
 
     // === writes =============================================================
 
@@ -531,14 +543,11 @@ final case class DatePicker[A] private (
             case Present(f) => f(now._1, now._2)
             case Absent     => ()
 
-    /** Closes the panel through the EFFECTIVE open ref (bound or mount-allocated), firing `onClose` on an actual transition. */
-    private def closeVia(oref: Maybe[SignalRef[Boolean]])(using Frame): UI.Action =
+    /** Asks for the calendar closed through the EFFECTIVE open binding (bound or mount-allocated), where it is open. */
+    private def closeVia(oref: Maybe[ReactiveValue[Boolean]])(using Frame): UI.Action =
         oref match
             case Present(r) =>
-                for
-                    wasOpen <- r.getAndSet(false)
-                    res     <- if wasOpen then fire(onCloseF) else (): UI.Action
-                yield res
+                r.current.map(isOpen => if isOpen then ReactiveValue.change(Present(r), false, onOpenF) else (): UI.Action)
             case Absent => ()
 
     /** Closes the panel and hands the focus back to the field.
@@ -549,7 +558,7 @@ final case class DatePicker[A] private (
       * An in-flow calendar is left alone entirely: it is the page's own furniture rather than a panel over it, so a pick is
       * not a reason to take it away and there is nothing to hand back.
       */
-    private def closeAndReturn(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
+    private def closeAndReturn(oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         if inlineFlag then ()
         else
             for
@@ -583,7 +592,7 @@ final case class DatePicker[A] private (
     /** Escape: put back what the panel held before the reader changed anything in it, then close and hand the focus back.
       * The refs carry the restored values, and no change callback fires, because over the whole open nothing changed.
       */
-    private def cancelVia(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
+    private def cancelVia(oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI.Action =
         if inlineFlag then ()
         else
             val undo: UI.Action = nav match
@@ -622,7 +631,7 @@ final case class DatePicker[A] private (
         view: DatePickerView,
         monthOverride: Maybe[String],
         snap: DatePicker.Snapshot,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav],
         inline: Boolean
     )(using Frame): UI =
@@ -743,7 +752,7 @@ final case class DatePicker[A] private (
         year: Int,
         month: Int,
         snap: DatePicker.Snapshot,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(using Frame): UI =
         val dim      = DatePicker.daysInMonth(year, month)
@@ -849,7 +858,7 @@ final case class DatePicker[A] private (
         month: Int,
         cursorIso: String,
         snap: DatePicker.Snapshot,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: DatePicker.Nav
     )(e: KeyboardEvent)(using Frame): UI.Action =
         CalendarNav.onKey(e.key, e.modifiers, perRow = 7) match
@@ -879,7 +888,7 @@ final case class DatePicker[A] private (
     private def selectDayIfInBounds(
         iso: String,
         snap: DatePicker.Snapshot,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(using Frame): UI.Action =
         val outOfRange =
@@ -929,12 +938,12 @@ final case class DatePicker[A] private (
       * bounds) and closes unless the time picker needs the panel; a set toggles the day and stays open; a range fills start
       * and end and closes on completion.
       */
-    private def selectDay(iso: String, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def selectDay(iso: String, snap: DatePicker.Snapshot, oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI.Action =
         remember(nav).andThen(selectDayNow(iso, snap, oref, nav))
 
-    private def selectDayNow(iso: String, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(
+    private def selectDayNow(iso: String, snap: DatePicker.Snapshot, oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(
         using Frame
     ): UI.Action =
         bindingV match
@@ -963,7 +972,7 @@ final case class DatePicker[A] private (
     /** Prime's `.p-datepicker-month-view`: 12 month cells. For a `YearMonth` a pick writes the value and closes; while
       * drilling from the day view it writes the displayed month and drills back.
       */
-    private def monthView(year: Int, snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def monthView(year: Int, snap: DatePicker.Snapshot, oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI =
         val current         = DatePicker.datePart(DatePicker.anchorOf(snap)).take(7)
@@ -1017,7 +1026,7 @@ final case class DatePicker[A] private (
         year: Int,
         month: Int,
         snap: DatePicker.Snapshot,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(using Frame): UI =
         val current         = DatePicker.datePart(DatePicker.anchorOf(snap)).take(4)
@@ -1096,7 +1105,7 @@ final case class DatePicker[A] private (
         cursor: String,
         indexOf: String => Int,
         perRow: Int,
-        oref: Maybe[SignalRef[Boolean]],
+        oref: Maybe[ReactiveValue[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(move: (Int, CalendarNav.Step) => Maybe[String])(activate: String => UI.Action)(using Frame): UI =
         var grid = div.cssClass(cls)
@@ -1131,7 +1140,7 @@ final case class DatePicker[A] private (
     end granularGrid
 
     /** A pick in the grid the kind picks in (`YearMonth`, `Year`): write the value, close. */
-    private def pickGranular(iso: String, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def pickGranular(iso: String, oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI.Action =
         for
@@ -1245,7 +1254,7 @@ final case class DatePicker[A] private (
     /** Prime's `.p-datepicker-buttonbar`: Today (only with an explicit [[today]], the render being pure) and Clear, both in
       * Prime's small secondary text Button skin.
       */
-    private def buttonBarUI(snap: DatePicker.Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+    private def buttonBarUI(snap: DatePicker.Snapshot, oref: Maybe[ReactiveValue[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI =
         def barButton(cls: String, label: String, action: Maybe[UI.Action]): UI =
@@ -1465,7 +1474,7 @@ object DatePicker:
       * typed text the field did not take).
       */
     final private[uic] case class Refs(
-        open: SignalRef[Boolean],
+        open: ReactiveValue[Boolean],
         month: ShownMonth,
         cursor: SignalRef[String],
         view: SignalRef[DatePickerView],
@@ -1473,6 +1482,19 @@ object DatePicker:
         restore: SignalRef[Maybe[Restore]],
         draft: SignalRef[Maybe[String]]
     )
+
+    private[uic] object Refs:
+        /** The refs over a two-way open ref, the shape a test or a golden hands the wired host. */
+        def apply(
+            open: SignalRef[Boolean],
+            month: ShownMonth,
+            cursor: SignalRef[String],
+            view: SignalRef[DatePickerView],
+            seed: SignalRef[Boolean],
+            restore: SignalRef[Maybe[Restore]],
+            draft: SignalRef[Maybe[String]]
+        ): Refs = new Refs(ReactiveValue[Boolean](open), month, cursor, view, seed, restore, draft)
+    end Refs
 
     final private[uic] case class Nav(
         monthOv: ShownMonth,
@@ -1696,14 +1718,11 @@ final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DateP
     /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
     def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
 
-    /** Binds the calendar's visibility two-way. */
-    def open(ref: SignalRef[Boolean]): Self = on(picker.open(ref))
+    /** Binds the calendar's visibility, as [[DatePicker.open]]. */
+    def open(v: Boolean | Signal[Boolean]): Self = on(picker.open(v))
 
-    /** Fired when the calendar opens through the component. */
-    def onOpen(f: => UI.Action)(using Frame): Self = on(picker.onOpen(f))
-
-    /** Fired when the calendar closes through the component. */
-    def onClose(f: => UI.Action)(using Frame): Self = on(picker.onClose(f))
+    /** Fired with the visibility the reader asks for, as [[DatePicker.onOpenChange]]. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Self = on(picker.onOpenChange(f))
 
     def disabled(v: Boolean): Self = on(picker.disabled(v))
 
@@ -1795,14 +1814,11 @@ final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DateP
     /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
     def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
 
-    /** Binds the calendar's visibility two-way. */
-    def open(ref: SignalRef[Boolean]): Self = on(picker.open(ref))
+    /** Binds the calendar's visibility, as [[DatePicker.open]]. */
+    def open(v: Boolean | Signal[Boolean]): Self = on(picker.open(v))
 
-    /** Fired when the calendar opens through the component. */
-    def onOpen(f: => UI.Action)(using Frame): Self = on(picker.onOpen(f))
-
-    /** Fired when the calendar closes through the component. */
-    def onClose(f: => UI.Action)(using Frame): Self = on(picker.onClose(f))
+    /** Fired with the visibility the reader asks for, as [[DatePicker.onOpenChange]]. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Self = on(picker.onOpenChange(f))
 
     def disabled(v: Boolean): Self = on(picker.disabled(v))
 
