@@ -150,4 +150,45 @@ class OverlayTest extends UicTest:
         }
     }
 
+    private def panel(open: Boolean | Signal[Boolean])(using Frame) = Overlay(open).autoFlip(false)(UI.span("inside"))
+
+    private def backdrops(t: UI)(using Frame) = elementsWithClass(t, "p-uic-overlay-backdrop")
+
+    private def onBackdrop(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-uic-overlay-backdrop")
+
+    "a constant nobody hears is fixed: an open panel stays, and nothing outside dismisses it" in {
+        for
+            outside <- backdrops(panel(true).render)
+            p       <- elementWithClass(panel(true).render, "p-uic-overlay-panel")
+            card    <- elementsWithClass(panel(true).render, "p-uic-key-error")
+            shut    <- elementsWithClass(panel(false).render, "p-uic-overlay-panel")
+        yield
+            assert(outside.isEmpty, "no backdrop takes an outside click")
+            assert(p.attrs.onKeyDown.isEmpty, "Escape closes nothing")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+            assert(shut.isEmpty, "a constant false shows nothing")
+    }
+
+    "a constant somebody hears reports an outside click" in {
+        for
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            _    <- clickBubbling(panel(true).onOpenChange(v => seen.set(Present(v))).render)(onBackdrop)
+            s    <- seen.get
+        yield assert(s == Present(false), s"reported $s")
+    }
+
+    "a signal bound one way is followed, and a dismissal is reported without being written" in {
+        for
+            held <- Signal.initRef(true)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            _    <- clickBubbling(panel(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)(onBackdrop)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(panel(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h && s == Present(false), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
 end OverlayTest

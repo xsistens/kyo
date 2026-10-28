@@ -111,7 +111,7 @@ end OverlayAnchor
   */
 final case class Overlay private (
     // Absent for a panel its host gates and closes itself (see [[Overlay.gated]]).
-    openRef: Maybe[SignalRef[Boolean]],
+    openSlot: Maybe[ReactiveValue[Boolean]],
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     matchWidthV: Boolean = true,
     maxHeightV: Maybe[String] = Absent,
@@ -130,7 +130,10 @@ final case class Overlay private (
     containClicksV: Boolean = false,
     triggerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil,
-    closeV: Maybe[UI.Action] = Absent
+    closeV: Maybe[UI.Action] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    reportedAsV: String = "Overlay",
+    quietFlag: Boolean = false
 ) extends Node:
     type Self = Overlay
 
@@ -277,12 +280,47 @@ final case class Overlay private (
     /** Adds panel children. */
     def apply(cs: UI*): Overlay = copy(kids = kids ++ cs)
 
+    /** Fired with the visibility the reader asks for (false for an outside click, an outside scroll and Escape), after
+      * a two-way [[Overlay.apply open]] binding is written.
+      */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Overlay = copy(onOpenF = Present(Callback.of(f)))
+
+    /** Package-internal: the component a binding mistake is reported for, when a host hands its own binding on. */
+    private[uic] def reportedAs(component: String): Overlay = copy(reportedAsV = component)
+
+    /** Package-internal: a host whose binding is not the reader's to see yet (a static placeholder over a signal that
+      * stands in for state the host has not allocated) keeps the overlay from reporting it.
+      */
+    private[uic] def quiet: Overlay = copy(quietFlag = true)
+
     private[uic] def render(using Frame): UI =
-        val gated: UI = openRef.fold(openContent)(ref => when(ref)(openContent))
-        triggerV match
+        // Shown while the binding says so: a constant needs no region, a signal is one boundary.
+        val gated: UI = openSlot match
+            case Absent        => openContent
+            case Present(slot) =>
+                slot.const match
+                    case Present(v) => if v then openContent else UI.empty
+                    case Absent     => when(slot.signal)(openContent)
+        val drawn = triggerV match
             case Present(t) => div.cssClass("p-uic-overlay-anchor")(toChild(t), toChild(gated))
             case Absent     => gated
+        // A signal nobody hears: every dismissal the reader asks for is painted away again.
+        if quietFlag || !ReactiveValue.deaf(openSlot, onOpenF) then drawn
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    reportedAsV,
+                    "the visibility is bound one way and nothing hears a dismissal, so the reader cannot close it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                drawn
+            )
+        end if
     end render
+
+    /** A constant nobody hears is fixed: an open panel stays, and nothing outside dismisses it. */
+    private def fixed: Boolean = ReactiveValue.fixed(openSlot, onOpenF)
 
     /** The open panel content: the continuous flip/shift reposition when `autoFlip`, else the declared-anchor render.
       *
@@ -291,7 +329,7 @@ final case class Overlay private (
       * moves a highlight, and a mount around the panel would start again each time, showing an inert snapshot that no
       * click or key reaches while it does.
       *
-      * Without one, which is the self-gated `render` path inside the `when(openRef)` region, each open mints a fresh id
+      * Without one, which is the self-gated `render` path inside the `when(open)` region, each open mints a fresh id
       * in a mount of its own and a fresh reposition lifecycle; close tears it down (and with it the scroll/resize
       * observer, via the mount's Scope).
       */
@@ -461,7 +499,7 @@ final case class Overlay private (
         }.keyed(panelId).placeholder(UI.empty)
 
     /** Package-internal: renders backdrop + panel UNCONDITIONALLY, for hosts
-      * (Menubar/TieredMenu/MegaMenu) that already subscribe to `openRef` in an
+      * (Menubar/TieredMenu/MegaMenu) that already subscribe to the open state in an
       * enclosing render and gate the overlay's presence themselves. Subscribing
       * twice to the same ref (the host's outer subscription plus this overlay's
       * own `when`) races the inner update against the outer replace and can
@@ -469,8 +507,8 @@ final case class Overlay private (
       * subscription. Escape/outside-click still write `false` into the ref.
       */
     /** Package-internal: the open panel with the full placement of [[render]] (the measured flip, the portal, a pointer
-      * anchor), for a host that reads `openRef` in its own region and renders this only while it is open. That host is
-      * then ONE region over its open state and everything else it draws; [[render]]'s own `when(openRef)` inside it would
+      * anchor), for a host that reads the open state in its own region and renders this only while it is open. That host is
+      * then ONE region over its open state and everything else it draws; [[render]]'s own `when(open)` inside it would
       * be a second region, drawing a panel that closed over the host's older state. Escape and an outside click still
       * write `false` into the ref, and the host's region takes the panel away.
       *
@@ -522,12 +560,12 @@ final case class Overlay private (
         val close: UI.Action = closeV match
             case Present(action) => action
             case Absent          =>
-                openRef match
-                    case Present(ref) => ref.set(false)
-                    case Absent       => ()
+                ReactiveValue.change(openSlot, false, onOpenF)
 
+        val outside            = dismissOnOutsideClickV && !fixed
+        val escape             = dismissOnEscapeV && !fixed
         val backdrop: List[UI] =
-            if dismissOnOutsideClickV then
+            if outside then
                 var b = div.cssClass("p-uic-overlay-backdrop").onClickSelf(close)
                 // The full-viewport backdrop intercepts every outside wheel (a fixed element chains scroll
                 // to the DOCUMENT scroller, so inner scroll containers never move), and each Scroll mode turns
@@ -570,17 +608,17 @@ final case class Overlay private (
         // innermost) overlay, ancestor panels keep their state. Only stamped when
         // this panel actually dismisses on Escape, so an Escape-inert panel stays
         // transparent to its enclosing overlay chain.
-        if dismissOnEscapeV then panel = panel.stopPropagation(true)
+        if escape then panel = panel.stopPropagation(true)
         // See `containClicks`: the no-op handler is what makes the stop apply to a click.
         if containClicksV then panel = panel.onClick(()).stopPropagation(true)
         // A panel that navigates with arrow keys (Select/MultiSelect/Menu/... via onPanelKeyDown) must not let the
         // browser ALSO scroll the page underneath; the keydown is still delivered so the highlight moves.
         if keyHandlerV.isDefined then panel = panel.preventScrollKeys
-        if dismissOnEscapeV || keyHandlerV.isDefined then
+        if escape || keyHandlerV.isDefined then
             panel = panel.onKeyDown { e =>
                 e.key match
-                    case Keyboard.Escape if dismissOnEscapeV => close
-                    case _                                   =>
+                    case Keyboard.Escape if escape => close
+                    case _                         =>
                         keyHandlerV match
                             case Present(f) => f(e)
                             case Absent     => ()
@@ -593,10 +631,12 @@ final case class Overlay private (
 end Overlay
 
 object Overlay:
-    /** An overlay whose visibility binds two-way to `open`: writes to the ref
-      * open and close the panel; Escape and outside clicks write `false` back.
+    /** An overlay over the visibility `open`. A `SignalRef` binds two way: writes open and close the panel, and Escape,
+      * an outside click or an outside scroll write false, then [[Overlay.onOpenChange]] hears it. A plain `Signal` binds
+      * one way: the panel follows it and only reports a dismissal. A constant nobody hears is fixed: an open panel
+      * stays, and nothing outside dismisses it. A signal nothing hears is reported in a card.
       */
-    def apply(open: SignalRef[Boolean]): Overlay = new Overlay(Present(open))
+    def apply(open: Boolean | Signal[Boolean]): Overlay = new Overlay(Present(ReactiveValue(open)))
 
     /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
       * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
