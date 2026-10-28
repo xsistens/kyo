@@ -56,7 +56,8 @@ final case class TreeSelect[K] private (
     valueSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
     expandedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
     onExpandedF: Maybe[Set[K] => UI.Action] = Absent,
-    openRefV: Maybe[SignalRef[Boolean]] = Absent,
+    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onOpenF: Maybe[Boolean => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.Single,
     placeholderV: Maybe[TextValue] = Absent,
     emptyContentV: Maybe[EmptyContent] = Absent,
@@ -133,10 +134,24 @@ final case class TreeSelect[K] private (
       */
     def loading(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(loadingV = Present(ReactiveValue(v)))
 
-    /** Binds the panel visibility two-way to `ref` (optional; self-managed
-      * otherwise).
+    /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
+      * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
+      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only,
+      * `true` keeps the panel open whatever the reader does. Unbound, the field keeps the state itself, starting
+      * closed. A signal nothing hears is reported in a card.
       */
-    def open(ref: SignalRef[Boolean]): TreeSelect[K] = copy(openRefV = Present(ref))
+    def open(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): TreeSelect[K] = copy(onOpenF = Present(Callback.of(f)))
+
+    /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
+    private def askOpen(open: ReactiveValue[Boolean], v: Boolean)(using Frame): UI.Action =
+        ReactiveValue.change(Present(open), v, onOpenF)
+
+    /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
+    private def openFixedShut: Boolean =
+        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
 
     /** Selection semantics (Tree's modes): `Single` (default: pick replaces the
       * selection and closes the panel), `Multiple` (toggle, panel stays open), or
@@ -212,6 +227,22 @@ final case class TreeSelect[K] private (
     end keyCollisionCard
 
     private[uic] def render(using Frame): UI =
+        // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
+        if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "TreeSelect",
+                    "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
+                        "onOpenChange, or bind a SignalRef",
+                    Nil
+                ),
+                renderLive
+            )
+        end if
+    end render
+
+    private def renderLive(using Frame): UI =
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
@@ -224,9 +255,10 @@ final case class TreeSelect[K] private (
                 cmds <- UI.commands
                 // A caller's own id is the base the tree's parts derive from; a minted one stands in.
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-                open <- openRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef(false)
+                // Unbound, the field keeps the panel state itself, starting closed.
+                open <- openSlot match
+                    case Present(slot) => Kyo.lift(slot)
+                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
                 exp <- expandedSlot match
                     case Present(v) => Kyo.lift(v.bound)
                     case Absent     => Signal.initRef(Set.empty[K]).map(r => r: Set[K] | Signal[Set[K]])
@@ -236,14 +268,14 @@ final case class TreeSelect[K] private (
                     if valueSlot.isEmpty then Signal.initRef(Set.empty[K]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
                 self = own.fold(this)(r => copy(valueSlot = Present(ReactiveValue(r))))
-            yield self.wired(open, exp, hi, base)
+            yield self.copy(openSlot = Present(open)).wiredOver(open, exp, hi, base)
         }.placeholder(stat)
-    end render
+    end renderLive
 
     /** A constant selection nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to
       * open.
       */
-    private def fixed: Boolean = ReactiveValue.fixed(valueSlot, onChangeF)
+    private def fixed: Boolean = openFixedShut || ReactiveValue.fixed(valueSlot, onChangeF)
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(
@@ -252,13 +284,24 @@ final case class TreeSelect[K] private (
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
+        val slot = ReactiveValue[Boolean](open)
+        copy(openSlot = Present(slot)).wiredOver(slot, exp, hi, idBase)
+    end wired
+
+    /** [[wired]] over the panel state however it is bound. */
+    private def wiredOver(
+        open: ReactiveValue[Boolean],
+        exp: Set[K] | Signal[Set[K]],
+        hi: SignalRef[Int],
+        idBase: String
+    )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val expV     = ReactiveValue[Set[K]](exp)
-        val panel    = Reading.Live(open).and(Reading.of(expV)).and(Reading.Live(hi))
+        val panel    = Reading.of(open).and(Reading.of(expV)).and(Reading.Live(hi))
         panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
             copy(nodeList = rs).bodyStatic(sel, e, o, Present(TreeSelect.State(open, expV, hi, h, idBase)), ph, ld, validity)
         }
-    end wired
+    end wiredOver
 
     /** The roots as ONE reading, in the order the setters received them: fixed while none of them is a signal. */
     private[uic] def roots(using Frame): Reading[List[TreeNode[K]]] =
@@ -308,13 +351,13 @@ final case class TreeSelect[K] private (
 
         def openPanel: UI.Action =
             st match
-                case Present(s) => s.hi.set(openHighlight).andThen(s.open.set(true))
+                case Present(s) => s.hi.set(openHighlight).andThen(askOpen(s.open, true))
                 case Absent     => ()
 
         // A pointer opens through the same path as a key, so the highlight lands on a row either way.
         def toggle: UI.Action =
             st match
-                case Present(s) => if isOpen then s.open.set(false) else openPanel
+                case Present(s) => if isOpen then askOpen(s.open, false) else openPanel
                 case Absent     => ()
 
         // Fired by the hosted Tree after its selection change: Single mode closes the panel (Prime). The new set reaches
@@ -323,7 +366,7 @@ final case class TreeSelect[K] private (
             st match
                 case Present(s) =>
                     selectionModeV match
-                        case SelectionMode.Single | SelectionMode.Radio => s.open.set(false)
+                        case SelectionMode.Single | SelectionMode.Radio => askOpen(s.open, false)
                         case _                                          => ()
                 case Absent => ()
 
@@ -382,7 +425,7 @@ final case class TreeSelect[K] private (
             // Nothing in this panel takes focus: it stays on the trigger, which is where the
             // tree's keyboard and the highlight announcement both live. A panel that seeded focus
             // would take the announcement away from the one element reading it.
-            val panel = Overlay(state.open)
+            val panel = Overlay.hosted(state.open, onOpenF)
                 .panelClass("p-treeselect-overlay")
                 .panelClass("p-component")
                 .seedFocus(false)
@@ -448,7 +491,7 @@ final case class TreeSelect[K] private (
                     // Escape closes, and so does Tab in either direction: the panel's keyboard
                     // lives here, on the element the Tab is carrying the reader away from, so a
                     // panel left open behind them is one nothing answers.
-                    else if e.key == Keyboard.Escape || e.key == Keyboard.Tab then state.open.set(false)
+                    else if e.key == Keyboard.Escape || e.key == Keyboard.Tab then askOpen(state.open, false)
                     else
                         treeKey match
                             case Present(f) => f(e)
@@ -485,7 +528,7 @@ object TreeSelect:
       * addresses its rows by.
       */
     final private[uic] case class State[K](
-        open: SignalRef[Boolean],
+        open: ReactiveValue[Boolean],
         exp: ReactiveValue[Set[K]],
         hi: SignalRef[Int],
         hiV: Int,

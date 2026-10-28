@@ -643,6 +643,12 @@ object Overlay:
       */
     private[uic] def gated(close: UI.Action): Overlay = new Overlay(Absent, closeV = Present(close))
 
+    /** Package-internal: the panel of a host over the host's own open binding, reporting a dismissal to the host's
+      * callback. Quiet, since the host reports its binding itself.
+      */
+    private[uic] def hosted(open: ReactiveValue[Boolean], report: Maybe[Boolean => UI.Action]): Overlay =
+        new Overlay(Present(open), onOpenF = report, quietFlag = true)
+
     /** How an OPEN overlay responds to scroll input outside its panel. The invisible outside-click
       * backdrop covers the whole viewport, so page scrolling necessarily runs through it; the mode
       * decides what that means. Scrolling INSIDE the panel (a `maxHeight` listbox) is unaffected.

@@ -943,6 +943,61 @@ class SelectTest extends UicTest:
         yield assert(after.nonEmpty, "the field never showed the option the reader picked")
     }
 
+    private def bare(using Frame) = uic.Select[Fruit]().options(fruit)(_.name).optionKey(_.id)
+
+    private def triggers(t: UI)(using Frame) = elementsWithClass(t, "p-select").map(_.filter(declaresClick))
+
+    /** The select as its mount publishes it, the trigger wired. */
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, t => elementsWithClass(t, "p-select").map(_.nonEmpty))()
+            .map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    "a panel fixed shut draws the select read-only, and says nothing" in {
+        for
+            field <- elementWithClass(bare.open(false).render, "p-select")
+            card  <- elementsWithClass(bare.open(false).render, "p-uic-key-error")
+        yield
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "nothing may open it")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a panel fixed open stays: nothing outside dismisses it" in {
+        for
+            t    <- mounted(bare.open(true).render)
+            pane <- elementsWithClass(t, "p-select-overlay")
+            out  <- elementsWithClass(t, "p-uic-overlay-backdrop")
+        yield
+            assert(pane.nonEmpty, "the panel shows")
+            assert(out.isEmpty, "no backdrop takes an outside click")
+    }
+
+    "a panel bound one way is followed, and a press is reported without being written" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mounted(bare.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            tr   <- triggers(t)
+            _    <- click(tr.head)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(bare.open(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(!h && s == Present(true), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a panel ref is written before the select reports it" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef((false, false))
+            t    <- mounted(bare.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            tr   <- triggers(t)
+            _    <- click(tr.head)
+            s    <- seen.get
+        yield assert(s == (true, true), s"reported, held: $s")
+    }
+
 end SelectTest
 
 object SelectTest:
