@@ -31,7 +31,10 @@ class DatePickerTest extends UicTest:
 
     /** The two-way open ref the test handed the wired host. */
     extension (rs: DatePicker.Refs)
-        private def openRef: SignalRef[Boolean] = rs.open.writable.getOrElse(throw new AssertionError("open is not a ref"))
+        private def openRef: SignalRef[Boolean]        = rs.open.writable.getOrElse(throw new AssertionError("open is not a ref"))
+        private def viewRef: SignalRef[DatePickerView] =
+            rs.view.writable.getOrElse(throw new AssertionError("view is not a ref"))
+    end extension
 
     /** The refs a mount hands the wired host, minted the way the mount mints them, plus the month the test reads back. */
     private def refs(open: Boolean = true, month: String = "", cursor: String = "", view: DatePickerView = DatePickerView.Date)(
@@ -337,7 +340,7 @@ class DatePickerTest extends UicTest:
             // and the browser would be pressing Enter on the grid the move re-rendered.
             moved  <- elementWithClass(ui, "p-datepicker-month-view")
             _      <- press(moved, UI.Keyboard.Enter)
-            landed <- rs.view.get
+            landed <- rs.viewRef.get
             days   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(days, UI.Keyboard.ArrowRight)
             at     <- rs.cursor.get
@@ -547,7 +550,7 @@ class DatePickerTest extends UicTest:
             ui = uic.DatePicker[LocalDate]().value(vref).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
             months <- elementWithClass(ui, "p-datepicker-month-view")
             _      <- press(months, UI.Keyboard.Enter)
-            landed <- rs.view.get
+            landed <- rs.viewRef.get
             got    <- moved.get
         yield assert(landed == DatePickerView.Date && got == List("dp-grid"))
     }
@@ -578,7 +581,7 @@ class DatePickerTest extends UicTest:
             vref    <- Signal.initRef(Maybe.empty[LocalDate])
             (rs, _) <- refs()
             ui = uic.DatePicker[LocalDate]().value(vref).month(shown).wired(
-                rs.copy(month = DatePicker.ShownMonth.Bound(shown)),
+                rs.copy(month = DatePicker.ShownMonth.Bound(ReactiveValue[YearMonth](shown), Absent)),
                 "dp",
                 _ => ()
             )
@@ -1075,6 +1078,84 @@ class DatePickerTest extends UicTest:
             _    <- click(dd.head)
             s    <- seen.get
         yield assert(s == (true, true), s"reported, held: $s")
+    }
+
+    private def calendar(using Frame) = picker.open(true)
+
+    private val july26 = YearMonth.of(2026, 7)
+
+    "a month bound one way is followed, and paging is reported without being written" in {
+        for
+            held <- Signal.initRef(july26)
+            seen <- Signal.initRef(Absent: Maybe[YearMonth])
+            t    <- mountedPicker(calendar.month(held.readOnly).onMonthChange(m => seen.set(Present(m))).render)
+            next <- elementWithClass(t, "p-datepicker-next-button")
+            _    <- click(next)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(calendar.month(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h == july26 && s == Present(YearMonth.of(2026, 8)), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onMonthChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a month fixed by a constant nobody hears keeps its page: the page buttons stay, inert" in {
+        for
+            t    <- mountedPicker(calendar.month(july26).render)
+            next <- elementWithClass(t, "p-datepicker-next-button")
+            card <- elementsWithClass(calendar.month(july26).render, "p-uic-key-error")
+        yield
+            assert(!declaresClick(next) && next.attrs.ariaAttrs.get("disabled").contains("true"), "the button is inert and says so")
+            assert(card.isEmpty, s"a fixed page is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a month ref is written before the picker reports it" in {
+        for
+            held <- Signal.initRef(july26)
+            seen <- Signal.initRef((july26, july26))
+            t    <- mountedPicker(calendar.month(held).onMonthChange(m => held.get.map(h => seen.set((m, h)))).render)
+            next <- elementWithClass(t, "p-datepicker-next-button")
+            _    <- click(next)
+            s    <- seen.get
+        yield assert(s == (YearMonth.of(2026, 8), YearMonth.of(2026, 8)), s"reported, held: $s")
+    }
+
+    "a view bound one way is followed, and a drill is reported without being written" in {
+        for
+            held <- Signal.initRef(DatePickerView.Date)
+            seen <- Signal.initRef(Absent: Maybe[DatePickerView])
+            t    <- mountedPicker(calendar.currentView(held.readOnly).onCurrentViewChange(v => seen.set(Present(v))).render)
+            b    <- elementWithClass(t, "p-datepicker-select-month")
+            _    <- click(b)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(calendar.currentView(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h == DatePickerView.Date && s == Present(DatePickerView.Month), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onCurrentViewChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a view fixed by a constant nobody hears stays: the title buttons are inert" in {
+        for
+            t    <- mountedPicker(calendar.currentView(DatePickerView.Date).render)
+            b    <- elementWithClass(t, "p-datepicker-select-month")
+            card <- elementsWithClass(calendar.currentView(DatePickerView.Date).render, "p-uic-key-error")
+        yield
+            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the button is inert and says so")
+            assert(card.isEmpty, s"a fixed view is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a view ref is written before the picker reports it" in {
+        for
+            held <- Signal.initRef(DatePickerView.Date)
+            seen <- Signal.initRef((DatePickerView.Date, DatePickerView.Date))
+            t    <- mountedPicker(calendar.currentView(held).onCurrentViewChange(v => held.get.map(h => seen.set((v, h)))).render)
+            b    <- elementWithClass(t, "p-datepicker-select-month")
+            _    <- click(b)
+            s    <- seen.get
+        yield assert(s == (DatePickerView.Month, DatePickerView.Month), s"reported, held: $s")
     }
 
 end DatePickerTest

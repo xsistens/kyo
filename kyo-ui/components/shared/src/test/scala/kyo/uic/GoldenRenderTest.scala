@@ -40,16 +40,16 @@ class GoldenRenderTest extends UicTest:
             cursor <- Signal.initRef("")
             // The mount lifts a caller's view ref and mints one at the kind's own grid otherwise;
             // rendering the seam by hand has to do the same or the golden shows the wrong grid.
-            view <- dp.currentViewRefV match
-                case Present(r) => Kyo.lift(r)
-                case Absent     => Signal.initRef(dp.kind.view)
+            view <- dp.currentViewSlot match
+                case Present(v) => Kyo.lift(v)
+                case Absent     => Signal.initRef(dp.kind.view).map(r => uic.ReactiveValue[uic.DatePickerView](r))
             seed    <- Signal.initRef(false)
             restore <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
             draft   <- Signal.initRef(Maybe.empty[String])
             shown: uic.DatePicker.ShownMonth = mref match
-                case Present(r) => uic.DatePicker.ShownMonth.Bound(r)
+                case Present(r) => uic.DatePicker.ShownMonth.Bound(uic.ReactiveValue[YearMonth](r), Absent)
                 case Absent     => uic.DatePicker.ShownMonth.Own(minted)
-            refs = uic.DatePicker.Refs(oref, shown, cursor, view, seed, restore, draft)
+            refs = uic.DatePicker.Refs(uic.ReactiveValue[Boolean](oref), shown, cursor, view, seed, restore, draft)
             out <- UI.runRender(dp.wired(refs, "dp", _ => ())).take(1).run
         yield out.mkString
 

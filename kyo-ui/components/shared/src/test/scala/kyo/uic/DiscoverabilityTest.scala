@@ -1436,6 +1436,10 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x(cv: SignalRef[uic.DatePickerView]): uic.DatePicker[java.time.YearMonth] = uic.DatePicker[java.time.YearMonth]().currentView(cv)"""
         )
         typeCheck(
+            preamble + """def x(using Frame): uic.DatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().month(java.time.YearMonth.of(2026, 7)).onMonthChange(_ => ()).currentView(uic.DatePickerView.Date).onCurrentViewChange(_ => ())"""
+        )
+        typeCheckFailure(preamble + """def x(using Frame) = uic.DatePicker[java.time.LocalTime]().onMonthChange(_ => ())""")
+        typeCheck(
             preamble + """def x: uic.DatePicker[java.time.LocalDateTime] = uic.DatePicker[java.time.LocalDateTime]().hourFormat(uic.HourFormat.H12).showButtonBar(true).today(java.time.LocalDateTime.of(2026, 7, 16, 9, 0))"""
         )
         typeCheck(
