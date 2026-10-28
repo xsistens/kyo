@@ -526,9 +526,13 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.RadioButton("a").valueState(uic.ValueState.Negative)""")
     }
 
-    "DatePicker opens only via SignalRef[Boolean] (no plain Boolean)" in {
+    "DatePicker binds its calendar by rule A, with one open event" in {
         typeCheck(preamble + """def x(o: SignalRef[Boolean]) = uic.DatePicker[java.time.LocalDate]().open(o)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().open(true)""")
+        typeCheck(
+            preamble + """def x(using Frame): uic.DatePicker[java.time.LocalDate] = uic.DatePicker[java.time.LocalDate]().open(true).onOpenChange(_ => ())"""
+        )
+        typeCheckFailure(preamble + """def x(using Frame) = uic.DatePicker[java.time.LocalDate]().onOpen(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.DatePicker[java.time.LocalDate]().onClose(())""")
     }
 
     "new controls' chained setters keep the concrete type" in {

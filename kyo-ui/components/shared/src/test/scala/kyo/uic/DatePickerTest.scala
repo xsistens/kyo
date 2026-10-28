@@ -29,6 +29,10 @@ class DatePickerTest extends UicTest:
 
     private def day(iso: String): LocalDate = LocalDate.parse(iso)
 
+    /** The two-way open ref the test handed the wired host. */
+    extension (rs: DatePicker.Refs)
+        private def openRef: SignalRef[Boolean] = rs.open.writable.getOrElse(throw new AssertionError("open is not a ref"))
+
     /** The refs a mount hands the wired host, minted the way the mount mints them, plus the month the test reads back. */
     private def refs(open: Boolean = true, month: String = "", cursor: String = "", view: DatePickerView = DatePickerView.Date)(
         using Frame
@@ -51,7 +55,7 @@ class DatePickerTest extends UicTest:
             (rs, mref) <- refs(month = month, cursor = cursor)
             moved      <- Signal.initRef(List.empty[String])
             ui = uic.DatePicker[LocalDate]().value(vref).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
-        yield (vref, mref, rs.cursor, rs.open, moved, ui)
+        yield (vref, mref, rs.cursor, rs.openRef, moved, ui)
 
     /** Presses `key` on the day grid and reports where the cursor landed. */
     private def after(key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none, from: String = july)(using
@@ -225,7 +229,7 @@ class DatePickerTest extends UicTest:
             (rs, _) <- refs(open = open, month = month, cursor = cursor, view = dp.kind.view)
             moved   <- Signal.initRef(List.empty[String])
             ui = dp.value(vref).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
-        yield (vref, rs.open, moved, ui)
+        yield (vref, rs.openRef, moved, ui)
         end for
     end recording
 
@@ -258,14 +262,14 @@ class DatePickerTest extends UicTest:
             ui = uic.DatePicker[LocalDate]().range(start, end).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(grid, UI.Keyboard.Enter)
-            opened <- rs.open.get
+            opened <- rs.openRef.get
             half   <- moved.get
             _      <- rs.cursor.set("2026-07-14")
             later  <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(later, UI.Keyboard.Enter)
             from   <- start.get
             to     <- end.get
-            closed <- rs.open.get
+            closed <- rs.openRef.get
             got    <- moved.get
         yield
             assert(opened && half.isEmpty, "a range half-picked is still being picked, so the panel stays")
@@ -282,7 +286,7 @@ class DatePickerTest extends UicTest:
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(grid, UI.Keyboard.Enter)
             picked <- set.get
-            still  <- rs.open.get
+            still  <- rs.openRef.get
             got    <- moved.get
         yield assert(picked == Set(day("2026-07-02"), day("2026-07-09")) && still && got.isEmpty, "there is a second date to pick")
     }
@@ -367,7 +371,7 @@ class DatePickerTest extends UicTest:
             after  <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(after, UI.Keyboard.Escape)
             back   <- set.get
-            open   <- rs.open.get
+            open   <- rs.openRef.get
             count  <- fired.get
         yield
             assert(picked == Set(day("2026-07-02"), day("2026-07-09")), "the pick lands while the panel is up")
@@ -414,7 +418,7 @@ class DatePickerTest extends UicTest:
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(grid, UI.Keyboard.Enter)
             picked <- vref.get
-            _      <- rs.open.set(true)
+            _      <- rs.openRef.set(true)
             again  <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(again, UI.Keyboard.Escape)
             kept   <- vref.get
@@ -431,7 +435,7 @@ class DatePickerTest extends UicTest:
             after  <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(after, UI.Keyboard.Escape)
             picked <- set.get
-            still  <- rs.open.get
+            still  <- rs.openRef.get
         yield assert(picked == Set(day("2026-07-09")) && still, "what is picked in the page is picked")
     }
 
@@ -453,7 +457,7 @@ class DatePickerTest extends UicTest:
             ui = uic.DatePicker[LocalDate]().value(vref).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
             field  <- elementWithClass(ui, "p-datepicker-input")
             _      <- press(field, UI.Keyboard.ArrowDown)
-            opened <- rs.open.get
+            opened <- rs.openRef.get
             first  <- moved.get
             _      <- press(field, UI.Keyboard.ArrowDown)
             second <- moved.get
@@ -470,7 +474,7 @@ class DatePickerTest extends UicTest:
             ui = uic.DatePicker[LocalDate]().value(vref).wired(rs, "dp", _ => ())
             field  <- elementWithClass(ui, "p-datepicker-input")
             _      <- press(field, UI.Keyboard.ArrowDown)
-            opened <- rs.open.get
+            opened <- rs.openRef.get
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
         yield
             assert(opened)
@@ -505,7 +509,7 @@ class DatePickerTest extends UicTest:
             field <- elementWithClass(ui, "p-datepicker-input")
             _     <- press(field, UI.Keyboard.Space)
             _     <- press(field, UI.Keyboard.Enter)
-            still <- rs.open.get
+            still <- rs.openRef.get
         yield assert(!still, "neither opens the panel: one types a space, the other belongs to the form")
     }
 
@@ -598,7 +602,7 @@ class DatePickerTest extends UicTest:
             fifteen <- dayCell(ui, 15)
             _       <- click(fifteen)
             same    <- seen.get
-            _       <- rs.open.set(true)
+            _       <- rs.openRef.set(true)
             twenty  <- dayCell(ui, 20)
             _       <- click(twenty)
             now     <- vref.get
@@ -620,7 +624,7 @@ class DatePickerTest extends UicTest:
             twenty  <- dayCell(ui, 20)
             _       <- click(twenty)
             now     <- vref.get
-            open    <- rs.open.get
+            open    <- rs.openRef.get
         yield
             assert(pickers.size == 1 && grids.size == 1, "the day grid and the time picker")
             assert(text == "2026-07-15T09:30")
@@ -738,7 +742,7 @@ class DatePickerTest extends UicTest:
             _       <- click(fifteen)
             kept    <- vref.get
             fired   <- seen.get
-            _       <- rs.open.set(true)
+            _       <- rs.openRef.set(true)
             sixteen <- dayCell(ui, 16)
             _       <- click(sixteen)
             moved   <- vref.get
@@ -783,8 +787,8 @@ class DatePickerTest extends UicTest:
             eight <- dayCell(ui, 8)
             _     <- click(eight)
             text  <- fieldText(ui)
-            shut  <- rs.open.get
-            _     <- rs.open.set(true)
+            shut  <- rs.openRef.get
+            _     <- rs.openRef.set(true)
             mid   <- elementsWithClass(ui, "p-datepicker-day-selected-range")
             all   <- seen.get
         yield
@@ -813,7 +817,7 @@ class DatePickerTest extends UicTest:
             two   <- elementsWithClass(ui, "p-datepicker-day").map(_.find(_.children.exists(_ == UI.Ast.Text("2"))).get)
             clear <- elementWithClass(ui, "p-datepicker-clear-button")
             _     <- click(clear)
-            _     <- rs.open.set(true)
+            _     <- rs.openRef.set(true)
             again <- elementWithClass(ui, "p-datepicker-clear-button")
             _     <- click(again)
             count <- seen.get
@@ -892,7 +896,7 @@ class DatePickerTest extends UicTest:
             _     <- click(clear)
             idle  <- seen.get
             _     <- vref.set(Present(day(july)))
-            _     <- rs.open.set(true)
+            _     <- rs.openRef.set(true)
             again <- elementWithClass(ui, "p-datepicker-clear-button")
             _     <- click(again)
             all   <- seen.get
@@ -1013,6 +1017,64 @@ class DatePickerTest extends UicTest:
         typeCheckFailure(pre + "def x(v: SignalRef[uic.DatePickerView]) = uic.DatePicker[Year]().currentView(v)")
         typeCheckFailure(pre + "def x = uic.DatePicker[YearMonth]().showWeek(true)")
         typeCheckFailure(pre + "def x = uic.DatePicker[String]()")
+    }
+
+    private def picker(using Frame) = uic.DatePicker[LocalDate]().referenceDate(day(july))
+
+    private def dropdowns(t: UI)(using Frame) = elementsWithClass(t, "p-datepicker-dropdown")
+
+    /** The picker as its mount publishes it, the dropdown wired. */
+    private def mountedPicker(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, t => dropdowns(t).map(_.exists(declaresClick)))()
+            .map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    "a calendar fixed shut draws the picker read-only, and says nothing" in {
+        for
+            field <- elementWithClass(picker.open(false).render, "p-datepicker-input")
+            card  <- elementsWithClass(picker.open(false).render, "p-uic-key-error")
+        yield
+            val readOnly = field match
+                case i: UI.Ast.Input => i.readOnly
+                case _               => Absent
+            assert(readOnly.contains(true), "nothing may open it, and the field says so")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a calendar fixed open stays: nothing outside dismisses it" in {
+        for
+            t     <- mountedPicker(picker.open(true).render)
+            panel <- elementsWithClass(t, "p-datepicker-panel")
+            out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+        yield
+            assert(panel.nonEmpty, "the calendar shows")
+            assert(out.isEmpty, "no backdrop takes an outside click")
+    }
+
+    "a calendar bound one way is followed, and a press is reported without being written" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mountedPicker(picker.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            dd   <- dropdowns(t).map(_.filter(declaresClick))
+            _    <- click(dd.head)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(picker.open(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(!h && s == Present(true), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a calendar ref is written before the picker reports it" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef((false, false))
+            t    <- mountedPicker(picker.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            dd   <- dropdowns(t).map(_.filter(declaresClick))
+            _    <- click(dd.head)
+            s    <- seen.get
+        yield assert(s == (true, true), s"reported, held: $s")
     }
 
 end DatePickerTest
