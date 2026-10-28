@@ -58,4 +58,23 @@ class ToggleSwitchTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant nobody hears is fixed: read-only, nothing to toggle, and no card" in {
+        for
+            b    <- box(uic.ToggleSwitch().checked(true).render)
+            card <- elementsWithClass(uic.ToggleSwitch().checked(true).render, "p-uic-key-error")
+        yield
+            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
+            assert(b.onChange.isEmpty, "with no handler behind it")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound one keeps its own state, so a toggle shows in what it draws" in {
+        for
+            after <- publishedAfter(uic.ToggleSwitch().onChange(_ => ()).render)(t =>
+                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
+            )
+            shown <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-toggleswitch-checked"))
+        yield assert(shown.nonEmpty, "what it draws stayed off after the reader turned it on")
+    }
+
 end ToggleSwitchTest

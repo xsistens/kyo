@@ -36,4 +36,20 @@ class ToggleButtonTest extends UicTest:
         end for
     }
 
+    "a constant nobody hears is fixed: no click handler, and no card" in {
+        for
+            el   <- elementWithClass(uic.ToggleButton().checked(true).render, "p-togglebutton")
+            card <- elementsWithClass(uic.ToggleButton().checked(true).render, "p-uic-key-error")
+        yield
+            assert(el.attrs.onClick.isEmpty, "a fixed button toggles nothing")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound button keeps its own state, so a click shows it pressed" in {
+        for
+            after <- publishedAfter(uic.ToggleButton().onChange(_ => ()).render)(t => elementWithClass(t, "p-togglebutton").map(click))
+            el    <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-togglebutton-checked"))
+        yield assert(el.nonEmpty, "the button stayed unpressed after the reader pressed it")
+    }
+
 end ToggleButtonTest

@@ -333,9 +333,19 @@ final case class MultiSelect[A] private (
                 q <- filterQueryRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef("")
-            yield wired(open, hi, q, Present(base))
+                // Unbound, the field keeps the options the reader picks itself.
+                own <-
+                    if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
+                    else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
+                self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
+            yield self.wired(open, hi, q, Present(base))
         }.placeholder(stat)
     end render
+
+    /** A constant nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to open and
+      * no chip to remove.
+      */
+    private def fixed: Boolean = choice.exists(_.fixed(onChangeF))
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
@@ -433,7 +443,7 @@ final case class MultiSelect[A] private (
                                 Chip(labelF(a))
                                     .extraClass("p-multiselect-chip")
                                     // A disabled field changes nothing, so its chips offer no removal.
-                                    .removable(!disabledFlag)
+                                    .removable(!disabledFlag && !fixed)
                                     .isolateRemove(true)
                                     .onRemove(write(current - key(a)))
                                     .render
@@ -474,7 +484,7 @@ final case class MultiSelect[A] private (
                 case Absent     => ()
 
         val clearUI: List[UI] =
-            if showClearFlag && !disabledFlag && selected.nonEmpty then
+            if showClearFlag && !disabledFlag && !fixed && selected.nonEmpty then
                 List(
                     button
                         .cssClass("p-multiselect-clear-icon")
@@ -551,14 +561,15 @@ final case class MultiSelect[A] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles, a chip's body included.
             // The clear button, the chips' remove buttons and the panel (`Overlay.containClicks`)
             // end their own clicks where they land.
-            st.foreach(s => el = el.onClick(toggle(s)))
+            st.filter(_ => !fixed).foreach(s => el = el.onClick(toggle(s)))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard. A
             // filter header is the exception, taking focus into the panel and the keys with it.
-            st.foreach { s =>
+            st.filter(_ => !fixed).foreach { s =>
                 val (_, shown, navigable, hiEff) = shownState(s)
                 el = el.onKeyDown { e =>
                     if !s.isOpen then
@@ -580,7 +591,7 @@ final case class MultiSelect[A] private (
         val field = validity.follow(el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         // A selection bound one way that nothing hears: every toggle is painted away again.
         val unheard: List[UI] =
-            if choice.forall(_.heard(onChangeF)) then Nil
+            if disabledFlag || !choice.exists(_.deaf(onChangeF)) then Nil
             else
                 List(KeyDiagnostics.card(
                     "MultiSelect",

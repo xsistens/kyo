@@ -87,25 +87,36 @@ final case class ToggleSwitch private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        // A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound one way, it paints the
-        // box again after the report, so a toggle the owner does not take is taken back (ReactiveValue.repainting).
+        val field    = validity.follow(checkedBinding match
+            // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
+            case Absent =>
+                ReactiveValue.owned(false)(own => copy(checkedBinding = Present(own)).drawn(validity))(drawn(validity))
+            case _ => drawn(validity))
+        // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
+        val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
+        val deaf  = checkedBinding.exists(b => b.dyn.isDefined && b.writable.isEmpty) && !ReactiveValue.heard(checkedBinding, onChangeF)
+        if deaf && !inert then fragment(field, KeyDiagnostics.unheard("ToggleSwitch", "checked", "onChange")) else field
+    end render
+
+    /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
+      * one way, or to a constant somebody hears, it paints the box again after the report, so a toggle the owner does not
+      * take is taken back (ReactiveValue.repainting). A constant nobody hears is fixed: drawn read-only, reachable and
+      * readable, with nothing to toggle.
+      */
+    private def drawn(validity: FieldValidity)(using Frame): UI =
         def toggle(repaint: UI.Action): Maybe[Boolean => UI.Action] =
             if ReactiveValue.heard(checkedBinding, onChangeF) then
                 Present(b => ReactiveValue.change(checkedBinding, b, onChangeF).andThen(repaint))
             else Absent
-        val field = validity.follow(checkedBinding match
+        checkedBinding match
             case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
             case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
-            // A constant the reader can toggle is held by its owner as much as a signal is, so it paints itself
-            // again the same way; one nobody hears renders as it is, with its card.
             case Present(ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
                 ReactiveValue.repainting(Signal.initConst(v))((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) => body(v, toggle(()), validity)
-            case Absent                          => body(false, toggle(()), validity))
-        val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
-        if checkedBinding.isEmpty || inert || toggle(()).nonEmpty then field
-        else fragment(field, KeyDiagnostics.unheard("ToggleSwitch", "checked", "onChange"))
-    end render
+            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, Absent, validity)
+            case Absent                          => body(false, toggle(()), validity)
+        end match
+    end drawn
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
