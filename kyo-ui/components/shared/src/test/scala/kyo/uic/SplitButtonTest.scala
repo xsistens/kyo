@@ -95,4 +95,50 @@ class SplitButtonTest extends UicTest:
         }
     }
 
+    private def split(using Frame) = SplitButton("Release").items(MenuItem("Draft").onSelect(()), MenuItem("Ship").onSelect(()))
+
+    private def dropdowns(t: UI)(using Frame) = elementsWithClass(t, "p-splitbutton-dropdown")
+
+    /** The button as its mount publishes it, the dropdown wired. */
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, t => dropdowns(t).map(_.nonEmpty))().map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    "a constant nobody hears is fixed: the dropdown stays reachable, opens nothing, and says so" in {
+        for
+            t    <- mounted(split.open(false).render)
+            b    <- elementWithClass(t, "p-splitbutton-dropdown")
+            card <- elementsWithClass(split.open(false).render, "p-uic-key-error")
+        yield
+            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the dropdown is inert and says so")
+            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a signal bound one way is followed, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(false)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mounted(split.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            b    <- elementWithClass(t, "p-splitbutton-dropdown")
+            _    <- click(b)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(split.open(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(!h && s == Present(true), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a pick in a menu bound one way is reported as a close" in {
+        for
+            held <- Signal.initRef(true)
+            seen <- Signal.initRef(Absent: Maybe[Boolean])
+            t    <- mounted(split.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            ls   <- elementsWithClass(t, "p-menu-item-link").map(_.filter(declaresClick))
+            _    <- click(ls.head)
+            h    <- held.get
+            s    <- seen.get
+        yield assert(h && s == Present(false), s"held $h, reported $s")
+    }
+
 end SplitButtonTest

@@ -302,7 +302,7 @@ final case class ContextMenu private (
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Vertical, focus, e.key) match
-                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, openRef, step)
+                        case Present(step) => MenuRender.applyStep(itemsV, subs, fr, openRef.fold[UI.Action](())(_.set(false)), step)
                         case Absent        => ()
                 case Absent => ()
 

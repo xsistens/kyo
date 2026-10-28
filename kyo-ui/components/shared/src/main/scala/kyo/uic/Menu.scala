@@ -25,9 +25,9 @@ end MenuAccessibleRole
   * and `li.p-menu-submenu-label` section headings for grouped items), so the
   * extracted `@primeuix` menu CSS applies verbatim.
   *
-  * Two modes like Prime: inline (the default render) and `popup(openRef)`: the
+  * Two modes like Prime: inline (the default render) and [[popup]]: the
   * popup wraps the same list in the [[Overlay]] primitive (Prime's
-  * `.p-menu-overlay` skin): writes to the ref open and close it, an outside
+  * `.p-menu-overlay` skin) over the bound open state, an outside
   * click or Escape closes, and the LIST seeds focus on open so the keyboard
   * works without a prior click (the list, not the panel around it, because the
   * list is the `role="menu"` carrying `aria-activedescendant` and that attribute
@@ -66,7 +66,9 @@ final case class Menu private (
     // The rows `body` draws: what a render resolved from `entriesV`, or what a host handed over through `rows`.
     itemsV: List[MenuItem] = Nil,
     entriesV: List[MenuItemLiveEntry] = Nil,
-    popupRefV: Maybe[SignalRef[Boolean]] = Absent,
+    popupSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    popupOwnFlag: Boolean = false,
+    onPopupF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     roleV: MenuAccessibleRole = MenuAccessibleRole.Menu,
     accessibleNameV: Maybe[TextValue] = Absent
@@ -88,10 +90,45 @@ final case class Menu private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Popup mode: the menu renders as a floating [[Overlay]] panel bound two-way
-      * to `ref`: writes open and close it, outside click/Escape write back.
+    /** Popup mode: the menu renders as a floating [[Overlay]] panel (Prime's `.p-menu-overlay`) over the open state `v`. A
+      * `SignalRef` binds two way: a pick, Tab, Escape and an outside click write false, then [[onPopupChange]] hears
+      * it. A plain `Signal` binds one way: the panel follows it and only reports. A constant nobody hears is fixed: an
+      * open panel stays, and nothing closes it. A signal nothing hears is reported in a card. Without `popup` the menu
+      * renders inline.
       */
-    def popup(ref: SignalRef[Boolean]): Menu = copy(popupRefV = Present(ref))
+    def popup(v: Boolean | Signal[Boolean]): Menu = copy(popupSlot = Present(ReactiveValue(v)), popupOwnFlag = false)
+
+    /** Popup mode with the open state kept by the menu itself, starting open, as an overlay nothing inside can open
+      * does: the panel shows until the reader closes it. [[onPopupChange]] still hears every close.
+      */
+    def popup(): Menu = copy(popupSlot = Absent, popupOwnFlag = true)
+
+    /** Fired with the open state the reader asks for (false for a pick, Tab, Escape and an outside click), after a
+      * two-way [[popup]] is written.
+      */
+    def onPopupChange(f: Boolean => UI.Action)(using Frame): Menu = copy(onPopupF = Present(Callback.of(f)))
+
+    /** Asks for the popup closed: a two-way binding is written, then the close reported. Inline, there is nothing to close. */
+    private def closePopup(using Frame): UI.Action =
+        if popupSlot.isDefined then ReactiveValue.change(popupSlot, false, onPopupF) else ()
+
+    /** The popup panel over the open state `slot`: the overlay wired to report a dismissal here, and quiet, since the
+      * menu reports its own binding.
+      */
+    private def popupOverlay(slot: ReactiveValue[Boolean])(using Frame): Overlay =
+        val ov = Overlay(slot.bound).quiet
+        onPopupF.fold(ov)(f => ov.onOpenChange(f))
+
+    /** The card for a popup bound one way that nothing hears. */
+    private def popupCard(using Frame): List[UI] =
+        if !ReactiveValue.deaf(popupSlot, onPopupF) then Nil
+        else
+            List(KeyDiagnostics.card(
+                "Menu",
+                "the popup is bound one way and nothing hears a close, so the reader cannot close it; add onPopupChange, " +
+                    "or bind a SignalRef",
+                Nil
+            ))
 
     /** What the menu is to a reader: an application menu (the default) or a site's
       * navigation. See [[MenuAccessibleRole]].
@@ -121,23 +158,33 @@ final case class Menu private (
         }
 
     private[uic] def render(using Frame): UI =
-        roleV match
+        val menu = roleV match
             case MenuAccessibleRole.Navigation =>
                 // No mount: a navigation holds no highlight and mints no id, so there is no state
                 // for one to allocate, and the static projection is already the live tree.
                 navigation
             case MenuAccessibleRole.Menu =>
+                // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight. Before the
+                // mount runs the panel is drawn open from a constant signal.
+                val ownsPopup = popupSlot.isEmpty && popupOwnFlag
+                val shown     = if ownsPopup then copy(popupSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))) else this
                 // The keyboard highlight lives in a signal allocated by this effectful
                 // mount; static projections (SSG, the SSR page HTML) render the same
                 // anatomy inert until the client transport attaches.
-                val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(-1, Absent, idV))
+                val stat: UI = MenuRender.readItems(entriesV).render(items => shown.copy(itemsV = items).body(-1, Absent, idV))
                 UI.mounted {
                     for
-                        cmds <- UI.commands
-                        base <- cmds.freshId
-                        hi   <- Anchored.init(-1)
-                    yield wired(hi, base)
+                        cmds  <- UI.commands
+                        base  <- cmds.freshId
+                        hi    <- Anchored.init(-1)
+                        popup <-
+                            if ownsPopup then Signal.initRef(true).map(r => Maybe(ReactiveValue[Boolean](r)))
+                            else Kyo.lift(popupSlot)
+                    yield copy(popupSlot = popup).wired(hi, base)
                 }.placeholder(stat)
+        popupCard match
+            case Nil   => menu
+            case cards => fragment((cards :+ menu)*)
     end render
 
     /** The navigation form: the rows as plain list items around links. Disabled rows are
@@ -145,6 +192,15 @@ final case class Menu private (
       * and takes its link out of the tab order.
       */
     private def navigation(using Frame): UI =
+        // `popup()` with no mount to allocate in: the open state is kept by a mount of its own.
+        if popupSlot.isEmpty && popupOwnFlag then
+            ReactiveValue.owned(true)(own => copy(popupSlot = Present(own)).navigation)(
+                copy(popupSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).navigation
+            )
+        else navigationOver
+    end navigation
+
+    private def navigationOver(using Frame): UI =
         MenuRender.readItems(entriesV).render { items =>
             val rowUIs: List[UI] = copy(itemsV = items).flatRows.map {
                 case MenuRow.Sep           => li.cssClass("p-menu-separator").role("separator")
@@ -166,13 +222,13 @@ final case class Menu private (
                     row(toChild(MenuRender.itemContent("menu", it, it.actionV, Absent, roving = false)))
             }
             val list = ul.cssClass("p-menu-list")(rowUIs.map(toChild)*)
-            popupRefV match
-                case Present(openRef) =>
+            popupSlot match
+                case Present(slot) =>
                     // The links are the stops, so focus goes to the list only to bring the reader
                     // into the panel, and Tab walks on from there.
                     var panelList = named(list.tabIndex(-1).focusAuto(true).focusRestore(true))
                     idV.foreach(v => panelList = panelList.id(v))
-                    Overlay(openRef)
+                    popupOverlay(slot)
                         .matchWidth(false)
                         .animate(false)
                         .panelClass("p-menu")
@@ -186,7 +242,7 @@ final case class Menu private (
                     root(toChild(list))
             end match
         }
-    end navigation
+    end navigationOver
 
     /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as
@@ -214,7 +270,7 @@ final case class Menu private (
                 // else.
                 // The items, the highlight and a popup's open state are read as ONE region (see [[Reading]]): leaving
                 // writes the popup ref and the highlight together, and a nested region would repaint what it closed over.
-                val popup = popupRefV.fold(Reading.Fixed(Maybe.empty[Boolean]))(r => Reading.Live(r.map(o => Present(o))))
+                val popup = popupSlot.fold(Reading.Fixed(Maybe.empty[Boolean]))(slot => Reading.of(slot).map(o => Present(o)))
                 // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
                 MenuRender.readRooted(entriesV).and(hi.reading).and(popup).render { case ((Rooted(roots, items), h), shown) =>
                     val hv = hi.view(h, roots)(using Menu.rowRebase)
@@ -252,9 +308,7 @@ final case class Menu private (
                         _ <- it.actionV match
                             case Present(eff) => eff
                             case Absent       => (): UI.Action
-                        _ <- popupRefV match
-                            case Present(r) => r.set(false)
-                            case Absent     => (): UI.Action
+                        _ <- closePopup
                         _ <- hi.set(-1)
                     yield ()
                 case Absent => ()
@@ -308,9 +362,9 @@ final case class Menu private (
         // root is the overlay's panel, which the menu does not own, so it lands on the
         // `ul[role=menu]`, the element that IS the menu to a reader. Either way `#<id>` exists
         // and contains the rows, which is what a page addressing a menu by name is reaching for.
-        if popupRefV.isDefined then idV.foreach(v => list = list.id(v))
-        popupRefV match
-            case Present(openRef) =>
+        if popupSlot.isDefined then idV.foreach(v => list = list.id(v))
+        popupSlot match
+            case Present(slot) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
                 // `role="menu"` and the thing carrying `aria-activedescendant`, and that attribute
                 // is read off the focused element or off nothing at all. Escape is left to bubble
@@ -319,9 +373,7 @@ final case class Menu private (
                 // on this list, and a panel left standing behind them answers none of them.
                 val leave: UI.Action =
                     for
-                        _ <- popupRefV match
-                            case Present(r) => r.set(false)
-                            case Absent     => (): UI.Action
+                        _ <- closePopup
                         _ <- hiRef match
                             case Present(hi) => hi.set(-1)
                             case Absent      => (): UI.Action
@@ -336,7 +388,7 @@ final case class Menu private (
                         else if e.key == Keyboard.Tab then leave
                         else keyHandler(e)
                     )
-                val overlay = Overlay(openRef)
+                val overlay = popupOverlay(slot)
                     .matchWidth(false)
                     .animate(false)
                     .panelClass("p-menu")
