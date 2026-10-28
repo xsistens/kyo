@@ -137,11 +137,19 @@ final case class Rating private (
         // group: five tab stops, no arrows, and nothing stopping two of them from being checked.
         // A caller's own name wins; otherwise the mount mints one. The static projection has no
         // name yet, so it keeps the single tab stop by taking the other stars out of the tab order.
-        if nameV.isDefined then renderNamed
-        else
-            UI.mounted {
-                UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
-            }.placeholder(renderNamed)
+        val field =
+            if nameV.isDefined then renderNamed
+            else
+                UI.mounted {
+                    UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
+                }.placeholder(renderNamed)
+        // A value bound one way that nothing hears: every star the reader picks is painted away again. The form layer's
+        // `Double` binding wins where both are set, as it does for what the stars show.
+        val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
+        val unheard = shown.exists(b => b.dyn.isDefined && b.writable.isEmpty) && onChangeF.isEmpty && !readonlyFlag &&
+            !disabledFlag.constTrue
+        if unheard then fragment(field, KeyDiagnostics.unheard("Rating", "value", "onChange")) else field
+    end render
 
     /** The tree the mount publishes once it has a name to group the radios by, the seam golden
       * tests render directly, since a mount shows only its placeholder there.

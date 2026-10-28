@@ -62,10 +62,10 @@ final case class Knob private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** The knob's value, in any of the three bindings a value slot holds. A constant renders the
-      * dial statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keyboard steps
-      * write the clamped value back, and ref changes redraw the arc. Any other `Signal[Double]`
-      * binds one-way, so the arc tracks it and interaction writes nowhere.
+    /** The knob's value, in any of the three bindings a value slot holds. A writable `SignalRef[Double]`
+      * binds TWO-WAY: drags and keyboard steps write the clamped value back, and ref changes redraw the
+      * arc. Any other `Signal[Double]`, or a constant, binds ONE-WAY: the arc shows it, and a drag or a
+      * step writes nothing and only reports through [[onChange]]; a signal nobody hears gets a card.
       *
       * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Double]`
       * does not opt out of write-back; pass `ref.readOnly` for that. A derived signal is already
@@ -124,7 +124,7 @@ final case class Knob private (
     private[uic] def withInvalidMessage(v: Maybe[String]): Knob                   = copy(invalidMsgV = v)
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = copy(invalidMsgDynV = v)
 
-    /** Fired with the NEW (clamped) value after the ref write-back. */
+    /** Fired with the NEW (clamped) value after the ref write-back, or with the value asked for where the knob is bound one way. */
     def onChange(f: Double => UI.Action)(using Frame): Knob = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the knob's current value; unlike onChange it fires even
@@ -141,28 +141,35 @@ final case class Knob private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        // A value bound one way that nothing hears: every change the reader makes is painted away again.
+        if valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue
+        then fragment(field, KeyDiagnostics.unheard("Knob", "value", "onChange"))
+        else field
+    end render
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(ref)) =>
-                // Pointer-drag + keyboard. The drag handler sits on the STABLE
-                // outer div, never re-rendered, while the reactive svg dial
-                // inside is pointer-events:none, so the pointer always lands on the div
-                // whose rect is the dial's coordinate space. The handler reads ref.get
-                // LIVE, so a drag onto any angle sets that angle regardless of the
-                // render-time value.
-                val reactiveSvg: UI = ref.render(v => dialSvg(clamp(v), Present(ref)))
-                var root            = shellRoot(validity)
-                if interactive then
-                    val onDrag = (e: PointerEvent) =>
-                        commit(clamp(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV)), Present(ref))
-                    root = root.onPointerDown(onDrag).onPointerMove(onDrag)
-                end if
-                root(toChild(reactiveSvg))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(v => staticRoot(clamp(v), validity))
-            case Present(ReactiveValue.Const(v)) => staticRoot(clamp(v), validity)
+            case Present(ReactiveValue.Dyn(sig)) => turnable(sig, validity)
+            case Present(ReactiveValue.Const(v)) => turnable(Signal.initConst(v), validity)
             case Absent                          => staticRoot(minV, validity)
+        end match
+    end renderResolved
+
+    /** Pointer-drag + keyboard over whatever the value is bound to. The drag handler sits on the STABLE outer div, never
+      * re-rendered, while the reactive svg dial inside is pointer-events:none, so the pointer always lands on the div whose
+      * rect is the dial's coordinate space. A drag maps the pointer to an angle and so to a value on its own, regardless
+      * of the render-time one; [[commit]] writes it where the binding is two-way and reports it either way.
+      */
+    private def turnable(value: Signal[Double], validity: FieldValidity)(using Frame): UI =
+        val reactiveSvg: UI = value.render(v => dialSvg(clamp(v), Present(value)))
+        var root            = shellRoot(validity)
+        if interactive then
+            val onDrag = (e: PointerEvent) => commit(clamp(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV)))
+            root = root.onPointerDown(onDrag).onPointerMove(onDrag)
+        end if
+        root(toChild(reactiveSvg))
+    end turnable
 
     /** The root box shared by the interactive and static paths. */
     private def shellRoot(validity: FieldValidity)(using Frame): Ast.Div =
@@ -174,26 +181,16 @@ final case class Knob private (
     private def staticRoot(value: Double, validity: FieldValidity)(using Frame): UI =
         shellRoot(validity)(toChild(dialSvg(value, Absent)))
 
-    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
-        val write: UI.Action = ref match
-            case Present(r) => r.set(next)
-            case Absent     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
-    end commit
+    /** A value the reader asked for: written where the binding is two-way, then reported to [[onChange]]. */
+    private def commit(next: Double)(using Frame): UI.Action =
+        ReactiveValue.change(valueBinding, next, onChangeF)
 
     /** The reactive svg dial (arcs + label + role=slider + keyboard). It carries
       * `p-uic-knob-dial` (pointer-events:none) so the drag pointer lands on the
       * stable outer div, and stays keyboard-focusable (Tab) with the full
       * arrow/Page/Home/End key set.
       */
-    private def dialSvg(value: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI =
+    private def dialSvg(value: Double, live: Maybe[Signal[Double]])(using Frame): UI =
         val paint = (spec: Maybe[String], token: String) =>
             spec.flatMap(CssValue.color).getOrElse(Style.Color.variable(token))
 
@@ -236,21 +233,21 @@ final case class Knob private (
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
         // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
-        // ref LIVE where there is one, so it reports the value at blur time.
+        // binding LIVE where there is one, so it reports the value at blur time.
         onBlurF.foreach { f =>
-            dial = dial.onBlur(ref match
-                case Present(r) => r.use(v => f(clamp(v)))
+            dial = dial.onBlur(live match
+                case Present(r) => r.current.map(v => f(clamp(v)))
                 case Absent     => f(value))
         }
         if interactive then
             dial = dial.preventScrollKeys.onKeyDown { e =>
                 e.key match
-                    case Keyboard.ArrowUp | Keyboard.ArrowRight  => commit(clamp(value + stepV), ref)
-                    case Keyboard.ArrowDown | Keyboard.ArrowLeft => commit(clamp(value - stepV), ref)
-                    case Keyboard.PageUp                         => commit(clamp(value + 10 * stepV), ref)
-                    case Keyboard.PageDown                       => commit(clamp(value - 10 * stepV), ref)
-                    case Keyboard.Home                           => commit(minV, ref)
-                    case Keyboard.End                            => commit(maxV, ref)
+                    case Keyboard.ArrowUp | Keyboard.ArrowRight  => commit(clamp(value + stepV))
+                    case Keyboard.ArrowDown | Keyboard.ArrowLeft => commit(clamp(value - stepV))
+                    case Keyboard.PageUp                         => commit(clamp(value + 10 * stepV))
+                    case Keyboard.PageDown                       => commit(clamp(value - 10 * stepV))
+                    case Keyboard.Home                           => commit(minV)
+                    case Keyboard.End                            => commit(maxV)
                     case _                                       => ()
             }
         end if

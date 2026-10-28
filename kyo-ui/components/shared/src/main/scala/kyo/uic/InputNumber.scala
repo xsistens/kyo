@@ -182,7 +182,14 @@ final case class InputNumber private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        // A value bound one way that nothing hears: every change the reader makes is painted away again.
+        if valueBinding.exists { case InputNumber.Value.Dyn(_) => true; case _ => false } && onChangeF.isEmpty && !readonlyFlag &&
+            !disabledFlag.constTrue
+        then fragment(field, KeyDiagnostics.unheard("InputNumber", "value", "onChange"))
+        else field
+        end if
+    end render
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match

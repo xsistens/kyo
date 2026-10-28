@@ -124,6 +124,10 @@ final case class CheckBox private (
         val field = validity.follow(checkedBinding match
             case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
             case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
+            // A constant the reader can toggle is held by its owner as much as a signal is, so it paints itself
+            // again the same way; one nobody hears renders as it is, with its card.
+            case Present(ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
+                ReactiveValue.repainting(Signal.initConst(v))((b, repaint) => body(b, toggle(repaint), validity))
             case Present(ReactiveValue.Const(v)) => body(v, toggle(()), validity)
             case Absent                          => body(false, toggle(()), validity))
         val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue

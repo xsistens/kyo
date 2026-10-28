@@ -75,8 +75,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   embeds a component hands a slot on as it was bound (`ReactiveValue.bound`), never as a ref it made up.
 - **A field with NATIVE state paints itself again after a one-way report.** The browser moves a tick, a caret's text,
   a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it
-  was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal through
-  `ReactiveValue.repainting`, whose body gets a `repaint` to run after each report: a count the mount owns is read
+  was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal (and a
+  boolean constant somebody hears, `Signal.initConst`) through `ReactiveValue.repainting`, whose body gets a `repaint` to run after each report: a count the mount owns is read
   beside the signal, so the field is drawn again from what the owner holds, and the morph puts the control back (a
   bound box through kyo-ui's `data-kyo-bound` marker, a text field through its value, even while focused). A two-way
   ref needs none of it, and a field that draws everything itself (ToggleButton, ColorPicker, the pickers) has nothing

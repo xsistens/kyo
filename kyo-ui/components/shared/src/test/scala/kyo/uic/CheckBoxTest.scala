@@ -64,4 +64,9 @@ class CheckBoxTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
+        for again <- repaintsAfter(uic.CheckBox().checked(false).onChange(_ => ()).render)(t => box(t).map(toggle(_, true)))
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end CheckBoxTest
