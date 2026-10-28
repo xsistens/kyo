@@ -39,8 +39,10 @@ import scala.annotation.targetName
 final case class DatePicker[A] private (
     kind: DateKind[A],
     bindingV: Maybe[DatePicker.Binding[A]] = Absent,
-    monthRef: Maybe[SignalRef[YearMonth]] = Absent,
-    currentViewRefV: Maybe[SignalRef[DatePickerView]] = Absent,
+    monthSlot: Maybe[ReactiveValue[YearMonth]] = Absent,
+    onMonthF: Maybe[YearMonth => UI.Action] = Absent,
+    currentViewSlot: Maybe[ReactiveValue[DatePickerView]] = Absent,
+    onCurrentViewF: Maybe[DatePickerView => UI.Action] = Absent,
     inlineFlag: Boolean = false,
     hourFormatV: HourFormat = HourFormat.H24,
     showButtonBarFlag: Boolean = false,
@@ -102,23 +104,36 @@ final case class DatePicker[A] private (
     /** This picker without its single-value binding and events, which is what a set or range picker is built from. */
     private def single: DatePicker[A] = copy(bindingV = Absent, onChangeF = Absent, onBlurF = Absent)
 
-    /** Binds the DISPLAYED month two-way: the header's prev and next buttons move it (by a month, a year or a decade, as the
-      * grid on screen counts), and so do the page keys and any arrow that steps out of the page. In the month grid its year is
-      * the year shown, in the year grid its decade. Bind it only to read or drive the page from outside; the mount mints one
-      * otherwise, so navigating is not something a caller has to opt into.
+    /** Binds the DISPLAYED month: the header's prev and next buttons move it (by a month, a year or a decade, as the grid on
+      * screen counts), and so do the page keys and any arrow that steps out of the page. In the month grid its year is the year
+      * shown, in the year grid its decade. A `SignalRef` binds two way and [[onMonthChange]] hears every page; a plain
+      * `Signal` binds one way and the picker only reports; a constant nobody hears is fixed, the page buttons inert. Bind it
+      * only to read or drive the page from outside: unbound, the mount keeps the page itself, so navigating is not something
+      * a caller has to opt into. A signal nothing hears is reported in a card.
       */
-    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): DatePicker[A] = copy(monthRef = Present(ref))
+    def month(v: YearMonth | Signal[YearMonth])(using DateKind.Calendar[A]): DatePicker[A] = copy(monthSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the month the reader pages to, after a two-way [[month]] is written. */
+    def onMonthChange(f: YearMonth => UI.Action)(using Frame, DateKind.Calendar[A]): DatePicker[A] =
+        copy(onMonthF = Present(Callback.of(f)))
 
     /** Renders the calendar panel IN-FLOW below the field instead of floating (Prime's `inline` prop,
       * `.p-datepicker-panel-inline`): always visible without an [[open]] ref, toggled by the dropdown button with one.
       */
     def inline(v: Boolean): DatePicker[A] = copy(inlineFlag = v)
 
-    /** Binds the grid on screen two-way, kyo's server-honest stand-in for Prime's internal `currentView` state: the title's
-      * month and year buttons drill into the coarser grids, and a pick there drills back. It starts at the grid the kind picks
-      * in (the day grid, or the month grid for `YearMonth`); without this binding the mount keeps the state itself.
+    /** Binds the grid on screen, kyo's server-honest stand-in for Prime's internal `currentView` state: the title's month
+      * and year buttons drill into the coarser grids, and a pick there drills back. A `SignalRef` binds two way and
+      * [[onCurrentViewChange]] hears every drill; a plain `Signal` binds one way and the picker only reports; a constant
+      * nobody hears is fixed, the title buttons inert. Unbound, the mount keeps the state itself, starting at the grid the
+      * kind picks in (the day grid, or the month grid for `YearMonth`). A signal nothing hears is reported in a card.
       */
-    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): DatePicker[A] = copy(currentViewRefV = Present(ref))
+    def currentView(v: DatePickerView | Signal[DatePickerView])(using DateKind.Drill[A]): DatePicker[A] =
+        copy(currentViewSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the grid the reader drills to, after a two-way [[currentView]] is written. */
+    def onCurrentViewChange(f: DatePickerView => UI.Action)(using Frame, DateKind.Drill[A]): DatePicker[A] =
+        copy(onCurrentViewF = Present(Callback.of(f)))
 
     /** Hour display format: `H12` shows 12-hour hours plus Prime's AM/PM picker (the held value is the same either way).
       * Default `H24`.
@@ -237,17 +252,24 @@ final case class DatePicker[A] private (
         val openFixedShut = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
         if openFixedShut && !readonlyFlag then copy(readonlyFlag = true).render
         // A calendar bound one way that nothing hears: every open and close the reader asks for is painted away again.
-        else if ReactiveValue.deaf(openSlot, onOpenF) then
-            fragment(
-                KeyDiagnostics.card(
-                    "DatePicker",
-                    "the calendar is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
-                        "onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                renderLive
-            )
-        else renderLive
+        else
+            // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
+            val unheard =
+                (if ReactiveValue.deaf(openSlot, onOpenF) then
+                     List("the calendar is bound one way and nothing hears an open or a close; add onOpenChange")
+                 else Nil) ++
+                    (if ReactiveValue.deaf(monthSlot, onMonthF) then
+                         List("the month is bound one way and nothing hears a page; add onMonthChange")
+                     else Nil) ++
+                    (if ReactiveValue.deaf(currentViewSlot, onCurrentViewF) then
+                         List("the view is bound one way and nothing hears a drill; add onCurrentViewChange")
+                     else Nil)
+            if unheard.isEmpty then renderLive
+            else
+                fragment(
+                    (unheard.map(advice => KeyDiagnostics.card("DatePicker", advice + ", or bind a SignalRef", Nil)) :+ renderLive)*
+                )
+            end if
         end if
     end render
 
@@ -281,12 +303,12 @@ final case class DatePicker[A] private (
                     oref <- openSlot match
                         case Present(o) => Kyo.lift(o)
                         case Absent     => Signal.initRef(inlineFlag).map(r => ReactiveValue[Boolean](r))
-                    mref <- monthRef match
-                        case Present(r) => Kyo.lift(DatePicker.ShownMonth.Bound(r))
+                    mref <- monthSlot match
+                        case Present(m) => Kyo.lift(DatePicker.ShownMonth.Bound(m, onMonthF))
                         case Absent     => Signal.initRef("").map(DatePicker.ShownMonth.Own(_))
-                    vref <- currentViewRefV match
-                        case Present(r) => Kyo.lift(r)
-                        case Absent     => Signal.initRef(kind.view)
+                    vref <- currentViewSlot match
+                        case Present(v) => Kyo.lift(v)
+                        case Absent     => Signal.initRef(kind.view).map(r => ReactiveValue[DatePickerView](r))
                     cur     <- Signal.initRef("")
                     seed    <- Signal.initRef(false)
                     restore <- Signal.initRef(Maybe.empty[DatePicker.Restore])
@@ -307,7 +329,7 @@ final case class DatePicker[A] private (
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         // The mount mints a view ref when the caller binds none, the way it mints the month one. Without it the month and year
         // buttons rendered disabled and a drill-down had nothing to write.
-        copy(currentViewRefV = Present(refs.view)).wiredWith(refs, base, focus)
+        copy(currentViewSlot = Present(refs.view)).wiredWith(refs, base, focus)
 
     private def wiredWith(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         val oref                                                     = refs.open
@@ -611,15 +633,15 @@ final case class DatePicker[A] private (
       */
     private def calendarStatic(using Frame): UI =
         val month: Reading[Maybe[String]] =
-            monthRef.fold(Reading.Fixed(Maybe.empty[String])) { ref =>
-                Reading.Live(DatePicker.ShownMonth.Bound(ref).signal.map(m => Present(m)))
+            monthSlot.fold(Reading.Fixed(Maybe.empty[String])) { m =>
+                Reading.Live(DatePicker.ShownMonth.Bound(m, onMonthF).signal.map(iso => Present(iso)))
             }
         calendarState.and(month).render { case ((view, snap), mOv) => panelUI(view, mOv, snap, Absent, Absent, inline = true) }
     end calendarStatic
 
     /** The view and the selection the calendar reads, as one [[Reading]] the host reads beside its month. */
     private def calendarState(using Frame): Reading[(DatePickerView, DatePicker.Snapshot)] =
-        val view = currentViewRefV.fold(Reading.Fixed(kind.view))(Reading.Live(_))
+        val view = currentViewSlot.fold(Reading.Fixed(kind.view))(Reading.of(_))
         val snap = bindingV.fold(Reading.Fixed[DatePicker.Snapshot](DatePicker.Snapshot.Single("")))(b => Reading.Live(b.snapshot(kind)))
         view.and(snap)
     end calendarState
@@ -673,7 +695,7 @@ final case class DatePicker[A] private (
 
     /** The page the month override and the header buttons write: the minted ref in a mounted picker, else the caller's own. */
     private def shownMonth(nav: Maybe[DatePicker.Nav]): Maybe[DatePicker.ShownMonth] =
-        nav.map(_.monthOv).orElse(monthRef.map(DatePicker.ShownMonth.Bound(_)))
+        nav.map(_.monthOv).orElse(monthSlot.map(DatePicker.ShownMonth.Bound(_, onMonthF)))
 
     /** Prime's calendar header: prev button, the month/year title BUTTONS (they drill into the month and year grids through
       * the view ref), next button. The nav buttons shift the month by a month, a year or a decade depending on the view.
@@ -694,7 +716,9 @@ final case class DatePicker[A] private (
                 .jsProp("type", "button")
                 .aria("label", label)
             shownMonth(nav) match
-                case Present(mref) =>
+                // A page fixed by a constant nobody hears: the button stays a tab stop and says it changes nothing.
+                case Present(_) if ReactiveValue.fixed(monthSlot, onMonthF) => b = b.aria("disabled", "true")
+                case Present(mref)                                          =>
                     b = b.onClick(mref.set(DatePicker.pad(target._1, 4) + "-" + DatePicker.pad(target._2, 2)))
                 case Absent => b = b.disabled(true)
             end match
@@ -712,11 +736,13 @@ final case class DatePicker[A] private (
 
         def viewButton(cls: String, text: String, target: DatePickerView, label: String): UI =
             var b = button.cssClass(cls).jsProp("type", "button").aria("label", label)
-            currentViewRefV match
+            currentViewSlot match
+                // A view fixed by a constant nobody hears: the button stays a tab stop and says it changes nothing.
+                case Present(_) if ReactiveValue.fixed(currentViewSlot, onCurrentViewF) => b = b.aria("disabled", "true")
                 // The switch redraws the header without the button that was pressed, so the focus goes on to the grid that
                 // appeared rather than falling to the document.
-                case Present(vref) =>
-                    b = b.onClick(seedGrid(nav).andThen(vref.set(target)).andThen(focusGrid(nav)))
+                case Present(_) =>
+                    b = b.onClick(seedGrid(nav).andThen(askView(target)).andThen(focusGrid(nav)))
                 case Absent => b = b.disabled(true)
             end match
             b(text)
@@ -1155,17 +1181,21 @@ final case class DatePicker[A] private (
     private def drillTo(yearMonth: String, target: DatePickerView, nav: Maybe[DatePicker.Nav])(using
         Frame
     ): Maybe[UI.Action] =
-        (shownMonth(nav), currentViewRefV) match
-            case (Present(mref), Present(vref)) =>
+        (shownMonth(nav), currentViewSlot) match
+            case (Present(mref), Present(_)) =>
                 Present(
                     for
                         _ <- seedGrid(nav)
                         _ <- mref.set(yearMonth)
-                        _ <- vref.set(target)
+                        _ <- askView(target)
                         r <- focusGrid(nav)
                     yield r
                 )
             case _ => Absent
+
+    /** Asks for grid `target`: written into a two-way [[currentView]], then reported. */
+    private def askView(target: DatePickerView)(using Frame): UI.Action =
+        ReactiveValue.change(currentViewSlot, target, onCurrentViewF)
 
     // === time picker ========================================================
 
@@ -1452,20 +1482,24 @@ object DatePicker:
       * mount's own ref, whose `""` means "derive it from the held value".
       */
     private[uic] enum ShownMonth:
-        case Bound(ref: SignalRef[YearMonth])
+        // A caller's binding, and what hears a page the reader asks for.
+        case Bound(month: ReactiveValue[YearMonth], report: Maybe[YearMonth => UI.Action])
         case Own(ref: SignalRef[String])
 
         def signal(using Frame): Signal[String] =
+            import DateKind.given_CanEqual_YearMonth_YearMonth
             this match
-                case Bound(r) => r.map(ym => pad(ym.getYear, 4) + "-" + pad(ym.getMonthValue, 2))
-                case Own(r)   => r
+                case Bound(m, _) => m.signal.map(ym => pad(ym.getYear, 4) + "-" + pad(ym.getMonthValue, 2))
+                case Own(r)      => r
+        end signal
 
-        def set(iso: String)(using Frame): Unit < Sync =
+        /** Asks for page `iso`: written into a two-way binding, then reported; the page the picker keeps is just written. */
+        def set(iso: String)(using Frame): UI.Action =
             this match
-                case Bound(r) =>
+                case Bound(m, report) =>
                     parseYearMonth(iso) match
-                        case Present((y, m)) => r.set(YearMonth.of(y, m))
-                        case Absent          => ()
+                        case Present((y, mo)) => ReactiveValue.change(Present(m), YearMonth.of(y, mo), report)
+                        case Absent           => ()
                 case Own(r) => r.set(iso)
     end ShownMonth
 
@@ -1477,7 +1511,7 @@ object DatePicker:
         open: ReactiveValue[Boolean],
         month: ShownMonth,
         cursor: SignalRef[String],
-        view: SignalRef[DatePickerView],
+        view: ReactiveValue[DatePickerView],
         seed: SignalRef[Boolean],
         restore: SignalRef[Maybe[Restore]],
         draft: SignalRef[Maybe[String]]
@@ -1493,7 +1527,7 @@ object DatePicker:
             seed: SignalRef[Boolean],
             restore: SignalRef[Maybe[Restore]],
             draft: SignalRef[Maybe[String]]
-        ): Refs = new Refs(ReactiveValue[Boolean](open), month, cursor, view, seed, restore, draft)
+        ): Refs = new Refs(ReactiveValue[Boolean](open), month, cursor, ReactiveValue[DatePickerView](view), seed, restore, draft)
     end Refs
 
     final private[uic] case class Nav(
@@ -1710,13 +1744,19 @@ final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DateP
     def showWeek(v: Boolean)(using DateKind.Weeks[A]): Self = on(picker.showWeek(v))
 
     /** Binds the displayed month two-way, as [[DatePicker.month]]. */
-    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(ref))
+    def month(v: YearMonth | Signal[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(v))
+
+    /** Fired with the month the reader pages to, as [[DatePicker.onMonthChange]]. */
+    def onMonthChange(f: YearMonth => UI.Action)(using Frame, DateKind.Calendar[A]): Self = on(picker.onMonthChange(f))
 
     /** The page to show while neither a month ref nor a held day says which. */
     def referenceDate(v: A)(using DateKind.Calendar[A]): Self = on(picker.referenceDate(v))
 
     /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
-    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
+    def currentView(v: DatePickerView | Signal[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(v))
+
+    /** Fired with the grid the reader drills to, as [[DatePicker.onCurrentViewChange]]. */
+    def onCurrentViewChange(f: DatePickerView => UI.Action)(using Frame, DateKind.Drill[A]): Self = on(picker.onCurrentViewChange(f))
 
     /** Binds the calendar's visibility, as [[DatePicker.open]]. */
     def open(v: Boolean | Signal[Boolean]): Self = on(picker.open(v))
@@ -1806,13 +1846,19 @@ final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DateP
     def showWeek(v: Boolean)(using DateKind.Weeks[A]): Self = on(picker.showWeek(v))
 
     /** Binds the displayed month two-way, as [[DatePicker.month]]. */
-    def month(ref: SignalRef[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(ref))
+    def month(v: YearMonth | Signal[YearMonth])(using DateKind.Calendar[A]): Self = on(picker.month(v))
+
+    /** Fired with the month the reader pages to, as [[DatePicker.onMonthChange]]. */
+    def onMonthChange(f: YearMonth => UI.Action)(using Frame, DateKind.Calendar[A]): Self = on(picker.onMonthChange(f))
 
     /** The page to show while neither a month ref nor a held day says which. */
     def referenceDate(v: A)(using DateKind.Calendar[A]): Self = on(picker.referenceDate(v))
 
     /** Binds the grid on screen two-way, as [[DatePicker.currentView]]. */
-    def currentView(ref: SignalRef[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(ref))
+    def currentView(v: DatePickerView | Signal[DatePickerView])(using DateKind.Drill[A]): Self = on(picker.currentView(v))
+
+    /** Fired with the grid the reader drills to, as [[DatePicker.onCurrentViewChange]]. */
+    def onCurrentViewChange(f: DatePickerView => UI.Action)(using Frame, DateKind.Drill[A]): Self = on(picker.onCurrentViewChange(f))
 
     /** Binds the calendar's visibility, as [[DatePicker.open]]. */
     def open(v: Boolean | Signal[Boolean]): Self = on(picker.open(v))
