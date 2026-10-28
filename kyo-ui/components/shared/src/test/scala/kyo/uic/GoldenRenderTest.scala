@@ -4497,7 +4497,7 @@ class GoldenRenderTest extends UicTest:
             assert(!html.contains("""data-uic-icon="times-circle""""), "default glyph replaced")
     }
 
-    "Inplace disabled renders an inert display; onOpen/onClose wire the interactions" in {
+    "Inplace disabled renders an inert display; onActiveChange wires the interactions" in {
         def inplace(disabled: Boolean)(ref: SignalRef[Boolean])(using Frame): UI =
             uic.Inplace()
                 .display(span("view"))
@@ -4505,8 +4505,7 @@ class GoldenRenderTest extends UicTest:
                 .active(ref)
                 .closable(true)
                 .disabled(disabled)
-                .onOpen(())
-                .onClose(())
+                .onActiveChange(_ => ())
         for
             disabledHtml <-
                 for
@@ -4527,9 +4526,9 @@ class GoldenRenderTest extends UicTest:
             assert(disabledHtml.contains("p-disabled"), "disabled: display carries p-disabled")
             assert(!disabledHtml.contains("click"), "disabled: no activation registered")
             assert(openable.contains("p-inplace-display"), "enabled: display side rendered")
-            assert(openable.contains("click"), "enabled: activation (ref write + onOpen) registered")
+            assert(openable.contains("click"), "enabled: activation (ref write + report) registered")
             assert(closable.contains("p-inplace-content"), "active: content side rendered")
-            assert(closable.contains("click"), "active: close (ref write + onClose) registered")
+            assert(closable.contains("click"), "active: close (ref write + report) registered")
         end for
     }
 

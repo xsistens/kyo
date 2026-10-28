@@ -9,25 +9,20 @@ import kyo.UI.*
   * `div.p-inplace-content`, never both), so the extracted `@primeuix` inplace
   * CSS applies verbatim.
   *
-  * The active state binds two-way to the `active` `SignalRef[Boolean]`
-  * ([[Panel]]'s reactive pattern): clicking the display (or pressing Enter on
-  * it, Prime's key) sets it true and swaps in the content; external ref
-  * writes swap the sides reactively. `closable(true)` appends an icon-only
-  * close button to the content that sets the ref back to false (PrimeReact's
-  * `closable`). `disabled(true)` renders the display side inert (`.p-disabled`,
-  * Prime's open guard). `onOpen`/`onClose` fire AFTER the ref write when the
-  * user activates the display or the close button (Prime's open/close events;
-  * external ref writes fire neither). Without a bound ref the display side
-  * renders statically.
+  * Which side shows is the inplace's own unless [[active]] binds it:
+  * clicking the display (or pressing Enter or Space on it) asks for the
+  * content, and the close button for the display. `closable(true)` appends
+  * that icon-only close button to the content (PrimeReact's `closable`). `disabled(true)` renders the display side inert (`.p-disabled`,
+  * Prime's open guard). [[onActiveChange]] hears the reader ask for either side
+  * (external ref writes fire nothing).
   */
 final case class Inplace private (
     displayV: Maybe[UI] = Absent,
     contentV: Maybe[UI] = Absent,
-    activeRef: Maybe[SignalRef[Boolean]] = Absent,
+    activeSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onActiveF: Maybe[Boolean => UI.Action] = Absent,
     closableFlag: Boolean = false,
-    disabledFlag: Boolean = false,
-    onOpenEff: Maybe[UI.Action] = Absent,
-    onCloseEff: Maybe[UI.Action] = Absent
+    disabledFlag: Boolean = false
 ) extends Node:
     type Self = Inplace
 
@@ -37,10 +32,17 @@ final case class Inplace private (
     /** The active side (`.p-inplace-content`), shown while the ref is true. */
     def content(u: UI): Inplace = copy(contentV = Present(u))
 
-    /** Binds the active state two-way to `ref`: display click sets it true,
-      * external writes swap the sides reactively.
+    /** Binds which side shows. A `SignalRef` binds two way: activating the display writes true and the close button
+      * false, then [[onActiveChange]] hears it. A plain `Signal` binds one way: the inplace follows it and only reports.
+      * A constant nobody hears is fixed: the side it names stays, reachable and inert. Unbound, the inplace keeps the
+      * state itself, starting on the display side. A signal nothing hears is reported in a card.
       */
-    def active(ref: SignalRef[Boolean]): Inplace = copy(activeRef = Present(ref))
+    def active(v: Boolean | Signal[Boolean]): Inplace = copy(activeSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the side the reader asks for (true for the content, false for the display), after a two-way
+      * [[active]] is written. One channel for both ways, since an open and a close are never both.
+      */
+    def onActiveChange(f: Boolean => UI.Action)(using Frame): Inplace = copy(onActiveF = Present(Callback.of(f)))
 
     /** Appends a close button to the content that deactivates (sets the ref false). */
     def closable(v: Boolean): Inplace = copy(closableFlag = v)
@@ -50,74 +52,75 @@ final case class Inplace private (
       */
     def disabled(v: Boolean): Inplace = copy(disabledFlag = v)
 
-    /** Runs `action` after the display side is activated (ref already true). */
-    def onOpen(action: => UI.Action)(using Frame): Inplace =
-        copy(onOpenEff = Present(Callback(action)))
+    /** Whether anything hears the reader ask for the other side. */
+    private def heard: Maybe[Unit] = if onActiveF.isDefined then Present(()) else Absent
 
-    /** Runs `action` after the close button deactivates (ref already false). */
-    def onClose(action: => UI.Action)(using Frame): Inplace =
-        copy(onCloseEff = Present(Callback(action)))
+    /** A constant nobody hears: the side it names stays, reachable, and nothing swaps it. */
+    private def fixed: Boolean = ReactiveValue.fixed(activeSlot, heard)
 
-    private def displaySide(ref: Maybe[SignalRef[Boolean]])(using Frame): UI =
+    /** Asks for side `v`: written where the binding is two way, then reported. */
+    private def ask(v: Boolean)(using Frame): UI.Action = ReactiveValue.change(activeSlot, v, onActiveF)
+
+    private def displaySide(using Frame): UI =
         var d = div.cssClass("p-inplace-display").role("button").tabIndex(0)
         if disabledFlag then d = d.cssClass("p-disabled")
+        else if fixed then d = d.aria("disabled", "true")
         else
-            ref.foreach { r =>
-                val open: UI.Action =
-                    onOpenEff match
-                        case Present(e) =>
-                            for
-                                _ <- r.set(true)
-                                x <- e
-                            yield x
-                        case Absent => r.set(true)
-                // A `role="button"` owes the reader both keys, and a div is not a button, so the
-                // browser supplies neither. Enter alone was half of the contract.
-                d = d.onClick(open).onKeyDown { evt =>
-                    evt.key match
-                        case Keyboard.Enter | Keyboard.Space => open
-                        case _                               => ()
-                }
+            val open = ask(true)
+            // A `role="button"` owes the reader both keys, and a div is not a button, so the
+            // browser supplies neither. Enter alone was half of the contract.
+            d = d.onClick(open).onKeyDown { evt =>
+                evt.key match
+                    case Keyboard.Enter | Keyboard.Space => open
+                    case _                               => ()
             }
         end if
         d(displayV.toList.map(toChild)*)
     end displaySide
 
-    private def contentSide(ref: SignalRef[Boolean])(using Frame): UI =
+    private def contentSide(using Frame): UI =
         val closeBtn: List[UI] =
             if !closableFlag then Nil
             else
-                val close: UI.Action =
-                    onCloseEff match
-                        case Present(e) =>
-                            for
-                                _ <- ref.set(false)
-                                x <- e
-                            yield x
-                        case Absent => ref.set(false)
-                List(
-                    button
-                        .cssClass("p-button")
-                        .cssClass("p-component")
-                        .cssClass("p-button-icon-only")
-                        .jsProp("type", "button")
-                        .aria("label", "Close")
-                        .onClick(close)(
-                            toChild(GlyphSvg(Icons.times, "p-button-icon"))
-                        )
-                )
+                val b = button
+                    .cssClass("p-button")
+                    .cssClass("p-component")
+                    .cssClass("p-button-icon-only")
+                    .jsProp("type", "button")
+                    .aria("label", "Close")
+                val pressable = if fixed then b.aria("disabled", "true") else b.onClick(ask(false))
+                List(pressable(toChild(GlyphSvg(Icons.times, "p-button-icon"))))
         div.cssClass("p-inplace-content")((contentV.toList ++ closeBtn).map(toChild)*)
     end contentSide
 
     private[uic] def render(using Frame): UI =
-        val root = div.cssClass("p-inplace").cssClass("p-component").aria("live", "polite")
-        activeRef match
-            case Present(ref) =>
-                root(toChild(ref.render(a => if a then contentSide(ref) else displaySide(Present(ref)))))
+        activeSlot match
+            // Unbound, the inplace keeps the side itself, starting on the display. Before the mount runs it draws the
+            // display from a signal, so the static page does not call it fixed.
             case Absent =>
-                root(toChild(displaySide(Absent)))
-        end match
+                ReactiveValue.owned(false)(own => copy(activeSlot = Present(own)).drawn)(
+                    copy(activeSlot = Present(ReactiveValue[Boolean](Signal.initConst(false)))).drawn
+                )
+            // A signal nobody hears: every side the reader asks for is painted away again.
+            case _ if ReactiveValue.deaf(activeSlot, heard) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "Inplace",
+                        "the active side is bound one way and nothing hears the reader ask for the other; add " +
+                            "onActiveChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    drawn
+                )
+            case _ => drawn
     end render
+
+    private def drawn(using Frame): UI =
+        val root = div.cssClass("p-inplace").cssClass("p-component").aria("live", "polite")
+        activeSlot match
+            case Present(slot) => root(toChild(Reading.of(slot).render(a => if a then contentSide else displaySide)))
+            case Absent        => root(toChild(displaySide))
+    end drawn
 end Inplace
 
 object Inplace:
