@@ -19,9 +19,9 @@ import kyo.UI.*
   * `role` is set: `<fieldset>` already has `group` implicitly.
   *
   * A fieldset is fixed by default; `toggleable(true)` renders the legend as
-  * Prime's toggle button (plus glyph collapsed, minus expanded) whose state
-  * binds two-way to the `collapsed` `SignalRef[Boolean]`: pressing the button
-  * toggles the ref, external ref writes collapse/expand the content.
+  * Prime's toggle button (plus glyph collapsed, minus expanded). The fieldset
+  * keeps the collapse state itself unless [[collapsed]] binds it, and reports
+  * every press to [[onCollapsedChange]].
   *
   * Collapse ANIMATION: the content container is a `.p-uic-collapse` grid,
   * reactive on the `collapsed` ref. Under DOM morphing a class-only re-render
@@ -32,7 +32,8 @@ import kyo.UI.*
 final case class Fieldset private (
     legendV: Maybe[TextValue] = Absent,
     toggleableFlag: Boolean = false,
-    collapsedRef: Maybe[SignalRef[Boolean]] = Absent,
+    collapsedSlot: Maybe[ReactiveValue[Boolean]] = Absent,
+    onCollapsedF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasElementId:
@@ -54,15 +55,41 @@ final case class Fieldset private (
       */
     def toggleable(v: Boolean): Fieldset = copy(toggleableFlag = v)
 
-    /** Binds the collapse state two-way to `ref` (only effective with
-      * `toggleable(true)`).
+    /** Binds the collapse state (only effective with `toggleable(true)`). A `SignalRef` binds two way: a press of the
+      * toggle writes it, then [[onCollapsedChange]] hears the new state. A plain `Signal` binds one way: the fieldset
+      * follows it and only reports a press. A constant nobody hears is fixed: the fieldset keeps it and the toggle,
+      * still reachable, changes nothing. Unbound, a toggleable fieldset keeps the state itself, starting expanded. A
+      * signal nothing hears is reported in a card.
       */
-    def collapsed(ref: SignalRef[Boolean]): Fieldset = copy(collapsedRef = Present(ref))
+    def collapsed(v: Boolean | Signal[Boolean]): Fieldset = copy(collapsedSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the new collapse state after a press of the toggle, after a two-way [[collapsed]] is written. */
+    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Fieldset = copy(onCollapsedF = Present(Callback.of(f)))
 
     /** Adds content children. */
     def apply(cs: UI*): Fieldset = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
+        collapsedSlot match
+            // Unbound, a toggleable fieldset keeps its collapse state itself, starting expanded.
+            case Absent if toggleableFlag =>
+                ReactiveValue.owned(false)(own => copy(collapsedSlot = Present(own)).body)(
+                    copy(collapsedSlot = Present(ReactiveValue[Boolean](Signal.initConst(false)))).body
+                )
+            // A signal nobody hears: every press the reader makes is painted away again.
+            case _ if toggleableFlag && ReactiveValue.deaf(collapsedSlot, onCollapsedF) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "Fieldset",
+                        "the collapse state is bound one way and nothing hears a press, so the reader cannot change it; " +
+                            "add onCollapsedChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    body
+                )
+            case _ => body
+
+    private def body(using Frame): UI =
         // The toggle button's own aria-label is an attribute channel, and a channel can only
         // carry a static string: there is no attribute-level reactive patch. So it reads the
         // constant legend, falling back to "Toggle". The GROUP's name does not depend on this:
@@ -75,8 +102,9 @@ final case class Fieldset private (
         idV.foreach(v => shell = shell.id(v))
         if toggleableFlag then shell = shell.cssClass("p-fieldset-toggleable")
 
-        val toggleRefV: Maybe[SignalRef[Boolean]] =
-            if toggleableFlag then collapsedRef else Absent
+        val toggleSlot: Maybe[ReactiveValue[Boolean]] = if toggleableFlag then collapsedSlot else Absent
+        // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
+        val fixed = ReactiveValue.fixed(collapsedSlot, onCollapsedF)
 
         def labelSpan: UI = legendV match
             case Present(TextValue.Const(v)) => span.cssClass("p-fieldset-legend-label")(v)
@@ -84,8 +112,8 @@ final case class Fieldset private (
             case Absent                      => span.cssClass("p-fieldset-legend-label")("")
 
         val legendUI: List[UI] =
-            toggleRefV match
-                case Present(ref) =>
+            toggleSlot match
+                case Present(slot) =>
                     // The whole button re-renders on toggle so the plus/minus glyph and
                     // aria-expanded track the state (a DIFFERENT element from the content,
                     // so replacing it never resets the content's collapse transition).
@@ -93,20 +121,23 @@ final case class Fieldset private (
                         // `UI.legend`, not the bare name: this class has its own `legend` setter,
                         // which shadows the element factory inside it.
                         UI.legend.cssClass("p-fieldset-legend")(
-                            toChild(ref.render { c =>
-                                button
+                            toChild(Reading.of(slot).render { c =>
+                                val b = button
                                     .cssClass("p-fieldset-toggle-button")
                                     .jsProp("type", "button")
                                     .aria("expanded", (!c).toString)
                                     .aria("label", legendConst.getOrElse("Toggle"))
-                                    .onClick(ref.getAndUpdate(!_))(
-                                        toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon")),
-                                        toChild(labelSpan)
-                                    )
+                                val pressable =
+                                    if fixed then b.aria("disabled", "true")
+                                    else b.onClick(ReactiveValue.update(collapsedSlot, !_, onCollapsedF))
+                                pressable(
+                                    toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon")),
+                                    toChild(labelSpan)
+                                )
                             })
                         )
                     )
-                case Absent if toggleableFlag || legendV.isDefined =>
+                case Absent if legendV.isDefined =>
                     List(UI.legend.cssClass("p-fieldset-legend")(toChild(labelSpan)))
                 case Absent => Nil
 
@@ -116,12 +147,12 @@ final case class Fieldset private (
                     div.cssClass("p-fieldset-content")(kids.map(toChild)*)
                 )
             )
-        val container: UI = toggleRefV match
-            case Present(ref) => ref.render(collapseContainer(_))
-            case Absent       => containerBase
+        val container: UI = toggleSlot match
+            case Present(slot) => Reading.of(slot).render(collapseContainer(_))
+            case Absent        => containerBase
 
         shell((legendUI :+ container).map(toChild)*)
-    end render
+    end body
 
     /** The animated content container: `containerBase`'s twin carrying
       * `.p-uic-collapse` (the grid-rows transition) with the current collapse state

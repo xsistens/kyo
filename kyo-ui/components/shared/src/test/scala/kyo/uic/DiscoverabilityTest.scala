@@ -589,6 +589,7 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(
             preamble + """def x(r: SignalRef[Boolean])(using Frame) = uic.Panel().header("H").toggleable(true).collapsed(r).footer(span("f"))"""
         )
+        typeCheck(preamble + """def x(using Frame): uic.Panel = uic.Panel().toggleable(true).collapsed(true).onCollapsedChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.Panel().fixed(true)""")
         typeCheckFailure(preamble + """def x = uic.Panel().stickyHeader(true)""")
         typeCheckFailure(preamble + """def x = uic.Panel().noAnimation(true)""")
@@ -1296,6 +1297,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x: uic.Divider = uic.Divider().layout(uic.DividerLayout.Vertical).lineStyle(uic.DividerLineStyle.Dashed).align(uic.DividerAlign.Center)"""
         )
         typeCheck(preamble + """def x(r: SignalRef[Boolean]): uic.Fieldset = uic.Fieldset().legend("L").toggleable(true).collapsed(r)""")
+        typeCheck(
+            preamble + """def x(using Frame): uic.Fieldset = uic.Fieldset().toggleable(true).collapsed(true).onCollapsedChange(_ => ())"""
+        )
         typeCheck(preamble + """def x: uic.Badge = uic.Badge("3").severity(uic.Severity.Danger).size(uic.Size.XLarge)""")
         typeCheck(
             preamble + """def x(using Frame): uic.OverlayBadge = uic.OverlayBadge(uic.Avatar().initials("A")).badge(uic.Badge("2"))"""
@@ -1510,7 +1514,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(preamble + """def x: uic.ToggleSwitch = uic.ToggleSwitch().checked(true).handleIcon(uic.Icons.check, uic.Icons.times)""")
         typeCheck(preamble + """def x(using Frame): uic.Chip = uic.Chip("Tag").removable(true).removeIcon(uic.Icons.times).onRemove(())""")
         typeCheck(
-            preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Inplace = uic.Inplace().display(span("v")).content(span("e")).active(r).disabled(true).onOpen(()).onClose(())"""
+            preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Inplace = uic.Inplace().display(span("v")).content(span("e")).active(r).disabled(true).onActiveChange(_ => ())"""
         )
         typeCheck(
             preamble + """def x(using Frame): uic.DataView[String] = uic.DataView[String]().items(Seq("a")).itemTemplate(s => span(s)).loading(true)"""
@@ -1550,10 +1554,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     "Divider, Avatar and Chip expose only their own options" in {
         typeCheckFailure(preamble + """def x = uic.Skeleton().severity(uic.Severity.Danger)""")
         typeCheckFailure(preamble + """def x = uic.Divider().placeholder("p")""")
-        typeCheckFailure(preamble + """def x = uic.Fieldset().collapsed(true)""")
         typeCheckFailure(preamble + """def x = uic.Badge().rounded(true)""")
         typeCheckFailure(preamble + """def x = uic.Chip("a").severity(uic.Severity.Info)""")
-        typeCheckFailure(preamble + """def x = uic.Inplace().active(true)""")
+        typeCheck(preamble + """def x(using Frame): uic.Inplace = uic.Inplace().active(true).onActiveChange(_ => ())""")
+        // One channel carries the side: an open and a close are never both, so there is no pair of events for them.
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Inplace().onOpen(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Inplace().onClose(())""")
         typeCheckFailure(preamble + """def x = uic.MeterGroup().value(40)""")
         typeCheckFailure(preamble + """def x = uic.ScrollPanel().onClick(())""")
     }

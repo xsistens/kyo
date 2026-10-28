@@ -465,14 +465,13 @@ object ShowcaseCompile:
             // chip with a custom remove glyph
             uic.Chip("Tag").removable(true).removeIcon(uic.Icons.times).onRemove(notify),
 
-            // inplace: disabled guard + open/close callbacks around the two-way ref
+            // inplace: disabled guard + the one side callback around the two-way ref
             uic.Inplace()
                 .display(span("Edit name"))
                 .content(uic.Input().value(query))
                 .active(editing)
                 .closable(true)
-                .onOpen(notify)
-                .onClose(notify),
+                .onActiveChange(_ => notify),
             uic.Inplace().display(span("Locked")).content(span("never")).active(editing).disabled(true),
 
             // data view busy overlay (sorting stays a Seq concern: sortBy before items)
