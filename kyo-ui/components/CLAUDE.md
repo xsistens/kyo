@@ -82,7 +82,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   its tick. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
   and keeps nothing of its own, and so does a paginator a table or a view embeds. In a DataTable, binding
   `columnWidths`, `columnOrder` or `expandedGroups` is still what turns the drag or the collapsible group ON; unbound,
-  those stay off rather than becoming the table's own.
+  those stay off rather than becoming the table's own. Each has a setter with no argument (`columnWidths()`) that turns
+  the feature on with the state kept by the table, for a page that would only hand over a ref nobody reads.
 - **A field with NATIVE state paints itself again after a one-way report.** The browser moves a tick, a caret's text,
   a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it
   was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal (and a
