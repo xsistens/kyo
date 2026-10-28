@@ -230,9 +230,17 @@ final case class CascadeSelect[A] private (
                 focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-            yield wired(open, subs, focus, Present(base))
+                // Unbound, the field keeps the leaf the reader picks itself.
+                own <-
+                    if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
+                    else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
+                self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
+            yield self.wired(open, subs, focus, Present(base))
         }.placeholder(stat)
     end render
+
+    /** A constant nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to open. */
+    private def fixed: Boolean = choice.exists(_.fixed(onChangeF.orElse(onPickF)))
 
     /** The subscription tree the mount publishes (golden-test seam): ONE reactive
       * region over the root ref and the open groups (see [[Submenus]]).
@@ -428,12 +436,13 @@ final case class CascadeSelect[A] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the chain.
-            if st.isDefined then el = el.onClick(toggleRoot)
+            if st.isDefined && !fixed then el = el.onClick(toggleRoot)
             // Focus never leaves the trigger, however deep the chain of panels goes, so the whole
             // cascade keyboard lives here: closed, the three opening keys; open, one [[MenuNav]]
             // walk that steps into groups, back out of them, picks a leaf and closes on Escape.
-            st.foreach { state =>
+            st.filter(_ => !fixed).foreach { state =>
                 el = el.onKeyDown { e =>
                     if isOpen then panelKey(state)(e)
                     else
@@ -459,7 +468,7 @@ final case class CascadeSelect[A] private (
       * so it has nothing to say.
       */
     private def unheardCard(using Frame): List[UI] =
-        if disabledFlag || choice.forall(_.heard(onChangeF.orElse(onPickF))) then Nil
+        if disabledFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
         else
             List(KeyDiagnostics.card(
                 "CascadeSelect",

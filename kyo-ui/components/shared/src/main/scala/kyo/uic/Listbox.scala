@@ -167,6 +167,7 @@ final case class Listbox[K] private (
     templateF: Maybe[ListItem[K] => UI] = Absent,
     checkmarkFlag: Boolean = false,
     disabledFlag: Boolean = false,
+    fixedFlag: Boolean = false,
     invalidV: Maybe[BoolValue] = Absent,
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
@@ -313,7 +314,7 @@ final case class Listbox[K] private (
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
-        !disabledFlag && (selectionModeV != SelectionMode.None || onItemClickF.isDefined)
+        !disabledFlag && !fixedFlag && (selectionModeV != SelectionMode.None || onItemClickF.isDefined)
 
     /** Package-internal: hosts (OrderList/PickList) that already subscribe to the
       * same selection ref in an enclosing render supply the resolved set directly;
@@ -333,7 +334,10 @@ final case class Listbox[K] private (
     end resolved
 
     private[uic] def render(using Frame): UI =
-        renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
+        // A constant selection nobody hears is fixed: the list shows it, read-only, and its options pick nothing.
+        val fixed = selectionModeV != SelectionMode.None && selectedRef.exists(_.fixed(onChangeF.orElse(onItemClickF)))
+        copy(fixedFlag = fixed).renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
+    end render
 
     /** One mount for the two signals this listbox owns: the keyboard highlight, and the
       * filter query when `filterable` asked for a header without handing over a ref.
@@ -357,11 +361,16 @@ final case class Listbox[K] private (
                 q    <-
                     if ownsQuery then Signal.initRef("").map(r => Present(r): Maybe[SignalRef[String]])
                     else filterQueryRef: Maybe[SignalRef[String]] < Sync
-            yield subscribed(q, Present(hi), Present(base), validity)
+                // Unbound, a list that selects keeps what the reader picks itself.
+                own <-
+                    if selectedRef.isEmpty && selectionModeV != SelectionMode.None then Signal.initRef(Set.empty[K]).map(r => Present(r))
+                    else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
+                self = own.fold(this)(r => copy(selectedRef = Present(SetBinding.of(ReactiveValue(r)))))
+            yield self.subscribed(q, Present(hi), Present(base), validity)
         }.placeholder(subscribed(filterQueryRef, Absent, Absent, validity))
         // A selection bound one way that nothing hears: every click is painted away again.
-        val heard = selectionModeV == SelectionMode.None || selectedRef.forall(_.heard(onChangeF.orElse(onItemClickF)))
-        if heard then list
+        val deaf = selectionModeV != SelectionMode.None && !disabledFlag && selectedRef.exists(_.deaf(onChangeF.orElse(onItemClickF)))
+        if !deaf then list
         else
             fragment(
                 KeyDiagnostics.card(
@@ -493,6 +502,7 @@ final case class Listbox[K] private (
         idV.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
+        if fixedFlag then list = list.aria("readonly", "true")
         // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
         // listbox pattern asks for and what Prime does: a reader tabbing through a form should
         // not have to press Tab once per option to get past a list of forty. That holds in the

@@ -910,9 +910,37 @@ class SelectTest extends UicTest:
             off      <- errors(base.selection("a").disabled(true))
         yield
             assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the fixed test).
+            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
             assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
         end for
+    }
+
+    "a constant nobody hears is fixed: read-only, reachable, answering no key, and no card" in {
+        val fixed = uic.Select[String]().options(Seq("a", "b"))(identity).optionKey(identity).selection("a")
+        for
+            field <- elementWithClass(fixed.render, "p-select")
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+        yield
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "it says it is read-only")
+            assert(field.attrs.tabIndex.contains(0), "and a reader can still land on it")
+            assert(field.attrs.onKeyDown.isEmpty, "but it answers no key")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+        end for
+    }
+
+    "an unbound select keeps what the reader picks" in {
+        val free = uic.Select[String]().options(Seq("a", "b"))(identity).optionKey(identity).id("sel")
+        for
+            after <- publishedAfterReady(
+                free.render,
+                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("sel") && declaresClick(e))),
+                until = t => elementsWithClass(t, "p-select-label").map(_.exists(e => textOf(e) == "b"))
+            )(
+                t => clickBubbling(t)(_.attrs.identifier.contains("sel")),
+                t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-select-option") && textOf(e) == "b")
+            )
+        yield assert(after.nonEmpty, "the field never showed the option the reader picked")
     }
 
 end SelectTest

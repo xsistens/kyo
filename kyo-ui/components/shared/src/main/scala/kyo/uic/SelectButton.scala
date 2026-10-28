@@ -180,6 +180,14 @@ final case class SelectButton[A] private (
     private type Nav = Maybe[(List[String], String => UI.Action)]
 
     private[uic] def render(using Frame): UI =
+        // Unbound, the group keeps what the reader presses itself.
+        if multipleFlag && multi.isEmpty then
+            ReactiveValue.owned(Set.empty[A])(own => copy(multi = Present(MultiChoice(own))).renderBound)(renderBound)
+        else if !multipleFlag && single.isEmpty then
+            ReactiveValue.owned(Maybe.empty[A])(own => copy(single = Present(SingleChoice.Optional(own))).renderBound)(renderBound)
+        else renderBound
+
+    private def renderBound(using Frame): UI =
         // Multiple select is a group of independent toggles, each its own tab stop, so it needs no
         // ids and no mount. Single select is a radio group, and the mount is where its ids come from.
         if multipleFlag then renderNav(Absent)
@@ -315,7 +323,10 @@ final case class SelectButton[A] private (
                 .size(sizeV)
             itemTemplateF.foreach(t => tb = tb.content(t(a)).accessibleName(label))
             if disabledFlag.constTrue || optionDisabledF.exists(_(a)) then tb = tb.disabled(true)
+            // A constant nobody hears is fixed: its buttons show it, read-only, and press nothing.
+            else if fixed then tb = tb.readonly(true)
             else tb = tb.onChange(_ => activate(a))
+            end if
             if !multipleFlag then
                 (nav, optionIds) match
                     case (Present((_, focus)), Present(ids)) if ids.isDefinedAt(i) =>
@@ -352,10 +363,10 @@ final case class SelectButton[A] private (
       * so it has nothing to say.
       */
     private def unheardCard(using Frame): List[UI] =
-        val heard =
-            if multipleFlag then multi.forall(_.heard(onChangeSetF))
-            else single.forall(_.heard(onChangeF.orElse(onPickF)))
-        if heard || disabledFlag.constTrue then Nil
+        val deaf =
+            if multipleFlag then multi.exists(_.deaf(onChangeSetF))
+            else single.exists(_.deaf(onChangeF.orElse(onPickF)))
+        if !deaf || disabledFlag.constTrue then Nil
         else
             List(KeyDiagnostics.card(
                 "SelectButton",
@@ -365,6 +376,11 @@ final case class SelectButton[A] private (
             ))
         end if
     end unheardCard
+
+    /** A constant nobody hears is fixed: the group is drawn read-only, its buttons pressing nothing. */
+    private def fixed: Boolean =
+        if multipleFlag then multi.exists(_.fixed(onChangeSetF))
+        else single.exists(_.fixed(onChangeF.orElse(onPickF)))
 
     /** The card naming held options no button carries (see [[KeyDiagnostics.unknown]]). */
     private def unknownCard(unknown: List[A])(using Frame): List[UI] =

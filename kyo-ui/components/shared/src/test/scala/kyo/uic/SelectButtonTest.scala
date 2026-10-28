@@ -291,7 +291,8 @@ class SelectButtonTest extends UicTest:
             off      <- errors(typed.selection(Size.M).disabled(true))
         yield
             assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the fixed test).
+            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
             assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
         end for
     }
@@ -301,6 +302,25 @@ class SelectButtonTest extends UicTest:
             held <- Signal.initRef(Set("Small"))
             off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
         yield assert(off.isEmpty, s"nobody can pick: ${off.map(textOf)}")
+    }
+
+    "a constant nobody hears is fixed: its buttons press nothing, and no card" in {
+        for
+            os   <- options(typed.selection(Size.M).render)
+            card <- elementsWithClass(typed.selection(Size.M).render, "p-uic-key-error")
+        yield
+            assert(os.forall(o => !declaresClick(o)), "a fixed group presses nothing")
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+    }
+
+    "an unbound group keeps the option the reader presses" in {
+        for
+            after <- publishedAfterReady(
+                typed.render,
+                t => options(t).map(_.exists(declaresClick)),
+                until = t => options(t).map(os => os.lastOption.exists(_.attrs.ariaAttrs.get("checked").contains("true")))
+            )(t => options(t).map(os => click(os(2))))
+        yield assert(after.nonEmpty, "the group never showed the option the reader pressed")
     }
 
 end SelectButtonTest

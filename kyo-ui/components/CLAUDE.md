@@ -64,15 +64,24 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`Input`, `TextArea`,
   `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it. A text
   field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, nothing
-  paints it away, so it gets no card. A boolean field's constant does, because its drawn box never moves.
+  paints it away, so it gets no card. A boolean field's constant is FIXED, as below.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
   every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
   `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is
   written first, atomically for a step, then the `on<Slot>Change` callback hears the new value, whatever the binding
   (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the pickers keep their family's
-  `onChange`). A one-way binding nothing hears is a card (`ReactiveValue.heard`), where an older per-item event
-  (`onRowClick`, `onNodeToggle`, `onItemClick`) counts as hearing it. `restore` writes only two-way slots. A host that
-  embeds a component hands a slot on as it was bound (`ReactiveValue.bound`), never as a ref it made up.
+  `onChange`). A SIGNAL nothing hears is a card (`ReactiveValue.deaf`): the state lives somewhere else and the reader's
+  change reaches nobody. An older per-item event (`onRowClick`, `onNodeToggle`, `onItemClick`) counts as hearing it.
+  `restore` writes only two-way slots. A host that embeds a component hands a slot on as it was bound
+  (`ReactiveValue.bound`), never as a ref it made up.
+- **For the fields and the pickers, a CONSTANT nothing hears is fixed, and an UNBOUND slot is the component's own**
+  (decided 2026-10-28). A constant nobody hears (`ReactiveValue.fixed`) is not a mistake but a value meant to stay: the
+  component draws it read-only, reachable and readable with nothing to change, the way `readonly` does, and says
+  nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as it is shown
+  (`ReactiveValue.owned`, or a ref the component's existing mount allocates), the way an HTML control nobody binds keeps
+  its tick. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
+  and keeps nothing of its own. Tables, paginators, carousels and the ordered lists still treat an unheard constant as
+  before.
 - **A field with NATIVE state paints itself again after a one-way report.** The browser moves a tick, a caret's text,
   a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it
   was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal (and a

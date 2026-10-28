@@ -312,9 +312,38 @@ class CascadeSelectTest extends UicTest:
             off      <- errors(cascade.selection("Bern").disabled(true))
         yield
             assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the fixed test).
+            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
             assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
         end for
+    }
+
+    "a constant nobody hears is fixed: no panel to open, and no card" in {
+        val fixed = cascade.selection("Bern")
+        for
+            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
+            field <- elementWithClass(fixed.render, "p-cascadeselect")
+        yield
+            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
+            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
+        end for
+    }
+
+    "an unbound cascade keeps the leaf the reader picks" in {
+        for
+            after <- publishedAfterReady(
+                cascade.render,
+                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("cs") && declaresClick(e))),
+                until = t => elementsWithClass(t, "p-cascadeselect-label").map(_.exists(e => textOf(e) == "Sydney"))
+            )(
+                t => clickBubbling(t)(_.attrs.identifier.contains("cs")),
+                t =>
+                    clickBubbling(t)((e: UI.Ast.Element) =>
+                        e.attrs.cssClasses.contains("p-cascadeselect-option-text") && textOf(e) == "Sydney"
+                    )
+            )
+        yield assert(after.nonEmpty, "the field never showed the leaf the reader picked")
     }
 
 end CascadeSelectTest

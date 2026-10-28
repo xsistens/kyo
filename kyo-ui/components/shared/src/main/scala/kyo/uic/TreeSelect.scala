@@ -231,9 +231,19 @@ final case class TreeSelect[K] private (
                     case Present(v) => Kyo.lift(v.bound)
                     case Absent     => Signal.initRef(Set.empty[K]).map(r => r: Set[K] | Signal[Set[K]])
                 hi <- Signal.initRef(-1)
-            yield wired(open, exp, hi, base)
+                // Unbound, the field keeps the nodes the reader picks itself.
+                own <-
+                    if valueSlot.isEmpty then Signal.initRef(Set.empty[K]).map(r => Present(r))
+                    else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
+                self = own.fold(this)(r => copy(valueSlot = Present(ReactiveValue(r))))
+            yield self.wired(open, exp, hi, base)
         }.placeholder(stat)
     end render
+
+    /** A constant selection nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to
+      * open.
+      */
+    private def fixed: Boolean = ReactiveValue.fixed(valueSlot, onChangeF)
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(
@@ -421,12 +431,13 @@ final case class TreeSelect[K] private (
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the panel.
-            if st.isDefined then el = el.onClick(toggle)
+            if st.isDefined && !fixed then el = el.onClick(toggle)
             // Focus stays on the trigger while the panel is open, so the tree's own keyboard runs
             // from here: closed, the three opening keys; open, the tree's arrows and Escape. The
             // tree supplies the handler rather than a second copy of it living here.
-            st.foreach { state =>
+            st.filter(_ => !fixed).foreach { state =>
                 val roving  = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
                 val treeKey = hosted.map(_.keyHandler(exp, roving))
                 el = el.onKeyDown { e =>
@@ -457,9 +468,9 @@ final case class TreeSelect[K] private (
         val field = validity.follow(el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
         // Bindings made one way that nothing hears: every pick or toggle is painted away again.
         val unheard =
-            (if valueSlot.isEmpty || ReactiveValue.heard(valueSlot, onChangeF) then Nil
+            (if disabledFlag || !ReactiveValue.deaf(valueSlot, onChangeF) then Nil
              else List("selection is bound one way and nothing hears a pick: add onChange, or bind a SignalRef")) ++
-                (if expandedSlot.isEmpty || ReactiveValue.heard(expandedSlot, onExpandedF) then Nil
+                (if disabledFlag || !ReactiveValue.deaf(expandedSlot, onExpandedF) then Nil
                  else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef"))
         val cards = unknownCard ++
             (if unheard.isEmpty then Nil else List(KeyDiagnostics.card("TreeSelect", "a binding the reader cannot move", unheard)))

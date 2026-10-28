@@ -379,6 +379,11 @@ final case class Select[A] private (
     )
 
     private[uic] def render(using Frame): UI =
+        // A constant nobody hears is fixed: drawn read-only, reachable and readable with no panel to open.
+        if choice.exists(_.fixed(onChangeF.orElse(onPickF))) && !readonlyFlag then copy(readonlyFlag = true).render
+        else renderLive
+
+    private def renderLive(using Frame): UI =
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount. Static projections (SSG, the SSR page GET,
         // initial render) show the placeholder (the same closed anatomy, inert)
@@ -401,9 +406,14 @@ final case class Select[A] private (
                 q <- filterQueryRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef("")
-            yield wired(open, hi, q, Present(base))
+                // Unbound, and with no host supplying what it holds, the field keeps what the reader picks itself.
+                own <-
+                    if choice.isEmpty && currentV.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
+                    else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
+                self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
+            yield self.wired(open, hi, q, Present(base))
         }.placeholder(stat)
-    end render
+    end renderLive
 
     /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as placeholders,
@@ -633,7 +643,7 @@ final case class Select[A] private (
       * so it has nothing to say.
       */
     private def unheardCard(using Frame): List[UI] =
-        if disabledFlag || choice.forall(_.heard(onChangeF.orElse(onPickF))) then Nil
+        if disabledFlag || readonlyFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
         else
             List(KeyDiagnostics.card(
                 "Select",

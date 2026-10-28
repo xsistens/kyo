@@ -52,7 +52,8 @@ class CheckBoxTest extends UicTest:
             off      <- errors(uic.CheckBox().checked(held.readOnly).disabled(true))
         yield
             assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(constant.size == 1, s"a constant nobody hears: ${constant.map(textOf)}")
+            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the test below).
+            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
             assert(heard.isEmpty && twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
         end for
     }
@@ -67,6 +68,28 @@ class CheckBoxTest extends UicTest:
     "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
         for again <- repaintsAfter(uic.CheckBox().checked(false).onChange(_ => ()).render)(t => box(t).map(toggle(_, true)))
         yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
+    "a constant nobody hears is fixed: reachable, read-only, and nothing to toggle" in {
+        for b <- box(uic.CheckBox().checked(true).render)
+        yield
+            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
+            assert(b.attrs.dataAttrs.get("kyo-inert").contains("1"), "the browser's own toggle is declined")
+            assert(b.attrs.ariaAttrs.get("readonly").contains("true"), "and it says it is read-only")
+            assert(b.onChange.isEmpty, "with no handler behind it")
+    }
+
+    "an unbound box keeps its own state, so a toggle ticks the box it draws" in {
+        for
+            seen  <- Signal.initRef(List.empty[Boolean])
+            after <- publishedAfter(uic.CheckBox("Free").onChange(v => seen.updateAndGet(_ :+ v).unit).render)(t =>
+                box(t).map(toggle(_, true))
+            )
+            ticked <- after.fold(Kyo.lift(false))(t => elementsWithClass(t, "p-checkbox-checked").map(_.nonEmpty))
+            s      <- seen.get
+        yield
+            assert(ticked, "the drawn box stayed empty after the reader ticked it")
+            assert(s == List(true), s"reported $s")
     }
 
 end CheckBoxTest

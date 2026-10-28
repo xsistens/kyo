@@ -122,6 +122,26 @@ private[uic] object ReactiveValue:
     def heard[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
         slot.exists(_.writable.isDefined) || report.isDefined
 
+    /** A constant nobody hears: the slot is fixed, so the component draws it read-only, reachable and readable with nothing
+      * to change, and says nothing about it.
+      */
+    def fixed[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
+        slot.exists(_.const.isDefined) && !heard(slot, report)
+
+    /** A signal bound one way that nobody hears: the state lives somewhere else and the reader's change reaches nobody,
+      * which is the one binding a card names.
+      */
+    def deaf[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
+        slot.exists(s => s.dyn.isDefined && s.writable.isEmpty) && !heard(slot, report)
+
+    /** Draws a slot nobody bound over state the component keeps itself, for as long as it is shown: the reader's change is
+      * written there and the field follows, the way an HTML control nobody binds keeps what the reader did. `initial` is
+      * where it starts, `draw` draws the component with that state bound two-way, and `placeholder` is what a static
+      * projection shows before the mount runs.
+      */
+    def owned[A](initial: A)(draw: ReactiveValue[A] => UI)(placeholder: UI)(using CanEqual[A, A], Frame): UI =
+        UI.mounted(Signal.initRef(initial).map(own => draw(ReactiveVariable(own)))).placeholder(placeholder)
+
     /** Draws a field the reader edits over a ONE-WAY signal, so that an edit its owner does not take is painted away.
       *
       * The browser changes a native control (a tick, a caret's text, a slider's thumb) before the report reaches the owner,
