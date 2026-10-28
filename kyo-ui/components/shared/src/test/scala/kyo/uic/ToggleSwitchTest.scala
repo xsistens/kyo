@@ -51,4 +51,11 @@ class ToggleSwitchTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
+        for again <- repaintsAfter(uic.ToggleSwitch().checked(false).onChange(_ => ()).render)(t =>
+                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(true)))
+            )
+        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    }
+
 end ToggleSwitchTest

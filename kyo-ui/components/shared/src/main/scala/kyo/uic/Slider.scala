@@ -110,7 +110,12 @@ final case class Slider private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        // A value bound one way that nothing hears: every change the reader makes is painted away again.
+        if valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF) && !disabledFlag.constTrue then
+            fragment(field, KeyDiagnostics.unheard("Slider", "value", "onChange"))
+        else field
+    end render
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
