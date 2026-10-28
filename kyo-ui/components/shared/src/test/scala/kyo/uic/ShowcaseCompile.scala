@@ -641,7 +641,7 @@ object ShowcaseCompile:
                 .position(uic.DrawerPosition.Right)
                 .header("Settings")
                 .footer(uic.Button("Apply").onClick(drawerOpen.set(false)))
-                .onClose(notify)(p("Drawer content"))
+                .onOpenChange(_ => notify)(p("Drawer content"))
         )
 
     /** A right-click menu on a table row, the composition [[uic.ContextMenu]] cannot wrap.
