@@ -592,6 +592,14 @@ object RowSource:
           *
           * The block size is part of the key, since block 3 of five rows is not block 3 of
           * two: a page size that changes leaves the old blocks to fall out on their own.
+          *
+          * One step, for the reason [[Run.acquire]] is: the turn that warms can be stopped by
+          * the next range, and a stop landing between starting the fetch and recording it left
+          * the fetch running where no range finds it, so the next one fetched the block again.
+          * No test holds this: the gap lay between two `Sync` steps, where no test can place a
+          * stop, and a page growing while the turn before it reaches ahead hit it about once in
+          * three hundred thousand runs on the JVM, never on JS, where one thread runs every fiber.
+          * Splitting this into two steps again brings it back.
           */
         private def warm(
             cache: Cache[(Q, Int, Int), Fiber[(Seq[A], Total), Any]],
@@ -599,10 +607,12 @@ object RowSource:
             block: Int,
             at: Int
         )(using Frame): Fiber[(Seq[A], Total), Any] < Sync =
-            cache.get((q, block, at)).map {
-                case Present(f) => f
-                case Absent     =>
-                    Fiber.initUnscoped(fetch(q, at * block, block)).map(f => cache.add((q, block, at), f))
+            Sync.Unsafe.defer {
+                // Unsafe: each safe call evaluated inline, which is what keeps the whole of it one step.
+                Sync.Unsafe.evalOrThrow(cache.get((q, block, at))).getOrElse {
+                    val f = Sync.Unsafe.evalOrThrow(Fiber.initUnscoped(fetch(q, at * block, block)))
+                    Sync.Unsafe.evalOrThrow(cache.add((q, block, at), f))
+                }
             }
 
         /** The feed: one turn per query, range and generation, until a turn's fetch fails, which ends it with that failure
