@@ -60,8 +60,8 @@ private[uic] object PopupTrigger:
         fixed: Boolean,
         activate: Maybe[UI.Action]
     )(using Frame): UI.Ast.Element =
-        val native                                     = isNative(e)
-        val keys: Maybe[UI.KeyboardEvent => UI.Action] =
+        val native                                           = isNative(e)
+        val activation: Maybe[UI.KeyboardEvent => UI.Action] =
             if native then Absent
             else
                 activate.map(act =>
@@ -70,13 +70,18 @@ private[uic] object PopupTrigger:
                             case UI.Keyboard.Enter | UI.Keyboard.Space => act
                             case _                                     => Kyo.unit
                 )
+        // A key handler the page put on its own trigger still runs, before the activation.
+        val keys: Maybe[UI.KeyboardEvent => UI.Action] =
+            (e.attrs.onKeyDownSelf, activation) match
+                case (Present(own), Present(act)) => Present(evt => own(evt).andThen(act(evt)))
+                case (own, act)                   => act.orElse(own)
         // A tab stop and the keys first, in one write, while the element is still known to take both.
         val reachable: UI.Ast.Element =
             if native then e
             else
                 e.withAttrs(e.attrs.copy(
                     tabIndex = e.attrs.tabIndex.orElse(Present(0)),
-                    onKeyDownSelf = keys.orElse(e.attrs.onKeyDownSelf)
+                    onKeyDownSelf = keys
                 ))
         var el: UI.Ast.Element = reachable.aria("haspopup", popup)
         el = expanded match
