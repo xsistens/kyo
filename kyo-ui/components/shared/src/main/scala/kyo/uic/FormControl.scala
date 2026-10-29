@@ -113,7 +113,7 @@ end MultiChoiceFormControl
   * required. There is no second, primitive field behind it: the control reads and writes the field's own ref.
   */
 trait OptionalFormControl[A] extends FormControl:
-    def value(ref: SignalRef[Maybe[A]]): Self
+    def value(v: Maybe[A] | Signal[Maybe[A]]): Self
     def onBlur(f: Maybe[A] => UI.Action)(using Frame): Self
 end OptionalFormControl
 

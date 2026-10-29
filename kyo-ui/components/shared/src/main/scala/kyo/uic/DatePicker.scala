@@ -85,21 +85,24 @@ final case class DatePicker[A] private (
     /** Binds the held value two-way to `ref`, `Absent` while nothing is picked: a pick, the time picker, the button bar and a
       * typed text write it back.
       */
-    def value(ref: SignalRef[Maybe[A]]): DatePicker[A] = copy(bindingV = Present(DatePicker.Binding.Single(ref)))
+    def value(v: Maybe[A] | Signal[Maybe[A]]): DatePicker[A] =
+        copy(bindingV = Present(DatePicker.Binding.Single(ReactiveValue[Maybe[A]](v))))
 
     /** The same picker with several days picked at once (Prime's `selectionMode="multiple"`): a [[MultiDatePicker]] bound
       * two-way to the set. A day click toggles membership and the panel stays open. Everything set so far carries over except
       * the single-value binding and its `onChange` and `onBlur`, which hold one value and would never fire on a set.
       */
-    def values(ref: SignalRef[Set[A]])(using DateKind.Days[A]): MultiDatePicker[A] =
-        MultiDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Multi(ref))))
+    def values(v: Set[A] | Signal[Set[A]])(using DateKind.Days[A]): MultiDatePicker[A] =
+        MultiDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Multi(ReactiveValue[Set[A]](v)))))
 
     /** The same picker picking a range (Prime's `selectionMode="range"`): a [[RangeDatePicker]] bound two-way to the start
       * and end days. The first pick writes `start` (clearing `end`), a pick on or after it completes the range and closes the
       * panel, an earlier pick restarts. Everything set so far carries over except the single-value binding and its events.
       */
-    def range(start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]])(using DateKind.Days[A]): RangeDatePicker[A] =
-        RangeDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Range(start, end))))
+    def range(start: Maybe[A] | Signal[Maybe[A]], end: Maybe[A] | Signal[Maybe[A]])(using DateKind.Days[A]): RangeDatePicker[A] =
+        RangeDatePicker(single.copy(bindingV =
+            Present(DatePicker.Binding.Range(ReactiveValue[Maybe[A]](start), ReactiveValue[Maybe[A]](end)))
+        ))
 
     /** This picker without its single-value binding and events, which is what a set or range picker is built from. */
     private def single: DatePicker[A] = copy(bindingV = Absent, onChangeF = Absent, onBlurF = Absent)
@@ -250,14 +253,18 @@ final case class DatePicker[A] private (
     private[uic] def render(using Frame): UI =
         // A calendar bound shut by a constant nobody hears: nothing the reader does may open it, so the picker is read-only.
         val openFixedShut = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
-        if openFixedShut && !readonlyFlag then copy(readonlyFlag = true).render
+        // A value held by a constant nobody hears is fixed too: drawn read-only, reachable and readable.
+        val valueFixed = bindingV.exists(_.fixed(valueHeard))
+        if (openFixedShut || valueFixed) && !readonlyFlag then copy(readonlyFlag = true).render
         // A calendar bound one way that nothing hears: every open and close the reader asks for is painted away again.
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
             val unheard =
-                (if ReactiveValue.deaf(openSlot, onOpenF) then
-                     List("the calendar is bound one way and nothing hears an open or a close; add onOpenChange")
+                (if bindingV.exists(_.deaf(valueHeard)) then List("the value is bound one way and nothing hears a pick; add onChange")
                  else Nil) ++
+                    (if ReactiveValue.deaf(openSlot, onOpenF) then
+                         List("the calendar is bound one way and nothing hears an open or a close; add onOpenChange")
+                     else Nil) ++
                     (if ReactiveValue.deaf(monthSlot, onMonthF) then
                          List("the month is bound one way and nothing hears a page; add onMonthChange")
                      else Nil) ++
@@ -298,7 +305,10 @@ final case class DatePicker[A] private (
                     base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
-                        case Absent     => Signal.initRef(Maybe.empty[A]).map(r => DatePicker.Binding.Single(r): DatePicker.Binding[A])
+                        case Absent     =>
+                            Signal.initRef(Maybe.empty[A]).map(r =>
+                                DatePicker.Binding.Single(ReactiveValue[Maybe[A]](r)): DatePicker.Binding[A]
+                            )
                     // Unbound, the picker keeps the calendar's visibility itself: closed, or open when it is inline.
                     oref <- openSlot match
                         case Present(o) => Kyo.lift(o)
@@ -474,15 +484,15 @@ final case class DatePicker[A] private (
         bindingV match
             case Present(DatePicker.Binding.Single(r)) =>
                 onBlurF match
-                    case Present(f) => r.use(f)
+                    case Present(f) => r.current.map(f)
                     case Absent     => ()
             case Present(DatePicker.Binding.Multi(r)) =>
                 onValuesBlurF match
-                    case Present(f) => r.use(f)
+                    case Present(f) => r.current.map(f)
                     case Absent     => ()
             case Present(DatePicker.Binding.Range(s, e)) =>
                 onRangeBlurF match
-                    case Present(f) => s.use(sv => e.use(ev => f(sv, ev)))
+                    case Present(f) => s.current.map(sv => e.current.map(ev => f(sv, ev)))
                     case Absent     => ()
             case Absent =>
                 onBlurF match
@@ -537,6 +547,14 @@ final case class DatePicker[A] private (
     /** Asks for the calendar open, where it is not already. */
     private def openPanel(oref: ReactiveValue[Boolean])(using Frame): UI.Action =
         oref.current.map(isOpen => if isOpen then (): UI.Action else ReactiveValue.change(Present(oref), true, onOpenF))
+
+    /** Whether the binding's own event is set: `onChange`, or its set or range form. */
+    private def valueHeard: Boolean =
+        bindingV match
+            case Present(DatePicker.Binding.Single(_))   => onChangeF.isDefined
+            case Present(DatePicker.Binding.Multi(_))    => onValuesChangeF.isDefined
+            case Present(DatePicker.Binding.Range(_, _)) => onRangeChangeF.isDefined
+            case Absent                                  => false
 
     // === writes =============================================================
 
@@ -1321,12 +1339,20 @@ final case class DatePicker[A] private (
             val wipe: UI.Action = bindingV match
                 case Present(DatePicker.Binding.Single(_)) => putValue("")
                 case Present(DatePicker.Binding.Multi(r))  =>
-                    r.getAndSet(Set.empty[A]).map(prev => if prev.isEmpty then (): UI.Action else fireValues(Set.empty))
+                    r.current.map(prev =>
+                        if prev.isEmpty then (): UI.Action
+                        else DatePicker.Binding.write(r, Set.empty[A]).andThen(fireValues(Set.empty))
+                    )
                 case Present(DatePicker.Binding.Range(s, e)) =>
                     for
-                        sv <- s.getAndSet(Maybe.empty[A])
-                        ev <- e.getAndSet(Maybe.empty[A])
-                        r  <- if sv.isEmpty && ev.isEmpty then (): UI.Action else fireRange((Absent, Absent))
+                        sv <- s.current
+                        ev <- e.current
+                        r  <-
+                            if sv.isEmpty && ev.isEmpty then (): UI.Action
+                            else
+                                DatePicker.Binding.write(s, Maybe.empty[A])
+                                    .andThen(DatePicker.Binding.write(e, Maybe.empty[A]))
+                                    .andThen(fireRange((Absent, Absent)))
                     yield r
                 case Absent => ()
             for
@@ -1391,33 +1417,65 @@ object DatePicker:
       * did not happen.
       */
     private[uic] enum Binding[A]:
-        case Single(ref: SignalRef[Maybe[A]])
-        case Multi(ref: SignalRef[Set[A]])
-        case Range(start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]])
+        // A constant, a one-way signal or a two-way ref, as every value slot takes them.
+        case Single(value: ReactiveValue[Maybe[A]])
+        case Multi(values: ReactiveValue[Set[A]])
+        case Range(start: ReactiveValue[Maybe[A]], end: ReactiveValue[Maybe[A]])
 
         /** The held selection as ISO strings. */
         def snapshot(kind: DateKind[A])(using Frame): Signal[Snapshot] =
+            // Compared by the app's own equality, as the value type defines it.
+            given CanEqual[Maybe[A], Maybe[A]] = CanEqual.derived
+            given CanEqual[Set[A], Set[A]]     = CanEqual.derived
             this match
-                case Single(r)   => r.map(m => Snapshot.Single(Binding.isoOf(kind, m)))
-                case Multi(r)    => r.map(as => Snapshot.Multi(as.map(kind.toIso)))
+                case Single(r)   => r.signal.map(m => Snapshot.Single(Binding.isoOf(kind, m)))
+                case Multi(r)    => r.signal.map(as => Snapshot.Multi(as.map(kind.toIso)))
                 case Range(s, e) =>
-                    s.map(Binding.isoOf(kind, _)).combineLatest(e.map(Binding.isoOf(kind, _))).map((a, b) => Snapshot.Range(a, b))
+                    s.signal.map(Binding.isoOf(kind, _)).combineLatest(e.signal.map(Binding.isoOf(kind, _))).map((a, b) =>
+                        Snapshot.Range(a, b)
+                    )
+            end match
+        end snapshot
 
-        /** What the binding holds now, as the write that would put it back: Escape's memory. */
+        /** What the binding holds now, as the write that would put it back: Escape's memory. A one-way binding wrote
+          * nothing, so there is nothing to put back.
+          */
         def capture(using Frame): Restore < Sync =
             this match
-                case Single(r)   => r.get.map(v => Restore(r.set(v)))
-                case Multi(r)    => r.get.map(v => Restore(r.set(v)))
+                case Single(r)   => r.current.map(v => Restore(Binding.write(r, v)))
+                case Multi(r)    => r.current.map(v => Restore(Binding.write(r, v)))
                 case Range(s, e) =>
                     for
-                        sv <- s.get
-                        ev <- e.get
-                    yield Restore(s.set(sv).andThen(e.set(ev)))
+                        sv <- s.current
+                        ev <- e.current
+                    yield Restore(Binding.write(s, sv).andThen(Binding.write(e, ev)))
+
+        /** A constant nobody hears ([[ReactiveValue.fixed]] for the binding's own event): the picker is drawn read-only. */
+        def fixed(heard: Boolean): Boolean =
+            !heard &&
+                (this match
+                    case Single(r)   => r.const.isDefined
+                    case Multi(r)    => r.const.isDefined
+                    case Range(s, e) => s.const.isDefined && e.const.isDefined)
+
+        /** A signal nobody hears: every pick is painted away again. */
+        def deaf(heard: Boolean): Boolean =
+            def oneWay[B](v: ReactiveValue[B]): Boolean = v.dyn.isDefined && v.writable.isEmpty
+            !heard &&
+            (this match
+                case Single(r)   => oneWay(r)
+                case Multi(r)    => oneWay(r)
+                case Range(s, e) => oneWay(s) || oneWay(e))
+        end deaf
     end Binding
 
     private[uic] object Binding:
 
         private[uic] def isoOf[A](kind: DateKind[A], v: Maybe[A]): String = v.map(kind.toIso).getOrElse("")
+
+        /** Writes `next` where the binding is two way. A one-way binding is only reported, which the caller does. */
+        private[uic] def write[B](v: ReactiveValue[B], next: B)(using Frame): Unit < Sync =
+            v.writable.fold(Kyo.unit)(_.set(next))
 
         /** The value `iso` names, keeping `prev` where it names the same one. */
         private def keep[A](kind: DateKind[A], prev: Maybe[A], iso: String): Maybe[A] =
@@ -1428,42 +1486,47 @@ object DatePicker:
         /** Writes the value `iso` names (`""` for none) unless it is the one held, and answers the value now held where the
           * write changed it. A string the kind cannot read writes nothing.
           */
-        def put[A](ref: SignalRef[Maybe[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Maybe[A]] < Sync =
+        def put[A](v: ReactiveValue[Maybe[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Maybe[A]] < Sync =
             if iso.nonEmpty && kind.fromIso(iso).isEmpty then Kyo.lift(Maybe.empty[Maybe[A]])
             else
-                ref.getAndUpdate(prev => keep(kind, prev, iso)).map { prev =>
-                    if isoOf(kind, prev) == iso then Absent else Present(keep(kind, prev, iso))
-                }
+                def answer(prev: Maybe[A]): Maybe[Maybe[A]] = if isoOf(kind, prev) == iso then Absent else Present(keep(kind, prev, iso))
+                v.writable match
+                    // Two way: one atomic step, so two writes cannot both read the value before either.
+                    case Present(ref) => ref.getAndUpdate(prev => keep(kind, prev, iso)).map(answer)
+                    case Absent       => v.current.map(answer)
+                end match
 
         /** Toggles the day `iso` names in or out of the set, and answers the set now held. A member the set already holds
           * stays as the app wrote it.
           */
-        def toggle[A](ref: SignalRef[Set[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Set[A]] < Sync =
+        def toggle[A](v: ReactiveValue[Set[A]], kind: DateKind[A], iso: String)(using Frame): Maybe[Set[A]] < Sync =
             def step(prev: Set[A]): Set[A] =
                 if prev.exists(a => kind.toIso(a) == iso) then prev.filterNot(a => kind.toIso(a) == iso)
                 else kind.fromIso(iso).map(prev + _).getOrElse(prev)
-            ref.getAndUpdate(step).map { prev =>
+            def answer(prev: Set[A]): Maybe[Set[A]] =
                 val now = step(prev)
                 if now.map(kind.toIso) == prev.map(kind.toIso) then Absent else Present(now)
-            }
+            v.writable match
+                case Present(ref) => ref.getAndUpdate(step).map(answer)
+                case Absent       => v.current.map(answer)
         end toggle
 
         /** One pick of a range: it restarts the range (start written, end cleared) when there is no start yet, when the range
           * is already complete, or when the day is before the start; otherwise it completes the range. Answers the start and
           * end now held where either changed, and whether the pick completed the range.
           */
-        def pickRange[A](start: SignalRef[Maybe[A]], end: SignalRef[Maybe[A]], kind: DateKind[A], iso: String)(using
+        def pickRange[A](start: ReactiveValue[Maybe[A]], end: ReactiveValue[Maybe[A]], kind: DateKind[A], iso: String)(using
             Frame
         ): (Maybe[(Maybe[A], Maybe[A])], Boolean) < Sync =
             for
-                sv <- start.get
-                ev <- end.get
+                sv <- start.current
+                ev <- end.current
                 sIso           = isoOf(kind, sv)
                 eIso           = isoOf(kind, ev)
                 restart        = sIso.isEmpty || eIso.nonEmpty || iso < sIso
                 (sNext, eNext) = if restart then (keep(kind, sv, iso), Maybe.empty[A]) else (sv, keep(kind, ev, iso))
-                _ <- start.set(sNext)
-                _ <- end.set(eNext)
+                _ <- write(start, sNext)
+                _ <- write(end, eNext)
             yield
                 val changed = isoOf(kind, sNext) != sIso || isoOf(kind, eNext) != eIso
                 (if changed then Present((sNext, eNext)) else Absent, !restart)
