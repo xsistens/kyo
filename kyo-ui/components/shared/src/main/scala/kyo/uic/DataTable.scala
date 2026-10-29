@@ -584,7 +584,7 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   * rather than shipping that failure to production data.
   */
 final case class DataTable[A] private (
-    rowsV: List[A] = Nil,
+    rowsTyped: Maybe[ReactiveValue[Seq[A]]] = Absent,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[ColumnTree[A]] = Nil,
     sortSlot: Maybe[ReactiveValue[List[SortKey]]] = Absent,
@@ -637,14 +637,13 @@ final case class DataTable[A] private (
     sourceV: Maybe[RowSource[?, A]] = Absent,
     frozenRowsV: Maybe[ReactiveValue[Seq[A]]] = Absent,
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
-    rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
     editingRowsTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
     editingCellTyped: Maybe[ReactiveValue[Maybe[CellPath[A]]]] = Absent,
     ownEditRowsFlag: Boolean = false,
     ownEditCellFlag: Boolean = false,
     onEditingRowsF: Maybe[Set[A] => UI.Action] = Absent,
     onEditingCellF: Maybe[Maybe[CellPath[A]] => UI.Action] = Absent,
-    rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
+    onRowsF: Maybe[Seq[A] => UI.Action] = Absent,
     cellNavV: Maybe[Boolean] = Absent,
     onCellChangedF: Maybe[CellChange[A] => UI.Action] = Absent,
     onRowChangedF: Maybe[RowChange[A] => UI.Action] = Absent,
@@ -675,8 +674,21 @@ final case class DataTable[A] private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** Appends data rows. */
-    def rows(rs: Seq[A]): DataTable[A] = copy(rowsV = rowsV ++ rs.toList)
+    /** The rows. A second call replaces the first.
+      *
+      * A constant is a list the table shows; nobody hearing it, it is fixed: an editable column opens no editor and a
+      * reorderable row drags nothing, with no card, since a read-only table is not a mistake. A `Signal` is followed on
+      * every emission, and a commit or a drop is only reported. A `SignalRef` is written first, which is what lets the
+      * table store an edit or a drop itself. A signal nothing hears is reported in a card.
+      *
+      * The new list is reported through [[onRowsChange]]; [[onCellValueChanged]], [[onRowValueChanged]] and
+      * [[onRowReorder]] carry what changed and fire after it, and any of the four counts as hearing the rows. A row
+      * list computed elsewhere (a query state, a `combineLatestAll` over per-row signals) is a `Signal`, not a ref:
+      * mirroring it into one puts a second thing in the program that claims to be the row list.
+      *
+      * A [[source]] holds the rows as well, so binding both is a mistake and says so; the source is what renders.
+      */
+    def rows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = copy(rowsTyped = Present(ReactiveValue(v)))
 
     /** Stable row identity: the selection/expansion key and the `onRowClick`
       * payload. Required for reliable selection/expansion.
@@ -957,15 +969,15 @@ final case class DataTable[A] private (
     /** Takes the rows, the total, the busy flag and the paginator from a [[RowSource]],
       * which is the whole wiring of a lazily loaded table in one call.
       *
-      * It sets what `rows`, `lazyRows`, `loading` and `paginate` set, so a later call to
-      * any of those overrides it: bind the source first, then override. The page size is
+      * It sets what `lazyRows`, `loading` and `paginate` set, so a later call to any of
+      * those overrides it: bind the source first, then override. The rows are the source's
+      * own, so a [[rows]] bound as well is reported in a card and not read. The page size is
       * bound as the source was given it, so a source opened over a `SignalRef` size lets the
       * paginator's rows-per-page dropdown change it, and one opened over a constant does not.
       */
     def source(src: RowSource[?, A]): DataTable[A] =
         copy(
             sourceV = Present(src),
-            rowsSigV = Present(src.rows),
             lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
             loadingV = Present(BoolValue.Dyn(src.loading))
         ).paginate(src.pageSizeBinding)(src.page)
@@ -1248,13 +1260,35 @@ final case class DataTable[A] private (
     /** The rows the table holds, whichever way it was given them. */
     private def currentRows(using Frame): Seq[A] < Async =
         if windowedSource then sourceV.get.window.current.map(_.rows)
-        else
-            rowsSigV match
-                case Present(sig) => sig.current
-                case Absent       =>
-                    rowsRefV match
-                        case Present(ref) => ref.get
-                        case Absent       => Kyo.lift(rowsV)
+        else rowsSlot.fold[Seq[A] < Async](Seq.empty[A])(_.current)
+
+    /** The rows' binding: a [[source]]'s own, which wins over [[rows]], or the one [[rows]] was given. */
+    private def rowsSlot: Maybe[ReactiveValue[Seq[A]]] =
+        sourceV match
+            case Present(src) => Present(ReactiveValue.Dyn(src.rows))
+            case Absent       => rowsTyped
+
+    /** Whether anybody takes the list an edit or a drop produces: a two-way [[rows]], or any of the four events. */
+    private def rowsReport: Maybe[Unit] =
+        if onRowsF.isDefined || onCellChangedF.isDefined || onRowChangedF.isDefined || onRowReorderF.isDefined then
+            Present(())
+        else Absent
+
+    /** Constant rows nobody hears: shown, with no editor opening and no row dragging. */
+    private def rowsFixed: Boolean = ReactiveValue.fixed(rowsSlot, rowsReport)
+
+    /** Rows bound one way that nobody hears: an edit or a drop is computed and reaches nobody. */
+    private def rowsDeaf: Boolean = ReactiveValue.deaf(rowsSlot, rowsReport)
+
+    /** Stores the list `step` makes of the rows where [[rows]] can be written, then hands it to [[onRowsChange]].
+      *
+      * The list is read at write time: a ref steps atomically, and anything else is stepped from the rows the table
+      * holds now, so a stale copy cannot report a list missing what arrived in between.
+      */
+    private def writeRows(step: Seq[A] => Seq[A])(using Frame): UI.Action =
+        val next: Seq[A] < Async = rowsSlot.flatMap(_.writable).fold(currentRows.map(step))(_.updateAndGet(step))
+        next.map(rs => onRowsF.fold[UI.Action](())(_(rs)))
+    end writeRows
 
     /** Classes each data row carries beyond the ones the table gives it (Prime's
       * `rowClassName`).
@@ -1347,43 +1381,18 @@ final case class DataTable[A] private (
       */
     def cellNavigation(v: Boolean): DataTable[A] = copy(cellNavV = Present(v))
 
-    /** Binds the rows two-way, which is what lets the table apply a committed edit itself,
-      * through the column's own `write`.
-      *
-      * The alternative is [[rows(rs:Seq[A])*]] plus [[onCellValueChanged]]: the table
-      * computes the new row and hands it over instead of storing it, which is the mode for
-      * a caller whose rows live somewhere the table cannot reach. Binding both is a
-      * mistake and says so, since then two things claim to be the row list.
-      *
-      * The ref itself asks the row type for `CanEqual`, as every `Signal` does; a row type
-      * that is a case class gets there with `derives CanEqual`.
-      */
-    def rows(ref: SignalRef[Seq[A]]): DataTable[A] = copy(rowsRefV = Present(ref))
-
-    /** Binds the rows ONE-way to a derived signal: the table re-reads them on every
-      * emission and writes nothing back.
-      *
-      * This is the shape a computed row list actually has. A list mapped out of a query
-      * state, a paginated connection, a `combineLatestAll` over per-row signals: none of
-      * them is a cell anyone can write into, so none of them is a `SignalRef`, and
-      * mirroring one into a ref just to satisfy a binding puts a second thing in the
-      * program that claims to be the row list. Reach for [[rows(ref:SignalRef[Seq[A]])*]]
-      * when the table should be able to store an edit or a reorder itself, and for this
-      * one otherwise; a read-only signal simply leaves those features unbound, exactly as
-      * [[rows(rs:Seq[A])*]] does.
-      *
-      * A [[source]] binds the same slot, so binding both is the same mistake as binding
-      * two row lists and says so.
-      */
-    def rows(sig: Signal[Seq[A]]): DataTable[A] = copy(rowsSigV = Present(sig))
-
-    /** Runs after a committed cell edit, with the row before and after the column's write.
-      * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification; without it, it
-      * is the only exit, and storing the new row is the caller's.
+    /** Runs after a committed cell edit, with the row before and after the column's write,
+      * after [[onRowsChange]]. With a two-way [[rows]] bound this is a notification;
+      * without it, storing the new row is the caller's.
       *
       * It does not fire when the value did not change, when the text will not parse, or
       * when a rule refuses it. A column-scoped variant is [[Column.onValueChanged]].
       */
+    /** Fired with the row list a commit or a drop produced, after a two-way [[rows]] is written, and before the event
+      * that says what changed.
+      */
+    def onRowsChange(f: Seq[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowsF = Present(Callback.of(f)))
+
     def onCellValueChanged(f: CellChange[A] => UI.Action)(using Frame): DataTable[A] = copy(onCellChangedF = Present(Callback.of(f)))
 
     /** Runs after a committed row edit, once, with the row before and after every editable
@@ -1399,9 +1408,9 @@ final case class DataTable[A] private (
       * the row it would land beside, where Prime positions two floating arrows measured
       * in JavaScript on every move.
       *
-      * What a drop rewrites is the ROW LIST, so it needs somewhere to write: a bound
-      * [[rows(ref:SignalRef[Seq[A]])*]] the table stores the new list into, or
-      * [[onRowReorder]], which hands it over. It also needs the rows on the screen to be
+      * What a drop rewrites is the ROW LIST, so it goes where [[rows]] says: a ref is
+      * written, a signal or a constant only reported, and a constant nobody hears offers
+      * the grip and drags nothing. It also needs the rows on the screen to be
       * the rows in the list, in that order, so while a sort spec, a filter or a row
       * grouping is deciding the order, and over a lazily loaded window where the order is
       * the query's, the grips are not offered and a card says which of them it is. Paging
@@ -1411,8 +1420,9 @@ final case class DataTable[A] private (
 
     /** Runs after a completed row drag, with the list that came out of it.
       *
-      * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification, the table has
-      * already stored the list; without it, it is the only exit.
+      * It fires after [[onRowsChange]]. With a two-way [[rows]] bound this is a
+      * notification, the table has already stored the list; without it, storing it is the
+      * caller's.
       */
     def onRowReorder(f: RowMove[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowReorderF = Present(Callback.of(f)))
 
@@ -1599,7 +1609,7 @@ final case class DataTable[A] private (
     private def keyOf(a: A): String =
         rowKeyF match
             case Present(f) => f(a)
-            case Absent     => rowsV.indexOf(a).toString
+            case Absent     => rowsSlot.flatMap(_.const).getOrElse(Seq.empty[A]).indexOf(a).toString
 
     // ---- the caller's rows, as the keys the table compares them by ----
     //
@@ -1747,9 +1757,6 @@ final case class DataTable[A] private (
       */
     private def handleColumn: Boolean = reorderRowsFlag
 
-    /** Where a completed row drag can write. */
-    private def rowMoveWritable: Boolean = rowsRefV.isDefined || onRowReorderF.isDefined
-
     /** What decides the row order instead of the list, which is what a drag cannot move
       * a row past. Empty means a drop lands where the reader let go.
       */
@@ -1803,7 +1810,7 @@ final case class DataTable[A] private (
         // as a plain list still has to render those rows, so the fold starts from the constants
         // rather than from the empty value and overwrites only what a signal supplies.
         val base = RowInputs[A](
-            rows = rowsV,
+            rows = rowsSlot.flatMap(_.const).getOrElse(Seq.empty[A]),
             sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
             ctx = contextBinding.flatMap(_.const).getOrElse(Absent),
             cells = cellsBinding.flatMap(_.const).getOrElse(Set.empty[CellKey]),
@@ -1823,7 +1830,7 @@ final case class DataTable[A] private (
                     acc match
                         case Absent       => Present(s.map(t => set(base, t)))
                         case Present(cur) => Present(cur.combineLatest(s).map((r, t) => set(r, t)))
-        val rowsSig: Maybe[Signal[Seq[A]]]     = rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
+        val rowsSig: Maybe[Signal[Seq[A]]]     = rowsSlot.flatMap(_.dyn)
         val selSig: Maybe[Signal[Set[String]]] = selectedBinding.flatMap {
             case ReactiveValue.Dyn(sig) => Present(sig)
             case ReactiveValue.Const(_) => Absent
@@ -2373,19 +2380,16 @@ final case class DataTable[A] private (
     private def writeRowMove(d: RowDrag, move: MoveState[A])(using Frame): UI.Action =
         if d.target == d.from || d.target == d.from + 1 then ()
         else
-            // The list is read at DROP time. This one writes its result back into the caller's ref,
+            // The list is read at DROP time. This one may be written back into the caller's ref,
             // so a stale copy does not merely display wrongly: it would store a list missing
             // whatever arrived while the row was being dragged.
             bodyViewNow.map { v =>
-                val next             = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
-                val to               = if d.target > d.from then d.target - 1 else d.target
-                val store: UI.Action = rowsRefV match
-                    case Present(ref) => ref.set(next)
-                    case Absent       => ()
+                val next              = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
+                val to                = if d.target > d.from then d.target - 1 else d.target
                 val notify: UI.Action = onRowReorderF match
                     case Present(f) => f(RowMove(d.from, to, next))
                     case Absent     => ()
-                store.andThen(notify)
+                writeRows(_ => next).andThen(notify)
             }
         end if
     end writeRowMove
@@ -3439,9 +3443,9 @@ final case class DataTable[A] private (
     private def frozenRowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[Seq[A]] =
         frozenRowsV.fold(Reading.Fixed(Seq.empty[A]))(Reading.of(_))
 
-    /** The rows the table renders, and the row index the first of them sits at: the bound
-      * list when there is one, the appended list otherwise. A bound list is what lets a
-      * committed edit reach the screen, since the table stores the new row into it.
+    /** The rows the table renders, and the row index the first of them sits at. A two-way
+      * list is what lets a committed edit reach the screen, since the table stores the new
+      * row into it.
       *
       * The offset is zero everywhere but under a windowed [[source]], which publishes a
       * window rather than a page: there the rows have to be placed by their own index, and
@@ -3451,8 +3455,9 @@ final case class DataTable[A] private (
     private def rowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[(Seq[A], Int)] =
         if windowedSource then Reading.Live(sourceV.get.window.map(w => (w.rows, w.offset)))
         else
-            rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
-                .fold(Reading.Fixed((rowsV, 0)))(sig => Reading.Live(sig.map(rows => (rows, 0))))
+            rowsSlot.flatMap(_.dyn).fold(Reading.Fixed((rowsSlot.flatMap(_.const).getOrElse(Seq.empty[A]), 0)))(sig =>
+                Reading.Live(sig.map(rows => (rows, 0)))
+            )
 
     /** How many rows the page the table was given came out of, zero where it was given no
       * total and computes its own.
@@ -3595,11 +3600,11 @@ final case class DataTable[A] private (
         end loadingRows
 
         // A grip is only offered where a drop would land where the reader let go: the rows
-        // on the screen have to be the rows in the list, in that order, and the list has to
-        // be somewhere the table can write. Anything else and the column still renders,
-        // since it is part of the anatomy, with nothing behind it and a card saying which.
+        // on the screen have to be the rows in the list, in that order, and the list must not
+        // be fixed. Anything else and the column still renders, since it is part of the
+        // anatomy, with nothing behind it.
         val moveOffered =
-            handleColumn && rowMoveWritable && rowOrderOwners(sort, query, filterIn.specs).isEmpty
+            handleColumn && !rowsFixed && rowOrderOwners(sort, query, filterIn.specs).isEmpty
         def moveFor(view: BodyView[A]): MoveState[A] =
             if moveOffered then moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
             else moveIn.copy(live = false, held = Absent)
@@ -4197,16 +4202,15 @@ final case class DataTable[A] private (
 
     /** Two places to read the rows from. Nothing about the table says which one it took,
       * so a caller who bound a source and left an older `rows` behind would be looking at
-      * one of them with no way to tell which.
+      * the source's rows with no way to tell.
       */
     private def rowsCards(using Frame): List[UI] =
-        val bound = List(
-            if sourceV.isDefined then List("source")
-            else if rowsSigV.isDefined then List("rows(signal)")
-            else Nil,
-            if rowsRefV.isDefined then List("rows(ref)") else Nil,
-            if rowsV.nonEmpty then List("rows(seq)") else Nil
-        ).flatten
+        val rowsForm = rowsTyped.map {
+            case v if v.writable.isDefined => "rows(ref)"
+            case v if v.dyn.isDefined      => "rows(signal)"
+            case _                         => "rows(seq)"
+        }
+        val bound = (if sourceV.isDefined then List("source") else Nil) ++ rowsForm.toList
         if bound.size < 2 then Nil
         else
             List(KeyDiagnostics.card(
@@ -4350,20 +4354,20 @@ final case class DataTable[A] private (
             ))
     end scrollCards
 
-    /** What stops a row grip from being offered: nowhere to write the list a drop
-      * produces, or something other than the list deciding what order the rows are in.
-      * Either way the column still renders, since it is part of the anatomy, and the drag
-      * is not wired rather than wired to nothing.
+    /** What a row grip is offered over that reaches nobody, or is not offered for: a list
+      * bound one way that nobody hears, or something other than the list deciding what
+      * order the rows are in. Fixed rows take the grip away and say nothing, since a list
+      * that cannot change is not a mistake.
       */
     private def moveCards(sort: List[SortKey], query: String, specs: Map[List[String], ColumnFilter])(using
         Frame
     ): List[UI] =
-        if !handleColumn then Nil
-        else if !rowMoveWritable then
+        if !handleColumn || rowsFixed then Nil
+        else if rowsDeaf then
             List(KeyDiagnostics.card(
                 "DataTable",
-                "a row drag rewrites the row list and this table has nowhere to put it; bind rows(ref) for the " +
-                    "table to store it, or onRowReorder to take it",
+                "the rows are bound one way and nothing hears a row drag, so a drop reaches nobody; add " +
+                    "onRowsChange, or bind a SignalRef",
                 Nil
             ))
         else
@@ -4535,26 +4539,15 @@ final case class DataTable[A] private (
                     Nil
                 ))
         // The inverse mistake, and the more expensive one: a column says how to read and
-        // write a value, and the table has nowhere to put the result, so a commit is
-        // computed and dropped.
+        // write a value, and the rows it lands in are followed one way with nobody hearing,
+        // so a commit is computed and dropped.
         val nowhere =
-            if !editable || rowsRefV.isDefined || onCellChangedF.isDefined then Nil
+            if !editable || !rowsDeaf then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "a column is editable but the table cannot save an edit; bind rows(ref) or add " +
-                        "onCellValueChanged",
-                    Nil
-                ))
-        // Two row lists means two answers to what the table shows, and a commit would
-        // write into the one that is not being rendered.
-        val twoSources =
-            if !(rowsRefV.isDefined && rowsV.nonEmpty) then Nil
-            else
-                List(KeyDiagnostics.card(
-                    "DataTable",
-                    "rows(Seq) and rows(ref) are both set; the bound list is what renders, so the appended rows " +
-                        "are dead",
+                    "a column is editable but the rows are bound one way and nothing hears an edit, so a commit " +
+                        "reaches nobody; add onRowsChange, or bind a SignalRef",
                     Nil
                 ))
         val both =
@@ -4566,7 +4559,7 @@ final case class DataTable[A] private (
                         "bind one",
                     Nil
                 ))
-        val rowsDeaf =
+        val editRowsDeaf =
             if !ReactiveValue.deaf(editingRowsTyped, onEditingRowsF) then Nil
             else
                 List(KeyDiagnostics.card(
@@ -4584,7 +4577,7 @@ final case class DataTable[A] private (
                         "add onEditingCellChange, or bind a SignalRef",
                     Nil
                 ))
-        nothing ++ nowhere ++ twoSources ++ both ++ rowsDeaf ++ cellDeaf
+        nothing ++ nowhere ++ both ++ editRowsDeaf ++ cellDeaf
     end editCards
 
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
@@ -5464,7 +5457,7 @@ final case class DataTable[A] private (
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = cellEditOn && !cellEditFixed && openable && edit.live
+                val cellMode = cellEditOn && !cellEditFixed && !rowsFixed && openable && edit.live
                 if cellMode then
                     cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
                     // The click picks a cell, it does not also pick the row; and while the
@@ -5531,9 +5524,9 @@ final case class DataTable[A] private (
                         .extraClass(cls)
                     // Inert in the static projection: the button is part of the anatomy, so
                     // it renders and the grid keeps its column count, but there is nothing
-                    // for a click to write into until the mount has run. Fixed editing rows
-                    // keep the buttons reachable and say they do nothing.
-                    if rowEditFixed then b = b.ariaDisabled(true)
+                    // for a click to write into until the mount has run. Fixed editing rows, or
+                    // fixed rows, keep the buttons reachable and say they do nothing.
+                    if rowEditFixed || rowsFixed then b = b.ariaDisabled(true)
                     else if edit.live then b = b.onClick(action)
                     b.render
                 end btn
@@ -5878,7 +5871,7 @@ final case class DataTable[A] private (
             rows = nav.rows.size,
             cols = leafPaths.size,
             editable = pos =>
-                cellEditOn && !cellEditFixed && ((rowAt(nav, pos), colAt(pos)) match
+                cellEditOn && !cellEditFixed && !rowsFixed && ((rowAt(nav, pos), colAt(pos)) match
                     case (Present(r), Present((_, c))) => c.isNavigable && c.isEditableAt(r)
                     case _                             => false),
             page = math.max(nav.page, 1),
@@ -6127,29 +6120,23 @@ final case class DataTable[A] private (
             r <- setRowEditing(id, true)
         yield r
 
-    /** Writes one committed row back where the table can reach it, and reports it.
+    /** Writes one committed row back through [[writeRows]], once, then reports each cell that changed in it, in
+      * reading order: the column's own callback, then [[onCellValueChanged]].
       *
-      * With `rows(ref)` bound the table stores the row itself; without it the change
-      * leaves through the callbacks and storing it is the caller's. Both run, so a bound
-      * table can still observe.
+      * With a two-way [[rows]] the table stores the row itself; otherwise the change leaves through the events and
+      * storing it is the caller's. Both run, so a bound table can still observe.
       */
-    private def applyCell(cell: CellKey, before: A, after: A, ed: CellEdit[A])(using Frame): UI.Action =
-        val store: UI.Action = rowsRefV match
-            case Present(ref) => ref.getAndUpdate(_.map(r => if keyOf(r) == cell.row then after else r))
-            case Absent       => ()
-        val column: UI.Action = ed.changed match
-            case Present(f) => f(before, after)
-            case Absent     => ()
-        val table: UI.Action = onCellChangedF match
-            case Present(f) => f(CellChange(cell.column, before, after))
-            case Absent     => ()
-        for
-            _ <- store
-            _ <- column
-            r <- table
-        yield r
-        end for
-    end applyCell
+    private def applyRow(id: String, after: A, changes: List[(CellKey, A, A, CellEdit[A])])(using Frame): UI.Action =
+        changes.foldLeft(writeRows(_.map(r => if keyOf(r) == id then after else r))) {
+            case (acc, (cell, before, next, ed)) =>
+                val column: UI.Action = ed.changed match
+                    case Present(f) => f(before, next)
+                    case Absent     => ()
+                val table: UI.Action = onCellChangedF match
+                    case Present(f) => f(CellChange(cell.column, before, next))
+                    case Absent     => ()
+                acc.andThen(column).andThen(table)
+        }
 
     /** Commits one cell: read the draft, run the column's pipeline over it, and let the
       * result decide whether the cell closes.
@@ -6173,7 +6160,8 @@ final case class DataTable[A] private (
                     res  <- ed.commit(row, text)
                     out  <- res match
                         case Result.Success(after) =>
-                            val moved: UI.Action = if ed.show(row) == text then () else applyCell(cell, row, after, ed)
+                            val moved: UI.Action =
+                                if ed.show(row) == text then () else applyRow(cell.row, after, List((cell, row, after, ed)))
                             for
                                 _ <- moved
                                 _ <- clearError(edit)
@@ -6196,14 +6184,20 @@ final case class DataTable[A] private (
     /** Commits a whole row, one editable column at a time, left to right.
       *
       * The first column that refuses stops the fold and leaves the row open with its error
-      * showing, so a row never lands half written. Every column that changed reports
-      * through [[applyCell]] before the row's own [[onRowValueChanged]] does, which is the
-      * order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
+      * showing, and nothing is written or reported, so a row never lands half written. The
+      * row is written once, after every column agreed; every column that changed then
+      * reports through [[applyRow]] before the row's own [[onRowValueChanged]] does, which
+      * is the order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
       */
     private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
-        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellKey, FieldError), A] < (Async & Abort[Any]) =
+        type Changes = List[(CellKey, A, A, CellEdit[A])]
+        def loop(
+            rest: List[(List[String], Column[A, FlatOnly])],
+            acc: A,
+            changes: Changes
+        ): Result[(CellKey, FieldError), (A, Changes)] < (Async & Abort[Any]) =
             rest match
-                case Nil               => Kyo.lift(Result.succeed(acc))
+                case Nil               => Kyo.lift(Result.succeed((acc, changes.reverse)))
                 case (path, c) :: tail =>
                     val cell = CellKey(id, path)
                     (c.editV, edit.draftOf(path)) match
@@ -6213,23 +6207,24 @@ final case class DataTable[A] private (
                                 res  <- ed.commit(acc, text)
                                 out  <- res match
                                     case Result.Success(next) =>
-                                        val moved: UI.Action =
-                                            if ed.show(acc) == text then () else applyCell(cell, acc, next, ed)
-                                        moved.andThen(loop(tail, next))
+                                        if ed.show(acc) == text then loop(tail, acc, changes)
+                                        else loop(tail, next, (cell, acc, next, ed) :: changes)
                                     case Result.Failure(e) => Kyo.lift(Result.fail((cell, e)))
                                     case Result.Panic(ex)  =>
                                         Kyo.lift(Result.fail((cell, FieldError("error", Map.empty, Maybe(ex.getMessage)))))
                             yield out
-                        case _ => loop(tail, acc)
+                        case _ => loop(tail, acc, changes)
                     end match
         for
-            res <- loop(editableLeaves.filter((_, c) => c.editV.exists(_.when(row))), row)
+            res <- loop(editableLeaves.filter((_, c) => c.editV.exists(_.when(row))), row, Nil)
             out <- res match
-                case Result.Success(after) =>
-                    val fire: UI.Action = onRowChangedF match
+                case Result.Success((after, changes)) =>
+                    val store: UI.Action = if changes.isEmpty then () else applyRow(id, after, changes)
+                    val fire: UI.Action  = onRowChangedF match
                         case Present(f) => f(RowChange(row, after))
                         case Absent     => ()
                     for
+                        _ <- store
                         _ <- fire
                         _ <- clearError(edit)
                         _ <- setRowEditing(id, false)

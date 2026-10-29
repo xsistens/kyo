@@ -2136,16 +2136,23 @@ class DataTableTest extends UicTest:
             assert(text.contains("source") && text.contains("rows(ref)"), "and both bindings are named")
     }
 
-    "a signal binding and a seq binding are reported the same way, and named apart from a source" in {
+    "rows beside a source are named by their form, and rows set twice are no mistake" in {
         for
-            rows <- Signal.initRef[Seq[Item]](items)
-            text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            rows  <- Signal.initRef[Seq[Item]](items)
+            query <- Signal.initRef("a")
+            src   <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+                (five.slice(offset, offset + limit), Total.Known(five.size))
+            }
+            beside <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).source(src).render)
+            twice <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                 uic.column("Name")(_.name)
             ).rows(rows.readOnly).render)
         yield
-            assert(text.contains("bound twice"))
-            assert(text.contains("rows(signal)") && text.contains("rows(seq)"))
-            assert(!text.contains("source"), "no RowSource is bound, so nothing may claim one is")
+            assert(beside.contains("bound twice") && beside.contains("source") && beside.contains("rows(seq)"))
+            assert(!twice.contains("bound twice"), s"the second rows replaces the first: $twice")
+        end for
     }
 
     // ---- a windowed body ----
@@ -3081,7 +3088,6 @@ class DataTableTest extends UicTest:
     private def draggableRows(build: uic.DataTable[Item] => uic.DataTable[Item] = identity)(using Frame) =
         for
             rows  <- Signal.initRef[Seq[Item]](trio)
-            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
             drag  <- Signal.initRef(Absent: Maybe[uic.RowDrag])
             moves <- Signal.initRef(List.empty[(Int, Int, List[String])])
             table = build(
@@ -3089,10 +3095,15 @@ class DataTableTest extends UicTest:
                     .reorderableRows(true)
                     .onRowReorder(m => moves.getAndUpdate(_ :+ (m.from, m.to, m.rows.map(_.name).toList)))
             )
-            measureAll = (ids: Seq[String]) =>
+            ui <- wiredDrag(table, drag)
+        yield (ui, rows, moves, drag)
+
+    /** `table` through the mount seam a drag needs: three rows forty pixels tall, and `drag` to park it in. */
+    private def wiredDrag(table: uic.DataTable[Item], drag: SignalRef[Maybe[uic.RowDrag]])(using Frame): UI < Sync =
+        Signal.initRef(Absent: Maybe[(CellKey, FieldError)]).map { err =>
+            val measureAll = (ids: Seq[String]) =>
                 Chunk.from(ids.zipWithIndex.map((_, i) => UI.Rect(0, i * 40, 200, 40, 1000, 800))): Chunk[UI.Rect] < Async
-        yield
-            val ui = table.wired(
+            table.wired(
                 "t",
                 Map.empty,
                 err,
@@ -3105,9 +3116,7 @@ class DataTableTest extends UicTest:
                 Absent,
                 Present(drag)
             )
-            (ui, rows, moves, drag)
-        end for
-    end draggableRows
+        }
 
     private def grips(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
         elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-reorderable-row-handle")))
@@ -3185,11 +3194,161 @@ class DataTableTest extends UicTest:
             assert(reported.contains("a sort spec"))
     }
 
-    "reorderable rows with nowhere to write are reported" in {
+    // ---- the rows under every binding ----
+
+    /** Two editable columns through the mount seam that gives the editors their drafts, with no rows and nobody
+      * listening: `bind` supplies the rows, the editing state and whoever hears.
+      */
+    private def editableOver(bind: uic.DataTable[Item] => uic.DataTable[Item])(using Frame) =
         for
-            reported <- cards(uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .reorderableRows(true).render)
-        yield assert(reported.contains("rows(ref)") && reported.contains("onRowReorder"))
+            name  <- Signal.initRef("")
+            price <- Signal.initRef("")
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+        yield
+            val ui = bind(uic.DataTable[Item]().rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+                uic.column("Price")(_.price.toString).editable(_.price)((i, v) => i.copy(price = v))
+            )).wired("t", Map(List("Name") -> name, List("Price") -> price), err, _ => ())
+            (ui, name, price)
+
+    /** Opens the first row's Name cell, types `text` and commits it with Enter. */
+    private def commitFirstName(ui: UI, text: String)(using Frame): Any < Async =
+        for
+            cell  <- elementWithId(ui, "t-c0-0")
+            _     <- press(cell, UI.Keyboard.Enter)
+            open  <- elementWithId(ui, "t-c0-0")
+            _     <- typeInto(open, text)
+            again <- elementWithId(ui, "t-c0-0")
+            r     <- press(again, UI.Keyboard.Enter)
+        yield r
+
+    "rows set twice show the second list, since a row list is set rather than appended" in {
+        for trs <- bodyTrs(uic.DataTable[Item]().rows(items).rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name)).render)
+        yield assert(trs.size == 3, s"${trs.size} rows")
+    }
+
+    "constant rows nobody hears are fixed: no cell opens, no row opens, and no card" in {
+        for
+            cellEd         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            rowEd          <- Signal.initRef(Set.empty[Item])
+            (byCell, _, _) <- editableOver(_.rows(items).editingCell(cellEd))
+            (byRow, _, _)  <- editableOver(_.rows(items).editingRows(rowEd))
+            cell           <- elementWithId(byCell, "t-c0-0")
+            inits          <- elementsWithClass(byRow, "p-datatable-row-editor-init")
+            cardC          <- cards(byCell)
+            cardR          <- cards(byRow)
+        yield
+            assert(!declaresClick(cell) && !cell.attrs.cssClasses.contains("p-editable-column"), "a fixed row list opens no cell")
+            assert(inits.nonEmpty && inits.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "and no row")
+            assert(cardC.isEmpty && cardR.isEmpty, s"fixed rows are not a mistake: $cardC / $cardR")
+        end for
+    }
+
+    "constant rows nobody hears keep their grips and drag nothing, with no card" in {
+        for
+            drag <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            ui   <- wiredDrag(
+                uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true),
+                drag
+            )
+            handles  <- grips(ui)
+            reported <- cards(ui)
+        yield
+            assert(handles.size == 3 && handles.forall(_.attrs.onPointerDown.isEmpty), "the grips show and drag nothing")
+            assert(reported.isEmpty, s"fixed rows are not a mistake: $reported")
+    }
+
+    "rows bound one way are followed, and a commit is reported through onRowsChange without being written" in {
+        for
+            held       <- Signal.initRef[Seq[Item]](items)
+            seen       <- Signal.initRef(List.empty[Seq[Item]])
+            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            (ui, _, _) <- editableOver(_.rows(held.readOnly).editingCell(ed).onRowsChange(rs => seen.getAndUpdate(_ :+ rs).unit))
+            _          <- commitFirstName(ui, "Ada")
+            h          <- held.get
+            s          <- seen.get
+        yield
+            assert(h == items, s"a one-way list is not written: $h")
+            assert(s == List(Seq(items(0).copy(name = "Ada"), items(1))), s"reported $s")
+    }
+
+    "a one-way row list nobody hears is reported in a card that names onRowsChange" in {
+        for
+            held       <- Signal.initRef[Seq[Item]](trio)
+            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            drag       <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            (ui, _, _) <- editableOver(_.rows(held.readOnly).editingCell(ed))
+            moved      <- wiredDrag(
+                uic.DataTable[Item]().rows(held.readOnly).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true),
+                drag
+            )
+            edits <- cards(ui)
+            drops <- cards(moved)
+        yield
+            assert(edits.contains("onRowsChange"), s"an edit nobody hears: $edits")
+            assert(drops.contains("onRowsChange"), s"a drop nobody hears: $drops")
+    }
+
+    "a row list ref is written before onRowsChange hears it" in {
+        for
+            held       <- Signal.initRef[Seq[Item]](items)
+            seen       <- Signal.initRef((Seq.empty[Item], Seq.empty[Item]))
+            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            (ui, _, _) <- editableOver(_.rows(held).editingCell(ed).onRowsChange(rs => held.get.map(now => seen.set((rs, now)))))
+            _          <- commitFirstName(ui, "Ada")
+            s          <- seen.get
+        yield
+            val after = Seq(items(0).copy(name = "Ada"), items(1))
+            assert(s == (after, after), s"reported, held: $s")
+    }
+
+    "rows heard only through onRowsChange offer the grips, and a drop reports the new list" in {
+        for
+            seen <- Signal.initRef(List.empty[Seq[String]])
+            drag <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            ui   <- wiredDrag(
+                uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true).onRowsChange(rs => seen.getAndUpdate(_ :+ rs.map(_.name)).unit),
+                drag
+            )
+            handles <- grips(ui)
+            _       <- dragRow(handles.head, 10, 95)
+            s       <- seen.get
+        yield assert(s == List(Seq("B", "A", "C")), s"reported $s")
+    }
+
+    "rows heard only through onRowValueChanged can be edited, with no card" in {
+        for
+            rowEd      <- Signal.initRef(Set.empty[Item])
+            (ui, _, _) <- editableOver(_.rows(items).editingRows(rowEd).onRowValueChanged(_ => ()))
+            inits      <- elementsWithClass(ui, "p-datatable-row-editor-init")
+            reported   <- cards(ui)
+        yield
+            assert(inits.nonEmpty && inits.forall(declaresClick), "the rows open")
+            assert(reported.isEmpty, s"onRowValueChanged hears a row edit: $reported")
+    }
+
+    "a row whose second column refuses lands nowhere, not half written" in {
+        for
+            held              <- Signal.initRef[Seq[Item]](items)
+            cells             <- Signal.initRef(List.empty[String])
+            rowEd             <- Signal.initRef(Set(items(0)))
+            (ui, name, price) <-
+                editableOver(_.rows(held).editingRows(rowEd).onCellValueChanged(c => cells.getAndUpdate(_ :+ c.after.name).unit))
+            _    <- name.set("Ada")
+            _    <- price.set("nope")
+            save <- elementWithClass(ui, "p-datatable-row-editor-save")
+            _    <- click(save)
+            h    <- held.get
+            c    <- cells.get
+            open <- rowEd.get
+        yield
+            assert(h == items, s"the Name column's write was kept: $h")
+            assert(c.isEmpty, s"and reported: $c")
+            assert(open == Set(items(0)), "the row stays open on its error")
+        end for
     }
 
     // ---- the row a context menu was opened on ----
