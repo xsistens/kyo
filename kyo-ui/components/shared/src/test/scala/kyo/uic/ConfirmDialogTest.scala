@@ -4,45 +4,39 @@ import kyo.*
 import kyo.UI.*
 
 /** [[ConfirmDialog]]'s visibility under every way it can be bound. The two choices are heard apart: [[onAccept]] hears
-  * an accept, [[onReject]] a reject and every dismissal, and [[onOpenChange]] both.
+  * an accept, [[onReject]] a reject and every dismissal, and [[onOpenChange]] both, which is the slot held to rule A
+  * ([[ReactiveValueContract]]).
   */
-class ConfirmDialogTest extends UicTest:
+class ConfirmDialogTest extends ReactiveValueContract:
 
     private def confirm(using Frame) = uic.ConfirmDialog().header("Delete?").message("This cannot be undone.")
 
-    private def accepts(t: UI)(using Frame) = elementsWithClass(t, "p-confirmdialog-accept-button")
     private def rejects(t: UI)(using Frame) = elementsWithClass(t, "p-confirmdialog-reject-button")
     private def closers(t: UI)(using Frame) = elementsWithClass(t, "p-dialog-close-button")
     private def dialogs(t: UI)(using Frame) = elementsWithClass(t, "p-confirmdialog")
 
-    "an unbound confirm dialog starts open and keeps the state itself, so a choice closes it" in {
-        for
-            first <- dialogs(confirm.render)
-            after <- publishedAfterReady(
-                confirm.render,
-                t => accepts(t).map(_.exists(declaresClick)),
-                until = t => dialogs(t).map(_.isEmpty)
-            )(t => accepts(t).map(b => click(b.head)))
-            card <- elementsWithClass(confirm.render, "p-uic-key-error")
-        yield
-            assert(first.size == 1, "the page as first rendered already shows it")
-            assert(after.nonEmpty, "the confirm dialog never closed")
-            assert(card.isEmpty, s"state the dialog keeps itself: ${card.map(textOf)}")
-        end for
-    }
+    holds(new Slot[ConfirmDialog, Boolean](
+        name = "open",
+        bare = confirm,
+        bind = _.open(_),
+        hear = (d, f) => d.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = elementWithClass(_, "p-confirmdialog-accept-button"),
+        shows = dialogs(_).map(_.nonEmpty)
+    ))
 
-    "a constant nobody hears is fixed: neither choice nor the close button does anything" in {
+    "a fixed dialog's other ways out are inert too: the reject and the close button do nothing, and the close says so" in {
         val fixed = confirm.open(true)
         for
-            a    <- accepts(fixed.render)
-            r    <- rejects(fixed.render)
-            c    <- closers(fixed.render)
-            card <- elementsWithClass(fixed.render, "p-uic-key-error")
+            r <- rejects(fixed.render)
+            c <- closers(fixed.render)
         yield
-            assert(a.size == 1 && r.size == 1 && c.size == 1, "it shows both choices and the close button")
-            assert((a ++ r ++ c).forall(b => !declaresClick(b)), "nothing closes it")
-            assert((a ++ c).forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "and the buttons say so")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
+            assert(r.size == 1 && c.size == 1, "it shows the reject and the close button")
+            assert((r ++ c).forall(b => !declaresClick(b)), "nothing closes it")
+            assert(c.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "and the close button says so")
         end for
     }
 
