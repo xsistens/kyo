@@ -1,6 +1,6 @@
 # kyo-ui-components
 
-kyo-ui-components is a component library for kyo-ui: 86 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
+kyo-ui-components is a component library for kyo-ui: 87 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
 
 Everything reactive is kyo-ui's own vocabulary, unchanged. Every slot is one setter taking `A | Signal[A]`: a constant renders once, a `Signal[A]` patches in place, and on an editable slot a `SignalRef[A]` binds two way; a panel's visibility is a `SignalRef[Boolean]` you own. Rendering stays server-honest: state lives in signals, behaviour is computed from those signals at render time, and the only client-side machinery is the contract kyo-ui already ships (focus seeding, in-place attribute and class patching, pointer and scroll reporting). Two things you supply yourself: `uic.Theme.css` on the page (nothing is injected for you), and `import scala.language.implicitConversions` for the placement lift.
 
@@ -160,7 +160,7 @@ val saveRow: UI < Async =
 
 ## The shared vocabulary
 
-Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 86 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
+Prime's own props are inconsistent across components: a button's accent is `danger`, a message's is `error`, and sizes are spelled differently again. kyo-ui-components exposes one harmonized enum set across all 87 components and maps each case to the right `.p-*` suffix privately. You learn `uic.Severity` once.
 
 `Severity` has `Primary`, `Secondary`, `Success`, `Info`, `Warn`, `Danger`, `Help`, and `Contrast`. `Size` has `Small`, `Normal`, `Large`, and `XLarge`. Alongside those sit `SelectionMode`, `ButtonVariant`, `FieldVariant`, `Orientation`, `LabelPosition`, `OverlayPosition`, `OverlayAnchor`, `ColumnAlign`, `TitleLevel`, and `TextEmptyIndicatorMode`, plus per-component enums (`DatePickerView`, `MultiSelectDisplay`, `DrawerPosition`, `SkeletonShape`, and so on) that only one family needs.
 

@@ -5706,7 +5706,7 @@ class GoldenRenderTest extends UicTest:
             multi <-
                 for
                     ref <- Signal.initRef(Set("p1", "p2"))
-                    out <- UI.runRender(panels(uic.Accordion[String]().value(ref))).take(1).run
+                    out <- UI.runRender(panels(uic.Accordion[String]()).value(ref)).take(1).run
                 yield out.mkString
             static <- renderHtml(panels(uic.Accordion[String]()))
         yield
@@ -5726,8 +5726,9 @@ class GoldenRenderTest extends UicTest:
             assert(single.contains("""aria-expanded="true""""), "aria-expanded on the open header")
             assert(single.contains("click"), "headers register clicks")
             assert(multi.contains("Content I") && multi.contains("Content II"), "multiple mode opens both")
-            assert(!static.contains("p-accordionpanel-active"), "no ref: fully collapsed")
-            assert(!static.contains("click"), "no ref: inert headers")
+            assert(!static.contains("p-accordionpanel-active"), "no value: fully collapsed")
+            // Unbound, the accordion keeps the open panel itself: its headers are live, not disabled.
+            assert(static.contains("click") && !static.contains("""aria-disabled="true""""), "no value: live headers")
         end for
     }
 
