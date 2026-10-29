@@ -1896,11 +1896,13 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x: uic.Carousel[String] = uic.Carousel[String]().items(Seq("A"))""")
     }
 
-    "Galleria binds activeIndex via an Int ref over typed GalleriaItems; fullscreen is deferred" in {
+    "Galleria binds activeIndex by rule A over typed GalleriaItems; fullscreen is deferred" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[Int])(using Frame): uic.Galleria = uic.Galleria().items(uic.GalleriaItem("/a.jpg", "A", title = Present("T"))).activeIndex(r).circular(true).showThumbnails(false).showIndicators(true).showItemNavigators(true).showThumbnailNavigators(false).itemTemplate(i => span(i.alt)).thumbnailTemplate(i => span(i.alt)).onItemChange(_ => ())"""
+            preamble + """def x(r: SignalRef[Int])(using Frame): uic.Galleria = uic.Galleria().items(uic.GalleriaItem("/a.jpg", "A", title = Present("T"))).activeIndex(r).circular(true).showThumbnails(false).showIndicators(true).showItemNavigators(true).showThumbnailNavigators(false).itemTemplate(i => span(i.alt)).thumbnailTemplate(i => span(i.alt)).onActiveIndexChange(_ => ())"""
         )
-        typeCheckFailure(preamble + """def x = uic.Galleria().activeIndex(0)""")
+        typeCheck(preamble + """def x: uic.Galleria = uic.Galleria().activeIndex(0)""")
+        // One event carries the index; the old name is gone.
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Galleria().onItemChange(_ => ())""")
         typeCheckFailure(preamble + """def x = uic.Galleria().fullScreen(true)""")
         typeCheckFailure(preamble + """def x = uic.Galleria().items("a.jpg")""")
     }
