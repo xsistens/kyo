@@ -1408,7 +1408,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
     "Rating and SelectButton bind selection only via SignalRef (no bare values)" in {
         typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value("a")""")
         typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value(Set("a"))""")
-        typeCheckFailure(preamble + """def x = uic.Stepper[String]().active(0)""")
+        typeCheck(preamble + """def x(using Frame): uic.Stepper[String] = uic.Stepper[String]().active(0).onActiveChange(_ => ())""")
+        // One event carries the step; the old name is gone.
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Stepper[String]().onActivate(_ => ())""")
     }
 
     "Rating, SelectButton and Stepper expose only their own options" in {
