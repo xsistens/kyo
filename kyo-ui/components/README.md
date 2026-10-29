@@ -931,14 +931,14 @@ The inline dismissible elements take the opposite convention, and the contrast i
 
 ### Popover, tooltip, context menu
 
-`Popover` is a non-modal panel with an optional `trigger`, which is the shape to reach for when the panel should not take focus away from the page. `ContextMenu` wraps a region and opens on right-click.
+`Popover` is a non-modal panel with an optional `trigger`, which is the shape to reach for when the panel should not take focus away from the page. The trigger opens and closes it by itself and says the popover's state to the reader, so it needs no click handler of its own. It is a `uic.Button` or any element; an element that is no control of its own, such as a `span` around an avatar, is made one. `ContextMenu` wraps a region and opens on right-click.
 
 ```scala
 val rowActions: UI < Async =
     for open <- Signal.initRef(false)
     yield div(
         uic.Popover(open)
-            .trigger(uic.Button("Details").onClick(open.set(true)))
+            .trigger(uic.Button("Details"))
             .anchor(uic.OverlayAnchor.BottomStart)(
                 p("65.00 EUR, 12 in stock")
             ),

@@ -53,11 +53,11 @@ final case class Button private (
     onKeyDownF: Maybe[KeyboardEvent => UI.Action] = Absent,
     extraChildren: List[UI] = Nil,
     extraClassesV: List[String] = Nil,
-    extraAriasV: List[(String, String)] = Nil,
+    extraAriasV: List[(String, String | Signal[String])] = Nil,
     roleRawV: Maybe[String] = Absent,
     tabIndexV: Maybe[Int] = Absent,
     focusSeedV: Boolean = false
-) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
+) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
     type Self = Button
 
     /** Package-internal class hook: hosts (SplitButton, SpeedDial) stamp Prime's
@@ -67,10 +67,22 @@ final case class Button private (
     private[uic] def extraClass(cls: String): Button = copy(extraClassesV = extraClassesV :+ cls)
 
     /** Package-internal aria hook: hosts add popup semantics (`aria-haspopup`,
-      * `aria-expanded`) not part of Button's own public surface.
+      * `aria-expanded`) not part of Button's own public surface. A signal is a channel,
+      * patched in place.
       */
-    private[uic] def ariaRaw(name: String, value: String): Button =
+    private[uic] def ariaRaw(name: String, value: String | Signal[String]): Button =
         copy(extraAriasV = extraAriasV :+ (name -> value))
+
+    private[uic] def asPopupTrigger(popup: String, expanded: String | Signal[String], fixed: Boolean)(using Frame): UI =
+        val trigger = ariaRaw("haspopup", popup).ariaRaw("expanded", expanded)
+        (if fixed then trigger.ariaDisabled(true) else trigger).render
+
+    /** The host-added aria attributes, a constant set as it stands and a signal as a channel. */
+    private def withExtraArias[E <: UI.Ast.Element { type Self = E }](el: E): E =
+        extraAriasV.foldLeft(el) {
+            case (e, (n, v: String))                    => e.aria(n, v)
+            case (e, (n, v: Signal[String] @unchecked)) => e.aria(n, v)
+        }
 
     /** Package-internal composite-widget hooks: the attributes a button needs when it is a CHILD
       * of a composite widget rather than a control of its own. A standalone button decides none
@@ -244,7 +256,7 @@ final case class Button private (
             case _ => ()
         end match
         idV.foreach(v => el = el.id(v))
-        extraAriasV.foreach((n, v) => el = el.aria(n, v))
+        el = withExtraArias(el)
         el = el.jsProp("type", buttonTypeV.token.toLowerCase)
         if accessibleRoleV == ButtonAccessibleRole.Link then el = el.role("link")
         roleRawV.foreach(r => el = el.role(r))
@@ -294,7 +306,7 @@ final case class Button private (
             case _ => ()
         end match
         idV.foreach(v => el = el.id(v))
-        extraAriasV.foreach((n, v) => el = el.aria(n, v))
+        el = withExtraArias(el)
         accessibleNameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)

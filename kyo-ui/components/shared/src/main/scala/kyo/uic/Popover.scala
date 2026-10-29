@@ -12,7 +12,7 @@ import kyo.UI.*
   * Built ON the [[Overlay]] primitive: visibility is the popover's own unless
   * [[open]] binds it, an outside click or Escape closes (`dismissable(false)` turns both off), and the
   * panel seeds focus on open / restores it on close (`seedFocus(false)` opts
-  * out). `trigger(ui)` renders the toggling trigger and the panel together
+  * out). `trigger(...)` renders the toggling trigger and the panel together
   * inside the anchor wrapper (`div.p-uic-overlay-anchor.p-uic-popover-anchor`);
   * while open, a click on the trigger area lands on the Overlay backdrop and
   * closes (Prime's toggle semantics). Without a trigger the popover renders just
@@ -34,7 +34,7 @@ import kyo.UI.*
 final case class Popover private (
     openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
     onOpenF: Maybe[Boolean => UI.Action] = Absent,
-    triggerV: Maybe[UI] = Absent,
+    triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     dismissableV: Boolean = true,
     seedFocusV: Boolean = true,
@@ -55,10 +55,12 @@ final case class Popover private (
     /** Fired with the visibility the reader asks for, after a two-way [[open]] is written. */
     def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = copy(onOpenF = Present(Callback.of(f)))
 
-    /** The toggling trigger: renders `ui` inside the anchor wrapper with a click
-      * handler that asks for the other state (open ⇄ closed).
+    /** The control that opens the popover: a click on it asks for the other state, and it says the popover's state to
+      * the reader (that it opens a dialog, whether the dialog is open, and that it changes nothing where the state is
+      * fixed). An element that is no control of its own (a `span`, a `div`) is made one, with a button role, a tab stop
+      * and Enter and Space. See [[PopupTrigger]] for what can be a trigger.
       */
-    def trigger(ui: UI): Popover = copy(triggerV = Present(ui))
+    def trigger(t: UI.Ast.Interactive | PopupTrigger): Popover = copy(triggerV = Present(t))
 
     /** Which anchor corner the panel opens from (default
       * [[OverlayAnchor.BottomStart]]); `Top*` flips the arrow to the bottom edge
@@ -122,16 +124,31 @@ final case class Popover private (
             overlay(div.cssClass("p-popover-content")(kids.map(toChild)*)).render
         triggerV match
             case Present(t) =>
-                // A constant nobody hears is fixed: the trigger stays, and toggles nothing.
-                val shell = span.cssClass("p-uic-popover-trigger")
-                val press =
-                    if ReactiveValue.fixed(openSlot, onOpenF) then shell
-                    else shell.onClick(ReactiveValue.update(openSlot, !_, onOpenF))
+                // A constant nobody hears is fixed: the trigger stays, says so, and toggles nothing.
+                val fixed                             = ReactiveValue.fixed(openSlot, onOpenF)
+                val expanded: String | Signal[String] = openSlot.flatMap(_.dyn).fold[String | Signal[String]](
+                    openSlot.flatMap(_.const).getOrElse(false).toString
+                )(_.map(_.toString))
+                val (control, native) = PopupTrigger.stamped(t, "dialog", expanded, fixed)
+                // The wrapper takes the click, which reaches it from the control, so a handler the page put on its own
+                // control still runs. A control that is not native gets its keys here too.
+                var shell = span.cssClass("p-uic-popover-trigger")
+                if !fixed then
+                    val toggle: UI.Action = ReactiveValue.update(openSlot, !_, onOpenF)
+                    shell = shell.onClick(toggle)
+                    if !native then
+                        shell = shell.onKeyDown { evt =>
+                            evt.key match
+                                case Keyboard.Enter | Keyboard.Space => toggle
+                                case _                               => ()
+                        }
+                    end if
+                end if
                 div.cssClass("p-uic-overlay-anchor").cssClass("p-uic-popover-anchor")(
-                    toChild(press(toChild(t))),
+                    toChild(shell(toChild(control))),
                     toChild(panel)
                 )
-            case Absent => panel
+            case _ => panel
         end match
     end drawn
 end Popover
