@@ -35,14 +35,15 @@ final case class OrgChartNode[K](
   * via `visibility` (Prime's inline `childStyle`, expressed as the
   * `.p-uic-oc-hidden` remainder class).
   *
-  * `expanded` binds two-way to a `SignalRef[Set[K]]` of EXPANDED ids, the
+  * `expanded` binds a `Set[K]` of EXPANDED ids (a constant, a signal or a ref), the
   * same polarity and the same name as [[Tree.expanded]] and
   * [[TreeTable.expanded]], so a ref moves between the three tree-shaped
   * components without inverting. Prime models this one collapse-keyed
   * (`collapsedKeys`); the inversion is absorbed here rather than exposed.
-  * Binding the ref is also what makes the chart interactive: with a ref, every
-  * node that has children renders its toggle button (Tree's contract); without
-  * one the chart is static, which is Prime's `collapsible=false`.
+  * Binding it is also what makes the chart collapsible: then every node that has
+  * children renders its toggle button (Tree's contract), and `expanded()` does the
+  * same over subtrees the chart keeps itself; without either the chart is static,
+  * which is Prime's `collapsible=false`.
   *
   * Selection (`Single`/`Multiple` + `selection` ref) follows the Tree contract.
   * Every nested table puts its rows in a real `tbody`, which is what the sheet's
@@ -50,8 +51,11 @@ final case class OrgChartNode[K](
   */
 final case class OrganizationChart[K] private (
     rootNode: Maybe[OrgChartNode[K]] = Absent,
-    expandedRef: Maybe[SignalRef[Set[K]]] = Absent,
-    selectedRef: Maybe[SignalRef[Set[K]]] = Absent,
+    expandedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    ownExpandedFlag: Boolean = false,
+    onExpandedF: Maybe[Set[K] => UI.Action] = Absent,
+    selectedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    onSelectionF: Maybe[Set[K] => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     onNodeToggleF: Maybe[K => UI.Action] = Absent,
     onNodeClickF: Maybe[K => UI.Action] = Absent
@@ -67,10 +71,44 @@ final case class OrganizationChart[K] private (
       * also renders the toggle buttons on nodes with children; a chart with no ref
       * is static and fully open, since there would be no toggle to open it with.
       */
-    def expanded(ref: SignalRef[Set[K]]): OrganizationChart[K] = copy(expandedRef = Present(ref))
+    def expanded(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = copy(expandedSlot = Present(ReactiveValue(v)), ownExpandedFlag = false)
 
-    /** Binds the selection two-way to the set of chosen node ids. */
-    def selection(ref: SignalRef[Set[K]]): OrganizationChart[K] = copy(selectedRef = Present(ref))
+    /** Renders the toggle buttons with the expanded subtrees kept by the chart itself, starting fully open: the
+      * [[expanded]] toggles with no ref to hand over, for a page that does not read them. [[onExpandedChange]] still hears
+      * every toggle.
+      */
+    def expanded(): OrganizationChart[K] = copy(expandedSlot = Absent, ownExpandedFlag = true)
+
+    /** Fired with the expanded ids after a toggle press, after a two-way [[expanded]] is written and before
+      * [[onNodeToggle]].
+      */
+    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): OrganizationChart[K] = copy(onExpandedF = Present(Callback.of(f)))
+
+    /** Binds the selection to the set of chosen node ids. A `SignalRef` binds two way and [[onSelectionChange]] hears
+      * every click; a plain `Signal` binds one way and the chart only reports; a constant nobody hears is fixed, the nodes
+      * inert. Unbound, a chart with a [[selectionMode]] keeps the selection itself. A signal nothing hears is reported in
+      * a card; [[onNodeClick]] hears it too.
+      */
+    def selection(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = copy(selectedSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the selected ids after a node click, after a two-way [[selection]] is written and before
+      * [[onNodeClick]].
+      */
+    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): OrganizationChart[K] = copy(onSelectionF = Present(Callback.of(f)))
+
+    // Node ids compare the way the sets that hold them already compare them, by `equals`.
+    private given CanEqual[K, K] = CanEqual.derived
+
+    /** What hears a toggle: [[onExpandedChange]] or [[onNodeToggle]]. */
+    private def expandHeard: Maybe[Unit] = if onExpandedF.isDefined || onNodeToggleF.isDefined then Present(()) else Absent
+
+    /** What hears a node click: [[onSelectionChange]] or [[onNodeClick]]. */
+    private def selectHeard: Maybe[Unit] = if onSelectionF.isDefined || onNodeClickF.isDefined then Present(()) else Absent
+
+    /** Every node that has children: what a chart that opens fully starts with. */
+    private def parents: Set[K] =
+        def walk(n: OrgChartNode[K]): List[K] = (if n.children.nonEmpty then List(n.id) else Nil) ++ n.children.flatMap(walk)
+        rootNode.toList.flatMap(walk).toSet
 
     /** Selection semantics: `Single`/`Multiple` on node click; `None` (default)
       * leaves nodes inert.
@@ -84,16 +122,42 @@ final case class OrganizationChart[K] private (
     def onNodeClick(f: K => UI.Action)(using Frame): OrganizationChart[K] = copy(onNodeClickF = Present(Callback.of(f)))
 
     private def selectable: Boolean =
-        selectionModeV != SelectionMode.None || onNodeClickF.isDefined
+        (selectionModeV != SelectionMode.None || onNodeClickF.isDefined) && !ReactiveValue.fixed(selectedSlot, selectHeard)
 
     private[uic] def render(using Frame): UI =
-        (expandedRef, selectedRef) match
-            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp.contains, sel)))
-            case (Present(e), Absent)     => e.render(exp => body(exp.contains, Set.empty))
-            // A chart with no `expanded` ref renders no toggles, so an empty set would leave every subtree hidden with
-            // nothing to open it: a static chart shows its whole hierarchy.
-            case (Absent, Present(s)) => s.render(sel => body(_ => true, sel))
-            case _                    => body(_ => true, Set.empty)
+        // `expanded()`: the open subtrees are the chart's own, starting fully open. An unbound selection with a mode to
+        // select in is the chart's own too. Before the mount runs, each is drawn from a constant signal of its start.
+        if expandedSlot.isEmpty && ownExpandedFlag then
+            val start = parents
+            ReactiveValue.owned(start)(own => copy(expandedSlot = Present(own), ownExpandedFlag = false).render)(
+                copy(expandedSlot = Present(ReactiveValue[Set[K]](Signal.initConst(start))), ownExpandedFlag = false).drawn
+            )
+        else if selectedSlot.isEmpty && selectionModeV != SelectionMode.None then
+            ReactiveValue.owned(Set.empty[K])(own => copy(selectedSlot = Present(own)).render)(drawn)
+        else
+            // A binding one way that nothing hears: every toggle or click there is painted away again.
+            val unheard =
+                (if ReactiveValue.deaf(expandedSlot, expandHeard) then
+                     List("the expanded subtrees are bound one way and nothing hears a toggle; add onExpandedChange")
+                 else Nil) ++
+                    (if ReactiveValue.deaf(selectedSlot, selectHeard) then
+                         List("the selection is bound one way and nothing hears a click; add onSelectionChange")
+                     else Nil)
+            if unheard.isEmpty then drawn
+            else fragment((unheard.map(a => KeyDiagnostics.card("OrganizationChart", a + ", or bind a SignalRef", Nil)) :+ drawn)*)
+            end if
+        end if
+    end render
+
+    /** The chart over its bindings, read as ONE region. With no `expanded` the chart renders no toggles, so an empty set
+      * would leave every subtree hidden with nothing to open it: a static chart shows its whole hierarchy.
+      */
+    private def drawn(using Frame): UI =
+        given CanEqual[Set[K], Set[K]] = CanEqual.derived
+        val exp                        = expandedSlot.fold(Reading.Fixed(Maybe.empty[Set[K]]))(e => Reading.of(e).map(Present(_)))
+        val sel                        = selectedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
+        exp.and(sel).render((e, s) => body(id => e.forall(_.contains(id)), s))
+    end drawn
 
     private def body(isExpanded: K => Boolean, sel: Set[K])(using Frame): UI =
         val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel))
@@ -118,22 +182,28 @@ final case class OrganizationChart[K] private (
             case Present(u) => u
             case Absent     => stringToUI(node.label)
         val toggle: List[UI] =
-            if expandedRef.isDefined && hasChildren then
+            if expandedSlot.isDefined && hasChildren then
+                val shell = a
+                    .cssClass("p-organizationchart-node-toggle-button")
+                    .role("button")
+                    .tabIndex(0)
+                    .aria("expanded", isExpanded.toString)
+                // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
+                val pressable =
+                    if ReactiveValue.fixed(expandedSlot, expandHeard) then shell.aria("disabled", "true")
+                    else
+                        shell
+                            .onClick(toggleNode(node.id))
+                            // Prime's toggle is an anchor with no `href`, which the browser treats as
+                            // ordinary text: it neither focuses it nor turns Enter into a click. The
+                            // tab stop is this component's own, so the keys have to be too.
+                            .onKeyDown { evt =>
+                                evt.key match
+                                    case Keyboard.Enter | Keyboard.Space => toggleNode(node.id)
+                                    case _                               => ()
+                            }
                 List(
-                    a
-                        .cssClass("p-organizationchart-node-toggle-button")
-                        .role("button")
-                        .tabIndex(0)
-                        .aria("expanded", isExpanded.toString)
-                        .onClick(toggleNode(node.id))
-                        // Prime's toggle is an anchor with no `href`, which the browser treats as
-                        // ordinary text: it neither focuses it nor turns Enter into a click. The
-                        // tab stop is this component's own, so the keys have to be too.
-                        .onKeyDown { evt =>
-                            evt.key match
-                                case Keyboard.Enter | Keyboard.Space => toggleNode(node.id)
-                                case _                               => ()
-                        }
+                    pressable
                         .stopPropagation(true)(
                             toChild(
                                 GlyphSvg(
@@ -191,10 +261,8 @@ final case class OrganizationChart[K] private (
       * `onNodeToggle`.
       */
     private def toggleNode(id: K)(using Frame): UI.Action =
-        val write: UI.Action = expandedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
-            case Absent       => ()
-        val fire: UI.Action = onNodeToggleF match
+        val write: UI.Action = ReactiveValue.update(expandedSlot, cur => if cur.contains(id) then cur - id else cur + id, onExpandedF)
+        val fire: UI.Action  = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         for
@@ -208,11 +276,11 @@ final case class OrganizationChart[K] private (
       * `onNodeClick`.
       */
     private def clickNode(id: K)(using Frame): UI.Action =
-        val write: UI.Action = (selectedRef, selectionModeV) match
-            case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
-                ref.getAndUpdate(cur => if cur.sizeIs == 1 && cur.contains(id) then Set.empty else Set(id))
-            case (Present(ref), SelectionMode.Multiple | SelectionMode.Checkbox) =>
-                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+        val write: UI.Action = selectionModeV match
+            case SelectionMode.Single | SelectionMode.Radio =>
+                ReactiveValue.update(selectedSlot, cur => if cur.sizeIs == 1 && cur.contains(id) then Set.empty else Set(id), onSelectionF)
+            case SelectionMode.Multiple | SelectionMode.Checkbox =>
+                ReactiveValue.update(selectedSlot, cur => if cur.contains(id) then cur - id else cur + id, onSelectionF)
             case _ => ()
         val fire: UI.Action = onNodeClickF match
             case Present(f) => f(id)
