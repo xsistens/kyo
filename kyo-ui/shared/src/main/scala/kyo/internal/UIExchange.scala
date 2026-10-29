@@ -111,3 +111,19 @@ private[kyo] trait UIExchange:
     /** The waiting boundary this exchange belongs to, which counts the passes and mounts inside it; none for the page itself. */
     private[kyo] def gate: Maybe[BoundaryHold] = Absent
 end UIExchange
+
+private[kyo] object UIExchange:
+
+    /** An exchange that takes every change and paints nothing: what runs a tree for its effects alone (its mounts, its
+      * handlers, the signals they feed), where no page is there to paint.
+      */
+    val noop: UIExchange = new UIExchange:
+        def onChange(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            ui: UI
+        )(using Frame): Unit < Async = Kyo.unit
+end UIExchange

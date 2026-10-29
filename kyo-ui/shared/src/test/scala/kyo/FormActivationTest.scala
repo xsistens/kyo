@@ -4,7 +4,6 @@ import kyo.internal.ButtonActivation
 import kyo.internal.HtmlRenderer
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
@@ -24,24 +23,13 @@ class FormActivationTest extends kyo.test.Test[Any]:
 
     override def config = super.config.sequential
 
-    private class NoopExchange extends UIExchange:
-        def onChange(
-            region: ReactiveRegion,
-            path: Seq[String],
-            context: ReactiveRegion.RegionIdentity,
-            parentContext: ReactiveRegion.ParentContext,
-            previous: Maybe[UI],
-            ui: UI
-        )(using Frame): Unit < Async = ()
-    end NoopExchange
-
     private def withDispatch[A](ui: UI)(f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
         Frame
     ): A < Async =
         Scope.run {
             for
                 root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, new NoopExchange)
+                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
                 result       <- f(subscription.handle)
             yield result
         }

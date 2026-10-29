@@ -4,7 +4,6 @@ import kyo.Browser.*
 import kyo.internal.HtmlOp
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
@@ -219,17 +218,6 @@ class ReactiveUITest extends UITest:
     // directly, which is what both transports post once the client shim has had its say. The shim's
     // own half (which browser default to suppress) is `KeyPolicy`'s, pinned in `KeyPolicyTest`.
 
-    private class NoopExchange extends UIExchange:
-        def onChange(
-            region: ReactiveRegion,
-            path: Seq[String],
-            contentContext: ReactiveRegion.RegionIdentity,
-            parentContext: ReactiveRegion.ParentContext,
-            previous: Maybe[UI],
-            changed: UI
-        )(using Frame): Unit < Async = ()
-    end NoopExchange
-
     /** Runs one key against a single element carrying a counting click handler. */
     private def activations(target: AtomicInt => UI, key: String)(using Frame): Int < Async =
         for
@@ -237,7 +225,7 @@ class ReactiveUITest extends UITest:
             dispatch <- Scope.run {
                 for
                     root         <- ReactiveUI.normalize(target(hits), Seq.empty)
-                    subscription <- ReactiveUI.subscribe(root, new NoopExchange)
+                    subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
                 yield subscription.handle
             }
             _     <- dispatch(Seq.empty, UIEvent.KeyDown(Seq.empty, KeyboardEventData(key, UI.Modifiers.none, Absent)))
