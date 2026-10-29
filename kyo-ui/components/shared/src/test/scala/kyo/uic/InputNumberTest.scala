@@ -58,4 +58,64 @@ class InputNumberTest extends UicTest:
         yield assert(after.nonEmpty, "the field never showed what the spin button made of it")
     }
 
+    private def textOf(n: UI.Ast.NumberInput)(using Frame): String < Sync =
+        n.value match
+            case Present(UI.Bound.Ref(r))   => r.get
+            case Present(UI.Bound.Const(v)) => Kyo.lift(v)
+            case _                          => Kyo.lift("")
+
+    // The way the runtime dispatches an input event: the bound ref is written first, then onInput is told.
+    private def typeText(n: UI.Ast.NumberInput, text: String)(using Frame): Any < Async =
+        val write: UI.Action = n.value match
+            case Present(UI.Bound.Ref(ref)) => ref.set(text)
+            case _                          => ()
+        n.onInput match
+            case Present(f) => handled(write.andThen(f(text)))
+            case Absent     => throw new AssertionError("the field hears no typing")
+    end typeText
+
+    "a constant text is the starting text, kept by the field" in {
+        for
+            t <- publishedAfterReady(uic.InputNumber().text("4.").render, t => number(t).map(_.value.isDefined))()
+                .map(_.getOrElse(throw new AssertionError("never mounted")))
+            n    <- number(t)
+            text <- textOf(n)
+            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-key-error")
+        yield
+            assert(text == "4.", s"the field starts from $text")
+            assert(n.readOnly.isEmpty, "and the reader goes on typing from it")
+            assert(card.isEmpty, s"a starting text is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a text bound one way is shown, and typing is reported without being written" in {
+        for
+            held <- Signal.initRef("12")
+            seen <- Signal.initRef(List.empty[String])
+            t    <- publishedAfterReady(
+                uic.InputNumber().text(held.readOnly).onTextChange(v => seen.updateAndGet(_ :+ v).unit).render,
+                t => number(t).map(_.onInput.isDefined)
+            )().map(_.getOrElse(throw new AssertionError("never mounted")))
+            n     <- number(t)
+            shown <- textOf(n)
+            _     <- typeText(n, "123")
+            h     <- held.get
+            s     <- seen.get
+            deaf  <- elementsWithClass(uic.InputNumber().text(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(shown == "12", s"the field shows the owner's text: $shown")
+            assert(h == "12" && s == List("123"), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onTextChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a text ref is written before every keystroke is reported" in {
+        for
+            held <- Signal.initRef("")
+            seen <- Signal.initRef(List.empty[(String, String)])
+            n    <- number(uic.InputNumber().text(held).onTextChange(v => held.get.map(h => seen.updateAndGet(_ :+ (v, h)).unit)).render)
+            _    <- typeText(n, "-")
+            s    <- seen.get
+        yield assert(s == List(("-", "-")), s"reported, held: $s")
+    }
+
 end InputNumberTest
