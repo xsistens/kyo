@@ -5,7 +5,7 @@ import kyo.UI.*
 
 /** One tab of a [[Tabs]], a hand-authored carrier: a `text` label, the
   * already-rendered `content` shown when the tab is active, a stable `id` (the
-  * value the `selected` binding holds and the `onTabSelect` payload), an optional
+  * value the `selected` binding holds and the `onSelectedChange` payload), an optional
   * leading `icon` glyph, an optional `additionalText` count badge (kyo
   * extension: `span.p-uic-tab-count`), an optional `url` (renders the header as
   * a real anchor), and a `disabled` flag (non-clickable).
@@ -37,13 +37,13 @@ final case class Tab[K] private[uic] (
       * carries no button reset, so the extracted CSS applies to the anchor
       * unchanged.
       *
-      * `onTabSelect` still fires, but ADDING it to a url strip costs the modified
+      * `onSelectedChange` still fires, but ADDING it to a url strip costs the modified
       * click. kyo-ui prevent-defaults a click on any anchor carrying a kyo click
       * handler, without exempting Ctrl/Cmd/Shift/Alt or the middle button, so the
-      * handler that fires `onTabSelect` is also what stops the browser opening a new
-      * tab. A url strip with no `onTabSelect` declares no handler and keeps the full
+      * handler that fires `onSelectedChange` is also what stops the browser opening a new
+      * tab. A url strip with no `onSelectedChange` declares no handler and keeps the full
       * native behaviour, which is why a plain navigational strip should not reach for
-      * one. (Measured in a browser: a url tab without `onTabSelect` leaves a
+      * one. (Measured in a browser: a url tab without `onSelectedChange` leaves a
       * Ctrl-click unprevented; with one, it is prevented.)
       */
     def url(v: String): Tab[K] = copy(urlV = Present(v))
@@ -139,7 +139,7 @@ final case class Tabs[K] private (
     tabList: List[Tab[K]] = Nil,
     tabSources: List[TabLiveEntry[K]] = Nil,
     selectedBinding: Maybe[ReactiveValue[K]] = Absent,
-    onTabSelectF: Maybe[K => UI.Action] = Absent,
+    onSelectedF: Maybe[K => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     lazyPanelsFlag: Boolean = false,
     fixedFlag: Boolean = false
@@ -162,9 +162,9 @@ final case class Tabs[K] private (
     private[uic] def entries(using Frame): Reading[List[Tab[K]]] = TabScope.reading(tabSources)
 
     /** The active tab's id. A `SignalRef` binds two way: clicking a tab writes its
-      * id back before firing `onTabSelect`, which is the self-contained panel
+      * id back before firing `onSelectedChange`, which is the self-contained panel
       * switcher. Any other `Signal` binds ONE way: the strip renders what the signal
-      * says and fires `onTabSelect`, and never writes, which is what a selection
+      * says and fires `onSelectedChange`, and never writes, which is what a selection
       * owned elsewhere needs: a route is a `map` over the location and has no ref
       * to write into. A plain `String` is the same contract without a stream.
       *
@@ -178,8 +178,8 @@ final case class Tabs[K] private (
       */
     def selected(v: K | Signal[K]): Tabs[K] = copy(selectedBinding = Present(ReactiveValue(v)))
 
-    /** Fired with the chosen tab's id after the write. */
-    def onTabSelect(f: K => UI.Action)(using Frame): Tabs[K] = copy(onTabSelectF = Present(Callback.of(f)))
+    /** Fired with the id of the tab the reader picks, after a two-way [[selected]] is written. */
+    def onSelectedChange(f: K => UI.Action)(using Frame): Tabs[K] = copy(onSelectedF = Present(Callback.of(f)))
 
     /** Renders the active panel alone, and builds a panel again each time its tab is chosen
       * (PrimeVue's `lazy`). Off by default: every panel is rendered once and a switch only
@@ -197,15 +197,15 @@ final case class Tabs[K] private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: the strip shows that tab and switches to no other.
-        if ReactiveValue.fixed(selectedBinding, onTabSelectF) && !fixedFlag then copy(fixedFlag = true).render
+        if ReactiveValue.fixed(selectedBinding, onSelectedF) && !fixedFlag then copy(fixedFlag = true).render
         else
             val strip = renderLive
             // A signal nobody hears: every tab the reader picks is painted away again. A url header is heard by the
             // navigation it starts, so only a header without one makes the strip deaf.
-            if !ReactiveValue.deaf(selectedBinding, onTabSelectF) then strip
+            if !ReactiveValue.deaf(selectedBinding, onSelectedF) then strip
             else
                 val card = entries.render(ts =>
-                    if ts.exists(_.urlV.isEmpty) then KeyDiagnostics.unheard("Tabs", "selected", "onTabSelect") else fragment()
+                    if ts.exists(_.urlV.isEmpty) then KeyDiagnostics.unheard("Tabs", "selected", "onSelectedChange") else fragment()
                 )
                 fragment(card, strip)
             end if
@@ -312,12 +312,12 @@ final case class Tabs[K] private (
         else
             out = out.tabIndex(if isActive then 0 else -1)
             // A url header gets a click handler only if there is something for it to
-            // do. It never writes back, so with no `onTabSelect` the handler would be
+            // do. It never writes back, so with no `onSelectedChange` the handler would be
             // empty, and an EMPTY handler is not free: kyo-ui prevent-defaults a click
             // on any anchor that declares one (DomBackend, "the handler, not the href,
             // drives the action"), which also takes the middle-click and the
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
-            if (t.urlV.isEmpty || onTabSelectF.isDefined) && !fixedFlag then
+            if (t.urlV.isEmpty || onSelectedF.isDefined) && !fixedFlag then
                 out = out.onClick(select(t.id, write = t.urlV.isEmpty))
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
@@ -428,7 +428,7 @@ final case class Tabs[K] private (
     end tablistWith
 
     /** Selecting a tab writes its id into the bound ref (only a two-way binding has
-      * one), then fires `onTabSelect`.
+      * one), then fires `onSelectedChange`.
       *
       * `write` is false for a `url` header: the navigation is the selection, and a
       * write would race it: the ref would hold the new id while the location, and
@@ -438,7 +438,7 @@ final case class Tabs[K] private (
         val setActive: UI.Action = selectedRef match
             case Present(ref) if write => ref.set(id)
             case _                     => ()
-        val fireSelect: UI.Action = onTabSelectF match
+        val fireSelect: UI.Action = onSelectedF match
             case Present(f) => f(id)
             case Absent     => ()
         for
