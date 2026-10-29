@@ -256,10 +256,11 @@ what the type already says. Rules:
   `referenceDate` `Calendar`. The markers are flat (no subtyping between them), so one given never
   satisfies two of them ambiguously. `DatePickerTest` holds each refusal.
 - **Inside, everything is ISO text at the kind's precision**, because the grid math is integer arithmetic
-  over it. `DatePicker.Binding` is the one crossing: it reads the typed refs as a `Snapshot` of ISO strings
-  and writes back values parsed from them, comparing by the ISO image the way `SingleChoice` compares by
-  key. A write naming the value already held writes nothing and reports nothing, which is what keeps a
-  zoned value's instant through a pick of its own day.
+  over it. `DatePicker.Binding` is the one crossing: it reads the typed bindings (a constant, a one-way
+  signal or a two-way ref, as every value slot takes them) as a `Snapshot` of ISO strings and writes back
+  values parsed from them into a two-way one, comparing by the ISO image the way `SingleChoice` compares by
+  key; a one-way binding is only reported. A write naming the value already held writes nothing and reports
+  nothing, which is what keeps a zoned value's instant through a pick of its own day.
 - **Bounds compare ISO strings of one kind**, and a time kind's bound reaches the time picker: a step that
   would leave the bounds renders disabled, and a day pick on a bound's own day is clamped to it.
 - **Typed text is parsed, never bound.** The field shows the held value; a `change` that does not name a
