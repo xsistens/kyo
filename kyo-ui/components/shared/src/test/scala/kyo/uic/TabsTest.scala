@@ -102,13 +102,13 @@ class TabsTest extends UicTest:
         yield assert(before == Present(2) && after == Present(0))
     }
 
-    "clicking a one-way tab fires onTabSelect and changes nothing" in {
+    "clicking a one-way tab fires onSelectedChange and changes nothing" in {
         for
             src   <- Signal.initRef("three")
             fired <- Signal.initRef(Absent: Maybe[String])
             // `.readOnly` is the documented opt-out from two-way binding, and the
             // runtime class is what the dispatch reads, so this stays one-way.
-            ui = strip.selected(src.readOnly).onTabSelect(id => fired.set(Present(id))).render
+            ui = strip.selected(src.readOnly).onSelectedChange(id => fired.set(Present(id))).render
             headers <- elementsWithClass(ui, "p-tab")
             _       <- click(headers(0))
             held    <- src.get
@@ -167,12 +167,12 @@ class TabsTest extends UicTest:
         for
             ref   <- Signal.initRef("three")
             fired <- Signal.initRef(Absent: Maybe[String])
-            ui = navStrip.selected(ref).onTabSelect(id => fired.set(Present(id))).render
+            ui = navStrip.selected(ref).onSelectedChange(id => fired.set(Present(id))).render
             headers <- elementsWithClass(ui, "p-tab")
             _       <- click(headers(0))
             held    <- ref.get
             saw     <- fired.get
-        yield assert(held == "three" && saw == Present("one"), "but onTabSelect still fires")
+        yield assert(held == "three" && saw == Present("one"), "but onSelectedChange still fires")
     }
 
     "a url header declares no click handler unless there is something for it to do" in {
@@ -183,14 +183,14 @@ class TabsTest extends UicTest:
         for
             plain      <- elementsWithClass(navStrip.selected("one").render, "p-tab")
             withSelect <- elementsWithClass(
-                navStrip.selected("one").onTabSelect(_ => ()).render,
+                navStrip.selected("one").onSelectedChange(_ => ()).render,
                 "p-tab"
             )
             // An unbound strip is the reader's to switch; a constant nobody hears would be fixed, and switch nothing.
             noUrls <- elementsWithClass(strip.render, "p-tab")
         yield
             assert(plain(0).attrs.onClick.isEmpty, "a pure navigation strip stays a plain link")
-            assert(withSelect(0).attrs.onClick.isDefined, "onTabSelect is honoured when asked for")
+            assert(withSelect(0).attrs.onClick.isDefined, "onSelectedChange is honoured when asked for")
             assert(noUrls(0).attrs.onClick.isDefined, "and a button header always has one")
     }
 
@@ -363,11 +363,11 @@ class TabsTest extends UicTest:
         for
             held  <- Signal.initRef("one")
             deaf  <- elementsWithClass(strip.selected(held.readOnly).render, "p-uic-key-error")
-            heard <- elementsWithClass(strip.selected(held.readOnly).onTabSelect(_ => ()).render, "p-uic-key-error")
+            heard <- elementsWithClass(strip.selected(held.readOnly).onSelectedChange(_ => ()).render, "p-uic-key-error")
             fixed <- elementsWithClass(strip.selected("one").render, "p-tab")
             quiet <- elementsWithClass(strip.selected("one").render, "p-uic-key-error")
         yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onTabSelect"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onSelectedChange"), s"nobody hears: ${deaf.map(textOf)}")
             assert(heard.isEmpty, "somebody hears")
             assert(fixed.nonEmpty && fixed.forall(h => !declaresClick(h)), "a fixed strip switches nothing")
             assert(quiet.isEmpty, s"a fixed constant: ${quiet.map(textOf)}")

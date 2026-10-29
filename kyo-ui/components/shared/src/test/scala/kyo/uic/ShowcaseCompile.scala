@@ -195,7 +195,7 @@ object ShowcaseCompile:
                 .tab("Overview", "ov")(p("Overview content"), (uic.Button("Refresh"): UI))
                 .tab("Details", "dt")(uic.Card().title("Info")(p("Details")))
                 .selected(activeTab)
-                .onTabSelect(onPick),
+                .onSelectedChange(onPick),
 
             // recursive tree with two-way expansion + selection Set refs and node icons
             uic.Tree[String]()
