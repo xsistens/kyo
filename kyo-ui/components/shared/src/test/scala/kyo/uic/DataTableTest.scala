@@ -2500,7 +2500,7 @@ class DataTableTest extends UicTest:
             ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(src.map(identity))
                 .onRowClick(_ => ())
-                .onRowContextMenu(t => seen.set(Present(t))).render
+                .onContextMenuRowChange(t => seen.set(Present(t))).render
             trs <- bodyTrs(ui)
             _   <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
@@ -3070,7 +3070,7 @@ class DataTableTest extends UicTest:
             seen <- Signal.initRef(List.empty[Item])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel)
-                .contextMenuRow(ctx).onRowContextMenu(t => seen.getAndUpdate(_ :+ t.row))
+                .contextMenuRow(ctx).onContextMenuRowChange(t => seen.getAndUpdate(_ :+ t.row))
             trs <- bodyTrs(table.render)
             _   <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
@@ -3086,13 +3086,62 @@ class DataTableTest extends UicTest:
             assert(!after.head.attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
     }
 
+    "a constant context row nobody hears is fixed: marked, and the right-click left to the browser" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .contextMenuRow(Present(items(1)))
+        for
+            trs  <- bodyTrs(table.render)
+            card <- cards(table.render)
+        yield
+            assert(trs(1).attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"), "the constant row is marked")
+            assert(trs.forall(_.attrs.onContextMenu.isEmpty), "a fixed row takes no right-click")
+            assert(card.isEmpty, s"a fixed context row is not a mistake: $card")
+        end for
+    }
+
+    "a context row bound one way is followed, and a right-click reported without being written" in {
+        for
+            held <- Signal.initRef(Absent: Maybe[Item])
+            seen <- Signal.initRef(List.empty[Item])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .contextMenuRow(held.readOnly).onContextMenuRowChange(t => seen.getAndUpdate(_ :+ t.row).unit)
+            _      <- held.set(Present(items.head))
+            before <- bodyTrs(table.render)
+            _      <- before(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            h    <- held.get
+            told <- seen.get
+            deaf <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .contextMenuRow(held.readOnly).render)
+        yield
+            assert(before.head.attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"), "the signal's row is marked")
+            assert(h == Present(items.head) && told == List(items(1)), s"held $h, reported $told")
+            assert(deaf.contains("onContextMenuRowChange"), s"nobody hears: $deaf")
+        end for
+    }
+
+    "a context row ref is written before the right-click is reported" in {
+        for
+            ctx  <- Signal.initRef(Absent: Maybe[Item])
+            seen <- Signal.initRef(List.empty[(Item, Maybe[Item])])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .contextMenuRow(ctx).onContextMenuRowChange(t => ctx.get.map(c => seen.getAndUpdate(_ :+ (t.row, c)).unit))
+            trs <- bodyTrs(table.render)
+            _   <- trs(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            told <- seen.get
+        yield assert(told == List((items(1), Present(items(1)))), s"reported, held: $told")
+    }
+
     "the right-click hands over the selected ROWS beside the one it landed on" in {
         for
             sel  <- Signal.initRef(rowsWith("1"))
             seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel)
-                .onRowContextMenu(t => seen.set(Present(t)))
+                .onContextMenuRowChange(t => seen.set(Present(t)))
             trs <- bodyTrs(table.render)
             // Row 2 is NOT in the selection: the pair is what lets a menu tell the two cases apart.
             _ <- trs(1).attrs.onContextMenu match
@@ -3118,7 +3167,7 @@ class DataTableTest extends UicTest:
             seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel).globalFilter(qry)
-                .onRowContextMenu(t => seen.set(Present(t)))
+                .onContextMenuRowChange(t => seen.set(Present(t)))
             trs <- bodyTrs(table.render)
             _   <- trs.head.attrs.onContextMenu match
                 case Present(h) => h

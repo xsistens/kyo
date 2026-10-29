@@ -603,7 +603,7 @@ final case class DataTable[A] private (
     onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
     cellsTyped: Maybe[SignalRef[Set[CellPath[A]]]] = Absent,
-    contextTyped: Maybe[SignalRef[Maybe[A]]] = Absent,
+    contextTyped: Maybe[ReactiveValue[Maybe[A]]] = Absent,
     onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
     csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
@@ -1073,21 +1073,24 @@ final case class DataTable[A] private (
     /** Binds the row a context menu was opened on, as the row itself (Prime's
       * `contextMenuSelection`).
       *
-      * A right-click on a row writes the ref and marks that row with Prime's
-      * `.p-datatable-contextmenu-row-selected`, which is a second, separate mark from
-      * the selection: the reader is acting ON one row without changing what is selected.
-      * Declaring it also suppresses the browser's own menu over the rows, which is what
-      * a context menu of one's own has to do.
+      * The bound row is marked with Prime's `.p-datatable-contextmenu-row-selected`, which is
+      * a second, separate mark from the selection: the reader is acting ON one row without
+      * changing what is selected. A right-click on a row writes a `SignalRef` and then
+      * reports through [[onContextMenuRowChange]]; a plain `Signal` is followed and the
+      * right-click only reported; a constant nobody hears is fixed, so the rows take no
+      * right-click of their own. Wherever a right-click is heard, the browser's own menu is
+      * suppressed over the rows, which is what a context menu of one's own has to do. A
+      * signal nothing hears is reported in a card.
       *
       * The menu itself is [[kyo.uic.ContextMenu]], which wraps the table: this says which
-      * row it was opened on, and the ref is the caller's to clear when the menu closes,
+      * row it was opened on, and the binding is the caller's to clear when the menu closes,
       * since the table cannot see a panel it does not render.
       */
-    def contextMenuRow(ref: SignalRef[Maybe[A]]): DataTable[A] = copy(contextTyped = Present(ref))
+    def contextMenuRow(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = copy(contextTyped = Present(ReactiveValue(v)))
 
     /** Runs on a right-click over a row with what that click was aimed at (the row under the
-      * pointer and the rows selected at that moment, as a [[RowContext]]), after [[contextMenuRow]]
-      * is written.
+      * pointer and the rows selected at that moment, as a [[RowContext]]), after a two-way
+      * [[contextMenuRow]] is written.
       *
       * That is what a menu needs to decide what it should do, and why it is a pair: acting on the
       * selection when the reader right-clicked inside it and on the one row when they did not is
@@ -1097,7 +1100,7 @@ final case class DataTable[A] private (
       * The menu is [[kyo.uic.ContextMenu]], which wraps the table and opens where the click was;
       * a menu item that runs later reads what this handler put in a ref of yours.
       */
-    def onRowContextMenu(f: RowContext[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowContextF = Present(Callback.of(f)))
+    def onContextMenuRowChange(f: RowContext[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowContextF = Present(Callback.of(f)))
 
     /** The field separator [[csv]] writes (Prime's `csvSeparator`, and a comma by default). */
     def csvSeparator(v: String): DataTable[A] = copy(csvSeparatorV = v)
@@ -1584,7 +1587,13 @@ final case class DataTable[A] private (
             case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(keysOf))
         }
 
-    private def contextRowRef(using Frame): Maybe[Signal[Maybe[String]]]   = contextTyped.map(_.map(_.map(keyOf)))
+    /** The context row as a key, whichever way it was bound. */
+    private def contextBinding(using Frame): Maybe[ReactiveValue[Maybe[String]]] =
+        contextTyped.map {
+            case ReactiveValue.Const(row) => ReactiveValue.Const(row.map(keyOf))
+            case ReactiveValue.Dyn(sig)   => ReactiveValue.Dyn(sig.map(_.map(keyOf)))
+        }
+
     private def selectedCellsRef(using Frame): Maybe[Signal[Set[CellKey]]] = cellsTyped.map(_.map(_.map(cellKey)))
 
     /** The expansion as keys, whichever way it was bound. */
@@ -1640,7 +1649,7 @@ final case class DataTable[A] private (
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
     /** Whether a right-click over a row means anything here. */
-    private def contextRowOn: Boolean = contextTyped.isDefined || onRowContextF.isDefined
+    private def contextRowOn: Boolean = ReactiveValue.heard(contextTyped, onRowContextF)
 
     /** Whether this row may enter the selection at all ([[selectableWhen]]). */
     private def selectableAt(a: A): Boolean = selectableF.forall(_(a))
@@ -1712,6 +1721,7 @@ final case class DataTable[A] private (
         val base = RowInputs[A](
             rows = rowsV,
             sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
+            ctx = contextBinding.flatMap(_.const).getOrElse(Absent),
             exp = expandedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
             groups = expandedGroupsSlot.flatMap(_.const).getOrElse(Set.empty[GroupPath]),
             waiting = BoolValue.const(loadingV).getOrElse(false),
@@ -1735,7 +1745,7 @@ final case class DataTable[A] private (
         }
         val r = fold[Seq[A]](Absent, rowsSig, (i, v) => i.copy(rows = v))
         val a = fold[Set[String]](r, selSig, (i, v) => i.copy(sel = v))
-        val b = fold[Maybe[String]](a, contextRowRef.map(x => x), (i, v) => i.copy(ctx = v))
+        val b = fold[Maybe[String]](a, contextBinding.flatMap(_.dyn), (i, v) => i.copy(ctx = v))
         val c = fold[Set[CellKey]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
         val d = fold[Set[String]](c, expandedBinding.flatMap(_.dyn), (i, v) => i.copy(exp = v))
         val e = fold[Set[GroupPath]](d, expandedGroupsSlot.flatMap(_.dyn), (i, v) => i.copy(groups = v))
@@ -1762,7 +1772,7 @@ final case class DataTable[A] private (
         val sel                                    = selectedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_))
         rowsReading
             .and(sel)
-            .and(Reading.orElse(contextRowRef, Absent: Maybe[String]))
+            .and(contextBinding.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.of(_)))
             .and(Reading.orElse(selectedCellsRef, Set.empty[CellKey]))
             .and(expandedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
             .and(groupsReading)
@@ -4188,7 +4198,16 @@ final case class DataTable[A] private (
                         "cannot express a range or a replacement; a one-way selection needs onSelectionChange",
                     List(selectionModeV.toString)
                 ))
-        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly
+        val contextDeaf =
+            if !ReactiveValue.deaf(contextTyped, onRowContextF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the context menu row is bound one way and nothing hears a right-click, so the browser's own menu " +
+                        "opens over the rows; add onContextMenuRowChange, or bind a SignalRef",
+                    Nil
+                ))
+        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly ++ contextDeaf
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -5615,10 +5634,8 @@ final case class DataTable[A] private (
       * is being asked about.
       */
     private def openRowContext(a: A, id: String)(using Frame): UI.Action =
-        val write: UI.Action = contextTyped match
-            case Present(ref) => ref.set(Present(a))
-            case Absent       => ()
-        val fire: UI.Action = onRowContextF match
+        val write: UI.Action = contextTyped.flatMap(_.writable).fold[UI.Action](())(_.set(Present(a)))
+        val fire: UI.Action  = onRowContextF match
             case Present(f) =>
                 for
                     // Through the BINDING, not the ref: a menu over a one-way selection is asked
