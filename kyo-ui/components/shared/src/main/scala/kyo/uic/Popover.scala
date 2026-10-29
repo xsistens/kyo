@@ -129,21 +129,12 @@ final case class Popover private (
                 val expanded: String | Signal[String] = openSlot.flatMap(_.dyn).fold[String | Signal[String]](
                     openSlot.flatMap(_.const).getOrElse(false).toString
                 )(_.map(_.toString))
-                val (control, native) = PopupTrigger.stamped(t, "dialog", expanded, fixed)
+                val toggle: Maybe[UI.Action] = if fixed then Absent else Present(ReactiveValue.update(openSlot, !_, onOpenF))
+                val control                  = PopupTrigger.stamped(t, "dialog", expanded, fixed, toggle)
                 // The wrapper takes the click, which reaches it from the control, so a handler the page put on its own
-                // control still runs. A control that is not native gets its keys here too.
+                // control still runs.
                 var shell = span.cssClass("p-uic-popover-trigger")
-                if !fixed then
-                    val toggle: UI.Action = ReactiveValue.update(openSlot, !_, onOpenF)
-                    shell = shell.onClick(toggle)
-                    if !native then
-                        shell = shell.onKeyDown { evt =>
-                            evt.key match
-                                case Keyboard.Enter | Keyboard.Space => toggle
-                                case _                               => ()
-                        }
-                    end if
-                end if
+                toggle.foreach(act => shell = shell.onClick(act))
                 div.cssClass("p-uic-overlay-anchor").cssClass("p-uic-popover-anchor")(
                     toChild(shell(toChild(control))),
                     toChild(panel)

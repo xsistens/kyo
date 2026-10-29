@@ -399,13 +399,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
         e.children.map(walk).mkString
     end textOf
 
-    /** Sends one key to `el`'s own handler, as the dispatcher would. */
+    /** Sends one key pressed on `el` itself to its own handlers, as the dispatcher would: the self-only one first. */
     private[uic] def press(el: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
         using Frame
     ): Any < Async =
-        el.attrs.onKeyDown match
-            case Present(f) => handled(f(UI.KeyboardEvent(key, mods, el.attrs.identifier)))
-            case Absent     => throw new AssertionError("the element declares no key handler")
+        val event = UI.KeyboardEvent(key, mods, el.attrs.identifier)
+        if el.attrs.onKeyDown.isEmpty && el.attrs.onKeyDownSelf.isEmpty then
+            throw new AssertionError("the element declares no key handler")
+        val self: Any < Async = el.attrs.onKeyDownSelf.fold[Any < Async](())(f => handled(f(event)))
+        self.andThen(el.attrs.onKeyDown.fold[Any < Async](())(f => handled(f(event))))
+    end press
 
     /** Runs `el`'s click handler, as the dispatcher would.
       *

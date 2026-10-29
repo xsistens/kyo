@@ -47,10 +47,10 @@ class PopoverTest extends ReactiveValueContract:
             ui = uic.Popover().open(held).trigger(span.cssClass("more")("More"))(p("inside")).render
             more       <- elementWithClass(ui, "more")
             shell      <- elementWithClass(ui, "p-uic-popover-trigger")
-            _          <- press(shell, UI.Keyboard.Enter)
+            _          <- press(more, UI.Keyboard.Enter)
             afterEnter <- held.get
             _          <- held.set(false)
-            _          <- press(shell, UI.Keyboard.Space)
+            _          <- press(more, UI.Keyboard.Space)
             afterSpace <- held.get
         yield
             assert(
@@ -59,6 +59,27 @@ class PopoverTest extends ReactiveValueContract:
             )
             assert(more.attrs.ariaAttrs.get("haspopup").contains("dialog"), s"aria: ${more.attrs.ariaAttrs}")
             assert(afterEnter && afterSpace, s"Enter opened: $afterEnter, Space opened: $afterSpace")
+            assert(
+                more.attrs.onKeyDownSelf.nonEmpty && more.attrs.onKeyDown.isEmpty && shell.attrs.onKeyDown.isEmpty,
+                "the keys are the trigger's own, so a key pressed in a control inside it does not reach them"
+            )
+        end for
+    }
+
+    "a link trigger with no address is no native control, so it is made one: a button role, a tab stop, its own keys" in {
+        for
+            held <- Signal.initRef(false)
+            ui = uic.Popover().open(held).trigger(uic.Link("Details"))(p("inside")).render
+            link <- elementWithClass(ui, "p-uic-link")
+            _    <- press(link, UI.Keyboard.Enter)
+            o    <- held.get
+        yield
+            assert(
+                link.attrs.role.contains("button") && link.attrs.tabIndex.contains(0),
+                s"role ${link.attrs.role}, tab ${link.attrs.tabIndex}"
+            )
+            assert(link.attrs.ariaAttrs.get("haspopup").contains("dialog"), s"aria: ${link.attrs.ariaAttrs}")
+            assert(o, "Enter on the link opened the popover")
         end for
     }
 
@@ -70,8 +91,41 @@ class PopoverTest extends ReactiveValueContract:
         yield
             assert(native.attrs.role.isEmpty && native.attrs.tabIndex.isEmpty, s"role ${native.attrs.role}, tab ${native.attrs.tabIndex}")
             assert(native.attrs.ariaAttrs.get("haspopup").contains("dialog"), s"aria: ${native.attrs.ariaAttrs}")
-            assert(shell.attrs.onKeyDown.isEmpty, "a key on a native button is its click, which the wrapper already takes")
+            assert(
+                shell.attrs.onKeyDown.isEmpty && native.attrs.onKeyDownSelf.isEmpty,
+                "a key on a native button is its click, which the wrapper already takes"
+            )
         end for
+    }
+
+    /** What the dispatcher does with `key` pressed on the element with id `id` inside a trigger that is no control of its
+      * own, as the client sends it: addressed by the path the element has on the page, bubbling from there.
+      */
+    private def pressInside(id: String, key: String)(using Frame): Boolean < Async =
+        import kyo.internal.*
+        Signal.initRef(false).map { open =>
+            val ui = uic.Popover().open(open)
+                .trigger(div.cssClass("card")(button.id("inner")("Go"), input.id("note")))(p("inside")).render
+            HtmlRenderer.render(ui, Seq.empty).map { html =>
+                val at = pathOf(html, id)
+                Scope.run {
+                    for
+                        root <- ReactiveUI.normalize(ui, Seq.empty)
+                        sub  <- ReactiveUI.subscribe(root, UIExchange.noop)
+                        _    <- Abort.run[Any](sub.handle(at, UIEvent.KeyDown(at, KeyboardEventData(key, UI.Modifiers.none, Absent))))
+                        o    <- open.get
+                    yield o
+                }
+            }
+        }
+    end pressInside
+
+    "Enter on a button inside the trigger is that button's click, so it opens the popover once" in {
+        pressInside("inner", "Enter").map(o => assert(o, "the key and the click it became toggled twice"))
+    }
+
+    "a space typed into a field inside the trigger is the field's, and leaves the popover as it was" in {
+        pressInside("note", " ").map(o => assert(!o, "typing a space toggled the popover"))
     }
 
     private inline val preamble = "import kyo.*\nimport kyo.UI.*\nimport kyo.uic\n"
