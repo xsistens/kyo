@@ -73,9 +73,16 @@ final case class Button private (
     private[uic] def ariaRaw(name: String, value: String | Signal[String]): Button =
         copy(extraAriasV = extraAriasV :+ (name -> value))
 
-    private[uic] def asPopupTrigger(popup: String, expanded: String | Signal[String], fixed: Boolean)(using Frame): UI =
+    // A button is a native control: its keys are its click, so `activate` has nothing left to answer.
+    private[uic] def asPopupTrigger(
+        popup: String,
+        expanded: String | Signal[String],
+        fixed: Boolean,
+        activate: Maybe[UI.Action]
+    )(using Frame): UI =
         val trigger = ariaRaw("haspopup", popup).ariaRaw("expanded", expanded)
         (if fixed then trigger.ariaDisabled(true) else trigger).render
+    end asPopupTrigger
 
     /** The host-added aria attributes, a constant set as it stands and a signal as a channel. */
     private def withExtraArias[E <: UI.Ast.Element { type Self = E }](el: E): E =
