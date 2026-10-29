@@ -809,7 +809,7 @@ object ShowcaseCompile:
             uic.FileUpload()
                 .inputId("container-data-upload")
                 .accept(FileAccept.Extension(".txt"))
-                .onSelect(_ => notify),
+                .onChange(_ => notify),
 
             // treetable: DataTable columns over recursive typed nodes
             uic.TreeTable[(String, String)]()

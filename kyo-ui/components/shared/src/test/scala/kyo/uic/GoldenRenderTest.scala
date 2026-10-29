@@ -5925,7 +5925,7 @@ class GoldenRenderTest extends UicTest:
     "FileUpload (basic) renders the label-for choose button over the hidden native input" in {
         for
             html <- renderHtml(
-                uic.FileUpload().inputId("up1").accept(FileAccept.Extension(".txt")).onSelect(_ => ())
+                uic.FileUpload().inputId("up1").accept(FileAccept.Extension(".txt")).onChange(_ => ())
             )
             disabled <- renderHtml(uic.FileUpload().inputId("up2").disabled(true))
         yield
@@ -6489,8 +6489,8 @@ class GoldenRenderTest extends UicTest:
 
     "FileUpload wires onFileSelect metadata (fileselect event) and multiple" in {
         for
-            single <- renderHtml(uic.FileUpload().inputId("f1").onSelect(_ => ()))
-            multi  <- renderHtml(uic.FileUpload().inputId("f2").multiple(true).onSelect(_ => ()))
+            single <- renderHtml(uic.FileUpload().inputId("f1").onChange(_ => ()))
+            multi  <- renderHtml(uic.FileUpload().inputId("f2").multiple(true).onChange(_ => ()))
         yield
             assert(single.contains("fileselect"), "onFileSelect registers the fileselect metadata event")
             assert(single.contains("p-fileupload-filelabel"), "empty-state file label present")

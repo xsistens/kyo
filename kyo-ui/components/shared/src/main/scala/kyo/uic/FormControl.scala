@@ -155,5 +155,5 @@ end NumberFormControl
   * extension, and what a submit handler needs to upload.
   */
 trait FileFormControl extends FormControl:
-    def value(ref: SignalRef[Seq[UI.FilePayload]]): Self
+    def value(v: Seq[UI.FilePayload] | Signal[Seq[UI.FilePayload]]): Self
     def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): Self
