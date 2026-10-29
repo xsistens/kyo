@@ -225,8 +225,8 @@ class SpeedDialTest extends ReactiveValueContract:
 
     holds(new Slot[SpeedDial, Boolean](
         name = "open",
-        bare = dial(),
-        bind = _.open(_),
+        bare = Present(dial()),
+        bind = dial().open(_),
         hear = (d, f) => d.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

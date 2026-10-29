@@ -38,8 +38,8 @@ class InplaceTest extends ReactiveValueContract:
 
     holds(new Slot[Inplace, Boolean](
         name = "active",
-        bare = inplace,
-        bind = _.active(_),
+        bare = Present(inplace),
+        bind = inplace.active(_),
         hear = (i, f) => i.onActiveChange(f),
         event = "onActiveChange",
         render = _.render,
