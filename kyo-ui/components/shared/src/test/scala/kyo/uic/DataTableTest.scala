@@ -790,6 +790,137 @@ class DataTableTest extends UicTest:
             assert(seen == List("t-c0-0"), "and focus lands on the row's first editable cell")
     }
 
+    // ---- the editing state under every binding ----
+
+    /** Two editable columns over `items`, through the mount seam that gives the editor its drafts. */
+    private def editable(bind: uic.DataTable[Item] => uic.DataTable[Item])(using Frame): UI < Sync =
+        for
+            name  <- Signal.initRef("")
+            price <- Signal.initRef("")
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+        yield bind(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+            uic.column("Price")(_.price.toString).editable(_.price)((i, v) => i.copy(price = v))
+        ).onCellValueChanged(_ => ()).onRowValueChanged(_ => ()))
+            .wired("t", Map(List("Name") -> name, List("Price") -> price), err, _ => ())
+
+    private def editableBare(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+        ).onCellValueChanged(_ => ()).onRowValueChanged(_ => ())
+
+    "a constant editing cell nobody hears is fixed: its editor shows, and no other cell opens" in {
+        for
+            ui    <- editable(_.editingCell(Present(CellPath(items(0), List("Name")))))
+            open  <- elementWithId(ui, "t-c0-0")
+            other <- elementWithId(ui, "t-c1-0")
+            card  <- cards(ui)
+        yield
+            assert(open.attrs.cssClasses.contains("p-cell-editing"), "the constant cell shows its editor")
+            assert(!declaresClick(other), "a fixed editing cell opens no other")
+            assert(card.isEmpty, s"a fixed editing cell is not a mistake: $card")
+        end for
+    }
+
+    "an editing cell bound one way is followed, and a click reported without being written" in {
+        for
+            held <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            seen <- Signal.initRef(List.empty[Maybe[CellPath[Item]]])
+            ui   <- editable(_.editingCell(held.readOnly).onEditingCellChange(c => seen.getAndUpdate(_ :+ c).unit))
+            cell <- elementWithId(ui, "t-c1-0")
+            _    <- click(cell)
+            h    <- held.get
+            told <- seen.get
+            deaf <- cards(editableBare.editingCell(held.readOnly).render)
+        yield
+            assert(h == Absent && told == List(Present(CellPath(items(1), List("Name")))), s"held $h, reported $told")
+            assert(deaf.contains("onEditingCellChange"), s"nobody hears: $deaf")
+        end for
+    }
+
+    "an editing cell ref is written before the click is reported" in {
+        for
+            held <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            seen <- Signal.initRef(List.empty[(Maybe[CellPath[Item]], Maybe[CellPath[Item]])])
+            ui   <- editable(_.editingCell(held).onEditingCellChange(c => held.get.map(h => seen.getAndUpdate(_ :+ (c, h)).unit)))
+            cell <- elementWithId(ui, "t-c1-0")
+            _    <- click(cell)
+            told <- seen.get
+        yield
+            val one = Present(CellPath(items(1), List("Name")))
+            assert(told == List((one, one)), s"reported, held: $told")
+    }
+
+    "editingCell() with no ref keeps the open cell itself, so a click opens the editor" in {
+        val table = editableBare.editingCell()
+        for
+            card  <- cards(table.render)
+            after <- publishedAfterReady(
+                table.render,
+                t => elementsWithClass(t, "p-editable-column").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-cell-editing").map(_.nonEmpty)
+            )(t => elementsWithClass(t, "p-editable-column").map(cs => click(cs.head)))
+        yield
+            assert(after.nonEmpty, "the table never opened the cell the reader clicked")
+            assert(card.isEmpty, s"an editing cell the table keeps itself: $card")
+        end for
+    }
+
+    "constant editing rows nobody hears are fixed: their editors show, and no button changes them" in {
+        for
+            ui    <- editable(_.editingRows(Set(items(0))))
+            save  <- elementWithClass(ui, "p-datatable-row-editor-save")
+            inits <- elementsWithClass(ui, "p-datatable-row-editor-init")
+            card  <- cards(ui)
+        yield
+            assert(save.attrs.ariaAttrs.get("disabled").contains("true"), "the open row's save is reachable and inert")
+            assert(inits.nonEmpty && inits.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "no row opens")
+            assert(card.isEmpty, s"fixed editing rows are not a mistake: $card")
+        end for
+    }
+
+    "editing rows bound one way are followed, and a row opened is reported without being written" in {
+        for
+            held  <- Signal.initRef(Set.empty[Item])
+            seen  <- Signal.initRef(List.empty[Set[Item]])
+            ui    <- editable(_.editingRows(held.readOnly).onEditingRowsChange(r => seen.getAndUpdate(_ :+ r).unit))
+            inits <- elementsWithClass(ui, "p-datatable-row-editor-init")
+            _     <- click(inits(1))
+            h     <- held.get
+            told  <- seen.get
+            deaf  <- cards(editableBare.editingRows(held.readOnly).render)
+        yield
+            assert(h.isEmpty && told == List(Set(items(1))), s"held $h, reported $told")
+            assert(deaf.contains("onEditingRowsChange"), s"nobody hears: $deaf")
+        end for
+    }
+
+    "an editing rows ref is written before the row opened is reported" in {
+        for
+            held  <- Signal.initRef(Set.empty[Item])
+            seen  <- Signal.initRef(List.empty[(Set[Item], Set[Item])])
+            ui    <- editable(_.editingRows(held).onEditingRowsChange(r => held.get.map(h => seen.getAndUpdate(_ :+ (r, h)).unit)))
+            inits <- elementsWithClass(ui, "p-datatable-row-editor-init")
+            _     <- click(inits(1))
+            told  <- seen.get
+        yield assert(told == List((Set(items(1)), Set(items(1)))), s"reported, held: $told")
+    }
+
+    "editingRows() with no ref keeps the open rows itself, so the row editor opens a row" in {
+        val table = editableBare.editingRows()
+        for
+            card  <- cards(table.render)
+            after <- publishedAfterReady(
+                table.render,
+                t => elementsWithClass(t, "p-datatable-row-editor-init").map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-datatable-row-editor-save").map(_.nonEmpty)
+            )(t => elementsWithClass(t, "p-datatable-row-editor-init").map(bs => click(bs.head)))
+        yield
+            assert(after.nonEmpty, "the table never opened the row the reader asked for")
+            assert(card.isEmpty, s"editing rows the table keeps itself: $card")
+        end for
+    }
+
     /** A table whose three columns the reader may resize, with the header measurement
       * stubbed: what the grab reads is the width the browser would report, and the test
       * supplies it so the arithmetic is the only thing under test.

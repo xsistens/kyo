@@ -638,8 +638,12 @@ final case class DataTable[A] private (
     frozenRowsV: Maybe[ReactiveValue[Seq[A]]] = Absent,
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
     rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
-    editingRowsTyped: Maybe[SignalRef[Set[A]]] = Absent,
-    editingCellTyped: Maybe[SignalRef[Maybe[CellPath[A]]]] = Absent,
+    editingRowsTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
+    editingCellTyped: Maybe[ReactiveValue[Maybe[CellPath[A]]]] = Absent,
+    ownEditRowsFlag: Boolean = false,
+    ownEditCellFlag: Boolean = false,
+    onEditingRowsF: Maybe[Set[A] => UI.Action] = Absent,
+    onEditingCellF: Maybe[Maybe[CellPath[A]] => UI.Action] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
     cellNavV: Maybe[Boolean] = Absent,
     onCellChangedF: Maybe[CellChange[A] => UI.Action] = Absent,
@@ -1283,10 +1287,15 @@ final case class DataTable[A] private (
       */
     def rowExpansionTemplate(f: A => UI): DataTable[A] = copy(expansionF = Present(f))
 
-    /** Binds row editing two-way to `ref` (the set of rows being edited, matched by [[rowKey]]): every column carrying
+    /** Binds row editing (the set of rows being edited, matched by [[rowKey]]): every column carrying
       * a [[Column.editable]] pipeline shows its editor for those rows, and an
       * editor-button column appears at the trailing edge with Prime's init, save and
       * cancel buttons.
+      *
+      * A `SignalRef` is written when a button opens or closes a row, then
+      * [[onEditingRowsChange]] hears the set; a plain `Signal` is followed and the button
+      * only reports; a constant nobody hears is fixed, its buttons reachable and inert. A
+      * signal nothing hears is reported in a card.
       *
       * The table owns the draft as well as the state, and both come from the column: the
       * editor is the one its [[CellType]] carries, seeded from `read`, and save writes
@@ -1294,15 +1303,36 @@ final case class DataTable[A] private (
       * after; a value that will not parse, or a rule that refuses it, leaves the row open
       * on the screen it failed on.
       */
-    def editingRows(ref: SignalRef[Set[A]]): DataTable[A] = copy(editingRowsTyped = Present(ref))
+    def editingRows(v: Set[A] | Signal[Set[A]]): DataTable[A] =
+        copy(editingRowsTyped = Present(ReactiveValue(v)), ownEditRowsFlag = false)
 
-    /** Binds cell editing two-way to `ref`: at most one cell shows its column's editor,
-      * and clicking a cell of an editable column moves the editor there. Enter commits,
-      * Escape discards, and both clear the ref.
+    /** Turns row editing on over open rows the table keeps itself, starting with none: [[editingRows]] with no ref to
+      * hand over. [[onEditingRowsChange]] still hears every row opened or closed.
+      */
+    def editingRows(): DataTable[A] = copy(editingRowsTyped = Absent, ownEditRowsFlag = true)
+
+    /** Fired with the rows being edited after a button opens or closes one, after a two-way [[editingRows]] is written. */
+    def onEditingRowsChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = copy(onEditingRowsF = Present(Callback.of(f)))
+
+    /** Binds cell editing: at most one cell shows its column's editor, and clicking a cell
+      * of an editable column moves the editor there. Enter commits, Escape discards, and
+      * both close it. A `SignalRef` is written, then [[onEditingCellChange]] hears the cell;
+      * a plain `Signal` is followed and a move only reported; a constant nobody hears is
+      * fixed, so no other cell opens. A signal nothing hears is reported in a card.
       *
       * A [[CellPath]], since a cell is a row crossed with a column.
       */
-    def editingCell(ref: SignalRef[Maybe[CellPath[A]]]): DataTable[A] = copy(editingCellTyped = Present(ref))
+    def editingCell(v: Maybe[CellPath[A]] | Signal[Maybe[CellPath[A]]]): DataTable[A] =
+        copy(editingCellTyped = Present(ReactiveValue(v)), ownEditCellFlag = false)
+
+    /** Turns cell editing on over an open cell the table keeps itself, starting with none: [[editingCell]] with no ref to
+      * hand over. [[onEditingCellChange]] still hears every move.
+      */
+    def editingCell(): DataTable[A] = copy(editingCellTyped = Absent, ownEditCellFlag = true)
+
+    /** Fired with the open cell after the reader moves or closes the editor, after a two-way [[editingCell]] is written. */
+    def onEditingCellChange(f: Maybe[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
+        copy(onEditingCellF = Present(Callback.of(f)))
 
     /** Whether the reader may move a cursor over the cells: arrows move it, Home and End
       * take it to the ends of a row (of the grid under ctrl or cmd), Page keys move it a
@@ -1634,12 +1664,32 @@ final case class DataTable[A] private (
     /** The open groups as the table reads them: the bound set, else none. */
     private def groupsReading(using Frame): Reading[Set[GroupPath]] =
         expandedGroupsSlot.fold(Reading.Fixed(Set.empty[GroupPath]))(Reading.of(_))
-    private def editingRowsRef(using Frame): Maybe[Signal[Set[String]]]    = editingRowsTyped.map(_.map(keysOf))
-    private def editingCellRef(using Frame): Maybe[Signal[Maybe[CellKey]]] = editingCellTyped.map(_.map(_.map(cellKey)))
 
-    /** Applies `f` to a bound row set's keys and writes back the rows they name. */
-    private def updateRows(ref: SignalRef[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
-        currentRows.map(all => ref.getAndUpdate(prev => rowsFor(f(keysOf(prev)), prev, all)).unit)
+    /** The rows being edited as keys, whichever way they were bound. */
+    private def editingRowsBinding(using Frame): Maybe[ReactiveValue[Set[String]]] =
+        editingRowsTyped.map {
+            case ReactiveValue.Const(rows) => ReactiveValue.Const(keysOf(rows))
+            case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(keysOf))
+        }
+
+    /** The open cell as a key, whichever way it was bound. */
+    private def editingCellBinding(using Frame): Maybe[ReactiveValue[Maybe[CellKey]]] =
+        editingCellTyped.map {
+            case ReactiveValue.Const(cell) => ReactiveValue.Const(cell.map(cellKey))
+            case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(_.map(cellKey)))
+        }
+
+    /** Whether row editing was asked for, bound or kept by the table ([[editingRows]]). */
+    private def rowEditOn: Boolean = editingRowsTyped.isDefined || ownEditRowsFlag
+
+    /** Whether cell editing was asked for, bound or kept by the table ([[editingCell]]). */
+    private def cellEditOn: Boolean = editingCellTyped.isDefined || ownEditCellFlag
+
+    /** Constant editing rows nobody hears: their editors show, and no button changes the set. */
+    private def rowEditFixed: Boolean = ReactiveValue.fixed(editingRowsTyped, onEditingRowsF)
+
+    /** A constant editing cell nobody hears: its editor shows, and no other cell opens. */
+    private def cellEditFixed: Boolean = ReactiveValue.fixed(editingCellTyped, onEditingCellF)
 
     private def rowClickSelects: Boolean =
         (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple ||
@@ -1673,7 +1723,7 @@ final case class DataTable[A] private (
       * a mode that is about a checkbox column says nothing about a cell.
       */
     private def cellSelectOn: Boolean =
-        cellsOn && editingCellTyped.isEmpty && selectedTyped.isEmpty &&
+        cellsOn && !cellEditOn && selectedTyped.isEmpty &&
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
     /** Whether cell selection was asked for, bound or kept by the table ([[selectedCells]]). */
@@ -1717,7 +1767,7 @@ final case class DataTable[A] private (
       * state IS the switch, the way `expanded(ref)` is for the expander column: a second
       * flag would only be a way to bind one without the other.
       */
-    private def editorColumn: Boolean = editingRowsTyped.isDefined
+    private def editorColumn: Boolean = rowEditOn
 
     private def rowInteractive: Boolean = rowClickSelects || onRowClickF.isDefined
 
@@ -1822,7 +1872,7 @@ final case class DataTable[A] private (
     /** Whether anything can be edited at all, which is what decides whether the table
       * needs state of its own.
       */
-    private def editingBound: Boolean = editingCellTyped.isDefined || editingRowsTyped.isDefined
+    private def editingBound: Boolean = cellEditOn || rowEditOn
 
     /** Navigation follows editing unless the caller says otherwise, and never runs over a
       * windowed body: the cursor addresses cells by their position among the RENDERED
@@ -2462,13 +2512,15 @@ final case class DataTable[A] private (
         val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None && !cellsOn
         // The layout the reader drags and the groups they open are kept only where the page asked for the feature
         // with no ref: `columnWidths()`, `columnOrder()`, `expandedGroups()`.
-        // `selectedCells()` likewise.
-        val ownsWidths = columnWidthsSlot.isEmpty && ownWidthsFlag
-        val ownsOrder  = columnOrderSlot.isEmpty && ownOrderFlag
-        val ownsGroups = expandedGroupsSlot.isEmpty && ownGroupsFlag
-        val ownsCells  = cellsTyped.isEmpty && ownCellsFlag
+        // `selectedCells()`, `editingRows()` and `editingCell()` likewise.
+        val ownsWidths   = columnWidthsSlot.isEmpty && ownWidthsFlag
+        val ownsOrder    = columnOrderSlot.isEmpty && ownOrderFlag
+        val ownsGroups   = expandedGroupsSlot.isEmpty && ownGroupsFlag
+        val ownsCells    = cellsTyped.isEmpty && ownCellsFlag
+        val ownsEditRows = editingRowsTyped.isEmpty && ownEditRowsFlag
+        val ownsEditCell = editingCellTyped.isEmpty && ownEditCellFlag
         if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups &&
-            !ownsCells
+            !ownsCells && !ownsEditRows && !ownsEditCell
         then
             renderBound
         else
@@ -2510,6 +2562,15 @@ final case class DataTable[A] private (
                             Signal.initRef(Set.empty[CellPath[A]])(using summon[Frame], CanEqual.derived)
                                 .map(r => Maybe(ReactiveValue[Set[CellPath[A]]](r)))
                         else Kyo.lift(cellsTyped)
+                    editRows <-
+                        if ownsEditRows then
+                            Signal.initRef(Set.empty[A])(using summon[Frame], CanEqual.derived).map(r => Maybe(ReactiveValue[Set[A]](r)))
+                        else Kyo.lift(editingRowsTyped)
+                    editCell <-
+                        if ownsEditCell then
+                            Signal.initRef(Absent: Maybe[CellPath[A]])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Maybe[CellPath[A]]](r)))
+                        else Kyo.lift(editingCellTyped)
                 yield copy(
                     sortSlot = sort,
                     columnFiltersSlot = filters,
@@ -2519,7 +2580,11 @@ final case class DataTable[A] private (
                     columnOrderSlot = order,
                     expandedGroupsSlot = groups,
                     cellsTyped = cells,
-                    ownCellsFlag = false
+                    ownCellsFlag = false,
+                    editingRowsTyped = editRows,
+                    ownEditRowsFlag = false,
+                    editingCellTyped = editCell,
+                    ownEditCellFlag = false
                 ).renderBound
             }.placeholder(renderBound)
         end if
@@ -2683,8 +2748,8 @@ final case class DataTable[A] private (
         given dragEq: CanEqual[Maybe[ColumnDrag], Maybe[ColumnDrag]]                      = CanEqual.derived
         given rowDragEq: CanEqual[Maybe[RowDrag], Maybe[RowDrag]]                         = CanEqual.derived
         val outer                                                                         = Reading.Live(errRef)
-            .and(Reading.orElse(editingRowsRef, Set.empty[String]))
-            .and(Reading.orElse(editingCellRef, Absent: Maybe[CellKey]))
+            .and(editingRowsBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
+            .and(editingCellBinding.fold(Reading.Fixed(Absent: Maybe[CellKey]))(Reading.of(_)))
             .and(Reading.orElse(moving, Absent: Maybe[ColumnDrag]))
             .and(Reading.orElse(rowDrag, Absent: Maybe[RowDrag]))
         renderWith(outer, ((((Absent, Set.empty[String]), Absent), Absent), Absent), navOn) {
@@ -3323,8 +3388,8 @@ final case class DataTable[A] private (
     /** Which cell is open NOW, for the same reason. */
     private def openCellNow(edit: EditState)(using Frame): Maybe[CellKey] < Async =
         editingCellTyped match
-            case Present(ref) => ref.get.map(_.map(cellKey))
-            case Absent       => Kyo.lift(edit.cell)
+            case Present(bound) => bound.current.map(_.map(cellKey))
+            case Absent         => Kyo.lift(edit.cell)
 
     /** The rows a query, a filter spec and a sort leave, in the order they leave them in:
       * steps 1, 1b and 2 of what the body renders, without the paging step 3.
@@ -3838,7 +3903,7 @@ final case class DataTable[A] private (
     private def rowKeyCard(shown: Seq[A])(using Frame): List[UI] =
         val usesIdentity =
             selectedTyped.isDefined || expandedTyped.isDefined || onRowClickF.isDefined ||
-                editingRowsTyped.isDefined || editingCellTyped.isDefined
+                rowEditOn || cellEditOn
         val unset =
             if rowKeyF.isDefined || !usesIdentity then Nil
             else
@@ -4185,7 +4250,7 @@ final case class DataTable[A] private (
         val claimed = List(
             if selectedTyped.isEmpty then Nil else List("selection, which picks rows"),
             if !cellsOn then Nil else List("selectedCells, which picks cells"),
-            if editingCellTyped.isEmpty then Nil else List("editingCell, which opens an editor")
+            if !cellEditOn then Nil else List("editingCell, which opens an editor")
         ).flatten
         val clash =
             if !cellsOn || claimed.sizeIs < 2 then Nil
@@ -4458,7 +4523,7 @@ final case class DataTable[A] private (
     end frozenCards
 
     private def editCards(using Frame): List[UI] =
-        val bound    = editingRowsTyped.isDefined || editingCellTyped.isDefined
+        val bound    = rowEditOn || cellEditOn
         val editable = allPaths.exists(_._2.isEditable)
         val nothing  =
             if !bound || editable then Nil
@@ -4493,7 +4558,7 @@ final case class DataTable[A] private (
                     Nil
                 ))
         val both =
-            if !(editingRowsTyped.isDefined && editingCellTyped.isDefined) then Nil
+            if !(rowEditOn && cellEditOn) then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -4501,7 +4566,25 @@ final case class DataTable[A] private (
                         "bind one",
                     Nil
                 ))
-        nothing ++ nowhere ++ twoSources ++ both
+        val rowsDeaf =
+            if !ReactiveValue.deaf(editingRowsTyped, onEditingRowsF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the editing rows are bound one way and nothing hears a row editor button, so the reader cannot " +
+                        "open a row; add onEditingRowsChange, or bind a SignalRef",
+                    Nil
+                ))
+        val cellDeaf =
+            if !ReactiveValue.deaf(editingCellTyped, onEditingCellF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the editing cell is bound one way and nothing hears a click, so the reader cannot open an editor; " +
+                        "add onEditingCellChange, or bind a SignalRef",
+                    Nil
+                ))
+        nothing ++ nowhere ++ twoSources ++ both ++ rowsDeaf ++ cellDeaf
     end editCards
 
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
@@ -5381,7 +5464,7 @@ final case class DataTable[A] private (
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = editingCellTyped.isDefined && openable && edit.live
+                val cellMode = cellEditOn && !cellEditFixed && openable && edit.live
                 if cellMode then
                     cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
                     // The click picks a cell, it does not also pick the row; and while the
@@ -5448,8 +5531,10 @@ final case class DataTable[A] private (
                         .extraClass(cls)
                     // Inert in the static projection: the button is part of the anatomy, so
                     // it renders and the grid keeps its column count, but there is nothing
-                    // for a click to write into until the mount has run.
-                    if edit.live then b = b.onClick(action)
+                    // for a click to write into until the mount has run. Fixed editing rows
+                    // keep the buttons reachable and say they do nothing.
+                    if rowEditFixed then b = b.ariaDisabled(true)
+                    else if edit.live then b = b.onClick(action)
                     b.render
                 end btn
                 // Where focus goes when a BUTTON closed the row. Not onto the button that
@@ -5793,7 +5878,7 @@ final case class DataTable[A] private (
             rows = nav.rows.size,
             cols = leafPaths.size,
             editable = pos =>
-                editingCellTyped.isDefined && ((rowAt(nav, pos), colAt(pos)) match
+                cellEditOn && !cellEditFixed && ((rowAt(nav, pos), colAt(pos)) match
                     case (Present(r), Present((_, c))) => c.isNavigable && c.isEditableAt(r)
                     case _                             => false),
             page = math.max(nav.page, 1),
@@ -5944,18 +6029,23 @@ final case class DataTable[A] private (
 
     /** Puts a row into the editing set, or takes it out. */
     private def setRowEditing(id: String, on: Boolean)(using Frame): UI.Action =
-        editingRowsTyped match
-            case Present(ref) => updateRows(ref)(cur => if on then cur + id else cur - id)
-            case Absent       => ()
+        currentRows.map(all =>
+            ReactiveValue.update(
+                editingRowsTyped,
+                prev => rowsFor(if on then keysOf(prev) + id else keysOf(prev) - id, prev, all),
+                onEditingRowsF
+            )
+        )
 
     /** Moves the cell editor, or clears it. */
     private def setEditingCell(cell: Maybe[CellKey])(using Frame): UI.Action =
-        editingCellTyped match
-            case Present(ref) =>
-                currentRows.map(all =>
-                    ref.getAndUpdate(prev => Maybe.fromOption(cellsFor(cell.toList.toSet, prev.toList.toSet, all).headOption)).unit
-                )
-            case Absent => ()
+        currentRows.map(all =>
+            ReactiveValue.update(
+                editingCellTyped,
+                prev => Maybe.fromOption(cellsFor(cell.toList.toSet, prev.toList.toSet, all).headOption),
+                onEditingCellF
+            )
+        )
 
     /** Fills a column's draft with what the row currently shows there, which is what an
       * editor opens on. The seed is the table's job precisely because the editor renders
