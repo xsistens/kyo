@@ -25,9 +25,6 @@ import scala.language.implicitConversions
   */
 class GoldenRenderTest extends UicTest:
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     /** DatePicker's live tree. Its keyboard, its minted month ref and its cell ids all come from
       * a mount, and a golden render shows a mount only as its placeholder, so these go through
       * the `wired` seam like every other mount-based component.
@@ -2172,7 +2169,7 @@ class GoldenRenderTest extends UicTest:
         def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
 
         def render(t: Frame ?=> uic.DataTable[Row])(using Frame) =
-            UI.runRender(t.render).take(1).run.map(_.mkString)
+            renderHtml(t.render)
 
         for
             all <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
@@ -2222,12 +2219,12 @@ class GoldenRenderTest extends UicTest:
                         uic.column("Note")(_.note).sortBy(_.note).visible(false)
                     ).sort(spec))
                 yield out
-            tree <- UI.runRender(
+            tree <- renderHtml(
                 uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head)).columns(
                     uic.column("Name")(_.name).visible(false),
                     uic.column("Code")(_.code)
                 ).render
-            ).take(1).run.map(_.mkString)
+            )
         yield
             // The flag written out as true is the default written down, so it may not
             // change one byte of what the table renders.
@@ -2269,10 +2266,10 @@ class GoldenRenderTest extends UicTest:
         )
 
         for
-            plain <- UI.runRender(
+            plain <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
-            ).take(1).run.map(_.mkString)
-            unbound <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            )
+            unbound <- renderHtml(table.render)
             live    <-
                 for
                     specs <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
@@ -2348,10 +2345,10 @@ class GoldenRenderTest extends UicTest:
         )
 
         for
-            plain <- UI.runRender(
+            plain <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
-            ).take(1).run.map(_.mkString)
-            authored <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            )
+            authored <- renderHtml(table.render)
             live     <-
                 for
                     widths <- Signal.initRef(Map.empty[List[String], Double])
@@ -2379,12 +2376,12 @@ class GoldenRenderTest extends UicTest:
                         ).columnWidths(widths).wired("t", Map.empty, err, _ => ())
                     ).take(1).run
                 yield out.mkString
-            tree <- UI.runRender(
+            tree <- renderHtml(
                 uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head)).columns(
                     uic.column("Name")(_.name).width(140),
                     uic.column("Price")(_.price.toString)
                 ).render
-            ).take(1).run.map(_.mkString)
+            )
         yield
             // A table nobody sized renders what it always rendered.
             assert(!plain.contains("<colgroup") && !plain.contains("p-uic-table-fixed"))
@@ -2446,7 +2443,7 @@ class GoldenRenderTest extends UicTest:
             yield out.mkString
 
         for
-            plain   <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            plain   <- renderHtml(table.render)
             live    <- wire(table)
             grouped <- wire(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name),
@@ -2495,31 +2492,31 @@ class GoldenRenderTest extends UicTest:
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
 
         for
-            plain <- UI.runRender(
+            plain <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                     uic.column("Name")(_.name).width(220)
                 ).render
-            ).take(1).run.map(_.mkString)
-            start <- UI.runRender(
+            )
+            start <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                     uic.column("Name")(_.name).width(220).frozen(true),
                     uic.column("Price")(_.price.toString).width(120).frozen(true),
                     uic.column("Note")(_ => "n")
                 ).render
-            ).take(1).run.map(_.mkString)
-            withLead <- UI.runRender(
+            )
+            withLead <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).selectionMode(uic.SelectionMode.Checkbox).columns(
                     uic.column("Name")(_.name).width(220).frozen(true),
                     uic.column("Note")(_ => "n")
                 ).render
-            ).take(1).run.map(_.mkString)
-            end <- UI.runRender(
+            )
+            end <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                     uic.column("Name")(_.name),
                     uic.column("Price")(_.price.toString).width(150).frozen(uic.FrozenEdge.End),
                     uic.column("Note")(_ => "n").width(100).frozen(uic.FrozenEdge.End)
                 ).render
-            ).take(1).run.map(_.mkString)
+            )
         yield
             // A table that freezes nothing stays out of the scroll container: freezing is
             // what asks for one, since a column can only be frozen against something moving.
@@ -2546,15 +2543,15 @@ class GoldenRenderTest extends UicTest:
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
             ref  <- Signal.initRef(Set.empty[Row])
-            open <- UI.runRender(
+            open <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                     .selectionMode(uic.SelectionMode.Checkbox).selection(ref).render
-            ).take(1).run.map(_.mkString)
-            limited <- UI.runRender(
+            )
+            limited <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                     .selectionMode(uic.SelectionMode.Checkbox).selection(ref)
                     .selectableWhen(_.id != "2").render
-            ).take(1).run.map(_.mkString)
+            )
         yield
             assert(
                 occurrences(open, "p-checkbox p-component") == 3,
@@ -2574,15 +2571,15 @@ class GoldenRenderTest extends UicTest:
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
             ref <- Signal.initRef(Set.empty[Row])
-            all <- UI.runRender(
+            all <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                     .selectionMode(uic.SelectionMode.Multiple).selection(ref).render
-            ).take(1).run.map(_.mkString)
-            some <- UI.runRender(
+            )
+            some <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                     .selectionMode(uic.SelectionMode.Multiple).selection(ref)
                     .selectableWhen(_.id != "2").render
-            ).take(1).run.map(_.mkString)
+            )
         yield
             assert(occurrences(all, "p-datatable-selectable-row") == 2)
             assert(occurrences(some, "p-datatable-selectable-row") == 1)
@@ -2682,12 +2679,12 @@ class GoldenRenderTest extends UicTest:
         def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
         for
             cells <- Signal.initRef(Set(uic.CellPath(rows(1), List("Price"))))
-            out   <- UI.runRender(
+            out   <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
                     uic.column("Name")(_.name),
                     uic.column("Price")(_.price.toString)
                 ).selectionMode(uic.SelectionMode.Multiple).selectedCells(cells).render
-            ).take(1).run.map(_.mkString)
+            )
             plain <- renderHtml(
                 uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
             )
@@ -7209,11 +7206,11 @@ class GoldenRenderTest extends UicTest:
         for
             ref <- Signal.initRef(false)
             ui = uic.Panel().header("Rail").id("rail").toggleable(true).collapsed(ref)(p("x"))
-            html  <- UI.runRender(ui).take(1).run.map(_.mkString)
+            html  <- renderHtml(ui)
             plain <- Signal.initRef(false).map(r =>
                 uic.Panel().header("Rail").toggleable(true).collapsed(r)(p("x"))
             )
-            plainHtml <- UI.runRender(plain).take(1).run.map(_.mkString)
+            plainHtml <- renderHtml(plain)
         yield
             assert(html.contains("""id="rail-toggle""""), "the toggle is named after the panel")
             assert(html.contains("p-panel-toggle-button"), "and is still Prime's button")

@@ -222,7 +222,7 @@ class SpeedDialTest extends UicTest:
 
     /** The dial as its mount publishes it, the toggle wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => toggles(t).map(_.nonEmpty))().map(_.getOrElse(throw new AssertionError("never mounted")))
+        mountedWhen(ui)(t => toggles(t).map(_.nonEmpty))
 
     "a constant nobody hears is fixed: the toggle stays reachable, opens nothing, and says so" in {
         for

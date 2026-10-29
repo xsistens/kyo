@@ -949,8 +949,7 @@ class SelectTest extends UicTest:
 
     /** The select as its mount publishes it, the trigger wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => elementsWithClass(t, "p-select").map(_.nonEmpty))()
-            .map(_.getOrElse(throw new AssertionError("never mounted")))
+        mountedWhen(ui)(t => elementsWithClass(t, "p-select").map(_.nonEmpty))
 
     "a panel fixed shut draws the select read-only, and says nothing" in {
         for

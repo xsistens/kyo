@@ -101,7 +101,7 @@ class SplitButtonTest extends UicTest:
 
     /** The button as its mount publishes it, the dropdown wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => dropdowns(t).map(_.nonEmpty))().map(_.getOrElse(throw new AssertionError("never mounted")))
+        mountedWhen(ui)(t => dropdowns(t).map(_.nonEmpty))
 
     "a constant nobody hears is fixed: the dropdown stays reachable, opens nothing, and says so" in {
         for

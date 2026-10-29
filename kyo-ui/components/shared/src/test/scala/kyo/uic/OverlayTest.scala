@@ -41,7 +41,7 @@ class OverlayTest extends UicTest:
                 result <- UICommands.commands.let(Present(cmds)) {
                     for
                         root <- ReactiveUI.normalize(ui, Seq.empty)
-                        sub  <- ReactiveUI.subscribe(root, quietExchange)
+                        sub  <- ReactiveUI.subscribe(root, kyo.internal.UIExchange.noop)
                         _    <- measured.get
                         _    <- sub.handle(path, clickAt(path))
                         p    <- picks.get

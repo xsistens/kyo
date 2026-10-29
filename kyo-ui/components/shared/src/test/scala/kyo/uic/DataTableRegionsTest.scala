@@ -202,14 +202,12 @@ class DataTableRegionsTest extends UicTest:
             .map(_.flatMap(_.children.collect { case c: UI.Ast.Element => c }.headOption))
             .map(_.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }).toList)
 
-    private def html(ui: UI)(using Frame): String < Async = UI.runRender(ui).take(1).run.map(_.mkString)
-
     "an empty table says so and still offers its paginator" in {
         for
             b <- bound()
             _ <- b.rows.set(Seq.empty)
             ui = wired(table(b), b)
-            out <- html(ui)
+            out <- renderHtml(ui)
         yield
             assert(out.contains("No records found"), "the empty message")
             assert(out.contains("p-paginator"), "the paginator stays")
@@ -238,7 +236,7 @@ class DataTableRegionsTest extends UicTest:
             _       <- b.sort.set(List(SortKey(List("Name"), SortDirection.Descending)))
             editing <- b.editing.get
             draft   <- b.draft.get
-            out     <- html(ui)
+            out     <- renderHtml(ui)
         yield
             assert(editing == Present(CellPath(five(1), List("Name"))), s"the same cell is open: $editing")
             assert(draft == "C", s"with what was typed: $draft")
@@ -253,7 +251,7 @@ class DataTableRegionsTest extends UicTest:
             _       <- b.query.set("B")
             editing <- b.editing.get
             names   <- bodyNames(ui)
-            out     <- html(ui)
+            out     <- renderHtml(ui)
         yield
             assert(editing == Present(CellPath(five(1), List("Name"))), s"the same cell is open: $editing")
             assert(out.contains("p-select"), s"and its editor is drawn over the one row left: $names")

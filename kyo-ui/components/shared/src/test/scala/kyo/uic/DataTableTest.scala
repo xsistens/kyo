@@ -3047,7 +3047,7 @@ class DataTableTest extends UicTest:
                 uic.column("Price")(_.price.toString),
                 uic.column("Id")(_.id).sortBy(_.id).sortable(false)
             ).sort(sort)
-            html <- UI.runRender(t.render).take(1).run.map(_.mkString)
+            html <- renderHtml(t.render)
             wired = t.wired("t", Map.empty, err, _ => ())
             live    <- elementsWithClass(wired, "p-datatable-header-cell")
             liveNow <- Kyo.foreach(live)(c =>

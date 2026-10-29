@@ -2,7 +2,6 @@ package kyo.uic
 
 import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIExchange
 
@@ -50,18 +49,6 @@ class DataTableReuseTest extends UicTest:
     private def settled(waits: (Signal.SignalRef[?], Int)*)(using Frame, kyo.test.AssertScope): Unit < Async =
         Kyo.foreachDiscard(waits)((ref, n) => parked(ref, n))
 
-    /** The engine needs a sink; nothing here asserts on the painted HTML. */
-    private val quiet: UIExchange =
-        new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async = ()
-
     // Was 80 for these forty rows (two full passes per write) before the body's reactive unit
     // became the row.
     //
@@ -82,7 +69,7 @@ class DataTableReuseTest extends UicTest:
                     })
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
-                _     <- ReactiveUI.subscribe(root, quiet)
+                _     <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 first <- counted.take
                 _     <- sel.set(Set(items(5)))
@@ -117,7 +104,7 @@ class DataTableReuseTest extends UicTest:
                     })
                     .wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _    <- settled(err -> 3, rows -> 3, scroll -> 1)
                 _    <- counted.take
                 // Exactly one row's worth: the window moves from [0, n) to [1, n + 1).
@@ -153,7 +140,7 @@ class DataTableReuseTest extends UicTest:
                     })
                     .wired("t", Map.empty, err, _ => ())
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _    <- settled(err -> 2, rows -> 3)
                 _    <- counted.take
                 // One row's value changes; the other thirty-nine are equal to what they were.
@@ -203,7 +190,7 @@ class DataTableReuseTest extends UicTest:
                     .onSelectionChange(_ => ())
                     .wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
-                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _    <- settled(err -> 2, rows -> 6, ctx -> 3, sort -> 4)
                 _    <- counted.take
                 // A click writes the client field on one row, and the query re-emits the list.
@@ -236,7 +223,7 @@ class DataTableReuseTest extends UicTest:
                     })
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
-                _     <- ReactiveUI.subscribe(root, quiet)
+                _     <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _     <- settled(err -> 2, rows -> 3, sel -> 3)
                 _     <- counted.take
                 _     <- rows.set(items :+ Item("k40", "row-40"))
@@ -269,7 +256,7 @@ class DataTableReuseTest extends UicTest:
                     })
                     .wired("t", Map.empty, err, _ => ())
                 root  <- ReactiveUI.normalize(ui, Seq.empty)
-                _     <- ReactiveUI.subscribe(root, quiet)
+                _     <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _     <- settled(err -> 3, rows -> 4, sel -> 4)
                 first <- counted.take
                 // The row is in BOTH bodies, so both have one row to draw again and no more.

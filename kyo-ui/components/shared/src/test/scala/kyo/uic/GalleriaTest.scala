@@ -77,7 +77,7 @@ class GalleriaTest extends UicTest:
 
     /** The gallery as its mount publishes it, the navigators wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => nexts(t).map(_.exists(declaresClick)))().map(_.getOrElse(throw new AssertionError("never mounted")))
+        mountedWhen(ui)(t => nexts(t).map(_.exists(declaresClick)))
 
     "an unbound gallery keeps the active image itself, so each next press moves on from the last" in {
         // The second press is made on the tree that shows the second image, the one the first press asked for.

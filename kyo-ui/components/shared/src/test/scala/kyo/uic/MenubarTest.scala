@@ -9,9 +9,6 @@ import kyo.UI.*
   */
 class MenubarTest extends UicTest:
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     private def bar(live: Signal[Seq[MenuItem]])(using Frame) =
         uic.Menubar().items(
             _.item("File").items(_.item("New").onSelect(())),

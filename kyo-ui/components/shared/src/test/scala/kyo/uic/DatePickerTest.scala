@@ -1027,9 +1027,8 @@ class DatePickerTest extends UicTest:
     private def dropdowns(t: UI)(using Frame) = elementsWithClass(t, "p-datepicker-dropdown")
 
     /** The picker as its mount publishes it, the dropdown wired. */
-    private def mountedPicker(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => dropdowns(t).map(_.exists(declaresClick)))()
-            .map(_.getOrElse(throw new AssertionError("never mounted")))
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        mountedWhen(ui)(t => dropdowns(t).map(_.exists(declaresClick)))
 
     "a calendar fixed shut draws the picker read-only, and says nothing" in {
         for
@@ -1045,7 +1044,7 @@ class DatePickerTest extends UicTest:
 
     "a calendar fixed open stays: nothing outside dismisses it" in {
         for
-            t     <- mountedPicker(picker.open(true).render)
+            t     <- mounted(picker.open(true).render)
             panel <- elementsWithClass(t, "p-datepicker-panel")
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
         yield
@@ -1057,7 +1056,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mountedPicker(picker.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            t    <- mounted(picker.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
             dd   <- dropdowns(t).map(_.filter(declaresClick))
             _    <- click(dd.head)
             h    <- held.get
@@ -1073,7 +1072,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef((false, false))
-            t    <- mountedPicker(picker.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            t    <- mounted(picker.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
             dd   <- dropdowns(t).map(_.filter(declaresClick))
             _    <- click(dd.head)
             s    <- seen.get
@@ -1088,7 +1087,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(july26)
             seen <- Signal.initRef(Absent: Maybe[YearMonth])
-            t    <- mountedPicker(calendar.month(held.readOnly).onMonthChange(m => seen.set(Present(m))).render)
+            t    <- mounted(calendar.month(held.readOnly).onMonthChange(m => seen.set(Present(m))).render)
             next <- elementWithClass(t, "p-datepicker-next-button")
             _    <- click(next)
             h    <- held.get
@@ -1102,7 +1101,7 @@ class DatePickerTest extends UicTest:
 
     "a month fixed by a constant nobody hears keeps its page: the page buttons stay, inert" in {
         for
-            t    <- mountedPicker(calendar.month(july26).render)
+            t    <- mounted(calendar.month(july26).render)
             next <- elementWithClass(t, "p-datepicker-next-button")
             card <- elementsWithClass(calendar.month(july26).render, "p-uic-key-error")
         yield
@@ -1114,7 +1113,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(july26)
             seen <- Signal.initRef((july26, july26))
-            t    <- mountedPicker(calendar.month(held).onMonthChange(m => held.get.map(h => seen.set((m, h)))).render)
+            t    <- mounted(calendar.month(held).onMonthChange(m => held.get.map(h => seen.set((m, h)))).render)
             next <- elementWithClass(t, "p-datepicker-next-button")
             _    <- click(next)
             s    <- seen.get
@@ -1125,7 +1124,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(DatePickerView.Date)
             seen <- Signal.initRef(Absent: Maybe[DatePickerView])
-            t    <- mountedPicker(calendar.currentView(held.readOnly).onCurrentViewChange(v => seen.set(Present(v))).render)
+            t    <- mounted(calendar.currentView(held.readOnly).onCurrentViewChange(v => seen.set(Present(v))).render)
             b    <- elementWithClass(t, "p-datepicker-select-month")
             _    <- click(b)
             h    <- held.get
@@ -1139,7 +1138,7 @@ class DatePickerTest extends UicTest:
 
     "a view fixed by a constant nobody hears stays: the title buttons are inert" in {
         for
-            t    <- mountedPicker(calendar.currentView(DatePickerView.Date).render)
+            t    <- mounted(calendar.currentView(DatePickerView.Date).render)
             b    <- elementWithClass(t, "p-datepicker-select-month")
             card <- elementsWithClass(calendar.currentView(DatePickerView.Date).render, "p-uic-key-error")
         yield
@@ -1151,7 +1150,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(DatePickerView.Date)
             seen <- Signal.initRef((DatePickerView.Date, DatePickerView.Date))
-            t    <- mountedPicker(calendar.currentView(held).onCurrentViewChange(v => held.get.map(h => seen.set((v, h)))).render)
+            t    <- mounted(calendar.currentView(held).onCurrentViewChange(v => held.get.map(h => seen.set((v, h)))).render)
             b    <- elementWithClass(t, "p-datepicker-select-month")
             _    <- click(b)
             s    <- seen.get
@@ -1164,7 +1163,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(Maybe.empty[LocalDate])
             seen <- Signal.initRef(Absent: Maybe[Maybe[LocalDate]])
-            t    <- mountedPicker(calendar.value(held.readOnly).onChange(v => seen.set(Present(v))).render)
+            t    <- mounted(calendar.value(held.readOnly).onChange(v => seen.set(Present(v))).render)
             cell <- dayCell(t, 9)
             _    <- click(cell)
             h    <- held.get
@@ -1192,7 +1191,7 @@ class DatePickerTest extends UicTest:
         for
             held <- Signal.initRef(Set.empty[LocalDate])
             seen <- Signal.initRef(Absent: Maybe[Set[LocalDate]])
-            t    <- mountedPicker(calendar.values(held.readOnly).onChange(v => seen.set(Present(v))).render)
+            t    <- mounted(calendar.values(held.readOnly).onChange(v => seen.set(Present(v))).render)
             cell <- dayCell(t, 9)
             _    <- click(cell)
             h    <- held.get
@@ -1205,7 +1204,7 @@ class DatePickerTest extends UicTest:
             start <- Signal.initRef(Maybe.empty[LocalDate])
             end   <- Signal.initRef(Maybe.empty[LocalDate])
             seen  <- Signal.initRef(Absent: Maybe[(Maybe[LocalDate], Maybe[LocalDate])])
-            t     <- mountedPicker(calendar.range(start.readOnly, end.readOnly).onChange((a, b) => seen.set(Present((a, b)))).render)
+            t     <- mounted(calendar.range(start.readOnly, end.readOnly).onChange((a, b) => seen.set(Present((a, b)))).render)
             cell  <- dayCell(t, 9)
             _     <- click(cell)
             sv    <- start.get
@@ -1216,7 +1215,7 @@ class DatePickerTest extends UicTest:
     "Escape puts back a set bound one way through its event, as it puts back a ref" in {
         for
             src    <- Signal.initRef(Set.empty[LocalDate])
-            t      <- mountedPicker(calendar.values(src.readOnly).onChange(v => src.set(v)).render)
+            t      <- mounted(calendar.values(src.readOnly).onChange(v => src.set(v)).render)
             cell   <- dayCell(t, 9)
             _      <- click(cell)
             picked <- src.get

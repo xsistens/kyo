@@ -223,7 +223,6 @@ class ContextMenuTest extends UicTest:
     }
 
     "an item the signal adds before an open submenu leaves that submenu open" in {
-        def html(ui: UI): String < Async = UI.runRender(ui).take(1).run.map(_.mkString)
         for
             live  <- Signal.initRef(Seq.empty[uic.MenuItem])
             open  <- Signal.initRef(true)
@@ -237,9 +236,9 @@ class ContextMenuTest extends UicTest:
                 .wired(open, focus, at, subs, "cm")
             links  <- elementsWithClass(ui, "p-contextmenu-item-link")
             _      <- click(links(1))
-            before <- html(ui)
+            before <- renderHtml(ui)
             _      <- live.set(Seq(uic.MenuItem("Share").onSelect(())))
-            after  <- html(ui)
+            after  <- renderHtml(ui)
         yield
             assert(before.contains("Archive") && !before.contains("Plain"), "Move's submenu is the open one")
             assert(after.contains("Archive"), "and stays open once Share arrives before it")
