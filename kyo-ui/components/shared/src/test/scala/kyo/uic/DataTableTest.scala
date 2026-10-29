@@ -60,9 +60,10 @@ class DataTableTest extends UicTest:
       */
     private def typeInto(cell: UI.Ast.Element, text: String)(using Frame): Any < Async =
         elements(cell).map { els =>
+            // The way the runtime dispatches an input event: the bound ref is written first, then onInput is told.
             els.collectFirst {
-                case t: UI.Ast.TextInput if t.onInput.isDefined         => t.onInput.get
-                case t: UI.Ast.TextInput if refBound(t.value).isDefined => refBound(t.value).get.set
+                case t: UI.Ast.TextInput if t.onInput.isDefined || refBound(t.value).isDefined =>
+                    (s: String) => refBound(t.value).fold[UI.Action](())(_.set(s)).andThen(t.onInput.fold[UI.Action](())(f => f(s)))
             }.getOrElse(throw new AssertionError("the open editor writes nothing as it is typed into"))
         }.map(f => handled(f(text)))
 
