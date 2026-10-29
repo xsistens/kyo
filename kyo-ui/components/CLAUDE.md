@@ -592,7 +592,7 @@ ids, pointer handlers, focus wiring).
   because package-private includes subpackages. Unit-test pure geometry directly there.
 - Discoverability tests (`DiscoverabilityTest`, all four platforms) gate each setter by
   concrete return type: inapplicable options must not compile. When you change a
-  setter's signature (e.g. `FileUpload.onSelect` String to `Seq[FilePayload]`),
+  setter's signature (e.g. FileUpload's file event from String to `Seq[FilePayload]`),
   update the discoverability property that pinned the old shape.
 
 ## Overlay and consumers
