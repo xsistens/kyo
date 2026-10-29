@@ -24,7 +24,7 @@ import kyo.UI.*
   * wrapping the row. Two ways round it, in order of preference:
   *   1. Wrap the TABLE and identify the row yourself. That is what [[DataTable]] does
   *      for the tables it owns ([[DataTable.contextMenuRow]] plus
-  *      [[DataTable.onRowContextMenu]]), and what a hand-built table has to do
+  *      [[DataTable.onContextMenuRowChange]]), and what a hand-built table has to do
   *      by hand: a ref written from each row's own `onContextMenu`, which fires
   *      first by bubbling and leaves the menu reading a settled target.
   *   2. [[targetless]]: the panel alone, opened by a handler you put on
