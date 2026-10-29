@@ -785,7 +785,8 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("p-uic-popover-anchor"), "trigger: anchor wrapper (position glue)")
             assert(open.contains("p-uic-popover-trigger"), "trigger: toggle wrapper")
             assert(open.contains("Open me"), "trigger content rendered")
-            assert(open.contains("""data-kyo-ev="click""""), "trigger registers the toggle click")
+            // The span is no control of its own, so the wrapper takes its keys as well as its click.
+            assert(open.contains("""data-kyo-ev="click,keydown""""), "trigger registers the toggle click and its keys")
             assert(open.contains("p-uic-overlay-backdrop"), "open: outside-click backdrop (Overlay primitive)")
             assert(open.contains("p-uic-overlay-panel"), "open: overlay panel geometry class")
             assert(open.contains("p-popover"), "open: Prime's popover skin class (arrow via the sheet's :before/:after)")
