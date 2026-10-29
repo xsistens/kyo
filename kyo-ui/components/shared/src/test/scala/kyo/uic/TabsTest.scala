@@ -374,6 +374,23 @@ class TabsTest extends UicTest:
         end for
     }
 
+    "a strip of url headers bound one way is heard by the navigation, so it carries no card" in {
+        for
+            route <- Signal.initRef("one")
+            cards <- elementsWithClass(navStrip.selected(route.readOnly).render, "p-uic-key-error")
+            mixed <- elementsWithClass(
+                uic.Tabs[String]().tabs(
+                    uic.Tab("One", p("first"), "one").url("/one"),
+                    uic.Tab("Two", p("second"), "two")
+                ).selected(route.readOnly).render,
+                "p-uic-key-error"
+            )
+        yield
+            assert(cards.isEmpty, s"a link click reaches the router: ${cards.map(textOf)}")
+            assert(mixed.size == 1, "a tab without a url still has nobody to hear it")
+        end for
+    }
+
     "an unbound strip keeps the tab the reader picks" in {
         for
             after <- publishedAfterReady(
