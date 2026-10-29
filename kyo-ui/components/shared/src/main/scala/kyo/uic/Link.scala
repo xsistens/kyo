@@ -32,7 +32,7 @@ final case class Link private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     onClickEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
-) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
+) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
     type Self = Link
 
     def href(v: String): Link      = copy(hrefV = Present(v))
@@ -71,7 +71,18 @@ final case class Link private (
     /** Adds default-slot children (typically the link text). */
     def apply(cs: UI*): Link = copy(kids = kids ++ cs)
 
-    private[uic] def render(using Frame): UI =
+    private[uic] def render(using Frame): UI = anchor
+
+    // The link's one element is its control. One with no `href` is no native control, so the host's keys go on it.
+    private[uic] def asPopupTrigger(
+        popup: String,
+        expanded: String | Signal[String],
+        fixed: Boolean,
+        activate: Maybe[UI.Action]
+    )(using Frame): UI =
+        PopupTrigger.element(anchor, popup, expanded, fixed, activate)
+
+    private def anchor(using Frame): Ast.Anchor =
         var el = a.cssClass("p-uic-link")
         if wrapFlag then el = el.cssClass("p-uic-link-wrap")
         accessibleNameV match
@@ -100,7 +111,7 @@ final case class Link private (
             onClickEff.foreach(e => el = el.onClick(e))
         end if
         el(contentChildren.map(toChild)*)
-    end render
+    end anchor
 
     /** Maps the string `target` onto kyo's typed `Target`; frame names (not
       * expressible in the kyo enum) go through the DOM `target` property instead.
