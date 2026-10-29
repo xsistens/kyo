@@ -83,7 +83,7 @@ class DiscoverabilityTest extends UicTest:
         )
         // And it still chains, so the slot did not cost the concrete return type.
         typeCheck(
-            preamble + """def x(s: Signal[String]): uic.Tabs[String] = uic.Tabs[String]().selected(s).onTabSelect(_ => ())"""
+            preamble + """def x(s: Signal[String]): uic.Tabs[String] = uic.Tabs[String]().selected(s).onSelectedChange(_ => ())"""
         )
     }
 
