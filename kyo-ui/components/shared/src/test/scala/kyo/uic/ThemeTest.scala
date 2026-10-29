@@ -333,4 +333,16 @@ class ThemeTest extends UicTest:
         assert(at > select, "the reset comes after Prime's rule")
         assert(body.contains("min-width: 0"), body)
     }
+
+    "a panel is as wide as its content, not as narrow as its anchor, and yields to a width Prime gives its own panels" in {
+        // An absolutely positioned panel with no width of its own shrinks to fit its containing block, which is the
+        // anchor: a popover off a short name broke its text over lines the width of that name. `:where` keeps the rule
+        // at no specificity, so `.p-colorpicker-panel { width: 193px }` and kin still win.
+        val sheet = Theme.primeCss
+        val rule  = ":where(.p-uic-overlay-panel) {"
+        val at    = sheet.indexOf(rule)
+        assert(at >= 0, "the panel has a width of its own")
+        val body = sheet.substring(at, sheet.indexOf("}", at))
+        assert(body.contains("width: max-content") && body.contains("max-width: calc(100vw - 2rem)"), body)
+    }
 end ThemeTest

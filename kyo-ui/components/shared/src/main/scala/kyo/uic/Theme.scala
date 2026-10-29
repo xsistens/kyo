@@ -872,6 +872,12 @@ object Theme:
       |   compared), and block children stack the same way. cursor resets to auto
       |   so an anchor's pointer (Prime's .p-select trigger) does not leak in. */
       |.p-uic-overlay-panel { position: absolute; z-index: 1001; display: block; cursor: auto; }
+      |/* Absolutely positioned with no width of its own, a panel shrinks to fit its
+      |   anchor: a popover off a short name broke its text to that name's width.
+      |   Prime places its panels at the body and never meets this. :where keeps the
+      |   rule at no specificity, so a width Prime gives a panel of its own (the
+      |   colour picker's 193px) wins, and matchWidth's min-width still applies. */
+      |:where(.p-uic-overlay-panel) { width: max-content; max-width: calc(100vw - 2rem); }
       |/* The panel is a tabindex="-1" focus-seed target, so no native ring on it. */
       |.p-uic-overlay-panel:focus { outline: none; }
       |/* Prime's overlay gutter: 2px between anchor and panel (byte-compared
