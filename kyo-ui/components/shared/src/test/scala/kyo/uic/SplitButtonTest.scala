@@ -2,7 +2,8 @@ package kyo.uic
 
 import kyo.*
 
-class SplitButtonTest extends UicTest:
+/** [[SplitButton]]: its rows, and whether its menu is open, held to rule A ([[ReactiveValueContract]]). */
+class SplitButtonTest extends ReactiveValueContract:
 
     "the rows follow a signal of items, so a page whose list changes keeps its split button" in {
         for
@@ -103,31 +104,19 @@ class SplitButtonTest extends UicTest:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => dropdowns(t).map(_.nonEmpty))
 
-    "a constant nobody hears is fixed: the dropdown stays reachable, opens nothing, and says so" in {
-        for
-            t    <- mounted(split.open(false).render)
-            b    <- elementWithClass(t, "p-splitbutton-dropdown")
-            card <- elementsWithClass(split.open(false).render, "p-uic-key-error")
-        yield
-            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the dropdown is inert and says so")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a signal bound one way is followed, and a toggle is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(split.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            b    <- elementWithClass(t, "p-splitbutton-dropdown")
-            _    <- click(b)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(split.open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
+    holds(new Slot[SplitButton, Boolean](
+        name = "open",
+        bare = split,
+        bind = _.open(_),
+        hear = (b, f) => b.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = elementWithClass(_, "p-splitbutton-dropdown"),
+        shows = elementsWithClass(_, "p-menu-item").map(_.nonEmpty),
+        ready = Present(dropdowns(_).map(_.nonEmpty))
+    ))
 
     "a pick in a menu bound one way is reported as a close" in {
         for
