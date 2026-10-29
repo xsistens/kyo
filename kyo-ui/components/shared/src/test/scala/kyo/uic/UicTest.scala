@@ -15,6 +15,26 @@ import kyo.*
   */
 abstract class UicTest extends kyo.test.Test[Any]:
 
+    /** A session's command channel for a page with no layout: every measure is answered as for an element not on the
+      * page (`Absent`), and every other command goes nowhere. A component that measures before it publishes (an overlay
+      * placing itself) then publishes, rather than waiting for a reply no page will send.
+      */
+    private[uic] def headlessCommands(using Frame): UI.Commands < Sync =
+        AtomicRef.init(Maybe.empty[UI.Commands]).map { channel =>
+            UI.Commands.init {
+                case kyo.internal.HtmlOp.RequestMeasureById(id) =>
+                    channel.get.map(_.fold(Kyo.unit)(_.deliverMeasureMissing(id)))
+                case _ => Kyo.unit
+            }.map(cmds => channel.set(Present(cmds)).andThen(cmds))
+        }
+
+    /** Whether `e` carries `cls` now: as a class of its own, or through a class channel whose signal holds true, which is
+      * how a mounted component shows state it patches in place.
+      */
+    private[uic] def carriesClass(e: UI.Ast.Element, cls: String)(using Frame): Boolean < Sync =
+        if e.attrs.cssClasses.contains(cls) then Kyo.lift(true)
+        else e.attrs.reactiveClasses.get(cls).fold(Kyo.lift(false))(_.current)
+
     /** Runs a handler's effect. None of the handlers under test is meant to fail, so a failure fails the test. */
     private[uic] def handled(action: UI.Action)(using Frame): Any < Async =
         Abort.run[Any](action).map {
@@ -29,7 +49,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * mounts to run; what they publish is then read through the signals they feed.
       */
     private[uic] def live(ui: UI)(using Frame): Unit < (Async & Scope) =
-        UI.Commands.init(_ => Kyo.unit).map { cmds =>
+        headlessCommands.map { cmds =>
             kyo.internal.UICommands.commands.let(Present(cmds)) {
                 kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map(root =>
                     kyo.internal.ReactiveUI.subscribe(root, kyo.internal.UIExchange.noop).unit
@@ -145,7 +165,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
             val published      = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
             val patched        = new java.util.concurrent.atomic.AtomicReference[List[(String, String)]](Nil)
             def all: UI < Sync = Sync.defer(published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*))
-            UI.Commands.init(_ => Kyo.unit).map { cmds =>
+            headlessCommands.map { cmds =>
                 kyo.internal.UICommands.commands.let(Present(cmds)) {
                     for
                         root <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)

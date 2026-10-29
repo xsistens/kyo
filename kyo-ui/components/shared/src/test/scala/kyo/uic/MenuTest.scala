@@ -10,7 +10,7 @@ import kyo.UI.*
   * row, which says nothing to anyone who cannot see it; `aria-activedescendant` on the focused
   * list is the whole of what is said, so a menu that renders one without the other is silent.
   */
-class MenuTest extends UicTest:
+class MenuTest extends ReactiveValueContract:
 
     private val rows = List(
         uic.MenuItem("New").onSelect(()),
@@ -305,57 +305,21 @@ class MenuTest extends UicTest:
     private def links(t: UI)(using Frame)  = elementsWithClass(t, "p-menu-item-link").map(_.filter(declaresClick))
     private def panels(t: UI)(using Frame) = elementsWithClass(t, "p-menu-overlay")
 
-    /** The popup as its mount publishes it, the rows wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => panels(t).map(_.nonEmpty))
-
-    "popup() keeps the open state itself and starts open, so a pick closes it" in {
-        for
-            _     <- mounted(menu.popup().render)
-            after <- publishedAfterReady(menu.popup().render, t => links(t).map(_.nonEmpty), until = t => panels(t).map(_.isEmpty))(t =>
-                links(t).map(ls => click(ls.head))
-            )
-            card <- elementsWithClass(menu.popup().render, "p-uic-key-error")
-        yield
-            assert(after.nonEmpty, "the popup never closed")
-            assert(card.isEmpty, s"state the menu keeps itself: ${card.map(textOf)}")
-    }
-
-    "a constant nobody hears is fixed: the popup stays, and nothing outside dismisses it" in {
-        for
-            t    <- mounted(menu.popup(true).render)
-            out  <- elementsWithClass(t, "p-uic-overlay-backdrop")
-            card <- elementsWithClass(menu.popup(true).render, "p-uic-key-error")
-        yield
-            assert(out.isEmpty, "no backdrop takes an outside click")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a signal bound one way is followed, and a pick is reported without being written" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(menu.popup(held.readOnly).onPopupChange(v => seen.set(Present(v))).render)
-            ls   <- links(t)
-            _    <- click(ls.head)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(menu.popup(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h && s == Present(false), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onPopupChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a ref is written before the menu reports it" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef((true, true))
-            t    <- mounted(menu.popup(held).onPopupChange(v => held.get.map(h => seen.set((v, h)))).render)
-            ls   <- links(t)
-            _    <- click(ls.head)
-            s    <- seen.get
-        yield assert(s == (false, false), s"reported, held: $s")
-    }
+    // A popup closes on a pick, an outside click or Escape: the rows are the control a gesture uses, and a fixed popup
+    // is one nothing outside dismisses, since a pick still runs the item's own action.
+    holds(new Slot[Menu, Boolean](
+        name = "popup",
+        bare = Present(menu.popup()),
+        bind = menu.popup(_),
+        hear = (m, f) => m.onPopupChange(f),
+        event = "onPopupChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = links(_).map(_.head),
+        shows = panels(_).map(_.nonEmpty),
+        isFixed = Present(elementsWithClass(_, "p-uic-overlay-backdrop").map(_.isEmpty)),
+        ready = Present(panels(_).map(_.nonEmpty))
+    ))
 
 end MenuTest

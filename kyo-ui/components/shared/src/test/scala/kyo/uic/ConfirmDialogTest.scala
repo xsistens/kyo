@@ -17,8 +17,8 @@ class ConfirmDialogTest extends ReactiveValueContract:
 
     holds(new Slot[ConfirmDialog, Boolean](
         name = "open",
-        bare = confirm,
-        bind = _.open(_),
+        bare = Present(confirm),
+        bind = confirm.open(_),
         hear = (d, f) => d.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

@@ -12,8 +12,8 @@ class DrawerTest extends ReactiveValueContract:
 
     holds(new Slot[Drawer, Boolean](
         name = "open",
-        bare = bare,
-        bind = _.open(_),
+        bare = Present(bare),
+        bind = bare.open(_),
         hear = (d, f) => d.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

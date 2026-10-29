@@ -13,8 +13,8 @@ class ToastTest extends ReactiveValueContract:
 
     holds(new Slot[Toast, Boolean](
         name = "open",
-        bare = toast,
-        bind = _.open(_),
+        bare = Present(toast),
+        bind = toast.open(_),
         hear = (t, f) => t.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

@@ -8,10 +8,12 @@ import kyo.UI.*
   */
 class FieldsetTest extends ReactiveValueContract:
 
+    private def fieldset(using Frame) = uic.Fieldset().legend("Details").toggleable(true)(p("body"))
+
     holds(new Slot[Fieldset, Boolean](
         name = "collapsed",
-        bare = uic.Fieldset().legend("Details").toggleable(true)(p("body")),
-        bind = _.collapsed(_),
+        bare = Present(fieldset),
+        bind = fieldset.collapsed(_),
         hear = (c, f) => c.onCollapsedChange(f),
         event = "onCollapsedChange",
         render = _.render,
