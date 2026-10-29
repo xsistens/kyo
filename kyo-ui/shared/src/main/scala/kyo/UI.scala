@@ -1663,11 +1663,17 @@ object UI:
 
             /** Runs `f` on key-down, receiving the [[kyo.UI.KeyboardEvent]] payload (typed key, modifier chord, target id). */
             def onKeyDown(f: KeyboardEvent => Action): Self = withAttrs(attrs.copy(onKeyDown = Present(f)))
-            def onKeyUp(f: KeyboardEvent => Action): Self   = withAttrs(attrs.copy(onKeyUp = Present(f)))
-            def onFocus(action: => Action): Self            = withAttrs(attrs.copy(onFocus = Present(Sync.defer(action)(using frame))))
-            def onFocus(f: MouseEvent => Action): Self      = withAttrs(attrs.copy(onFocusEvt = Present(f)))
-            def onBlur(action: => Action): Self             = withAttrs(attrs.copy(onBlur = Present(Sync.defer(action)(using frame))))
-            def onBlur(f: MouseEvent => Action): Self       = withAttrs(attrs.copy(onBlurEvt = Present(f)))
+
+            /** Runs `f` on key-down only when the key is pressed on this element itself, not on a descendant: the key a
+              * control inside it receives is that control's. The keyboard twin of [[onClickSelf]], for an element that is a
+              * control of its own around content that may hold others (a `role="button"` wrapper).
+              */
+            def onKeyDownSelf(f: KeyboardEvent => Action): Self = withAttrs(attrs.copy(onKeyDownSelf = Present(f)))
+            def onKeyUp(f: KeyboardEvent => Action): Self       = withAttrs(attrs.copy(onKeyUp = Present(f)))
+            def onFocus(action: => Action): Self                = withAttrs(attrs.copy(onFocus = Present(Sync.defer(action)(using frame))))
+            def onFocus(f: MouseEvent => Action): Self          = withAttrs(attrs.copy(onFocusEvt = Present(f)))
+            def onBlur(action: => Action): Self                 = withAttrs(attrs.copy(onBlur = Present(Sync.defer(action)(using frame))))
+            def onBlur(f: MouseEvent => Action): Self           = withAttrs(attrs.copy(onBlurEvt = Present(f)))
 
             /** Runs `action` when the pointer enters this element. */
             def onHover(action: => Action): Self = withAttrs(attrs.copy(onHover = Present(Sync.defer(action)(using frame))))
@@ -2115,6 +2121,7 @@ object UI:
             onContextMenu: Maybe[Action] = Absent,
             onContextMenuEvt: Maybe[MouseEvent => Action] = Absent,
             onKeyDown: Maybe[KeyboardEvent => Action] = Absent,
+            onKeyDownSelf: Maybe[KeyboardEvent => Action] = Absent,
             onKeyUp: Maybe[KeyboardEvent => Action] = Absent,
             onFocus: Maybe[Action] = Absent,
             onFocusEvt: Maybe[MouseEvent => Action] = Absent,

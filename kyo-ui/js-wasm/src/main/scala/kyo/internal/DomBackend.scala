@@ -2123,7 +2123,8 @@ private[kyo] object DomBackend:
                             KeyboardEventData(
                                 key = ke.key,
                                 modifiers = UI.Modifiers(ke.ctrlKey, ke.altKey, ke.shiftKey, ke.metaKey),
-                                targetId = kdTargetId
+                                targetId = kdTargetId,
+                                self = ke.target.asInstanceOf[dom.Element] eq target
                             )
                         ))
                     else if t == "keyup" && evTypes.contains("keyup") then

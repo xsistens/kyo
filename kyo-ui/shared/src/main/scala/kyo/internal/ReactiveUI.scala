@@ -1333,7 +1333,10 @@ private[kyo] object ReactiveUI:
                         modifiers = e.keyboard.modifiers,
                         targetId = e.keyboard.targetId
                     )
-                    val keyHandler = invokeWith(attrs.onKeyDown, kbEvent)
+                    // The self handler runs first, as onClickSelf does, and only for a key on this element itself.
+                    val onSelf     = isTarget && e.keyboard.self
+                    val selfKey    = if onSelf then invokeWith(attrs.onKeyDownSelf, kbEvent) else Kyo.lift(())
+                    val keyHandler = selfKey.andThen(invokeWith(attrs.onKeyDown, kbEvent))
                     // Keyboard activation, emulated here so a component behaves the same where no browser
                     // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
                     // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
@@ -1392,7 +1395,7 @@ private[kyo] object ReactiveUI:
                                 case _ => Kyo.lift(())
                         else Kyo.lift(())
                     keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
-                        .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
+                        .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty || (onSelf && attrs.onKeyDownSelf.nonEmpty)))
                 }
             case e: UIEvent.KeyUp =>
                 val kbEvent = UI.KeyboardEvent(

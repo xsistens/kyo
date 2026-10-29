@@ -24,11 +24,16 @@ final private[kyo] case class MouseEventData(
     self: Boolean = true
 ) derives CanEqual, Schema
 
-/** Keyboard event payload on the wire. Reconstructed into UI.KeyboardEvent on the server. */
+/** Keyboard event payload on the wire. Reconstructed into UI.KeyboardEvent on the server.
+  *
+  * `self` says whether the DOM target was the element the event's path names, for `onKeyDownSelf`, exactly as
+  * [[MouseEventData.self]] does for `onClickSelf`: a key pressed in a plain element inside it is reported under it.
+  */
 final private[kyo] case class KeyboardEventData(
     key: String,
     modifiers: UI.Modifiers,
-    targetId: Maybe[String]
+    targetId: Maybe[String],
+    self: Boolean = true
 ) derives CanEqual, Schema
 
 // --- Events ---

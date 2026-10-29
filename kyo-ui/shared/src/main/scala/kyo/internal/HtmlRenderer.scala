@@ -1203,7 +1203,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then add("contextmenu")
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then add("focus")
         if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then add("blur")
-        if attrs.onKeyDown.nonEmpty then add("keydown")
+        if attrs.onKeyDown.nonEmpty || attrs.onKeyDownSelf.nonEmpty then add("keydown")
         if attrs.onKeyUp.nonEmpty then add("keyup")
         if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then add("mouseover")
         if attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty then add("mouseout")
@@ -2643,8 +2643,8 @@ private[kyo] object HtmlRenderer:
            |function mkMouse(mods,tid,pos,self){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;if(self===false)m.self=false;return m;}
            |// Viewport coordinates of a pointer event; the events without a pointer (focus, blur, submit) pass no third argument.
            |function mkPos(e){return {x:e.clientX,y:e.clientY};}
-           |// Build a keyboard payload, omitting targetId when absent.
-           |function mkKbd(key,mods,tid){var k={key:key,modifiers:mods};if(tid)k.targetId=tid;return k;}
+           |// Build a keyboard payload, omitting targetId when absent; `self` as for a mouse payload (see KeyboardEventData.self).
+           |function mkKbd(key,mods,tid,self){var k={key:key,modifiers:mods};if(tid)k.targetId=tid;if(self===false)k.self=false;return k;}
            |// onScrollPosition: rAF-coalesce bursts to one post per frame; capture-phase catches non-bubbling scroll.
            |var __scrRaf=0,__scrEl=null,__scrPath=null;
            |function __scrFlush(){__scrRaf=0;if(__scrEl){var stid=__scrEl.id?__scrEl.id:null;var sp={path:__scrPath,scrollTop:__scrEl.scrollTop,scrollLeft:__scrEl.scrollLeft};if(stid)sp.targetId=stid;post({ScrollPosition:sp});}}
@@ -2901,7 +2901,7 @@ private[kyo] object HtmlRenderer:
            |      // Dropdown closed: suppress Enter (avoid form submit) and Space is handled above
            |      if((e.key==='Enter'||isSpaceKey)&&!isOpen&&opts2){e.preventDefault();return;}
            |    }
-           |    if(he(el,"keydown")){var ktid=e.target&&e.target.id?e.target.id:null;post({KeyDown:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},ktid)}});}
+           |    if(he(el,"keydown")){var ktid=e.target&&e.target.id?e.target.id:null;post({KeyDown:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},ktid,e.target===el)}});}
            |  }
            |  else if(t==="keyup"&&he(el,"keyup")){var kutid=e.target&&e.target.id?e.target.id:null;post({KeyUp:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},kutid)}});}
            |  else if(t==="focus"&&he(el,"focus")){var ftid=e.target&&e.target.id?e.target.id:null;post({Focus:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},ftid)}});}
