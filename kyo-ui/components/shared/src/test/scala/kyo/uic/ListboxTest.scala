@@ -147,9 +147,8 @@ class ListboxTest extends UicTest:
     }
 
     /** The listbox as its mount publishes it. */
-    private def mountedList(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => elementsWithClass(t, "p-listbox-filter").map(_.nonEmpty))()
-            .map(_.getOrElse(throw new AssertionError("never mounted")))
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        mountedWhen(ui)(t => elementsWithClass(t, "p-listbox-filter").map(_.nonEmpty))
 
     private def filterInput(t: UI)(using Frame): UI.Ast.Input < Sync =
         elementWithClass(t, "p-listbox-filter").map {
@@ -161,7 +160,7 @@ class ListboxTest extends UicTest:
         for
             held  <- Signal.initRef("an")
             seen  <- Signal.initRef(List.empty[String])
-            t     <- mountedList(fruit.filterQuery(held.readOnly).onFilterQueryChange(q => seen.updateAndGet(_ :+ q).unit).render)
+            t     <- mounted(fruit.filterQuery(held.readOnly).onFilterQueryChange(q => seen.updateAndGet(_ :+ q).unit).render)
             shown <- shownTexts(t)
             in    <- filterInput(t)
             _     <- in.onInput.fold[Any < Async](throw new AssertionError("the filter hears no typing"))(f => handled(f("pine")))
@@ -177,7 +176,7 @@ class ListboxTest extends UicTest:
 
     "a constant query is the starting text" in {
         for
-            t     <- mountedList(fruit.filterQuery("apple").render)
+            t     <- mounted(fruit.filterQuery("apple").render)
             shown <- shownTexts(t)
         yield assert(shown == Chunk("Apple", "Pineapple"), s"the list starts filtered: $shown")
     }

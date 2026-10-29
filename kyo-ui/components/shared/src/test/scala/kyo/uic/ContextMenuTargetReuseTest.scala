@@ -2,7 +2,6 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.foreachKeyed
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIExchange
 
@@ -31,17 +30,6 @@ class ContextMenuTargetReuseTest extends UicTest:
         def reset(): Unit = synchronized { n = 0 }
     end Renders
 
-    private val quiet: UIExchange =
-        new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async = ()
-
     "a signal the menu's items read does not rebuild the target's keyed list" in {
         Scope.run {
             val counted = new Renders
@@ -64,7 +52,7 @@ class ContextMenuTargetReuseTest extends UicTest:
                 at      <- Signal.initRef(Absent: Maybe[UI.Point])
                 subs    <- Submenus.init()
                 root    <- ReactiveUI.normalize(menu(target).wired(openRef, focus, at, subs, "m"), Seq.empty)
-                _       <- ReactiveUI.subscribe(root, quiet)
+                _       <- ReactiveUI.subscribe(root, UIExchange.noop)
                 _       <- Async.sleep(150.millis)
                 first = counted.get
                 _     = counted.reset()

@@ -52,11 +52,7 @@ class TerminalTest extends UicTest:
         for
             held <- Signal.initRef(Seq.empty[uic.TerminalCommand])
             seen <- Signal.initRef(Seq.empty[uic.TerminalCommand])
-            t    <- publishedAfterReady(
-                shell.commands(held.readOnly).onCommandsChange(seen.set).render,
-                t => promptOf(t).map(_.onChange.isDefined)
-            )()
-                .map(_.getOrElse(throw new AssertionError("never mounted")))
+            t    <- mountedWhen(shell.commands(held.readOnly).onCommandsChange(seen.set).render)(t => promptOf(t).map(_.onChange.isDefined))
             in   <- promptOf(t)
             _    <- commit(in, "ls")
             h    <- held.get
@@ -72,10 +68,9 @@ class TerminalTest extends UicTest:
         for
             held <- Signal.initRef(Seq.empty[uic.TerminalCommand])
             seen <- Signal.initRef((Seq.empty[uic.TerminalCommand], Seq.empty[uic.TerminalCommand]))
-            t    <- publishedAfterReady(
-                shell.commands(held).onCommandsChange(h => held.get.map(now => seen.set((h, now)))).render,
-                t => promptOf(t).map(_.onChange.isDefined)
-            )().map(_.getOrElse(throw new AssertionError("never mounted")))
+            t    <- mountedWhen(shell.commands(held).onCommandsChange(h => held.get.map(now => seen.set((h, now)))).render)(t =>
+                promptOf(t).map(_.onChange.isDefined)
+            )
             in <- promptOf(t)
             _  <- commit(in, "ls")
             s  <- seen.get

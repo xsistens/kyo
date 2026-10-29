@@ -24,9 +24,6 @@ import scala.language.implicitConversions
   */
 class TextChannelTest extends UicTest:
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     /** The string signal a lifted node carries, `Absent` for any other reactive node. */
     private def lifted(node: UI.Ast.Reactive[?]): Maybe[Signal[String]] =
         node.source match

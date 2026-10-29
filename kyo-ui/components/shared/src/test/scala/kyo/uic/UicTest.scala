@@ -31,20 +31,9 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def live(ui: UI)(using Frame): Unit < (Async & Scope) =
         UI.Commands.init(_ => Kyo.unit).map { cmds =>
             kyo.internal.UICommands.commands.let(Present(cmds)) {
-                kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map { root =>
-                    kyo.internal.ReactiveUI.subscribe(
-                        root,
-                        new kyo.internal.UIExchange:
-                            def onChange(
-                                region: kyo.internal.ReactiveRegion,
-                                path: Seq[String],
-                                contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
-                                parentContext: kyo.internal.ReactiveRegion.ParentContext,
-                                previous: Maybe[UI],
-                                changed: UI
-                            )(using Frame): Unit < Async = Kyo.unit
-                    ).unit
-                }
+                kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map(root =>
+                    kyo.internal.ReactiveUI.subscribe(root, kyo.internal.UIExchange.noop).unit
+                )
             }
         }
 
@@ -107,6 +96,17 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 answer <- d.since
             yield if holds then Present(answer) else Absent
         }
+
+    /** `ui` as its mount publishes it once `ready` holds, the tree a gesture acts on: the walks above see a mount as its
+      * placeholder, which carries none of the wiring the mount adds. A mount that never publishes such a tree fails the
+      * test.
+      */
+    private[uic] def mountedWhen(ui: UI)(ready: UI => Boolean < Sync)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(ui, ready)().map(_.getOrElse(throw new AssertionError("never mounted")))
+
+    /** The first HTML a transport renders for `ui`, which is what a static page carries. */
+    private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
+        UI.runRender(ui).take(1).run.map(_.mkString)
 
     /** [[publishedAfterReady]] for what reaches the page as an attribute patch rather than a region: whether, after the
       * gestures, the field patched an attribute `holds` accepts, as `(name, value)`. A header's sort state, say, rides
@@ -493,18 +493,6 @@ abstract class UicTest extends kyo.test.Test[Any]:
             .getOrElse(throw new AssertionError(s"the element with id $id carries no path: $tag"))
         if raw.isEmpty then Seq.empty else raw.split('.').toSeq
     end pathOf
-
-    /** An exchange that paints nothing, for a live session whose test reads refs and handlers rather than the page. */
-    private[uic] val quietExchange: kyo.internal.UIExchange =
-        new kyo.internal.UIExchange:
-            def onChange(
-                region: kyo.internal.ReactiveRegion,
-                path: Seq[String],
-                contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
-                parentContext: kyo.internal.ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async = ()
 
     /** Whether `el` declares any click handler, the self-only one included. */
     private[uic] def declaresClick(el: UI.Ast.Element): Boolean =

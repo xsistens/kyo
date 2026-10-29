@@ -8,9 +8,6 @@ import kyo.UI.*
   */
 class MegaMenuTest extends UicTest:
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     private def department(name: String, leaf: String): uic.MegaMenuItem =
         uic.MegaMenuItem(name).column(uic.MenuGroup(s"$name group").items(uic.MenuItem(leaf).onSelect(())))
 
