@@ -1213,4 +1213,19 @@ class DatePickerTest extends UicTest:
         yield assert(sv.isEmpty && s == Present((Present(july9), Absent)), s"held $sv, reported $s")
     }
 
+    "Escape puts back a set bound one way through its event, as it puts back a ref" in {
+        for
+            src    <- Signal.initRef(Set.empty[LocalDate])
+            t      <- mountedPicker(calendar.values(src.readOnly).onChange(v => src.set(v)).render)
+            cell   <- dayCell(t, 9)
+            _      <- click(cell)
+            picked <- src.get
+            grid   <- elementWithClass(t, "p-datepicker-day-view")
+            _      <- press(grid, UI.Keyboard.Escape)
+            undone <- src.get
+        yield
+            assert(picked == Set(july9), s"the owner took the pick: $picked")
+            assert(undone.isEmpty, s"Escape asks the owner to put back what the panel held: $undone")
+    }
+
 end DatePickerTest

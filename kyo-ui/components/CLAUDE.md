@@ -856,7 +856,9 @@ exactly the state the reader is about to leave.
   next Escape after a reopen has nothing old to put back.
 - **The undo writes refs and stays silent on the change callback.** Over the whole open nothing
   changed, so an `onChange` for the undo would report a change that did not happen; a ref-observing
-  page still sees the restored value, because that is where the value lives.
+  page still sees the restored value, because that is where the value lives. A ONE-WAY binding is the
+  exception: nothing was written, its owner took every pick from the event, so the undo asks the owner
+  through that same event for what was held, and only where it differs from what the owner holds now.
 - **An in-flow variant has nothing to cancel** (`DatePicker.inline`): it does not close, and what
   is picked in the page is picked. Guard the cancel on the floating form, not just its close.
 
