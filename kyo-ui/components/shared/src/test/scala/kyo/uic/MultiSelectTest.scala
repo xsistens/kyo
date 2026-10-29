@@ -616,6 +616,42 @@ class MultiSelectTest extends UicTest:
         yield assert(s == (true, true), s"reported, held: $s")
     }
 
+    private def filterInput(t: UI)(using Frame): UI.Ast.Input < Sync =
+        elementWithClass(t, "p-multiselect-filter").map {
+            case i: UI.Ast.Input => i
+            case other           => throw new AssertionError(s"the filter is not an input: $other")
+        }
+
+    private def typeFilter(i: UI.Ast.Input, text: String)(using Frame): Any < Async =
+        i.onInput match
+            case Present(f) => handled(f(text))
+            case Absent     => throw new AssertionError("the filter hears no typing")
+
+    "a query bound one way filters the panel, and typing is reported without being written" in {
+        for
+            held <- Signal.initRef("ap")
+            seen <- Signal.initRef(List.empty[String])
+            t <- mountedField(multi.open(true).filterQuery(held.readOnly).onFilterQueryChange(q => seen.updateAndGet(_ :+ q).unit).render)
+            rows <- elementsWithClass(t, "p-multiselect-option")
+            in   <- filterInput(t)
+            _    <- typeFilter(in, "ban")
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(multi.filterQuery(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(rows.size == 1 && textOf(rows.head).contains("Apple"), s"the panel filters by the signal: ${rows.map(textOf)}")
+            assert(h == "ap" && s.lastOption.contains("ban"), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onFilterQueryChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a constant query is the starting text" in {
+        for
+            t    <- mountedField(multi.open(true).filterQuery("ch").render)
+            rows <- elementsWithClass(t, "p-multiselect-option")
+        yield assert(rows.size == 1 && textOf(rows.head).contains("Cherry"), s"the panel starts filtered: ${rows.map(textOf)}")
+    }
+
 end MultiSelectTest
 
 object MultiSelectTest:

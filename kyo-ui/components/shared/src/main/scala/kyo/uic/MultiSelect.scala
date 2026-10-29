@@ -69,7 +69,8 @@ final case class MultiSelect[A] private (
     selectedItemsLabelV: Maybe[TextValue] = Absent,
     filterableV: Maybe[BoolValue] = Absent,
     filterF: Maybe[(A, String) => Boolean] = Absent,
-    filterQueryRefV: Maybe[SignalRef[String]] = Absent,
+    filterQuerySlot: Maybe[ReactiveValue[String]] = Absent,
+    onFilterQueryF: Maybe[String => UI.Action] = Absent,
     showToggleAllFlag: Boolean = true,
     highlightOnSelectFlag: Boolean = false,
     showClearFlag: Boolean = false,
@@ -205,11 +206,14 @@ final case class MultiSelect[A] private (
       */
     def filter(f: (A, String) => Boolean): MultiSelect[A] = copy(filterF = Present(f))
 
-    /** Renders the same header filter over a query the APP owns: typing writes
-      * `ref`, external writes re-filter the panel. Turns the header filter on unless
-      * [[filterable]] says otherwise.
+    /** Renders the same header filter over a query the APP holds, as [[Select.filterQuery]] does: a `SignalRef` is written
+      * by typing, a plain `Signal` filters the panel and typing is only reported and painted back, a constant is the
+      * starting text. Turns the header filter on unless [[filterable]] says otherwise.
       */
-    def filterQuery(ref: SignalRef[String]): MultiSelect[A] = copy(filterQueryRefV = Present(ref))
+    def filterQuery(v: String | Signal[String]): MultiSelect[A] = copy(filterQuerySlot = Present(ReactiveValue(v)))
+
+    /** Fired with the query the reader types, and with the empty query a new open starts from. */
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] = copy(onFilterQueryF = Present(Callback.of(f)))
 
     /** Whether the header renders the select-all checkbox (default true,
       * Prime's `showToggleAll`).
@@ -285,7 +289,7 @@ final case class MultiSelect[A] private (
       * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
     private def filterOn: BoolValue =
-        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQueryRefV.isDefined))
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.isDefined))
 
     /** How an option matches the query: [[filter]], else a contains on the label projection. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
@@ -302,11 +306,14 @@ final case class MultiSelect[A] private (
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
       */
-    private def freshQuery(q: SignalRef[String])(using Frame): UI.Action =
+    private def freshQuery(q: ReactiveValue[String])(using Frame): UI.Action =
+        val fresh: UI.Action = ReactiveValue.change(Present(q), "", onFilterQueryF)
         filterOn match
-            case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then q.set("") else Kyo.unit)
-            case BoolValue.Const(true) => q.set("")
-            case _                     => Kyo.unit
+            case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then fresh else (): UI.Action)
+            case BoolValue.Const(true) => fresh
+            case _                     => ()
+        end match
+    end freshQuery
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
@@ -314,7 +321,7 @@ final case class MultiSelect[A] private (
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
-        q: SignalRef[String],
+        q: ReactiveValue[String],
         qV: String,
         /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
           * is not subscribed, and the trigger's role follows the switch itself.
@@ -323,22 +330,22 @@ final case class MultiSelect[A] private (
         /** The id the highlight is announced through, as [[Select]] and [[Listbox]] carry it: a
           * caller's own `id` wins, and a minted one stands in where there is none.
           */
-        idBase: Maybe[String]
+        idBase: Maybe[String],
+        /** Draws the panel again from what the query's owner holds, after a one-way report the owner may not take. */
+        repaint: UI.Action = ()
     )
 
     private[uic] def render(using Frame): UI =
-        // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
-        if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
-        else
-            fragment(
-                KeyDiagnostics.card(
-                    "MultiSelect",
-                    "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
-                        "onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                renderLive
-            )
+        // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
+        val unheard =
+            (if ReactiveValue.deaf(openSlot, onOpenF) then
+                 List("the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add onOpenChange")
+             else Nil) ++
+                (if ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
+                     List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
+                 else Nil)
+        if unheard.isEmpty then renderLive
+        else fragment((unheard.map(a => KeyDiagnostics.card("MultiSelect", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
         end if
     end render
 
@@ -362,15 +369,19 @@ final case class MultiSelect[A] private (
                 hi <- Signal.initRef(-1)
                 // Same shape as `open` above: an app-owned query ref takes over the
                 // slot the component would otherwise allocate for itself.
-                q <- filterQueryRefV match
-                    case Present(r) => Kyo.lift(r)
-                    case Absent     => Signal.initRef("")
+                // A constant query is the starting text, kept here like an unbound one.
+                q <- filterQuerySlot match
+                    case Present(slot) if slot.const.isEmpty => Kyo.lift(slot)
+                    case Present(slot)                       => Signal.initRef(slot.const.getOrElse("")).map(r => ReactiveValue[String](r))
+                    case Absent                              => Signal.initRef("").map(r => ReactiveValue[String](r))
+                // Counts the repaints a one-way query asks for, read with the panel (see [[Select]]).
+                paints <- Signal.initRef(0)
                 // Unbound, the field keeps the options the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
                 self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
+            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base), Present(paints))
         }.placeholder(stat)
     end renderLive
 
@@ -384,18 +395,25 @@ final case class MultiSelect[A] private (
         using Frame
     ): UI =
         val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, hi, q, base)
+        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base, Absent)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
-    private def wiredOver(open: ReactiveValue[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String])(
-        using Frame
-    ): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.Live(q))
-        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
+    private def wiredOver(
+        open: ReactiveValue[Boolean],
+        hi: SignalRef[Int],
+        q: ReactiveValue[String],
+        base: Maybe[String],
+        paints: Maybe[SignalRef[Int]]
+    )(using Frame): UI =
+        val validity           = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
+        val panel              = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q).and(painted))
+        val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
+        // The paint count is read and dropped: it is there so a repaint changes what the region reads.
+        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), (qq, _)), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base, repaint)), ph, ld, validity)
         }
     end wiredOver
 
@@ -757,8 +775,13 @@ final case class MultiSelect[A] private (
                          .aria("label", "Filter")
                          .aria("haspopup", "listbox")
                          .aria("expanded", "true")
-                         .value(s.q)
-                         .onInput(_ => s.hi.set(0))
+                         // Typing re-filters and highlights the first match; one way it is only reported, and the
+                         // field is painted back to the owner's query.
+                         .onInput(text =>
+                             s.hi.set(0)
+                                 .andThen(ReactiveValue.change(Present(s.q), text, onFilterQueryF))
+                                 .andThen(if s.q.writable.isEmpty then s.repaint else (): UI.Action)
+                         )
                          // The header is where focus goes and therefore where the option keyboard
                          // lives: the arrows move the highlight, the caret keeps Space and the
                          // printable keys, Escape closes.
@@ -766,6 +789,8 @@ final case class MultiSelect[A] private (
                          .focusRestore(true)
                          .preventScrollKeys
                          .onKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption, toggleAll))
+                     // Two way, the field writes the query itself; one way it shows what the owner holds.
+                     filterEl = s.q.writable.fold(filterEl.value(s.qV))(r => filterEl.value(r))
                      s.idBase.foreach { b =>
                          filterEl = filterEl.aria("controls", listId(b))
                          if hiEff >= 0 then filterEl = filterEl.aria("activedescendant", optionId(b, hiEff))
