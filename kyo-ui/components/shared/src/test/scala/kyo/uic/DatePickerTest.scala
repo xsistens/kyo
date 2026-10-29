@@ -1158,4 +1158,59 @@ class DatePickerTest extends UicTest:
         yield assert(s == (DatePickerView.Month, DatePickerView.Month), s"reported, held: $s")
     }
 
+    private val july9 = day("2026-07-09")
+
+    "a value bound one way is followed, and a pick is reported without being written" in {
+        for
+            held <- Signal.initRef(Maybe.empty[LocalDate])
+            seen <- Signal.initRef(Absent: Maybe[Maybe[LocalDate]])
+            t    <- mountedPicker(calendar.value(held.readOnly).onChange(v => seen.set(Present(v))).render)
+            cell <- dayCell(t, 9)
+            _    <- click(cell)
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(calendar.value(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h.isEmpty && s == Present(Present(july9)), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a value held by a constant nobody hears draws the picker read-only, and says nothing" in {
+        for
+            field <- elementWithClass(picker.value(Present(july9)).render, "p-datepicker-input")
+            card  <- elementsWithClass(picker.value(Present(july9)).render, "p-uic-key-error")
+        yield
+            val readOnly = field match
+                case i: UI.Ast.Input => i.readOnly
+                case _               => Absent
+            assert(readOnly.contains(true), "the value is not the reader's to change, and the field says so")
+            assert(card.isEmpty, s"a fixed value is not a mistake: ${card.map(textOf)}")
+    }
+
+    "a set bound one way is followed, and a toggle is reported without being written" in {
+        for
+            held <- Signal.initRef(Set.empty[LocalDate])
+            seen <- Signal.initRef(Absent: Maybe[Set[LocalDate]])
+            t    <- mountedPicker(calendar.values(held.readOnly).onChange(v => seen.set(Present(v))).render)
+            cell <- dayCell(t, 9)
+            _    <- click(cell)
+            h    <- held.get
+            s    <- seen.get
+        yield assert(h.isEmpty && s == Present(Set(july9)), s"held $h, reported $s")
+    }
+
+    "a range bound one way is followed, and a pick is reported without being written" in {
+        for
+            start <- Signal.initRef(Maybe.empty[LocalDate])
+            end   <- Signal.initRef(Maybe.empty[LocalDate])
+            seen  <- Signal.initRef(Absent: Maybe[(Maybe[LocalDate], Maybe[LocalDate])])
+            t     <- mountedPicker(calendar.range(start.readOnly, end.readOnly).onChange((a, b) => seen.set(Present((a, b)))).render)
+            cell  <- dayCell(t, 9)
+            _     <- click(cell)
+            sv    <- start.get
+            s     <- seen.get
+        yield assert(sv.isEmpty && s == Present((Present(july9), Absent)), s"held $sv, reported $s")
+    }
+
 end DatePickerTest

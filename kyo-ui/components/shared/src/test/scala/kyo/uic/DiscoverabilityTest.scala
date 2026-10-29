@@ -1471,12 +1471,13 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         )
     }
 
-    "the deepened surfaces stay typed: no string views/orientations, refs not bare values" in {
+    "the deepened surfaces stay typed: no string views/orientations, values of the right type" in {
         // The kind decides the grid: there is no view, showTime or timeOnly setter to contradict it.
         typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().view(uic.DatePickerView.Month)""")
         typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().showTime(true)""")
         typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().timeOnly(true)""")
-        typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().values(Set(java.time.LocalDate.of(2026, 1, 1)))""")
+        // A value slot takes a constant, a signal or a ref, and a constant nobody hears is fixed.
+        typeCheck(preamble + """def x = uic.DatePicker[java.time.LocalDate]().values(Set(java.time.LocalDate.of(2026, 1, 1)))""")
         typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.DatePicker[java.time.LocalDate]().value(r)""")
         typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalDate]().today("2026-07-16")""")
         typeCheckFailure(preamble + """def x = uic.DatePicker[java.time.LocalTime]().hourFormat("12")""")
