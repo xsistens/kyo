@@ -692,6 +692,15 @@ class DiscoverabilityTest extends UicTest:
         )
         // ...the app-owned query is `filterQuery` everywhere it exists...
         typeCheck(preamble + """def x(q: SignalRef[String]): uic.Listbox[String] = uic.Listbox[String]().filterQuery(q).item("A", "a")""")
+        typeCheck(
+            preamble + """def x(using Frame): uic.Listbox[String] = uic.Listbox[String]().filterQuery("a").onFilterQueryChange(_ => ())"""
+        )
+        typeCheck(
+            preamble + """def x(using Frame): uic.Select[String] = uic.Select[String]().filterQuery("a").onFilterQueryChange(_ => ())"""
+        )
+        typeCheck(
+            preamble + """def x(using Frame): uic.MultiSelect[String] = uic.MultiSelect[String]().filterQuery("a").onFilterQueryChange(_ => ())"""
+        )
         typeCheck(preamble + """def x(q: SignalRef[String]): uic.Select[String] = uic.Select[String]().options(Seq("A")).filterQuery(q)""")
         typeCheck(
             preamble + """def x(q: SignalRef[String]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterQuery(q)"""
