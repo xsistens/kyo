@@ -200,9 +200,15 @@ final case class Tabs[K] private (
         if ReactiveValue.fixed(selectedBinding, onTabSelectF) && !fixedFlag then copy(fixedFlag = true).render
         else
             val strip = renderLive
-            // A signal nobody hears: every tab the reader picks is painted away again.
+            // A signal nobody hears: every tab the reader picks is painted away again. A url header is heard by the
+            // navigation it starts, so only a header without one makes the strip deaf.
             if !ReactiveValue.deaf(selectedBinding, onTabSelectF) then strip
-            else fragment(KeyDiagnostics.unheard("Tabs", "selected", "onTabSelect"), strip)
+            else
+                val card = entries.render(ts =>
+                    if ts.exists(_.urlV.isEmpty) then KeyDiagnostics.unheard("Tabs", "selected", "onTabSelect") else fragment()
+                )
+                fragment(card, strip)
+            end if
         end if
     end render
 
