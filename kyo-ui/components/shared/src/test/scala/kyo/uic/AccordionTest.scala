@@ -82,4 +82,57 @@ class AccordionTest extends UicTest:
         yield assert(o == List("change a held a", "toggle a"), s"order: $o")
     }
 
+    "a value bound one way follows the signal: a write from outside opens the panel it names" in {
+        for
+            held   <- Signal.initRef(Maybe.empty[String])
+            opened <- attrPatchedAfter(
+                accordion.value(held.readOnly).onValueChange(_ => ()).render,
+                t => headers(t).map(_.exists(declaresClick))
+            )(_ => held.set(Present("b")))((n, v) => n.endsWith("expanded") && v == "true")
+        yield assert(opened, "the panel the signal names never opened")
+    }
+
+    "a set bound one way follows the signal: a write from outside opens the panels it names" in {
+        for
+            held   <- Signal.initRef(Set.empty[String])
+            opened <- attrPatchedAfter(
+                accordion.value(held.readOnly).onValueChange(_ => ()).render,
+                t => headers(t).map(_.exists(declaresClick))
+            )(_ => held.set(Set("a")))((n, v) => n.endsWith("expanded") && v == "true")
+        yield assert(opened, "the panel the signal names never opened")
+    }
+
+    "single mode keeps one panel open: opening the second closes the first" in {
+        for
+            held <- Signal.initRef(Maybe.empty[String])
+            seen <- Signal.initRef(List.empty[Maybe[String]])
+            t    <- mounted(accordion.value(held).onValueChange(v => seen.updateAndGet(_ :+ v).unit).render)
+            hs   <- headers(t)
+            _    <- click(hs(0))
+            _    <- click(hs(1))
+            h    <- held.get
+            s    <- seen.get
+        yield
+            assert(h == Present("b"), s"held $h")
+            assert(s == List(Present("a"), Present("b")), s"reported $s")
+        end for
+    }
+
+    "multiple mode toggles membership in a ref, and reports the whole set each time" in {
+        for
+            held <- Signal.initRef(Set.empty[String])
+            seen <- Signal.initRef(List.empty[Set[String]])
+            t    <- mounted(accordion.value(held).onValueChange(v => seen.updateAndGet(_ :+ v).unit).render)
+            hs   <- headers(t)
+            _    <- click(hs(0))
+            _    <- click(hs(1))
+            _    <- click(hs(0))
+            h    <- held.get
+            s    <- seen.get
+        yield
+            assert(h == Set("b"), s"held $h")
+            assert(s == List(Set("a"), Set("a", "b"), Set("b")), s"reported $s")
+        end for
+    }
+
 end AccordionTest
