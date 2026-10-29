@@ -1842,12 +1842,19 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
 
     // ---- the container/data block ----
 
-    "Accordion: the value ref TYPE picks the mode (Maybe = single, Set = multiple); no bare Boolean" in {
+    "Accordion: the value TYPE picks the mode (Maybe = single, Set = MultipleAccordion); no bare id" in {
         typeCheck(
             preamble + """def x(r: SignalRef[Maybe[String]])(using Frame): uic.Accordion[String] = uic.Accordion[String]().panel("H", "h")(p("c")).value(r).onToggle(_ => ())"""
         )
         typeCheck(
-            preamble + """def x(r: SignalRef[Set[String]])(using Frame): uic.Accordion[String] = uic.Accordion[String]().panels(uic.AccordionPanel("H", p("c"), "h", disabled = true)).value(r)"""
+            preamble + """def x(r: SignalRef[Set[String]])(using Frame): uic.MultipleAccordion[String] = uic.Accordion[String]().panels(uic.AccordionPanel("H", p("c"), "h", disabled = true)).value(r).onValueChange(_ => ())"""
+        )
+        typeCheck(
+            preamble + """def x(using Frame): uic.Accordion[String] = uic.Accordion[String]().value(Present("h")).onValueChange(_ => ())"""
+        )
+        // A set holds several open panels, so the single value's event is not on it.
+        typeCheckFailure(
+            preamble + """def x(r: SignalRef[Set[String]])(using Frame) = uic.Accordion[String]().value(r).onValueChange((m: Maybe[String]) => ())"""
         )
         typeCheckFailure(preamble + """def x = uic.Accordion[String]().value("h")""")
         // All closed is Absent, not an empty id, so a bare id ref no longer picks the single mode.

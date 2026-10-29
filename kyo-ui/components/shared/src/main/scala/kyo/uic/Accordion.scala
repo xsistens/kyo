@@ -72,21 +72,22 @@ end AccordionPanelScope
   * `div.p-accordioncontent-wrapper` > `div.p-accordioncontent-content`), so the
   * extracted `@primeuix` accordion CSS applies verbatim.
   *
-  * The open state binds two-way through `value`, as panel ids of the app's own
-  * type `K`: a `SignalRef[Maybe[K]]` keeps at most ONE panel open (Prime's default;
-  * `Absent` = all closed), a `SignalRef[Set[K]]` is Prime's `multiple` mode. The
-  * ref TYPE selects the mode, no separate flag. Header clicks write the ref before firing `onToggle`.
-  * Without a bound ref the accordion renders fully collapsed and inert
-  * (server-honest: no internal state).
+  * The open state binds through `value`, as panel ids of the app's own type `K`:
+  * a `Maybe[K]` keeps at most ONE panel open (Prime's default; `Absent` = all
+  * closed), a `Set[K]` is Prime's `multiple` mode and gives a [[MultipleAccordion]].
+  * The value TYPE selects the mode, no separate flag. Each takes a constant, a
+  * signal or a ref: a click writes a ref, then reports to `onValueChange`, then
+  * fires `onToggle`; a constant nobody hears renders the panels fixed and the
+  * headers inert. Unbound, the accordion keeps the open panel itself, in single
+  * mode, starting with all closed.
   *
   * Keyboard (WAI-ARIA accordion): the headers are buttons, so each is its own tab stop and
   * Enter or Space toggles the focused one natively. ArrowDown/ArrowUp move focus to the next
   * and previous enabled header, cycling at the ends, and Home/End reach the first and last;
   * focus moves for real, by id, since a header that looked focused without being focused would
-  * take Enter nowhere. The arrows work in the bound-ref render only, the same place the clicks
-  * do: an accordion with no ref is inert by design.
+  * take Enter nowhere. The arrows work in the mounted render, the same place the clicks do.
   *
-  * Collapse ANIMATION: with a bound ref the whole body is built ONCE
+  * Collapse ANIMATION: in the mounted render the whole body is built ONCE
   * inside a `UI.mounted`, so each panel's content container stays STABLE across
   * toggles; a whole-body `ref.render` would replace it and reset the grid-rows
   * transition. Per panel: the `.p-accordioncontent.p-uic-collapse` container is
@@ -111,8 +112,10 @@ final case class Accordion[K] private (
     // The panels `body` draws, resolved from `panelSources` by the render.
     panelList: List[AccordionPanel[K]] = Nil,
     panelSources: List[AccordionPanelLiveEntry[K]] = Nil,
-    singleRef: Maybe[SignalRef[Maybe[K]]] = Absent,
-    multiRef: Maybe[SignalRef[Set[K]]] = Absent,
+    singleSlot: Maybe[ReactiveValue[Maybe[K]]] = Absent,
+    multiSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
+    onValueF: Maybe[Maybe[K] => UI.Action] = Absent,
+    onValuesF: Maybe[Set[K] => UI.Action] = Absent,
     onToggleF: Maybe[K => UI.Action] = Absent
 ) extends Node:
     type Self = Accordion[K]
@@ -134,17 +137,36 @@ final case class Accordion[K] private (
     def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
         copy(panelSources = panelSources :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
 
-    /** Binds the open panel two-way, SINGLE mode (Prime's default): at most one
-      * panel open, the ref holds its id (`Absent` = all closed); clicking the open
-      * header closes it.
+    /** Binds the open panel, SINGLE mode (Prime's default): at most one panel open, the value holding its id (`Absent` =
+      * all closed); clicking the open header closes it. A `SignalRef` binds two way and [[onValueChange]] hears every
+      * click; a plain `Signal` binds one way and the accordion only reports; a constant nobody hears is fixed, the headers
+      * reachable and inert. Unbound, the accordion keeps the open panel itself, starting with all closed. A signal nothing
+      * hears is reported in a card; [[onToggle]] hears it too.
       */
-    def value(ref: SignalRef[Maybe[K]]): Accordion[K] = copy(singleRef = Present(ref))
+    def value(v: Maybe[K] | Signal[Maybe[K]]): Accordion[K] = copy(singleSlot = Present(ReactiveValue(v)), multiSlot = Absent)
 
-    /** Binds the open panels two-way, MULTIPLE mode (Prime's `multiple`): the ref
-      * holds the set of open ids; header clicks toggle membership.
+    /** The same accordion in MULTIPLE mode (Prime's `multiple`): a [[MultipleAccordion]] over the set of open ids, which
+      * header clicks toggle membership of. Bound like the single value. The single value and its event do not carry over.
       */
     @targetName("valueMultiple")
-    def value(ref: SignalRef[Set[K]]): Accordion[K] = copy(multiRef = Present(ref))
+    def value(v: Set[K] | Signal[Set[K]]): MultipleAccordion[K] =
+        MultipleAccordion(copy(singleSlot = Absent, onValueF = Absent, multiSlot = Present(ReactiveValue(v))))
+
+    /** Fired with the panel now open (`Absent` once all are closed) after a header click, after a two-way [[value]] is
+      * written and before [[onToggle]].
+      */
+    def onValueChange(f: Maybe[K] => UI.Action)(using Frame): Accordion[K] = copy(onValueF = Present(Callback.of(f)))
+
+    /** Package-internal: the event [[MultipleAccordion]] sets. */
+    private[uic] def withValuesChange(f: Set[K] => UI.Action)(using Frame): Accordion[K] = copy(onValuesF = Present(Callback.of(f)))
+
+    /** Whether anything hears a click: the mode's own value event, or [[onToggle]]. */
+    private def heard: Maybe[Unit] =
+        val valueEvent = if multiSlot.isDefined then onValuesF.isDefined else onValueF.isDefined
+        if valueEvent || onToggleF.isDefined then Present(()) else Absent
+
+    /** A constant nobody hears is fixed: the open panels stay, and every header is inert. */
+    private def fixed: Boolean = ReactiveValue.fixed(singleSlot, heard) || ReactiveValue.fixed(multiSlot, heard)
 
     /** Fired with the panel id after a header click (after the value write). */
     def onToggle(f: K => UI.Action)(using Frame): Accordion[K] = copy(onToggleF = Present(Callback.of(f)))
@@ -152,22 +174,46 @@ final case class Accordion[K] private (
     /** The panels as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): Reading[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
 
-    /** The open panel ids, read from whichever ref is bound (single mode lifts the one id into a set); none, and fixed,
-      * without a ref.
+    /** The open panel ids, read from whichever value is bound (single mode lifts the one id into a set); none before the
+      * mount allocates the accordion's own.
       */
     private def openIds(using Frame): Reading[Set[K]] =
-        (singleRef, multiRef) match
-            case (Present(r), _)      => Reading.Live(r.map(_.toList.toSet))
-            case (Absent, Present(r)) => Reading.Live(r)
+        given CanEqual[Set[K], Set[K]] = CanEqual.derived
+        (singleSlot, multiSlot) match
+            case (Present(v), _)      => Reading.of(v).map(_.toList.toSet)
+            case (Absent, Present(v)) => Reading.of(v)
             case _                    => Reading.Fixed(Set.empty)
+        end match
+    end openIds
 
     private[uic] def render(using Frame): UI =
         val still = entries.and(openIds).render((ps, open) => copy(panelList = ps).body(open))
-        if interactive then
-            UI.mounted {
-                UI.commands.map(cmds => cmds.freshId.map(base => wired(base, id => cmds.focusId(id))))
-            }.placeholder(still)
-        else still
+        val drawn =
+            if !interactive then still
+            else
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        base <- cmds.freshId
+                        // Unbound, the accordion keeps the open panel itself, in single mode, starting with all closed.
+                        self <-
+                            if singleSlot.isEmpty && multiSlot.isEmpty then
+                                Signal.initRef(Maybe.empty[K]).map(r => copy(singleSlot = Present(ReactiveValue[Maybe[K]](r))))
+                            else Kyo.lift(this)
+                    yield self.wired(base, id => cmds.focusId(id))
+                }.placeholder(still)
+        // A value bound one way that nothing hears: every click is painted away again.
+        if !(ReactiveValue.deaf(singleSlot, heard) || ReactiveValue.deaf(multiSlot, heard)) then drawn
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "Accordion",
+                    "the open panels are bound one way and nothing hears a click, so the reader cannot change them; add " +
+                        "onValueChange, or bind a SignalRef",
+                    Nil
+                ),
+                drawn
+            )
         end if
     end render
 
@@ -255,7 +301,7 @@ final case class Accordion[K] private (
             .aria("expanded", active.map(_.toString))
         if p.disabled then header = header.jsProp("disabled", "true")
         else
-            if interactive then header = header.onClick(toggle(p.id))
+            if interactive then header = header.onClick(toggle(p.id)) else header = header.aria("disabled", "true")
             header = header.preventScrollKeys.onKeyDown(headerMove(base, p.id, focus))
         end if
         val headerEl: UI = header(
@@ -298,6 +344,7 @@ final case class Accordion[K] private (
             .aria("expanded", active.toString)
         if p.disabled then header = header.jsProp("disabled", "true")
         else if interactive then header = header.onClick(toggle(p.id))
+        else header = header.aria("disabled", "true")
         val headerEl: UI = header(
             toChild(headerSlot),
             toChild(GlyphSvg(if active then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon"))
@@ -317,17 +364,16 @@ final case class Accordion[K] private (
         shell((headerEl :: contentEl).map(toChild)*)
     end renderPanel
 
-    private def interactive: Boolean = singleRef.isDefined || multiRef.isDefined
+    private def interactive: Boolean = !fixed
 
-    /** A header click writes the bound value ref (per the mode the ref type
-      * selected), then fires `onToggle`.
+    /** A header click asks for the panel opened or closed (per the mode the bound value selected): written into a two-way
+      * value, reported to the mode's value event, then `onToggle`.
       */
     private def toggle(id: K)(using Frame): UI.Action =
-        val write: UI.Action = (singleRef, multiRef) match
-            case (Present(ref), _)      => ref.getAndUpdate(cur => if cur.contains(id) then Absent else Present(id))
-            case (Absent, Present(ref)) =>
-                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
-            case _ => ()
+        val write: UI.Action = (singleSlot, multiSlot) match
+            case (Present(_), _)      => ReactiveValue.update(singleSlot, cur => if cur.contains(id) then Absent else Present(id), onValueF)
+            case (Absent, Present(_)) => ReactiveValue.update(multiSlot, cur => if cur.contains(id) then cur - id else cur + id, onValuesF)
+            case _                    => ()
         val fire: UI.Action = onToggleF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -341,3 +387,28 @@ end Accordion
 
 object Accordion:
     def apply[K](): Accordion[K] = new Accordion[K]()
+end Accordion
+
+/** An [[Accordion]] in MULTIPLE mode, from [[Accordion.value]] over a set: several panels may be open, and header clicks
+  * toggle membership. It has exactly one value event, over the set, so no single-value callback can be set that never
+  * fires; every other setter is the accordion's own.
+  */
+final case class MultipleAccordion[K] private[uic] (private[uic] val accordion: Accordion[K]) extends Node:
+    type Self = MultipleAccordion[K]
+
+    private def on(a: Accordion[K]): MultipleAccordion[K] = copy(accordion = a)
+
+    /** Fired with the panels now open after a header click, after a two-way value is written and before [[onToggle]]. */
+    def onValueChange(f: Set[K] => UI.Action)(using Frame): MultipleAccordion[K] = on(accordion.withValuesChange(f))
+
+    /** Fired with the panel id after a header click, as [[Accordion.onToggle]]. */
+    def onToggle(f: K => UI.Action)(using Frame): MultipleAccordion[K] = on(accordion.onToggle(f))
+
+    /** Appends panels, as [[Accordion.panels]]. */
+    def panels(ps: AccordionPanelLiveEntry[K]*): MultipleAccordion[K] = on(accordion.panels(ps*))
+
+    /** Appends a single panel, as [[Accordion.panel]]. */
+    def panel(header: String | Signal[String], id: K)(content: UI): MultipleAccordion[K] = on(accordion.panel(header, id)(content))
+
+    private[uic] def render(using Frame): UI = accordion.render
+end MultipleAccordion
