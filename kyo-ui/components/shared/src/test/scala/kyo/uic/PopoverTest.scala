@@ -83,6 +83,21 @@ class PopoverTest extends ReactiveValueContract:
         end for
     }
 
+    "a key handler the page put on its own trigger still runs, and the trigger still opens" in {
+        for
+            held  <- Signal.initRef(false)
+            heard <- Signal.initRef(List.empty[String])
+            ui = uic.Popover().open(held)
+                .trigger(span.cssClass("more").onKeyDownSelf(evt => heard.updateAndGet(_ :+ evt.key.toString).unit)("More"))(
+                    p("inside")
+                ).render
+            more <- elementWithClass(ui, "more")
+            _    <- press(more, UI.Keyboard.Enter)
+            o    <- held.get
+            h    <- heard.get
+        yield assert(o && h == List("Enter"), s"opened $o, the page heard $h")
+    }
+
     "a native control as trigger keeps its own role and keys: the browser turns its keys into the click" in {
         for
             ui = uic.Popover().trigger(button.cssClass("more")("More"))(p("inside")).render
