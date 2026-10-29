@@ -41,11 +41,11 @@ final case class FileUpload private (
     acceptV: List[FileAccept] = Nil,
     multipleFlag: Boolean = false,
     disabledFlag: Boolean = false,
-    filesRef: Maybe[SignalRef[Seq[UI.FilePayload]]] = Absent,
+    filesSlot: Maybe[ReactiveValue[Seq[UI.FilePayload]]] = Absent,
     invalidV: Maybe[BoolValue] = Absent,
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    onSelectF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent,
+    onChangeF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent,
     onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
 ) extends Node, FileFormControl:
     type Self = FileUpload
@@ -79,12 +79,17 @@ final case class FileUpload private (
     private[uic] def elementId: Maybe[String] =
         if inputIdV == FileUpload.defaultInputId then Absent else Present(inputIdV)
 
-    /** Binds the picked files two-way: a pick writes the [[kyo.UI.FilePayload]] metadata
-      * (name, size, MIME type, content) into `ref`, and a ref write of an empty Seq clears
-      * the label back to the empty state. This is what makes a FileUpload validatable: a
-      * rule can read the sizes and extensions it was handed.
+    /** Binds the picked files, as [[kyo.UI.FilePayload]] metadata (name, size, MIME type, content). A `SignalRef` binds
+      * two way: a pick writes it, then [[onChange]] hears the files, and a write of an empty Seq clears the label back to
+      * the empty state. This is what makes a FileUpload validatable: a rule can read the sizes and extensions it was
+      * handed. A plain `Signal` binds one way: the label follows it and a pick is only reported. A constant nobody hears
+      * is fixed: the control stays reachable and opens no dialog. Unbound, the control keeps the pick itself. A signal
+      * nothing hears is reported in a card.
       */
-    def value(ref: SignalRef[Seq[UI.FilePayload]]): FileUpload = copy(filesRef = Present(ref))
+    def value(v: Seq[UI.FilePayload] | Signal[Seq[UI.FilePayload]]): FileUpload = copy(filesSlot = Present(ReactiveValue(v)))
+
+    /** A constant nobody hears is fixed: the control stays reachable and opens no dialog. */
+    private def fixed: Boolean = ReactiveValue.fixed(filesSlot, onChangeF)
 
     /** Label of the choose button (default "Choose", Prime's locale default). A `Signal[String]` re-renders
       * it in place on emission.
@@ -110,10 +115,10 @@ final case class FileUpload private (
     private[uic] def withInvalidMessage(v: Maybe[String]): FileUpload                   = copy(invalidMsgV = v)
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = copy(invalidMsgDynV = v)
 
-    /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size,
-      * mimeType, content) once a file is chosen, after the [[value]] write-back.
+    /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size, mimeType, content) once a file is
+      * chosen, after a two-way [[value]] is written.
       */
-    def onSelect(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onSelectF = Present(Callback.of(f)))
+    def onChange(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the currently picked files: the validation layer's Blur
       * trigger. Reports an empty Seq when nothing is bound or picked.
@@ -121,16 +126,27 @@ final case class FileUpload private (
     def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        // The chosen-name label is reactive: a pick writes the picked name(s) into the
-        // BOUND value ref when there is one, else into a signal owned by this mount; the
-        // static projection shows the empty-state label until the transport attaches.
-        filesRef match
+        // The chosen-name label is reactive: a bound value is its source, else a signal owned by this mount holds the
+        // picked name(s); the static projection shows the empty-state label until the transport attaches.
+        filesSlot match
+            case Present(_) if ReactiveValue.deaf(filesSlot, onChangeF) =>
+                fragment(
+                    KeyDiagnostics.card(
+                        "FileUpload",
+                        "the files are bound one way and nothing hears a pick, so the reader's choice reaches nobody; add " +
+                            "onChange, or bind a SignalRef",
+                        Nil
+                    ),
+                    body(Absent)
+                )
             case Present(_) => body(Absent)
             case Absent     =>
                 UI.mounted {
                     for shown <- Signal.initRef[Maybe[String]](Absent)
                     yield body(Present(shown))
                 }.placeholder(body(Absent))
+        end match
+    end render
 
     /** The chosen-file label: the joined name(s) once picked (adding Prime's
       * `.p-fileupload-filename`), else the empty-state text.
@@ -154,6 +170,7 @@ final case class FileUpload private (
             .cssClass("p-button")
             .cssClass("p-component")
         if disabledFlag then choose = choose.cssClass("p-disabled")
+        if fixed then choose = choose.aria("disabled", "true")
         val chooseLabelEl: UI = chooseLabelV match
             case TextValue.Const(t) => span.cssClass("p-button-label")(t)
             case TextValue.Dyn(s)   => span.cssClass("p-button-label")(s)
@@ -164,8 +181,8 @@ final case class FileUpload private (
 
         // A bound value ref is the label's source of truth; without one the mount's own
         // signal is (and the static projection has neither).
-        val fileLabelEl: UI = (filesRef, shown) match
-            case (Present(ref), _)      => ref.render(fs => labelSpan(FileUpload.joinedNames(fs)))
+        val fileLabelEl: UI = (filesSlot, shown) match
+            case (Present(files), _)    => Reading.of(files).render(fs => labelSpan(FileUpload.joinedNames(fs)))
             case (Absent, Present(ref)) => ref.render(labelSpan)
             case _                      => labelSpan(Absent)
 
@@ -174,31 +191,30 @@ final case class FileUpload private (
         if acceptV.nonEmpty then file = file.accept(acceptV*)
         if multipleFlag then file = file.multiple(true)
         if disabledFlag then file = file.disabled(true)
-        // The pick writes through even without an onSelect handler: a bound value ref is
-        // the form's value and must track the picker on its own.
-        if onSelectF.isDefined || filesRef.isDefined then
+        // The pick goes through even without an onChange handler: a bound value ref is the form's value and must track the
+        // picker on its own, and an unbound control shows the pick in its own label. A fixed control takes no pick.
+        if !fixed && (onChangeF.isDefined || filesSlot.isDefined || shown.isDefined) then
             file = file.onFileSelect { payloads =>
-                val setLabel: UI.Action = (filesRef, shown) match
-                    case (Present(ref), _)      => ref.set(payloads)
-                    case (Absent, Present(ref)) =>
-                        ref.set(FileUpload.joinedNames(payloads))
-                    case _ => ()
-                val fire: UI.Action = onSelectF match
-                    case Present(handler) => handler(payloads)
-                    case Absent           => ()
-                setLabel.andThen(fire)
+                val own: UI.Action = shown.fold[UI.Action](())(_.set(FileUpload.joinedNames(payloads)))
+                // Bound: written into a two-way value, then reported; unbound: the own label, then reported.
+                val asked: UI.Action =
+                    if filesSlot.isDefined then ReactiveValue.change(filesSlot, payloads, onChangeF)
+                    else onChangeF.fold[UI.Action](())(f => f(payloads))
+                own.andThen(asked)
             }
         end if
         onBlurF.foreach { f =>
-            file = file.onBlur(filesRef match
-                case Present(ref) => ref.use(f)
-                case Absent       => f(Seq.empty))
+            file = file.onBlur(filesSlot match
+                case Present(files) => files.current.map(f)
+                case Absent         => f(Seq.empty))
         }
 
         var root = div
             .cssClass("p-fileupload")
             .cssClass("p-fileupload-basic")
             .cssClass("p-component")
+        // The browser opens the dialog on its own; an inert root declines that default for the click and the keys.
+        if fixed then root = root.preventActivation
         validity.follow(
             validity.mark(root)(
                 div.cssClass("p-fileupload-basic-content")(

@@ -1909,14 +1909,16 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.Galleria().items("a.jpg")""")
     }
 
-    "FileUpload is basic-mode only: FilePayload-metadata onSelect + multiple; Prime's URL/auto machinery is absent" in {
+    "FileUpload is basic-mode only: FilePayload-metadata onChange + multiple; Prime's URL/auto machinery is absent" in {
         typeCheck(
-            preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().inputId("up").chooseLabel("Pick").fileLabel("None yet").accept(FileAccept.Extension(".csv"), FileAccept.Pdf).multiple(true).disabled(false).onSelect(files => ())"""
+            preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().inputId("up").chooseLabel("Pick").fileLabel("None yet").accept(FileAccept.Extension(".csv"), FileAccept.Pdf).multiple(true).disabled(false).onChange(files => ())"""
         )
         typeCheckFailure(preamble + """def x = uic.FileUpload().mode("advanced")""")
         typeCheckFailure(preamble + """def x = uic.FileUpload().url("/api/upload")""")
         typeCheckFailure(preamble + """def x = uic.FileUpload().auto(true)""")
-        typeCheckFailure(preamble + """def x = uic.FileUpload().onSelect((name: String, content: String) => ())""")
+        typeCheckFailure(preamble + """def x = uic.FileUpload().onChange((name: String, content: String) => ())""")
+        // One event carries the pick; the old name is gone.
+        typeCheckFailure(preamble + """def x(using Frame) = uic.FileUpload().onSelect(_ => ())""")
     }
 
     "TreeTable reuses the DataTable Column carrier over recursive typed nodes; pagination is deferred" in {
@@ -2008,12 +2010,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(preamble + """def x(r: SignalRef[Double])(using Frame): uic.Knob = uic.Knob().value(r).min(0).max(100)""")
         // Carousel swipe is behavioral on the bound page; no responsiveOptions prop (deferred)
         typeCheckFailure(preamble + """def x = uic.Carousel[Int]().responsiveOptions(Nil)""")
-        // FileUpload: onSelect now delivers FilePayload metadata; multiple present
-        typeCheck(preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().multiple(true).onSelect(fs => ())""")
+        // FileUpload: onChange delivers FilePayload metadata; multiple present
+        typeCheck(preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().multiple(true).onChange(fs => ())""")
         typeCheck(
-            preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().onSelect((fs: Seq[UI.FilePayload]) => fs.headOption.map(_.name))"""
+            preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().onChange((fs: Seq[UI.FilePayload]) => fs.headOption.map(_.name))"""
         )
         // the old content-String onSelect signature is gone
-        typeCheckFailure(preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().onSelect((s: String) => ())""")
+        typeCheckFailure(preamble + """def x(using Frame): uic.FileUpload = uic.FileUpload().onChange((s: String) => ())""")
     }
 end DiscoverabilityTest
