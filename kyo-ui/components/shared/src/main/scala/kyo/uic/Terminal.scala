@@ -17,12 +17,14 @@ final case class TerminalCommand(command: String, response: String) derives CanE
   * `input.p-terminal-prompt-value`), so the extracted `@primeuix` terminal CSS
   * applies verbatim.
   *
-  * The HISTORY is the model: `commands` binds a
-  * `SignalRef[Seq[TerminalCommand]]`. Committing a line (Enter, the input's
+  * The HISTORY is the model: `commands` binds a `Seq[TerminalCommand]` (a
+  * constant, a signal or a ref), and without a binding a terminal with a handler
+  * keeps it itself. Committing a line (Enter, the input's
   * native change commit) runs `commandHandler(cmd): String < Async` (a real
   * effect, evaluated wherever the UI runs; in server-push transports that is the
-  * SERVER, which makes Terminal the natural server-push showcase) and appends
-  * the `TerminalCommand` to the ref; the re-render clears the input. Prime's
+  * SERVER, which makes Terminal the natural server-push showcase) and asks for
+  * the `TerminalCommand` appended, reported to `onCommandsChange`; the re-render
+  * clears the input. Prime's
   * TerminalService event bus is replaced by the effect-typed handler: same
   * contract, no global bus.
   *
@@ -39,7 +41,8 @@ final case class TerminalCommand(command: String, response: String) derives CanE
 final case class Terminal private (
     welcomeMessageV: Maybe[TextValue] = Absent,
     promptV: String = "$",
-    commandsRef: Maybe[SignalRef[Seq[TerminalCommand]]] = Absent,
+    commandsSlot: Maybe[ReactiveValue[Seq[TerminalCommand]]] = Absent,
+    onCommandsF: Maybe[Seq[TerminalCommand] => UI.Action] = Absent,
     handlerF: Maybe[String => String < Async] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node, HasAccessibleName:
@@ -53,10 +56,24 @@ final case class Terminal private (
     /** The prompt label (default `$`), shown before the input and each history row. */
     def prompt(v: String): Terminal = copy(promptV = v)
 
-    /** Binds the command history two-way: committed commands append here, external
-      * writes re-render the list (write `Seq.empty` to clear the screen).
+    /** Binds the command history. A `SignalRef` binds two way: a committed command is appended to it, then
+      * [[onCommandsChange]] hears the history, and external writes re-render the list (write `Seq.empty` to clear the
+      * screen). A plain `Signal` binds one way: the list follows it and a commit is only reported. A constant nobody
+      * hears is fixed: the history shows, and the prompt takes no command. Unbound, a terminal with a [[commandHandler]]
+      * keeps the history itself. A signal nothing hears is reported in a card.
       */
-    def commands(ref: SignalRef[Seq[TerminalCommand]]): Terminal = copy(commandsRef = Present(ref))
+    def commands(v: Seq[TerminalCommand] | Signal[Seq[TerminalCommand]]): Terminal = copy(commandsSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the history the reader's commit asks for (the history with the new command appended), after a
+      * two-way [[commands]] is written.
+      */
+    def onCommandsChange(f: Seq[TerminalCommand] => UI.Action)(using Frame): Terminal = copy(onCommandsF = Present(Callback.of(f)))
+
+    /** A constant nobody hears is fixed: the history shows, and the prompt takes no command. */
+    private def fixed: Boolean = ReactiveValue.fixed(commandsSlot, onCommandsF)
+
+    // A history compares by its commands, which are plain data.
+    private given CanEqual[Seq[TerminalCommand], Seq[TerminalCommand]] = CanEqual.derived
 
     /** The command interpreter, an effect: the committed line in, the response
       * text out. Runs where the UI runs (server-side under server-push).
@@ -66,8 +83,11 @@ final case class Terminal private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Terminal = copy(accessibleNameV = v)
 
     private[uic] def render(using Frame): UI =
-        (commandsRef, handlerF) match
-            case (Present(r), Present(_)) =>
+        // Without a handler nothing can be committed, so the terminal only shows its history.
+        val static: UI = commandsSlot.fold(body(Seq.empty, Absent, Absent))(c => Reading.of(c).render(h => body(h, Absent, Absent)))
+        handlerF match
+            case Absent     => static
+            case Present(_) =>
                 // Auto-scroll needs a stable id for the newest row: mint one from the
                 // session `Commands` (`freshId`) once in a mounted effect, then the
                 // reactive body reads it. The scroll ITSELF goes through the Local
@@ -77,23 +97,61 @@ final case class Terminal private (
                 // the lost-op-is-fine transport (see the A+ two-door contract on UI.Commands).
                 // The post-insertion mount below already guarantees the row exists when the
                 // command lands, which is exactly the discipline the fire-and-forget door needs.
-                UI.mounted {
+                val terminal = UI.mounted {
                     for
                         cmds   <- UI.commands
                         lastId <- cmds.freshId
-                    yield wired(r, lastId, id => UI.scrollIntoView(id))
-                }.placeholder(r.render(h => body(h, Absent, Absent)))
-            case (Present(r), _) => r.render(h => body(h, Absent, Absent))
-            case _               => body(Seq.empty, Absent, Absent)
+                        // Unbound, the terminal keeps the history itself.
+                        history <- commandsSlot match
+                            case Present(c) => Kyo.lift(c)
+                            case Absent     => Signal.initRef(Seq.empty[TerminalCommand]).map(r => ReactiveValue[Seq[TerminalCommand]](r))
+                        // Counts the repaints a one-way history asks for, so a commit the owner declines clears the prompt.
+                        paints <- Signal.initRef(0)
+                    yield copy(commandsSlot = Present(history)).wiredOver(history, lastId, id => UI.scrollIntoView(id), Present(paints))
+                }.placeholder(static)
+                // A history bound one way that nothing hears: every commit reaches nobody.
+                if !ReactiveValue.deaf(commandsSlot, onCommandsF) then terminal
+                else
+                    fragment(
+                        KeyDiagnostics.card(
+                            "Terminal",
+                            "the history is bound one way and nothing hears a command, so the reader's commit reaches nobody; " +
+                                "add onCommandsChange, or bind a SignalRef",
+                            Nil
+                        ),
+                        terminal
+                    )
+                end if
+        end match
+    end render
 
     /** The scrolling subscription the mount publishes: the golden seam.
       * `scrollTo` scrolls the row with the given id into view (production: the Local
       * fire-and-forget `UI.scrollIntoView`; tests inject a fake to observe the seam).
       */
     private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], lastId: String, scrollTo: String => UI.Action)(using Frame): UI =
-        ref.render(h => body(h, Present(lastId), Present(scrollTo)))
+        val history = ReactiveValue[Seq[TerminalCommand]](ref)
+        copy(commandsSlot = Present(history)).wiredOver(history, lastId, scrollTo, Absent)
 
-    private def body(history: Seq[TerminalCommand], lastId: Maybe[String], scrollTo: Maybe[String => UI.Action])(using Frame): UI =
+    /** [[wired]] over the history however it is bound. */
+    private def wiredOver(
+        history: ReactiveValue[Seq[TerminalCommand]],
+        lastId: String,
+        scrollTo: String => UI.Action,
+        paints: Maybe[SignalRef[Int]]
+    )(using Frame): UI =
+        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
+        val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
+        // The paint count is read and dropped: it is there so a repaint draws the prompt empty again.
+        Reading.of(history).and(painted).render((h, _) => body(h, Present(lastId), Present(scrollTo), repaint))
+    end wiredOver
+
+    private def body(
+        history: Seq[TerminalCommand],
+        lastId: Maybe[String],
+        scrollTo: Maybe[String => UI.Action],
+        repaint: UI.Action = ()
+    )(using Frame): UI =
         val welcome: List[UI] =
             welcomeMessageV.toList.map {
                 case TextValue.Const(t) => div.cssClass("p-terminal-welcome-message")(t): UI
@@ -131,7 +189,8 @@ final case class Terminal private (
             .cssClass("p-terminal-prompt-value")
             .value("")
             .aria("label", "Terminal command")
-        if handlerF.isDefined && commandsRef.isDefined then field = field.onChange(execute)
+        if fixed then field = field.readOnly(true)
+        else if handlerF.isDefined && commandsSlot.isDefined then field = field.onChange(line => execute(line, repaint))
         val promptRow: UI = div.cssClass("p-terminal-prompt")(
             span.cssClass("p-terminal-prompt-label")(promptV),
             toChild(field)
@@ -151,17 +210,19 @@ final case class Terminal private (
       * its own on-mount effect (see [[body]]), reliable because it fires AFTER
       * the row is inserted, unlike scrolling from here (which races the render).
       */
-    private def execute(line: String)(using Frame): UI.Action =
+    private def execute(line: String, repaint: UI.Action)(using Frame): UI.Action =
         val cmd = line.trim
         if cmd.isEmpty then ()
         else
-            (handlerF, commandsRef) match
-                case (Present(h), Present(ref)) =>
+            handlerF match
+                case Present(h) =>
                     for
                         response <- h(cmd)
-                        _        <- ref.getAndUpdate(_ :+ TerminalCommand(cmd, response))
+                        _        <- ReactiveValue.update(commandsSlot, _ :+ TerminalCommand(cmd, response), onCommandsF)
+                        // One way, the owner may not take the command: the prompt is drawn empty again either way.
+                        _ <- if commandsSlot.exists(_.writable.isEmpty) then repaint else (): UI.Action
                     yield ()
-                case _ => ()
+                case Absent => ()
         end if
     end execute
 end Terminal

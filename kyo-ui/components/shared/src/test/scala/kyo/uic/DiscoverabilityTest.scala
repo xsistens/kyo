@@ -1954,7 +1954,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(h: SignalRef[Seq[uic.TerminalCommand]], eff: String => String < Async)(using Frame): uic.Terminal = uic.Terminal().commands(h).commandHandler(eff)"""
         )
-        typeCheckFailure(preamble + """def x = uic.Terminal().commands(Seq(uic.TerminalCommand("a", "b")))""")
+        typeCheck(
+            preamble + """def x(using Frame): uic.Terminal = uic.Terminal().commands(Seq(uic.TerminalCommand("a", "b"))).onCommandsChange(_ => ())"""
+        )
         typeCheckFailure(preamble + """def x = uic.TerminalService""")
     }
 
