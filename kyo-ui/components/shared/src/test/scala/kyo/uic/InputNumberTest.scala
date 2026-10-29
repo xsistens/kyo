@@ -76,8 +76,7 @@ class InputNumberTest extends UicTest:
 
     "a constant text is the starting text, kept by the field" in {
         for
-            t <- publishedAfterReady(uic.InputNumber().text("4.").render, t => number(t).map(_.value.isDefined))()
-                .map(_.getOrElse(throw new AssertionError("never mounted")))
+            t    <- mountedWhen(uic.InputNumber().text("4.").render)(t => number(t).map(_.value.isDefined))
             n    <- number(t)
             text <- textOf(n)
             card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-key-error")
@@ -91,10 +90,9 @@ class InputNumberTest extends UicTest:
         for
             held <- Signal.initRef("12")
             seen <- Signal.initRef(List.empty[String])
-            t    <- publishedAfterReady(
-                uic.InputNumber().text(held.readOnly).onTextChange(v => seen.updateAndGet(_ :+ v).unit).render,
-                t => number(t).map(_.onInput.isDefined)
-            )().map(_.getOrElse(throw new AssertionError("never mounted")))
+            t    <- mountedWhen(uic.InputNumber().text(held.readOnly).onTextChange(v => seen.updateAndGet(_ :+ v).unit).render)(t =>
+                number(t).map(_.onInput.isDefined)
+            )
             n     <- number(t)
             shown <- textOf(n)
             _     <- typeText(n, "123")

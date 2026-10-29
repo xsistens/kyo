@@ -266,9 +266,8 @@ class TreeSelectTest extends UicTest:
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-treeselect-overlay").map(_.nonEmpty)
 
     /** The field as its mount publishes it, the trigger wired. */
-    private def mountedField(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => elementsWithClass(t, "p-treeselect-dropdown").map(_.nonEmpty))()
-            .map(_.getOrElse(throw new AssertionError("never mounted")))
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        mountedWhen(ui)(t => elementsWithClass(t, "p-treeselect-dropdown").map(_.nonEmpty))
 
     private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-treeselect-dropdown")
 
@@ -283,7 +282,7 @@ class TreeSelectTest extends UicTest:
 
     "a panel fixed open stays: nothing outside dismisses it" in {
         for
-            t     <- mountedField(treeSelect.open(true).render)
+            t     <- mounted(treeSelect.open(true).render)
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
         yield
@@ -295,7 +294,7 @@ class TreeSelectTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mountedField(treeSelect.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            t    <- mounted(treeSelect.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
             _    <- clickBubbling(t)(onDropdown)
             h    <- held.get
             s    <- seen.get
@@ -310,7 +309,7 @@ class TreeSelectTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef((false, false))
-            t    <- mountedField(treeSelect.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            t    <- mounted(treeSelect.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
             _    <- clickBubbling(t)(onDropdown)
             s    <- seen.get
         yield assert(s == (true, true), s"reported, held: $s")

@@ -20,9 +20,6 @@ import scala.language.implicitConversions
   */
 class DataViewItemsTest extends UicTest:
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     private def view(using Frame): uic.DataView[String] =
         uic.DataView[String]().itemTemplate(s => span.cssClass("row")(s))
 

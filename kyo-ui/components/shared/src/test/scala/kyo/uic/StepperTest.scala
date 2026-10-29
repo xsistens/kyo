@@ -16,9 +16,6 @@ class StepperTest extends UicTest:
     private val base = "s"
 
     // Driven by position alone, so no type argument: see [[Stepper.apply]].
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     private def steps(using Frame) =
         uic.Stepper()
             .step("One")(p("first"))

@@ -123,18 +123,7 @@ class CarouselTest extends UicTest:
                 ui  = UI.boundary.onNotice { case UI.Failed(raw) => Abort.run[Closed](notices.put(String.valueOf(raw))).unit }(car.render)
                 _ <- kyo.internal.UICommands.commands.let(Present(cmds)) {
                     kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map { root =>
-                        kyo.internal.ReactiveUI.subscribe(
-                            root,
-                            new kyo.internal.UIExchange:
-                                def onChange(
-                                    region: kyo.internal.ReactiveRegion,
-                                    path: Seq[String],
-                                    contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
-                                    parentContext: kyo.internal.ReactiveRegion.ParentContext,
-                                    previous: Maybe[UI],
-                                    changed: UI
-                                )(using Frame): Unit < Async = Kyo.unit
-                        ).unit
+                        kyo.internal.ReactiveUI.subscribe(root, kyo.internal.UIExchange.noop).unit
                     }
                 }
                 first  <- notices.take
@@ -163,9 +152,9 @@ class CarouselTest extends UicTest:
             page  <- Signal.initRef(1)
             start <- Signal.initRef(0.0)
             ui = uic.Carousel[String]().items(live)(s => span(s)).numVisible(2).numScroll(2).wired(page, "car", start)
-            before <- UI.runRender(ui).take(1).run.map(_.mkString)
+            before <- renderHtml(ui)
             _      <- live.set(Seq("A", "B"))
-            after  <- UI.runRender(ui).take(1).run.map(_.mkString)
+            after  <- renderHtml(ui)
         yield
             assert(active(before) == 2, s"page 2 shows C and D: ${active(before)}")
             assert(active(after) == 2, s"A and B, the page the strip falls back to, are active: ${active(after)}")

@@ -274,9 +274,6 @@ class ThemeTest extends UicTest:
 
     // ── themed: the attributes the blocks select by ─────────────────────────────────
 
-    private def renderHtml(ui: UI)(using Frame): String < Async =
-        UI.runRender(ui).take(1).run.map(_.mkString)
-
     "themed stamps the preset and the scheme the sheet keys on" in {
         val el = UI.div("x").themed(Theme.Preset.Material, Theme.Scheme.Dark)
         assert(el.attrs.dataAttrs == Map("theme" -> "material", "scheme" -> "dark"))

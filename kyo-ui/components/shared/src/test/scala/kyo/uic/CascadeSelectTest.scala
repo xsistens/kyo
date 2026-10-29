@@ -280,8 +280,7 @@ class CascadeSelectTest extends UicTest:
     "an option the signal adds before an open group leaves that group open" in {
         val europe =
             uic.CascadeItem.group("Europe")(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin")), uic.CascadeItem.leaf("Bern"))
-        val sydney                       = uic.CascadeItem.leaf("Sydney")
-        def html(ui: UI): String < Async = UI.runRender(ui).take(1).run.map(_.mkString)
+        val sydney = uic.CascadeItem.leaf("Sydney")
         for
             live  <- Signal.initRef(Seq(europe, sydney))
             open  <- Signal.initRef(true)
@@ -291,9 +290,9 @@ class CascadeSelectTest extends UicTest:
             ui = uic.CascadeSelect[String]().options(live)(identity).id("cs").selection(value).wired(open, refs, focus, Present("cs"))
             group  <- leaf(ui, "Europe")
             _      <- click(group)
-            before <- html(ui)
+            before <- renderHtml(ui)
             _      <- live.set(Seq(uic.CascadeItem.leaf("Asia"), europe, sydney))
-            after  <- html(ui)
+            after  <- renderHtml(ui)
         yield
             assert(before.contains("Germany"), "Europe's group is open")
             assert(after.contains("Germany"), "and stays open once Asia arrives before it")
@@ -349,9 +348,8 @@ class CascadeSelectTest extends UicTest:
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-cascadeselect-overlay").map(_.nonEmpty)
 
     /** The field as its mount publishes it, the trigger wired. */
-    private def mountedField(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => elementsWithClass(t, "p-cascadeselect-dropdown").map(_.nonEmpty))()
-            .map(_.getOrElse(throw new AssertionError("never mounted")))
+    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        mountedWhen(ui)(t => elementsWithClass(t, "p-cascadeselect-dropdown").map(_.nonEmpty))
 
     private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-cascadeselect-dropdown")
 
@@ -366,7 +364,7 @@ class CascadeSelectTest extends UicTest:
 
     "a panel fixed open stays: nothing outside dismisses it" in {
         for
-            t     <- mountedField(cascade.open(true).render)
+            t     <- mounted(cascade.open(true).render)
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
         yield
@@ -378,7 +376,7 @@ class CascadeSelectTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mountedField(cascade.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
+            t    <- mounted(cascade.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
             _    <- clickBubbling(t)(onDropdown)
             h    <- held.get
             s    <- seen.get
@@ -393,7 +391,7 @@ class CascadeSelectTest extends UicTest:
         for
             held <- Signal.initRef(false)
             seen <- Signal.initRef((false, false))
-            t    <- mountedField(cascade.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
+            t    <- mounted(cascade.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
             _    <- clickBubbling(t)(onDropdown)
             s    <- seen.get
         yield assert(s == (true, true), s"reported, held: $s")

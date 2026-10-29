@@ -15,7 +15,7 @@ class AccordionTest extends UicTest:
 
     /** The accordion as its mount publishes it, the headers wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        publishedAfterReady(ui, t => headers(t).map(_.exists(declaresClick)))().map(_.getOrElse(throw new AssertionError("never mounted")))
+        mountedWhen(ui)(t => headers(t).map(_.exists(declaresClick)))
 
     "an unbound accordion keeps the open panel itself, so a second click closes what the first opened" in {
         for
