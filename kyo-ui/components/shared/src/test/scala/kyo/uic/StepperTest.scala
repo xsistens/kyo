@@ -151,4 +151,77 @@ class StepperTest extends UicTest:
         end for
     }
 
+    private def headersOf(t: UI)(using Frame) = elementsWithClass(t, "p-step-header")
+
+    private def valued(using Frame) =
+        uic.Stepper()
+            .step("One", value = Present("one"))(p("first"))
+            .step("Two", value = Present("two"))(p("second"))
+
+    "an unbound stepper keeps the active step itself, so a header click moves it" in {
+        for
+            seen  <- Signal.initRef(List.empty[Int])
+            after <- publishedAfterReady(
+                steps.onActiveChange(i => seen.updateAndGet(_ :+ i).unit).render,
+                t => headersOf(t).map(_.exists(declaresClick)),
+                // The active header takes no click, so the second header without one is the step having moved.
+                until = t => headersOf(t).map(hs => hs.size == 3 && !declaresClick(hs(1)))
+            )(t => headersOf(t).map(hs => click(hs(1))))
+            s <- seen.get
+        yield
+            assert(after.nonEmpty, "the stepper never moved")
+            assert(s == List(1), s"reported $s")
+    }
+
+    "a constant nobody hears is fixed: the headers stay reachable, move nothing, and say so" in {
+        for
+            hs   <- headersOf(steps.active(1).render)
+            card <- elementsWithClass(steps.active(1).render, "p-uic-key-error")
+        yield
+            assert(hs.forall(h => !declaresClick(h)), "nothing moves the stepper")
+            assert(hs.zipWithIndex.forall((h, i) => i == 1 || h.attrs.ariaAttrs.get("disabled").contains("true")), "and the headers say so")
+            assert(card.isEmpty, s"a fixed step is not a mistake: ${card.map(textOf)}")
+    }
+
+    "an index bound one way is followed, and a click is reported without being written" in {
+        for
+            held <- Signal.initRef(0)
+            seen <- Signal.initRef(Absent: Maybe[Int])
+            hs   <- headersOf(steps.active(held.readOnly).onActiveChange(i => seen.set(Present(i))).wired(base, _ => ()))
+            _    <- click(hs(2))
+            h    <- held.get
+            s    <- seen.get
+            deaf <- elementsWithClass(steps.active(held.readOnly).render, "p-uic-key-error")
+        yield
+            assert(h == 0 && s == Present(2), s"held $h, reported $s")
+            assert(deaf.size == 1 && textOf(deaf.head).contains("onActiveChange"), s"nobody hears: ${deaf.map(textOf)}")
+        end for
+    }
+
+    "a step value bound one way is reported before the index, and not written" in {
+        for
+            held  <- Signal.initRef("one")
+            order <- Signal.initRef(List.empty[String])
+            hs    <- headersOf(
+                valued.value(held.readOnly)
+                    .onValueChange(v => order.updateAndGet(_ :+ s"value $v").unit)
+                    .onActiveChange(i => order.updateAndGet(_ :+ s"index $i").unit)
+                    .wired(base, _ => ())
+            )
+            _ <- click(hs(1))
+            h <- held.get
+            o <- order.get
+        yield assert(h == "one" && o == List("value two", "index 1"), s"held $h, order $o")
+    }
+
+    "an index ref is written before the stepper reports it" in {
+        for
+            held <- Signal.initRef(0)
+            seen <- Signal.initRef((0, 0))
+            hs   <- headersOf(steps.active(held).onActiveChange(i => held.get.map(h => seen.set((i, h)))).wired(base, _ => ()))
+            _    <- click(hs(2))
+            s    <- seen.get
+        yield assert(s == (2, 2), s"reported, held: $s")
+    }
+
 end StepperTest
