@@ -1927,7 +1927,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.TreeTable[String]().rows(Seq("a"))""")
     }
 
-    "OrganizationChart expands via the same expanded-keys Set ref as Tree/TreeTable" in {
+    "OrganizationChart expands via the same expanded-keys Set as Tree/TreeTable" in {
         typeCheck(
             preamble + """def x(e: SignalRef[Set[String]], s: SignalRef[Set[String]])(using Frame): uic.OrganizationChart[String] = uic.OrganizationChart[String]().node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto")), template = Present(span("x")), className = Present("hl"))).expanded(e).selectionMode(uic.SelectionMode.Single).selection(s).onNodeToggle(_ => ()).onNodeClick(_ => ())"""
         )
@@ -1938,7 +1938,10 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         // The collapse-keyed spelling and its separate opt-in flag are gone.
         typeCheckFailure(preamble + """def x(c: SignalRef[Set[String]]) = uic.OrganizationChart[String]().collapsed(c)""")
         typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().collapsible(true)""")
-        typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().expanded(Set("a"))""")
+        typeCheck(
+            preamble + """def x(using Frame): uic.OrganizationChart[String] = uic.OrganizationChart[String]().expanded(Set("a")).onExpandedChange(_ => ()).selection(Set("a")).onSelectionChange(_ => ())"""
+        )
+        typeCheck(preamble + """def x: uic.OrganizationChart[String] = uic.OrganizationChart[String]().expanded()""")
         typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().nodes(uic.OrgChartNode("a", "a"))""")
     }
 
