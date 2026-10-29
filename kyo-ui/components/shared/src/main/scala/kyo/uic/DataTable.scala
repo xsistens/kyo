@@ -101,7 +101,8 @@ end NavState
 // rendered every row again for an append.
 final private[uic] case class SelectState[A](
     metaKey: Boolean = false,
-    anchor: Maybe[SignalRef[Maybe[A]]] = Absent
+    anchor: Maybe[ReactiveValue[Maybe[A]]] = Absent,
+    onAnchor: Maybe[Maybe[A] => UI.Action] = Absent
 )
 
 /** What the filter row needs to know: the filters that are bound, which of them this
@@ -659,7 +660,8 @@ final case class DataTable[A] private (
     onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
     orderedPaths: List[List[String]] = Nil,
     idV: Maybe[String] = Absent,
-    anchorRef: Maybe[SignalRef[Maybe[A]]] = Absent
+    anchorSlot: Maybe[ReactiveValue[Maybe[A]]] = Absent,
+    onAnchorF: Maybe[Maybe[A] => UI.Action] = Absent
 ) extends Node, HasElementId, HasEmptyContent, HasLoadingContent, HasAccessibleNameRef:
     type Self = DataTable[A]
 
@@ -1032,10 +1034,16 @@ final case class DataTable[A] private (
       * Bind it and two things follow: the anchor survives whatever the page does, and ranging
       * no longer forces a mount, so a table that owns nothing else stays a pure render.
       *
-      * A shift-click READS this and leaves it where it is; a click without shift moves it.
-      * Written, never read for display, so nothing re-renders when it changes.
+      * A shift-click READS this and leaves it where it is; a click without shift moves it: a
+      * `SignalRef` is written, then [[onSelectionAnchorChange]] hears the row; a plain `Signal`
+      * is ranged from and the move only reported; a constant nobody hears is fixed, so every
+      * range starts at that row. A signal nothing hears is reported in a card. Never read for
+      * display, so nothing re-renders when it changes.
       */
-    def selectionAnchor(ref: SignalRef[Maybe[A]]): DataTable[A] = copy(anchorRef = Present(ref))
+    def selectionAnchor(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = copy(anchorSlot = Present(ReactiveValue(v)))
+
+    /** Fired with the new anchor when a click without shift moves it, after a two-way [[selectionAnchor]] is written. */
+    def onSelectionAnchorChange(f: Maybe[A] => UI.Action)(using Frame): DataTable[A] = copy(onAnchorF = Present(Callback.of(f)))
 
     /** The selection's write-back ref, where the caller bound one that can be written.
       *
@@ -1884,7 +1892,7 @@ final case class DataTable[A] private (
       * A caller who bound one has already supplied it, and supplied it somewhere that outlives
       * this table's mount (see [[selectionAnchor]]).
       */
-    private def mintsAnchor: Boolean = rangeOn && anchorRef.isEmpty
+    private def mintsAnchor: Boolean = rangeOn && anchorSlot.isEmpty
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -2530,7 +2538,7 @@ final case class DataTable[A] private (
                     MoveState[A](),
                     // A caller-bound anchor works without a mount, which is the point of binding it:
                     // a table that ranges and owns nothing else stays a pure render.
-                    SelectState(metaKey = metaKeyFlag, anchor = anchorRef)
+                    SelectState(metaKey = metaKeyFlag, anchor = anchorSlot, onAnchor = onAnchorF)
                 )
             }
         if !ownsState then static
@@ -2597,8 +2605,8 @@ final case class DataTable[A] private (
                         // A caller who bound the anchor owns it; the minted one is the fallback for
                         // a table that did not, and it lives exactly as long as this mount does.
                         if !rangeOn then Absent
-                        else if anchorRef.isDefined then anchorRef
-                        else Present(anchorRow),
+                        else if anchorSlot.isDefined then anchorSlot
+                        else Present(ReactiveValue[Maybe[A]](anchorRow)),
                         typed.toMap
                     )
                     if !frozenRowsOn then tree
@@ -2666,7 +2674,7 @@ final case class DataTable[A] private (
         headTop: Maybe[Signal[Maybe[Int]]] = Absent,
         rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
         filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
-        anchor: Maybe[SignalRef[Maybe[A]]] = Absent,
+        anchor: Maybe[ReactiveValue[Maybe[A]]] = Absent,
         filterTyped: Map[List[String], SignalRef[Maybe[String]]] = Map.empty
     )(using Frame): UI =
         // The caller's state is read in the table's one region (see `renderWith`): starting an edit writes the error
@@ -2695,7 +2703,7 @@ final case class DataTable[A] private (
                         live = true,
                         measure = measure
                     ),
-                    SelectState(metaKey = metaKeyFlag, anchor = anchor)
+                    SelectState(metaKey = metaKeyFlag, anchor = anchor, onAnchor = onAnchorF)
                 )
         }
     end wired
@@ -4253,7 +4261,16 @@ final case class DataTable[A] private (
                         "onSelectedCellsChange, or bind a SignalRef",
                     Nil
                 ))
-        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly ++ contextDeaf ++ cellsDeaf
+        val anchorDeaf =
+            if !rangeOn || !ReactiveValue.deaf(anchorSlot, onAnchorF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the selection anchor is bound one way and nothing hears a click move it, so every range starts " +
+                        "where the signal says; add onSelectionAnchorChange, or bind a SignalRef",
+                    Nil
+                ))
+        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly ++ contextDeaf ++ cellsDeaf ++ anchorDeaf
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -6161,15 +6178,16 @@ final case class DataTable[A] private (
         val meta = e.modifiers.meta || e.modifiers.ctrl
 
         def pick: UI.Action =
+            // A two-way anchor is written and the move reported; a one-way or constant one is only reported, so a constant
+            // nobody hears stays where it was.
             def anchorTo(v: Set[String]): UI.Action =
-                select.anchor match
-                    case Present(a) => a.set(Present(row)).andThen(applySelection(v))
-                    case Absent     => applySelection(v)
+                if select.anchor.isEmpty then applySelection(v)
+                else ReactiveValue.change(select.anchor, Present(row), select.onAnchor).andThen(applySelection(v))
             (select.anchor, e.modifiers.shift, selectionModeV) match
                 // A range needs somewhere to start. Without an anchor the shift-click is just the
                 // first pick, which is what sets one.
                 case (Present(a), true, SelectionMode.Multiple) if metaKeyFlag =>
-                    a.get.map {
+                    a.current.map {
                         // The list is read HERE, not where this handler was built: a row kept across
                         // an emission keeps its handler, and a range spanned over the list as it was
                         // would silently degrade to a single pick the moment anything was appended.

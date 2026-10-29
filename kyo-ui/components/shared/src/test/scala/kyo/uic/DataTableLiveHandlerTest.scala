@@ -49,7 +49,7 @@ class DataTableLiveHandlerTest extends UicTest:
                 .selectionMode(uic.SelectionMode.Multiple)
                 .selectionAnchor(anchor)
                 // `wired` is the mount's seam, so the anchor arrives the way the mount hands it over.
-                .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+                .wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor)))
             painted <- rowsOf(ui)
             // The anchor is set on the first row, from the render the reader is looking at.
             _ <- plainClick(painted.head)

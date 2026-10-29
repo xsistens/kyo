@@ -201,7 +201,7 @@ class DataTableReuseTest extends UicTest:
                     .selectionAnchor(anchor)
                     .selection(rows.map(selectedOf))
                     .onSelectionChange(_ => ())
-                    .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+                    .wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, quiet)
                 _    <- settled(err -> 2, rows -> 6, ctx -> 3, sort -> 4)
