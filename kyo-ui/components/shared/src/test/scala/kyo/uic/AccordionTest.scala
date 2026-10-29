@@ -7,7 +7,7 @@ import kyo.UI.*
   * multiple mode: unbound they are the accordion's own, a constant nobody hears is fixed, a signal is followed and a click
   * only reported, and a ref is written before the report.
   */
-class AccordionTest extends UicTest:
+class AccordionTest extends ReactiveValueContract:
 
     private def accordion(using Frame) = uic.Accordion[String]().panel("Alpha", "a")(p("one")).panel("Beta", "b")(p("two"))
 
@@ -17,7 +17,28 @@ class AccordionTest extends UicTest:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => headers(t).map(_.exists(declaresClick)))
 
-    "an unbound accordion keeps the open panel itself, so a second click closes what the first opened" in {
+    /** The panel shown open, by its id: the accordion here has two, Alpha and Beta. */
+    private def open(t: UI)(using Frame): Maybe[String] < Sync =
+        elementsWithClass(t, "p-accordionpanel-active").map(ps =>
+            Maybe.fromOption(ps.headOption.map(p => if textOf(p).contains("Alpha") then "a" else "b"))
+        )
+
+    holds(new Slot[Accordion[String], Maybe[String]](
+        name = "value",
+        bare = accordion,
+        bind = _.value(_),
+        hear = (a, f) => a.onValueChange(f),
+        event = "onValueChange",
+        render = _.render,
+        start = Absent,
+        next = Present("a"),
+        control = headers(_).map(_.head),
+        shows = open(_),
+        ready = Present(headers(_).map(_.exists(declaresClick))),
+        nextPatch = Present(_ == ("aria-expanded", "true"))
+    ))
+
+    "unbound, a second click on the open header closes it again" in {
         for
             seen <- Signal.initRef(List.empty[Maybe[String]])
             t    <- mounted(accordion.onValueChange(v => seen.updateAndGet(_ :+ v).unit).render)
@@ -28,30 +49,11 @@ class AccordionTest extends UicTest:
         yield assert(s == List(Present("a"), Absent), s"reported $s")
     }
 
-    "a constant nobody hears is fixed: the headers stay reachable, open nothing, and say so" in {
-        for
-            hs   <- headers(accordion.value(Present("a")).render)
-            card <- elementsWithClass(accordion.value(Present("a")).render, "p-uic-key-error")
+    "a fixed accordion holds every header to it, not only the one a gesture reaches" in {
+        for hs <- headers(accordion.value(Present("a")).render)
         yield
             assert(hs.size == 2 && hs.forall(h => !declaresClick(h)), "nothing opens or closes")
             assert(hs.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "and the headers say so")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a value bound one way is followed, and a click is reported without being written" in {
-        for
-            held <- Signal.initRef(Maybe.empty[String])
-            seen <- Signal.initRef(Absent: Maybe[Maybe[String]])
-            t    <- mounted(accordion.value(held.readOnly).onValueChange(v => seen.set(Present(v))).render)
-            hs   <- headers(t)
-            _    <- click(hs.head)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(accordion.value(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s == Present(Present("a")), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onValueChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
     }
 
     "a set bound one way is followed, and a click is reported without being written" in {

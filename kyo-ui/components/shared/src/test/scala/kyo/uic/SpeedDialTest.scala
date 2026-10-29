@@ -9,8 +9,11 @@ import kyo.UI.*
   * of hiding them (`scale(0)`, `opacity: 0`) left every one of them a real tab stop on a dial the
   * reader had not opened. The OPEN fan is one tab stop with [[ListNav]] inside it, along the axis
   * the direction lays the actions out on, coming round because a menu comes round.
+  *
+  * Whether the fan is open is held to rule A ([[ReactiveValueContract]]); the toggle is wired by the mount in every
+  * binding.
   */
-class SpeedDialTest extends UicTest:
+class SpeedDialTest extends ReactiveValueContract:
 
     private val actions = List(
         uic.MenuItem("Add").icon(Icons.pencil).onSelect(()),
@@ -220,45 +223,18 @@ class SpeedDialTest extends UicTest:
 
     private def toggles(t: UI)(using Frame) = elementsWithClass(t, "p-speeddial-button")
 
-    /** The dial as its mount publishes it, the toggle wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => toggles(t).map(_.nonEmpty))
-
-    "a constant nobody hears is fixed: the toggle stays reachable, opens nothing, and says so" in {
-        for
-            t    <- mounted(dial().open(false).render)
-            b    <- elementWithClass(t, "p-speeddial-button")
-            card <- elementsWithClass(dial().open(false).render, "p-uic-key-error")
-        yield
-            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the toggle is inert and says so")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a signal bound one way is followed, and a toggle is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(dial().open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            b    <- elementWithClass(t, "p-speeddial-button")
-            _    <- click(b)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(dial().open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a ref is written before the dial reports it" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            t    <- mounted(dial().open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
-            b    <- elementWithClass(t, "p-speeddial-button")
-            _    <- click(b)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
-    }
+    holds(new Slot[SpeedDial, Boolean](
+        name = "open",
+        bare = dial(),
+        bind = _.open(_),
+        hear = (d, f) => d.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = elementWithClass(_, "p-speeddial-button"),
+        shows = elementsWithClass(_, "p-speeddial-open").map(_.nonEmpty),
+        ready = Present(toggles(_).map(_.nonEmpty))
+    ))
 
 end SpeedDialTest
