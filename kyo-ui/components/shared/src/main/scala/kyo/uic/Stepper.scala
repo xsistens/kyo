@@ -60,13 +60,14 @@ end StepScope
   * completed-separator accent via `.p-step:has(~ .p-step-active)`).
   *
   * Steps are value-keyed like Prime's: a step may carry a value of the app's own
-  * type `K` and `value(ref)` binds the ACTIVE VALUE two-way; the index-based
-  * `active(ref)` binding needs no values at all (`value` wins when both are
-  * bound). Header clicks
-  * write the bound ref back before firing `onActivate`. `linear(true)` renders
+  * type `K` and `value` binds the ACTIVE VALUE; the index-based `active` binding
+  * needs no values at all (`value` wins when both are bound). Each takes a
+  * constant, a signal or a ref, and unbound the stepper keeps the active step
+  * itself. A header click writes a ref, reports to `onValueChange` in value mode,
+  * then to `onActiveChange`. `linear(true)` renders
   * the stepper readonly-forward: headers AHEAD of the active step are disabled
   * (backward navigation stays allowed); per-step `disabled = true` blocks a
-  * header unconditionally. The app advances by writing the ref (a "Next"
+  * header unconditionally. The app advances by writing its binding (a "Next"
   * button).
   *
   * The steps may change while the stepper is shown: [[steps]] takes a signal of them beside fixed ones (see
@@ -78,11 +79,12 @@ final case class Stepper[K] private (
     // The steps the headers draw, resolved from `stepSources` by the render.
     stepList: List[Step[K]] = Nil,
     stepSources: List[StepLiveEntry[K]] = Nil,
-    activeRef: Maybe[SignalRef[Int]] = Absent,
-    valueRef: Maybe[SignalRef[K]] = Absent,
+    activeSlot: Maybe[ReactiveValue[Int]] = Absent,
+    valueSlot: Maybe[ReactiveValue[K]] = Absent,
+    onValueF: Maybe[K => UI.Action] = Absent,
     linearFlag: Boolean = false,
     verticalFlag: Boolean = false,
-    onActivateF: Maybe[Int => UI.Action] = Absent
+    onActiveF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Stepper[K]
 
@@ -112,15 +114,33 @@ final case class Stepper[K] private (
     /** The steps as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): Reading[List[Step[K]]] = StepScope.reading(stepSources)
 
-    /** Binds the 0-based active step index two-way to `ref` (clamped at render). */
-    def active(ref: SignalRef[Int]): Stepper[K] = copy(activeRef = Present(ref))
-
-    /** Binds the ACTIVE STEP VALUE two-way to `ref` (Prime's `v-model:value`):
-      * header clicks write the step's value back (a step with no value writes
-      * nothing); a ref value no step carries falls back to the first step. Wins
-      * over [[active]] when both are bound.
+    /** Binds the 0-based active step index (clamped at render). A `SignalRef` binds two way: a header click writes it,
+      * then [[onActiveChange]] hears the index. A plain `Signal` binds one way: the stepper shows it and only reports. A
+      * constant nobody hears is fixed: the stepper stays on that step, its headers reachable and inert. Unbound, the
+      * stepper keeps the active step itself, starting on the first. A signal nothing hears is reported in a card.
       */
-    def value(ref: SignalRef[K]): Stepper[K] = copy(valueRef = Present(ref))
+    def active(v: Int | Signal[Int]): Stepper[K] = copy(activeSlot = Present(ReactiveValue(v)))
+
+    /** Binds the ACTIVE STEP VALUE (Prime's `v-model:value`), bound like [[active]]: a header click asks for the step's
+      * value (a step with no value asks for nothing) and [[onValueChange]] hears it; a value no step carries falls back to
+      * the first step. Wins over [[active]] when both are bound.
+      */
+    // `Signal[K]` first: with `K` still open (`uic.Stepper().value(ref)`), the solver then reads `K` off the ref's own type
+    // instead of taking the whole ref as `K`.
+    def value(v: Signal[K] | K): Stepper[K] = copy(valueSlot = Present(ReactiveValue[K](v)))
+
+    /** Fired with the step value the reader asks for, after a two-way [[value]] is written and before [[onActiveChange]]. */
+    def onValueChange(f: K => UI.Action)(using Frame): Stepper[K] = copy(onValueF = Present(Callback.of(f)))
+
+    /** What hears a header click: [[onActiveChange]], and in value mode [[onValueChange]] too. */
+    private def heard: Maybe[Unit] =
+        if onActiveF.isDefined || (valueSlot.isDefined && onValueF.isDefined) then Present(()) else Absent
+
+    /** A constant nobody hears is fixed: the stepper stays on that step, and every header is inert. */
+    private def fixed: Boolean =
+        valueSlot match
+            case Present(_) => ReactiveValue.fixed(valueSlot, heard)
+            case Absent     => ReactiveValue.fixed(activeSlot, heard)
 
     /** Linear mode: header clicks cannot jump AHEAD of the active step
       * (backward stays allowed); advance by writing the bound ref.
@@ -132,13 +152,40 @@ final case class Stepper[K] private (
       */
     def vertical(v: Boolean): Stepper[K] = copy(verticalFlag = v)
 
-    /** Fired with the target step index after a header click's ref write-back. */
-    def onActivate(f: Int => UI.Action)(using Frame): Stepper[K] = copy(onActivateF = Present(Callback.of(f)))
+    /** Fired with the index of the step the reader asks for after a header click, after a two-way [[active]] or
+      * [[value]] is written. One event carries the step, whichever binding moved.
+      */
+    def onActiveChange(f: Int => UI.Action)(using Frame): Stepper[K] = copy(onActiveF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        UI.mounted {
-            UI.commands.map(cmds => cmds.freshId.map(base => wired(base, id => cmds.focusId(id))))
+        val stepper = UI.mounted {
+            for
+                cmds <- UI.commands
+                base <- cmds.freshId
+                // Unbound, the stepper keeps the active step itself, starting on the first.
+                self <-
+                    if activeSlot.isEmpty && valueSlot.isEmpty then
+                        Signal.initRef(0).map(r => copy(activeSlot = Present(ReactiveValue[Int](r))))
+                    else Kyo.lift(this)
+            yield self.wired(base, id => cmds.focusId(id))
         }.placeholder(shown(Absent, _ => ()))
+        // A binding one way that nothing hears: every click is painted away again.
+        val deaf = valueSlot match
+            case Present(_) => ReactiveValue.deaf(valueSlot, heard)
+            case Absent     => ReactiveValue.deaf(activeSlot, heard)
+        if !deaf then stepper
+        else
+            fragment(
+                KeyDiagnostics.card(
+                    "Stepper",
+                    "the active step is bound one way and nothing hears a click, so the reader cannot change it; add " +
+                        "onActiveChange, or bind a SignalRef",
+                    Nil
+                ),
+                stepper
+            )
+        end if
+    end render
 
     /** The rendered stepper: the steps and the binding read as ONE region. No `base` is the placeholder a golden render
       * and an SSG page show: no mount has run, so there is nothing to move focus with yet, but a horizontal stepper is
@@ -147,13 +194,15 @@ final case class Stepper[K] private (
     private def shown(base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
         def drawn(ss: List[Step[K]], active: Int): UI =
             copy(stepList = ss).body(active, base.fold(Nil)(b => ss.indices.toList.map(i => s"$b-$i")), focus)
-        valueRef match
-            case Present(ref) =>
-                entries.and(Reading.Live(ref)).render((ss, v) => drawn(ss, math.max(ss.indexWhere(_.value.contains(v)), 0)))
+        // Steps carry values the app compares by its own equality.
+        given CanEqual[K, K] = CanEqual.derived
+        valueSlot match
+            case Present(v) =>
+                entries.and(Reading.of(v)).render((ss, held) => drawn(ss, math.max(ss.indexWhere(_.value.contains(held)), 0)))
             case Absent =>
-                activeRef match
-                    case Present(ref) => entries.and(Reading.Live(ref)).render((ss, a) => drawn(ss, a))
-                    case Absent       => entries.render(ss => drawn(ss, 0))
+                activeSlot match
+                    case Present(a) => entries.and(Reading.of(a)).render((ss, at) => drawn(ss, at))
+                    case Absent     => entries.render(ss => drawn(ss, 0))
         end match
     end shown
 
@@ -213,7 +262,8 @@ final case class Stepper[K] private (
         if tablist && !blocked then header = header.tabIndex(if isActive then 0 else -1)
         if blocked then header = header.disabled(true).tabIndex(-1)
         else
-            if !isActive then header = header.onClick(activate(i))
+            // A fixed stepper keeps every other header a stop that says it moves nothing.
+            if !isActive then header = if fixed then header.aria("disabled", "true") else header.onClick(activate(i))
             if ids.isDefinedAt(i) then
                 val axis = if tablist then ListNav.Orientation.Horizontal else ListNav.Orientation.Vertical
                 header = header.id(ids(i)).onKeyDown(headerMove(ids, navigableSteps(cur), i, axis, focus))
@@ -316,27 +366,18 @@ final case class Stepper[K] private (
         root(items.map(toChild)*)
     end verticalBody
 
-    /** Header click: write the bound ref (value wins, matching render), then fire
-      * `onActivate` with the index.
+    /** Header click: ask for the step (value wins, matching render), written into a two-way binding and reported, then
+      * `onActiveChange` with the index.
       */
     private def activate(i: Int)(using Frame): UI.Action =
-        val write: UI.Action = valueRef match
-            case Present(ref) =>
-                stepList(i).value match
-                    case Present(v) => ref.set(v)
+        valueSlot match
+            case Present(_) =>
+                val asked: UI.Action = stepList(i).value match
+                    case Present(v) => ReactiveValue.change(valueSlot, v, onValueF)
                     case Absent     => ()
-            case Absent =>
-                activeRef match
-                    case Present(ref) => ref.set(i)
-                    case Absent       => ()
-        val fire: UI.Action = onActivateF match
-            case Present(f) => f(i)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
+                asked.andThen(onActiveF.fold[UI.Action](())(f => f(i)))
+            case Absent => ReactiveValue.change(activeSlot, i, onActiveF)
+        end match
     end activate
 end Stepper
 
