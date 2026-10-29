@@ -3326,6 +3326,95 @@ class DataTableTest extends UicTest:
             assert(after.head.attrs.ariaAttrs.get("selected").contains("false"))
     }
 
+    "a constant cell set nobody hears is fixed: picked cells show, and a click picks nothing" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name),
+            uic.column("Price")(_.price.toString)
+        ).selectionMode(SelectionMode.Multiple).selectedCells(Set(CellPath(items(1), List("Price"))))
+        for
+            tds  <- cellsIn(table.render)
+            card <- cards(table.render)
+        yield
+            assert(tds(3).attrs.cssClasses.contains("p-uic-dt-cell-selected"), "the constant cell shows picked")
+            assert(tds.forall(td => !declaresClick(td)), "a fixed set takes no click")
+            assert(card.isEmpty, s"a fixed cell set is not a mistake: $card")
+        end for
+    }
+
+    "a cell set bound one way is followed, and a click reported without being written" in {
+        for
+            held <- Signal.initRef(Set(CellPath(items(0), List("Name"))))
+            seen <- Signal.initRef(List.empty[Set[CellPath[Item]]])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString)
+            ).selectionMode(SelectionMode.Multiple).selectedCells(held.readOnly)
+                .onSelectedCellsChange(c => seen.getAndUpdate(_ :+ c).unit)
+            tds  <- cellsIn(table.render)
+            _    <- click(tds(3))
+            h    <- held.get
+            told <- seen.get
+            deaf <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selectedCells(held.readOnly).render)
+        yield
+            assert(tds.head.attrs.cssClasses.contains("p-uic-dt-cell-selected"), "the signal's cell shows picked")
+            assert(h == Set(CellPath(items(0), List("Name"))), s"the signal is not written: $h")
+            assert(told == List(Set(CellPath(items(0), List("Name")), CellPath(items(1), List("Price")))), s"reported $told")
+            assert(deaf.contains("onSelectedCellsChange"), s"nobody hears: $deaf")
+        end for
+    }
+
+    "a cell set ref is written before the click is reported" in {
+        for
+            picked <- Signal.initRef(Set.empty[CellPath[Item]])
+            seen   <- Signal.initRef(List.empty[(Set[CellPath[Item]], Set[CellPath[Item]])])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Single).selectedCells(picked)
+                .onSelectedCellsChange(c => picked.get.map(p => seen.getAndUpdate(_ :+ (c, p)).unit))
+            tds  <- cellsIn(table.render)
+            _    <- click(tds(1))
+            told <- seen.get
+        yield
+            val one = Set(CellPath(items(1), List("Name")))
+            assert(told == List((one, one)), s"reported, held: $told")
+    }
+
+    // A table with a selection mode and no row binding keeps a row selection of its own, which it allocates in a mount.
+    // That selection must not count as a row binding: it switched cell selection off in every live table.
+    "a live table picks cells into a bound ref, with no row selection bound" in {
+        for
+            picked <- Signal.initRef(Set.empty[CellPath[Item]])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Single).selectedCells(picked)
+            // A published region may be the row stream alone, with no table around it, so the mark is looked for anywhere.
+            after <- publishedAfterReady(
+                table.render,
+                t => cellsIn(t).map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-uic-dt-cell-selected").map(_.nonEmpty)
+            )(t => cellsIn(t).map(tds => click(tds(1))))
+            held <- picked.get
+        yield
+            assert(held == Set(CellPath(items(1), List("Name"))), s"picked $held")
+            assert(after.nonEmpty, "the table never showed the cell the reader picked")
+    }
+
+    "selectedCells() with no ref keeps the picked cells itself" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .selectionMode(SelectionMode.Single).selectedCells()
+        for
+            card <- cards(table.render)
+            // A published region may be the row stream alone, with no table around it, so the mark is looked for anywhere.
+            after <- publishedAfterReady(
+                table.render,
+                t => cellsIn(t).map(_.exists(declaresClick)),
+                until = t => elementsWithClass(t, "p-uic-dt-cell-selected").map(_.nonEmpty)
+            )(t => cellsIn(t).map(tds => click(tds(1))))
+        yield
+            assert(after.nonEmpty, "the table never showed the cell the reader picked")
+            assert(card.isEmpty, s"cells the table keeps itself: $card")
+        end for
+    }
+
     "Single replaces the set rather than adding to it" in {
         for
             picked <- Signal.initRef(Set.empty[CellPath[Item]])

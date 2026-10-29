@@ -602,7 +602,9 @@ final case class DataTable[A] private (
     metaKeyFlag: Boolean = false,
     onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
-    cellsTyped: Maybe[SignalRef[Set[CellPath[A]]]] = Absent,
+    cellsTyped: Maybe[ReactiveValue[Set[CellPath[A]]]] = Absent,
+    ownCellsFlag: Boolean = false,
+    onCellsF: Maybe[Set[CellPath[A]] => UI.Action] = Absent,
     contextTyped: Maybe[ReactiveValue[Maybe[A]]] = Absent,
     onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
     csvSeparatorV: String = ",",
@@ -1048,7 +1050,10 @@ final case class DataTable[A] private (
       * [[CellPath]], which pairs a row with a column path.
       *
       * Binding it is the switch, and [[selectionMode]] says what a click means:
-      * `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no
+      * `Single` replaces the set, `Multiple` toggles the cell in it. A `SignalRef` is written,
+      * then [[onSelectedCellsChange]] hears the set; a plain `Signal` is followed and a click
+      * only reported; a constant nobody hears is fixed, its cells shown picked and taking no
+      * click. A signal nothing hears is reported in a card. A cell has no
       * identity until a row key and a column path are put together, which is why this is
       * a second binding and not a mode over the row one; binding both is a card, since
       * one click cannot mean two things.
@@ -1058,7 +1063,17 @@ final case class DataTable[A] private (
       * EDITING claims the same click, so the two are a card as well, and editing keeps
       * the click.
       */
-    def selectedCells(ref: SignalRef[Set[CellPath[A]]]): DataTable[A] = copy(cellsTyped = Present(ref))
+    def selectedCells(v: Set[CellPath[A]] | Signal[Set[CellPath[A]]]): DataTable[A] =
+        copy(cellsTyped = Present(ReactiveValue(v)), ownCellsFlag = false)
+
+    /** Turns cell selection on over picked cells the table keeps itself, starting with none: [[selectedCells]] with no
+      * ref to hand over, for a page that does not read them. [[onSelectedCellsChange]] still hears every pick.
+      */
+    def selectedCells(): DataTable[A] = copy(cellsTyped = Absent, ownCellsFlag = true)
+
+    /** Fired with the picked cells after a click changes them, after a two-way [[selectedCells]] is written. */
+    def onSelectedCellsChange(f: Set[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
+        copy(onCellsF = Present(Callback.of(f)))
 
     /** Restricts selection to the rows `p` accepts (Prime's `isDataSelectable`).
       *
@@ -1594,7 +1609,12 @@ final case class DataTable[A] private (
             case ReactiveValue.Dyn(sig)   => ReactiveValue.Dyn(sig.map(_.map(keyOf)))
         }
 
-    private def selectedCellsRef(using Frame): Maybe[Signal[Set[CellKey]]] = cellsTyped.map(_.map(_.map(cellKey)))
+    /** The picked cells as keys, whichever way they were bound. */
+    private def cellsBinding(using Frame): Maybe[ReactiveValue[Set[CellKey]]] =
+        cellsTyped.map {
+            case ReactiveValue.Const(cells) => ReactiveValue.Const(cells.map(cellKey))
+            case ReactiveValue.Dyn(sig)     => ReactiveValue.Dyn(sig.map(_.map(cellKey)))
+        }
 
     /** The expansion as keys, whichever way it was bound. */
     private def expandedBinding(using Frame): Maybe[ReactiveValue[Set[String]]] =
@@ -1645,8 +1665,14 @@ final case class DataTable[A] private (
       * a mode that is about a checkbox column says nothing about a cell.
       */
     private def cellSelectOn: Boolean =
-        cellsTyped.isDefined && editingCellTyped.isEmpty && selectedTyped.isEmpty &&
+        cellsOn && editingCellTyped.isEmpty && selectedTyped.isEmpty &&
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
+
+    /** Whether cell selection was asked for, bound or kept by the table ([[selectedCells]]). */
+    private def cellsOn: Boolean = cellsTyped.isDefined || ownCellsFlag
+
+    /** A constant cell set nobody hears: the picked cells show and a click picks nothing. */
+    private def cellsFixed: Boolean = ReactiveValue.fixed(cellsTyped, onCellsF)
 
     /** Whether a right-click over a row means anything here. */
     private def contextRowOn: Boolean = ReactiveValue.heard(contextTyped, onRowContextF)
@@ -1722,6 +1748,7 @@ final case class DataTable[A] private (
             rows = rowsV,
             sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
             ctx = contextBinding.flatMap(_.const).getOrElse(Absent),
+            cells = cellsBinding.flatMap(_.const).getOrElse(Set.empty[CellKey]),
             exp = expandedBinding.flatMap(_.const).getOrElse(Set.empty[String]),
             groups = expandedGroupsSlot.flatMap(_.const).getOrElse(Set.empty[GroupPath]),
             waiting = BoolValue.const(loadingV).getOrElse(false),
@@ -1746,7 +1773,7 @@ final case class DataTable[A] private (
         val r = fold[Seq[A]](Absent, rowsSig, (i, v) => i.copy(rows = v))
         val a = fold[Set[String]](r, selSig, (i, v) => i.copy(sel = v))
         val b = fold[Maybe[String]](a, contextBinding.flatMap(_.dyn), (i, v) => i.copy(ctx = v))
-        val c = fold[Set[CellKey]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
+        val c = fold[Set[CellKey]](b, cellsBinding.flatMap(_.dyn), (i, v) => i.copy(cells = v))
         val d = fold[Set[String]](c, expandedBinding.flatMap(_.dyn), (i, v) => i.copy(exp = v))
         val e = fold[Set[GroupPath]](d, expandedGroupsSlot.flatMap(_.dyn), (i, v) => i.copy(groups = v))
         val f = fold[Boolean](e, loadingSignal, (i, v) => i.copy(waiting = v))
@@ -1773,7 +1800,7 @@ final case class DataTable[A] private (
         rowsReading
             .and(sel)
             .and(contextBinding.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.of(_)))
-            .and(Reading.orElse(selectedCellsRef, Set.empty[CellKey]))
+            .and(cellsBinding.fold(Reading.Fixed(Set.empty[CellKey]))(Reading.of(_)))
             .and(expandedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
             .and(groupsReading)
             .and(loadingV.fold(Reading.Fixed(false))(Reading.of(_)))
@@ -2422,13 +2449,19 @@ final case class DataTable[A] private (
         val ownsSort      = sortSlot.isEmpty && leafPaths.exists((_, c) => canSortBy(c))
         val ownsFilters   = columnFiltersSlot.isEmpty && (leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable))
         val ownsExpansion = expandedTyped.isEmpty && expansionF.isDefined
-        val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None
+        // Not under cell selection: there the mode says what a click on a CELL means, and a row selection kept here would
+        // count as a bound one and switch the cells off.
+        val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None && !cellsOn
         // The layout the reader drags and the groups they open are kept only where the page asked for the feature
         // with no ref: `columnWidths()`, `columnOrder()`, `expandedGroups()`.
+        // `selectedCells()` likewise.
         val ownsWidths = columnWidthsSlot.isEmpty && ownWidthsFlag
         val ownsOrder  = columnOrderSlot.isEmpty && ownOrderFlag
         val ownsGroups = expandedGroupsSlot.isEmpty && ownGroupsFlag
-        if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups then
+        val ownsCells  = cellsTyped.isEmpty && ownCellsFlag
+        if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups &&
+            !ownsCells
+        then
             renderBound
         else
             UI.mounted {
@@ -2464,6 +2497,11 @@ final case class DataTable[A] private (
                             Signal.initRef(Set.empty[GroupPath])(using summon[Frame], CanEqual.derived)
                                 .map(r => Maybe(ReactiveValue[Set[GroupPath]](r)))
                         else Kyo.lift(expandedGroupsSlot)
+                    cells <-
+                        if ownsCells then
+                            Signal.initRef(Set.empty[CellPath[A]])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Set[CellPath[A]]](r)))
+                        else Kyo.lift(cellsTyped)
                 yield copy(
                     sortSlot = sort,
                     columnFiltersSlot = filters,
@@ -2471,7 +2509,9 @@ final case class DataTable[A] private (
                     selectedTyped = sel,
                     columnWidthsSlot = widths,
                     columnOrderSlot = order,
-                    expandedGroupsSlot = groups
+                    expandedGroupsSlot = groups,
+                    cellsTyped = cells,
+                    ownCellsFlag = false
                 ).renderBound
             }.placeholder(renderBound)
         end if
@@ -4136,11 +4176,11 @@ final case class DataTable[A] private (
         // does something a second click cannot undo.
         val claimed = List(
             if selectedTyped.isEmpty then Nil else List("selection, which picks rows"),
-            if cellsTyped.isEmpty then Nil else List("selectedCells, which picks cells"),
+            if !cellsOn then Nil else List("selectedCells, which picks cells"),
             if editingCellTyped.isEmpty then Nil else List("editingCell, which opens an editor")
         ).flatten
         val clash =
-            if cellsTyped.isEmpty || claimed.sizeIs < 2 then Nil
+            if !cellsOn || claimed.sizeIs < 2 then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -4149,7 +4189,7 @@ final case class DataTable[A] private (
                     claimed
                 ))
         val modeless =
-            if cellsTyped.isEmpty || selectionModeV == SelectionMode.Single ||
+            if !cellsOn || selectionModeV == SelectionMode.Single ||
                 selectionModeV == SelectionMode.Multiple
             then Nil
             else
@@ -4159,9 +4199,6 @@ final case class DataTable[A] private (
                         "Radio are about a column of the table, which a cell is not in",
                     List(selectionModeV.toString)
                 ))
-        // A one-way `selected` paints but never writes, which is the point of it: the caller owns
-        // the set and closes the loop through `onRowClick`. Two shapes have no loop to close, and
-        // both look exactly like a working selection until a reader clicks one.
         // A one-way `selected` paints but never writes, which is the point of it: the caller owns
         // the set and applies the change themselves. `onSelectionChange` is the outlet that
         // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
@@ -4207,7 +4244,16 @@ final case class DataTable[A] private (
                         "opens over the rows; add onContextMenuRowChange, or bind a SignalRef",
                     Nil
                 ))
-        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly ++ contextDeaf
+        val cellsDeaf =
+            if !cellSelectOn || !ReactiveValue.deaf(cellsTyped, onCellsF) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the selected cells are bound one way and nothing hears a click, so the reader cannot pick one; add " +
+                        "onSelectedCellsChange, or bind a SignalRef",
+                    Nil
+                ))
+        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly ++ contextDeaf ++ cellsDeaf
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -5333,7 +5379,7 @@ final case class DataTable[A] private (
                 if cellSelectOn then
                     cell = cell.aria("selected", pickedCells.contains(path).toString)
                     if pickedCells.contains(path) then cell = cell.cssClass("p-uic-dt-cell-selected")
-                    if canSelect then cell = cell.onClick(toggleCell(here)).stopPropagation(true)
+                    if canSelect && !cellsFixed then cell = cell.onClick(toggleCell(here)).stopPropagation(true)
                 end if
                 // With navigation on, every cell is addressable and the editable ones are
                 // the tab stops: the DOM is row-major, so the browser's own tab order IS
@@ -5618,11 +5664,9 @@ final case class DataTable[A] private (
         val step: Set[CellKey] => Set[CellKey] =
             if selectionModeV == SelectionMode.Single then cur => if cur == Set(cell) then Set.empty else Set(cell)
             else cur => if cur.contains(cell) then cur - cell else cur + cell
-        cellsTyped match
-            case Present(ref) =>
-                currentRows.map(all => ref.getAndUpdate(prev => cellsFor(step(prev.map(cellKey)), prev, all)).unit)
-            case Absent => ()
-        end match
+        currentRows.map(all =>
+            ReactiveValue.update(cellsTyped, prev => cellsFor(step(prev.map(cellKey)), prev, all), onCellsF)
+        )
     end toggleCell
 
     /** A right-click over a row: remember which one, then tell the caller what it was aimed at.
