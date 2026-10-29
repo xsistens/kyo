@@ -2556,7 +2556,7 @@ class DataTableTest extends UicTest:
         yield
             val t = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
-            (t.wired("t", Map.empty, err, _ => (), anchor = Present(anchor)), anchor)
+            (t.wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor))), anchor)
 
     private def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
         el.attrs.onClickEvt match
@@ -2640,7 +2640,7 @@ class DataTableTest extends UicTest:
             ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
                 .selectableWhen(_.id != "2")
-                .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+                .wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor)))
             trs    <- bodyTrs(ui)
             _      <- click(trs.head)
             _      <- clickWith(trs(2), UI.Modifiers(shift = true))
@@ -2676,7 +2676,7 @@ class DataTableTest extends UicTest:
                 .selection(src.map(identity))
                 .metaKeySelection(true)
                 .onSelectionChange(s => heard.getAndUpdate(_ :+ s).unit)
-                .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+                .wired("t", Map.empty, err, _ => (), anchor = Present(uic.ReactiveValue[Maybe[Item]](anchor)))
             trs <- bodyTrs(ui)
             _   <- click(trs.head)
             // The table computed a range off its own anchor; the caller could not have.
@@ -3773,6 +3773,57 @@ class DataTableTest extends UicTest:
         yield
             assert(held.contains(four.head), "the plain click moved the anchor the caller holds")
             assert(got == rowsWith("1", "2", "3"), "and the next render measured its range from there")
+    }
+
+    private def rangingOver(sel: SignalRef[Set[Item]])(using Frame) =
+        uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true)
+
+    "a constant anchor nobody hears is fixed: a shift-click ranges from it, and a plain click leaves it" in {
+        for
+            sel  <- Signal.initRef(Set.empty[Item])
+            trs  <- bodyTrs(rangingOver(sel).selectionAnchor(Present(four(1))).render)
+            _    <- click(trs.head)
+            _    <- clickWith(trs(3), UI.Modifiers(shift = true))
+            got  <- sel.get
+            card <- cards(rangingOver(sel).selectionAnchor(Present(four(1))).render)
+        yield
+            assert(got == rowsWith("2", "3", "4"), s"the range starts at the constant row: $got")
+            assert(card.isEmpty, s"a fixed anchor is not a mistake: $card")
+        end for
+    }
+
+    "an anchor bound one way is ranged from, and a plain click reported without being written" in {
+        for
+            sel  <- Signal.initRef(Set.empty[Item])
+            held <- Signal.initRef(Present(four(1)): Maybe[Item])
+            seen <- Signal.initRef(List.empty[Maybe[Item]])
+            table = rangingOver(sel).selectionAnchor(held.readOnly).onSelectionAnchorChange(a => seen.getAndUpdate(_ :+ a).unit)
+            trs  <- bodyTrs(table.render)
+            _    <- clickWith(trs(3), UI.Modifiers(shift = true))
+            got  <- sel.get
+            _    <- click(trs.head)
+            h    <- held.get
+            told <- seen.get
+            deaf <- cards(rangingOver(sel).selectionAnchor(held.readOnly).render)
+        yield
+            assert(got == rowsWith("2", "3", "4"), s"the range starts at the signal's row: $got")
+            assert(h == Present(four(1)) && told == List(Present(four.head)), s"held $h, reported $told")
+            assert(deaf.contains("onSelectionAnchorChange"), s"nobody hears: $deaf")
+        end for
+    }
+
+    "an anchor ref is written before the plain click is reported" in {
+        for
+            sel    <- Signal.initRef(Set.empty[Item])
+            anchor <- Signal.initRef(Absent: Maybe[Item])
+            seen   <- Signal.initRef(List.empty[(Maybe[Item], Maybe[Item])])
+            table = rangingOver(sel).selectionAnchor(anchor)
+                .onSelectionAnchorChange(a => anchor.get.map(h => seen.getAndUpdate(_ :+ (a, h)).unit))
+            trs  <- bodyTrs(table.render)
+            _    <- click(trs(2))
+            told <- seen.get
+        yield assert(told == List((Present(four(2)), Present(four(2)))), s"reported, held: $told")
     }
 
     "a bound anchor is the only state a ranging table needed, so it stays a pure render" in {
