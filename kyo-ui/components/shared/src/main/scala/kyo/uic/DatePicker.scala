@@ -619,7 +619,9 @@ final case class DatePicker[A] private (
             case (Present(n), Present(b)) =>
                 n.restore.use {
                     case Present(_) => (): UI.Action
-                    case Absent     => b.capture.map(rs => n.restore.set(Present(rs)))
+                    case Absent     =>
+                        b.capture(kind, fireValue, fireValues, (a, b) => fireRange((a, b)))
+                            .map(rs => n.restore.set(Present(rs)))
                 }
             case _ => ()
 
@@ -1437,18 +1439,49 @@ object DatePicker:
             end match
         end snapshot
 
-        /** What the binding holds now, as the write that would put it back: Escape's memory. A one-way binding wrote
-          * nothing, so there is nothing to put back.
+        /** What the binding holds now, as what would put it back: Escape's memory. A two-way binding is written back and
+          * nothing is reported, since over the whole open nothing changed. A one-way binding was never written: its owner
+          * took each pick from the event, so the undo asks the owner through the same event for what was held, where that
+          * differs from what the owner holds now.
           */
-        def capture(using Frame): Restore < Sync =
+        def capture(
+            kind: DateKind[A],
+            one: Maybe[A] => UI.Action,
+            set: Set[A] => UI.Action,
+            range: (Maybe[A], Maybe[A]) => UI.Action
+        )(using Frame): Restore < Sync =
+            def isoSet(as: Set[A]): Set[String] = as.map(kind.toIso)
             this match
-                case Single(r)   => r.current.map(v => Restore(Binding.write(r, v)))
-                case Multi(r)    => r.current.map(v => Restore(Binding.write(r, v)))
+                case Single(r) =>
+                    r.current.map(v =>
+                        Restore(r.writable match
+                            case Present(ref) => ref.set(v)
+                            case Absent       =>
+                                r.current.map(now => if Binding.isoOf(kind, now) == Binding.isoOf(kind, v) then (): UI.Action else one(v)))
+                    )
+                case Multi(r) =>
+                    r.current.map(v =>
+                        Restore(r.writable match
+                            case Present(ref) => ref.set(v)
+                            case Absent       => r.current.map(now => if isoSet(now) == isoSet(v) then (): UI.Action else set(v)))
+                    )
                 case Range(s, e) =>
                     for
                         sv <- s.current
                         ev <- e.current
-                    yield Restore(Binding.write(s, sv).andThen(Binding.write(e, ev)))
+                    yield Restore(
+                        if s.writable.isDefined || e.writable.isDefined then Binding.write(s, sv).andThen(Binding.write(e, ev))
+                        else
+                            s.current.map(sn =>
+                                e.current.map(en =>
+                                    val same = Binding.isoOf(kind, sn) == Binding.isoOf(kind, sv) &&
+                                        Binding.isoOf(kind, en) == Binding.isoOf(kind, ev)
+                                    if same then (): UI.Action else range(sv, ev)
+                                )
+                            )
+                    )
+            end match
+        end capture
 
         /** A constant nobody hears ([[ReactiveValue.fixed]] for the binding's own event): the picker is drawn read-only. */
         def fixed(heard: Boolean): Boolean =
@@ -1536,7 +1569,7 @@ object DatePicker:
       * Recorded once per open, at the first write rather than at the open itself, so an open a caller drove through its own
       * ref is remembered too. It holds the app's own instances, so an undo gives back exactly what was there.
       */
-    final private[uic] case class Restore(put: Unit < Sync)
+    final private[uic] case class Restore(put: UI.Action)
 
     private[uic] object Restore:
         given CanEqual[Restore, Restore] = CanEqual.derived
