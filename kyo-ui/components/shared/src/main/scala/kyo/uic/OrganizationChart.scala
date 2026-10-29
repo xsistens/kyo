@@ -65,11 +65,12 @@ final case class OrganizationChart[K] private (
     /** The root node of the chart. */
     def node(n: OrgChartNode[K]): OrganizationChart[K] = copy(rootNode = Present(n))
 
-    /** Binds the EXPANDED subtrees two-way, exactly like [[Tree.expanded]] and
-      * [[TreeTable.expanded]]: the set holds the ids whose children are shown, an
-      * empty set shows the root alone, and toggles flip membership. Binding a ref
-      * also renders the toggle buttons on nodes with children; a chart with no ref
-      * is static and fully open, since there would be no toggle to open it with.
+    /** Binds the EXPANDED subtrees with the polarity of [[Tree.expanded]] and [[TreeTable.expanded]]: the set holds the
+      * ids whose children are shown, an empty set shows the root alone, and a toggle flips membership. Binding it renders
+      * the toggle buttons on nodes with children. A `SignalRef` is written, then [[onExpandedChange]] hears the set; a
+      * plain `Signal` is followed and a toggle only reported; a constant nobody hears is fixed, its toggles reachable and
+      * inert. A signal nothing hears is reported in a card. Unbound, the chart is static and fully open; [[expanded]]
+      * with no argument gives it toggles over state it keeps itself.
       */
     def expanded(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = copy(expandedSlot = Present(ReactiveValue(v)), ownExpandedFlag = false)
 

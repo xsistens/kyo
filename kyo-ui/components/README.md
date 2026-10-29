@@ -260,7 +260,7 @@ val importResult: UI < Async =
     )
 ```
 
-> **Unlike** the modal surfaces under [Floating panels](#floating-panels), which own a visibility ref and write `false` into it before running your effect, `Message.onDismissed` and `Chip.onRemove` change no visibility at all. They run the effect and leave the element exactly where it was, which is why the message above is wrapped in `when(failed)`: the page owns whether it is on screen. The names say which contract you are in: `onClose` belongs to the surfaces that own a `SignalRef[Boolean]` and close themselves, and an inline element that owns no ref does not have it.
+> **Unlike** the modal surfaces under [Floating panels](#floating-panels), which own their visibility and report a close through `onOpenChange`, `Message.onDismissed` and `Chip.onRemove` change no visibility at all. They run the effect and leave the element exactly where it was, which is why the message above is wrapped in `when(failed)`: the page owns whether it is on screen. The names say which contract you are in: `onOpenChange` belongs to the surfaces that own their visibility and close themselves, and an inline element that owns none does not have it.
 
 ### Work in progress
 
@@ -637,7 +637,7 @@ val importer: UI =
     uic.FileUpload()
         .inputId("catalog-import")
         .accept(FileAccept.Extension(".csv"))
-        .onSelect(files => Kyo.foreach(files)(f => Console.printLine(s"picked ${f.name} (${f.size} bytes)")))
+        .onChange(files => Kyo.foreach(files)(f => Console.printLine(s"picked ${f.name} (${f.size} bytes)")))
 
 val importField: UI < Async =
     for picked <- Signal.initRef(Seq.empty[UI.FilePayload])
@@ -925,9 +925,9 @@ val editorDrawer: UI < Async =
     )
 ```
 
-> **Note:** `Dialog.onClose` and `Drawer.onClose` fire only when the component dismisses *itself*: the close button, Escape, a backdrop click, or a mask click. Each of those writes `false` into your ref first and then runs the effect. Writing `false` into the ref yourself closes the panel silently, which is what you want when the close is already part of a larger action you are performing.
+> **Note:** `Dialog.onOpenChange` and `Drawer.onOpenChange` fire only when the component dismisses *itself*: the close button, Escape, a backdrop click, or a mask click. Each of those writes `false` into a bound ref first and then reports it. Writing `false` into the ref yourself closes the panel silently, which is what you want when the close is already part of a larger action you are performing.
 
-The inline dismissible elements take the opposite convention, and the contrast is worked through under [Messages the page owns](#messages-the-page-owns): `Message.onDismissed` and `Chip.onRemove` change no visibility at all, because neither owns a ref to write into, which is why neither has an `onClose` at all.
+The inline dismissible elements take the opposite convention, and the contrast is worked through under [Messages the page owns](#messages-the-page-owns): `Message.onDismissed` and `Chip.onRemove` change no visibility at all, because neither owns a visibility to write, which is why neither has an `onOpenChange` at all.
 
 ### Popover, tooltip, context menu
 
@@ -1636,7 +1636,7 @@ A `headerGroup` is a `DataTable` shape only: a `TreeTable` renders one header ro
 
 ### Recursive shapes
 
-`TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree[K]` is the plain hierarchy, and `OrganizationChart[K]` is the top-down box diagram. `Tree` and `OrganizationChart` hold node ids of the app's own type `K`; `TreeTable` holds its rows, matched by `rowKey`, as `DataTable` does. All three bind their open state through `expanded(ref)` with the same polarity, the set of what is open, so nothing has to be inverted between them.
+`TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree[K]` is the plain hierarchy, and `OrganizationChart[K]` is the top-down box diagram. `Tree` and `OrganizationChart` hold node ids of the app's own type `K`; `TreeTable` holds its rows, matched by `rowKey`, as `DataTable` does. All three bind their open state through `expanded` with the same polarity, the set of what is open, so nothing has to be inverted between them.
 
 ```scala
 val hierarchy: UI < Async =
@@ -1665,7 +1665,7 @@ val hierarchy: UI < Async =
     )
 ```
 
-Prime models the chart's open state collapse-keyed (`collapsedKeys`); `OrganizationChart` absorbs that inversion rather than exposing it, so `expanded(ref)` means here exactly what it means on `Tree`. Binding the ref is also what makes the chart interactive: with one, every node that has children renders its toggle; without one the chart is static and fully open, since there would be no toggle to open it with.
+Prime models the chart's open state collapse-keyed (`collapsedKeys`); `OrganizationChart` absorbs that inversion rather than exposing it, so `expanded` means here exactly what it means on `Tree`. Binding it is also what makes the chart interactive: with a binding, every node that has children renders its toggle; without one the chart is static and fully open, and `expanded()` with no argument gives it toggles over state the chart keeps itself.
 
 ```scala
 val orgChart: UI < Async =
@@ -1728,7 +1728,7 @@ val transfer: UI < Async =
         .showTargetControls(false): UI
 ```
 
-`Galleria` is the one view here that is not generic over your rows. Its model is a fixed `GalleriaItem`: an image `src`, its `alt` text, an optional `thumbnailSrc`, and an optional `title`/`subtitle` caption pair. That fixed shape is what buys it the thumbnail strip, which renders each item's `thumbnailSrc` (falling back to `src`), and the caption, which renders the `title`/`subtitle` pair. `Carousel[A]` has neither, because neither can be read off an arbitrary `A`. Indicator dots and prev/next navigators are positional, derived from the item count rather than from the item type, so both components have them under the same names, `showIndicators` and `showItemNavigators`. Their DEFAULTS differ: on by default in `Carousel`, off in `Galleria`. That split is Prime's own between the two components, inherited so the out-of-the-box look matches the design system rather than a local convention. `activeIndex(ref)` binds the current image, and `itemTemplate` / `thumbnailTemplate` replace the default `img` on either side.
+`Galleria` is the one view here that is not generic over your rows. Its model is a fixed `GalleriaItem`: an image `src`, its `alt` text, an optional `thumbnailSrc`, and an optional `title`/`subtitle` caption pair. That fixed shape is what buys it the thumbnail strip, which renders each item's `thumbnailSrc` (falling back to `src`), and the caption, which renders the `title`/`subtitle` pair. `Carousel[A]` has neither, because neither can be read off an arbitrary `A`. Indicator dots and prev/next navigators are positional, derived from the item count rather than from the item type, so both components have them under the same names, `showIndicators` and `showItemNavigators`. Their DEFAULTS differ: on by default in `Carousel`, off in `Galleria`. That split is Prime's own between the two components, inherited so the out-of-the-box look matches the design system rather than a local convention. `activeIndex` binds the current image (a ref written on every move, a signal followed while `onActiveIndexChange` hears the move, or a constant, fixed while nothing hears it), and `itemTemplate` / `thumbnailTemplate` replace the default `img` on either side.
 
 ```scala
 val gallery: UI < Async =
