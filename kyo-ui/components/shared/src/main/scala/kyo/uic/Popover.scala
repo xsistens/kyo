@@ -125,10 +125,8 @@ final case class Popover private (
         triggerV match
             case Present(t) =>
                 // A constant nobody hears is fixed: the trigger stays, says so, and toggles nothing.
-                val fixed                             = ReactiveValue.fixed(openSlot, onOpenF)
-                val expanded: String | Signal[String] = openSlot.flatMap(_.dyn).fold[String | Signal[String]](
-                    openSlot.flatMap(_.const).getOrElse(false).toString
-                )(_.map(_.toString))
+                val fixed                    = ReactiveValue.fixed(openSlot, onOpenF)
+                val expanded                 = PopupTrigger.expanded(openSlot)
                 val toggle: Maybe[UI.Action] = if fixed then Absent else Present(ReactiveValue.update(openSlot, !_, onOpenF))
                 val control                  = PopupTrigger.stamped(t, "dialog", expanded, fixed, toggle)
                 // The wrapper takes the click, which reaches it from the control, so a handler the page put on its own

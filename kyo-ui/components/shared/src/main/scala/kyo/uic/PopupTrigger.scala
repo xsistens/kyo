@@ -34,6 +34,29 @@ end PopupTrigger
 
 private[uic] object PopupTrigger:
 
+    /** `aria-expanded` for a host's open slot: a channel where the slot follows a signal, the constant as it stands, and
+      * closed where nothing is bound.
+      */
+    def expanded(open: Maybe[ReactiveValue[Boolean]])(using Frame): String | Signal[String] =
+        open.flatMap(_.dyn).fold[String | Signal[String]](open.flatMap(_.const).getOrElse(false).toString)(_.map(_.toString))
+
+    /** The trigger of a host that leaves its handlers to the caller (an [[Overlay]] anchors a panel and toggles
+      * nothing): the popup's kind and whether it is open, said on the trigger, and nothing that would make it a control
+      * the host does not wire.
+      */
+    def announced(trigger: UI.Ast.Interactive | PopupTrigger, popup: String, expanded: String | Signal[String])(using
+        Frame
+    ): UI =
+        trigger match
+            case t: PopupTrigger       => t.asPopupTrigger(popup, expanded, fixed = false, activate = Absent)
+            case e: UI.Ast.Interactive =>
+                val el = e.aria("haspopup", popup)
+                expanded match
+                    case s: String                    => el.aria("expanded", s)
+                    case s: Signal[String] @unchecked => el.aria("expanded", s)
+        end match
+    end announced
+
     /** The trigger as the host draws it. The host takes the click around it, which reaches it from the trigger and from
       * anything inside; `activate` is what a key asks for on a trigger that is no control of its own (Absent where the
       * state is fixed). That key is taken on the trigger itself only (`onKeyDownSelf`): a key pressed in a control inside
