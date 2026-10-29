@@ -6,7 +6,7 @@ import kyo.UI.*
 /** What a [[TieredMenu]] keeps while its list changes under it: the submenu the reader opened and the row they
   * highlighted belong to an ITEM, so an item the signal adds before it must not hand either to a neighbour.
   */
-class TieredMenuTest extends UicTest:
+class TieredMenuTest extends ReactiveValueContract:
 
     /** The labels of the root rows carrying `cls`. */
     private def rowsWith(ui: UI, cls: String)(using Frame): List[String] < Async =
@@ -49,57 +49,21 @@ class TieredMenuTest extends UicTest:
     private def links(t: UI)(using Frame)  = elementsWithClass(t, "p-tieredmenu-item-link").map(_.filter(declaresClick))
     private def panels(t: UI)(using Frame) = elementsWithClass(t, "p-tieredmenu-overlay")
 
-    /** The popup as its mount publishes it, the rows wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => panels(t).map(_.nonEmpty))
-
-    "popup() keeps the open state itself and starts open, so a pick closes it" in {
-        for
-            _     <- mounted(tiered.popup().render)
-            after <- publishedAfterReady(tiered.popup().render, t => links(t).map(_.nonEmpty), until = t => panels(t).map(_.isEmpty))(t =>
-                links(t).map(ls => click(ls.head))
-            )
-            card <- elementsWithClass(tiered.popup().render, "p-uic-key-error")
-        yield
-            assert(after.nonEmpty, "the popup never closed")
-            assert(card.isEmpty, s"state the menu keeps itself: ${card.map(textOf)}")
-    }
-
-    "a constant nobody hears is fixed: the popup stays, and nothing outside dismisses it" in {
-        for
-            t    <- mounted(tiered.popup(true).render)
-            out  <- elementsWithClass(t, "p-uic-overlay-backdrop")
-            card <- elementsWithClass(tiered.popup(true).render, "p-uic-key-error")
-        yield
-            assert(out.isEmpty, "no backdrop takes an outside click")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a signal bound one way is followed, and a pick is reported without being written" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(tiered.popup(held.readOnly).onPopupChange(v => seen.set(Present(v))).render)
-            ls   <- links(t)
-            _    <- click(ls.head)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(tiered.popup(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h && s == Present(false), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onPopupChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a ref is written before the menu reports it" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef((true, true))
-            t    <- mounted(tiered.popup(held).onPopupChange(v => held.get.map(h => seen.set((v, h)))).render)
-            ls   <- links(t)
-            _    <- click(ls.head)
-            s    <- seen.get
-        yield assert(s == (false, false), s"reported, held: $s")
-    }
+    // A popup closes on a pick, an outside click or Escape: the rows are the control a gesture uses, and a fixed popup
+    // is one nothing outside dismisses, since a pick still runs the item's own action.
+    holds(new Slot[TieredMenu, Boolean](
+        name = "popup",
+        bare = Present(tiered.popup()),
+        bind = tiered.popup(_),
+        hear = (m, f) => m.onPopupChange(f),
+        event = "onPopupChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = links(_).map(_.head),
+        shows = panels(_).map(_.nonEmpty),
+        isFixed = Present(elementsWithClass(_, "p-uic-overlay-backdrop").map(_.isEmpty)),
+        ready = Present(panels(_).map(_.nonEmpty))
+    ))
 
 end TieredMenuTest

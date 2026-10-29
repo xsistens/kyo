@@ -106,8 +106,8 @@ class SplitButtonTest extends ReactiveValueContract:
 
     holds(new Slot[SplitButton, Boolean](
         name = "open",
-        bare = split,
-        bind = _.open(_),
+        bare = Present(split),
+        bind = split.open(_),
         hear = (b, f) => b.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

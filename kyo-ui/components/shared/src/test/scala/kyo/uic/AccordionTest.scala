@@ -17,16 +17,25 @@ class AccordionTest extends ReactiveValueContract:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => headers(t).map(_.exists(declaresClick)))
 
-    /** The panel shown open, by its id: the accordion here has two, Alpha and Beta. */
-    private def open(t: UI)(using Frame): Maybe[String] < Sync =
-        elementsWithClass(t, "p-accordionpanel-active").map(ps =>
-            Maybe.fromOption(ps.headOption.map(p => if textOf(p).contains("Alpha") then "a" else "b"))
+    /** The panels shown open, by their ids: the accordion here has two, Alpha and Beta. A mounted accordion patches the
+      * open class in place, so it is read as a class channel too.
+      */
+    private def opened(t: UI)(using Frame): Set[String] < Sync =
+        elementsWithClass(t, "p-accordionpanel").map(ps =>
+            Kyo.foreach(ps)(p =>
+                carriesClass(p, "p-accordionpanel-active").map(on =>
+                    if on then Set(if textOf(p).contains("Alpha") then "a" else "b") else Set.empty[String]
+                )
+            ).map(_.foldLeft(Set.empty[String])(_ ++ _))
         )
+
+    /** The one panel shown open, in single mode. */
+    private def open(t: UI)(using Frame): Maybe[String] < Sync = opened(t).map(ids => Maybe.fromOption(ids.headOption))
 
     holds(new Slot[Accordion[String], Maybe[String]](
         name = "value",
-        bare = accordion,
-        bind = _.value(_),
+        bare = Present(accordion),
+        bind = accordion.value(_),
         hear = (a, f) => a.onValueChange(f),
         event = "onValueChange",
         render = _.render,
@@ -56,17 +65,20 @@ class AccordionTest extends ReactiveValueContract:
             assert(hs.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "and the headers say so")
     }
 
-    "a set bound one way is followed, and a click is reported without being written" in {
-        for
-            held <- Signal.initRef(Set("b"))
-            seen <- Signal.initRef(Absent: Maybe[Set[String]])
-            t    <- mounted(accordion.value(held.readOnly).onValueChange(v => seen.set(Present(v))).render)
-            hs   <- headers(t)
-            _    <- click(hs.head)
-            h    <- held.get
-            s    <- seen.get
-        yield assert(h == Set("b") && s == Present(Set("a", "b")), s"held $h, reported $s")
-    }
+    // A set binds the accordion into multiple mode, which is another type, so this slot has no unbound form.
+    holds(new Slot[MultipleAccordion[String], Set[String]](
+        name = "value, multiple",
+        bare = Absent,
+        bind = accordion.value(_),
+        hear = (a, f) => a.onValueChange(f),
+        event = "onValueChange",
+        render = _.render,
+        start = Set("b"),
+        next = Set("a", "b"),
+        control = headers(_).map(_.head),
+        shows = opened(_),
+        ready = Present(headers(_).map(_.exists(declaresClick)))
+    ))
 
     "a ref is written before the accordion reports it, and onToggle comes after both" in {
         for

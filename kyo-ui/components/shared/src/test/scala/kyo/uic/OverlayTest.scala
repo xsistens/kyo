@@ -14,7 +14,7 @@ import kyo.internal.UICommands
   * when the click arrives. A reader who clicks during the first paint therefore hits whatever the
   * second paint put at that path, so the two paints must put the same element there.
   */
-class OverlayTest extends UicTest:
+class OverlayTest extends ReactiveValueContract:
 
     /** Opens `overlay` inside a clickable host, waits until the measured content is the tree the session holds, then
       * clicks the option at the path the opening paint showed it at. Answers how often the option and the host heard it,
@@ -156,39 +156,32 @@ class OverlayTest extends UicTest:
 
     private def onBackdrop(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-uic-overlay-backdrop")
 
-    "a constant nobody hears is fixed: an open panel stays, and nothing outside dismisses it" in {
+    /** Nothing in `t` closes the panel: no backdrop takes an outside click, and the panel answers no Escape. */
+    private def undismissable(t: UI)(using Frame): Boolean < Sync =
         for
-            outside <- backdrops(panel(true).render)
-            p       <- elementWithClass(panel(true).render, "p-uic-overlay-panel")
-            card    <- elementsWithClass(panel(true).render, "p-uic-key-error")
-            shut    <- elementsWithClass(panel(false).render, "p-uic-overlay-panel")
-        yield
-            assert(outside.isEmpty, "no backdrop takes an outside click")
-            assert(p.attrs.onKeyDown.isEmpty, "Escape closes nothing")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-            assert(shut.isEmpty, "a constant false shows nothing")
-    }
+            outside <- backdrops(t)
+            p       <- elementWithClass(t, "p-uic-overlay-panel")
+        yield outside.isEmpty && p.attrs.onKeyDown.isEmpty
 
-    "a constant somebody hears reports an outside click" in {
-        for
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            _    <- clickBubbling(panel(true).onOpenChange(v => seen.set(Present(v))).render)(onBackdrop)
-            s    <- seen.get
-        yield assert(s == Present(false), s"reported $s")
-    }
+    // An overlay is open or not from its constructor on, so the slot has no unbound form.
+    holds(new Slot[Overlay, Boolean](
+        name = "open",
+        bare = Absent,
+        bind = panel(_),
+        hear = (o, f) => o.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = elementWithClass(_, "p-uic-overlay-backdrop"),
+        shows = elementsWithClass(_, "p-uic-overlay-panel").map(_.nonEmpty),
+        act = Present(clickBubbling(_)(onBackdrop)),
+        isFixed = Present(undismissable(_))
+    ))
 
-    "a signal bound one way is followed, and a dismissal is reported without being written" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            _    <- clickBubbling(panel(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)(onBackdrop)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(panel(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h && s == Present(false), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
+    "a constant false shows nothing" in {
+        for shut <- elementsWithClass(panel(false).render, "p-uic-overlay-panel")
+        yield assert(shut.isEmpty, "a constant false shows nothing")
     }
 
 end OverlayTest

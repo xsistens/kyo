@@ -12,8 +12,8 @@ class DialogTest extends ReactiveValueContract:
 
     holds(new Slot[Dialog, Boolean](
         name = "open",
-        bare = bare,
-        bind = _.open(_),
+        bare = Present(bare),
+        bind = bare.open(_),
         hear = (d, f) => d.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,

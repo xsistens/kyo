@@ -16,8 +16,8 @@ class PopoverTest extends ReactiveValueContract:
 
     holds(new Slot[Popover, Boolean](
         name = "open, with a trigger",
-        bare = withTrigger,
-        bind = _.open(_),
+        bare = Present(withTrigger),
+        bind = withTrigger.open(_),
         hear = (o, f) => o.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,
@@ -26,6 +26,25 @@ class PopoverTest extends ReactiveValueContract:
         control = elementWithClass(_, "p-uic-popover-trigger"),
         shows = panels(_).map(_.nonEmpty),
         fixedOn = Present(elementWithClass(_, "p-button"))
+    ))
+
+    private def onBackdrop(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-uic-overlay-backdrop")
+
+    // Without a trigger nothing inside can open it, so it starts open and only an outside click or Escape closes it: a
+    // fixed one is one nothing dismisses.
+    holds(new Slot[Popover, Boolean](
+        name = "open, without a trigger",
+        bare = Present(uic.Popover()(p("inside"))),
+        bind = uic.Popover().open(_)(p("inside")),
+        hear = (o, f) => o.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = elementWithClass(_, "p-uic-overlay-backdrop"),
+        shows = panels(_).map(_.nonEmpty),
+        act = Present(clickBubbling(_)(onBackdrop)),
+        isFixed = Present(elementsWithClass(_, "p-uic-overlay-backdrop").map(_.isEmpty))
     ))
 
     // Read off the page as a transport renders it: an unbound popover holds its state in a signal of its own, so
@@ -151,11 +170,6 @@ class PopoverTest extends ReactiveValueContract:
 
     "and the same region inside an element does" in {
         typeCheck(preamble + """def x(s: Signal[String])(using Frame) = uic.Popover().trigger(span(s.render(t => span(t))))""")
-    }
-
-    "an unbound popover without a trigger starts open" in {
-        for shown <- panels(uic.Popover()(p("inside")).render)
-        yield assert(shown.size == 1, "nothing could open it, so it shows until dismissed")
     }
 
     "the card for a signal nobody hears names the popover, not the overlay it draws through" in {

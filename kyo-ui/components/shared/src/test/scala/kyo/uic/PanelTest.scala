@@ -8,10 +8,12 @@ import kyo.UI.*
   */
 class PanelTest extends ReactiveValueContract:
 
+    private def panel(using Frame) = uic.Panel().header("Details").toggleable(true)(p("body"))
+
     holds(new Slot[Panel, Boolean](
         name = "collapsed",
-        bare = uic.Panel().header("Details").toggleable(true)(p("body")),
-        bind = _.collapsed(_),
+        bare = Present(panel),
+        bind = panel.collapsed(_),
         hear = (c, f) => c.onCollapsedChange(f),
         event = "onCollapsedChange",
         render = _.render,
