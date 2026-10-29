@@ -206,7 +206,8 @@ final case class DatePicker[A] private (
     def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = copy(referenceDateV = Present(v))
 
     /** Fired with the value now held after a write that changed it (`Absent` once cleared). A pick of the value already held
-      * fires nothing, and neither does the undo of an Escape.
+      * fires nothing. The undo of an Escape writes a two-way binding back without firing; a one-way binding took every pick
+      * from this event, so it hears the value to put back through it too.
       */
     def onChange(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = copy(onChangeF = Present(Callback.of(f)))
 
@@ -219,7 +220,8 @@ final case class DatePicker[A] private (
         copy(onRangeBlurF = Present(Callback.of2(f)))
 
     /** Fired with the visibility the reader asks for, true when the field or the dropdown button opens the calendar and
-      * false when the button, a completing pick, the button bar or Escape closes it, after a two-way [[open]] is written.
+      * false when the button, a completing pick, the button bar, Escape or an outside click closes it, after a two-way
+      * [[open]] is written.
       * One event for both, since an open and a close are never both. External writes fire nothing.
       */
     def onOpenChange(f: Boolean => UI.Action)(using Frame): DatePicker[A] = copy(onOpenF = Present(Callback.of(f)))
