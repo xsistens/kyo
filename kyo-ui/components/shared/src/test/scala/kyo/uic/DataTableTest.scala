@@ -3330,6 +3330,59 @@ class DataTableTest extends UicTest:
             assert(reported.isEmpty, s"onRowValueChanged hears a row edit: $reported")
     }
 
+    "a drop on rows heard only for edits reaches nobody: constant rows drag nothing, and a one-way list says so" in {
+        for
+            held  <- Signal.initRef[Seq[Item]](trio)
+            dragC <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            dragS <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            fixed <- wiredDrag(
+                uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true).onCellValueChanged(_ => ()),
+                dragC
+            )
+            oneWay <- wiredDrag(
+                uic.DataTable[Item]().rows(held.readOnly).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true).onCellValueChanged(_ => ()),
+                dragS
+            )
+            handles  <- grips(fixed)
+            reported <- cards(oneWay)
+        yield
+            assert(handles.forall(_.attrs.onPointerDown.isEmpty), "onCellValueChanged hears no drop")
+            assert(reported.contains("onRowsChange"), s"a drop nobody hears: $reported")
+        end for
+    }
+
+    "an edit on rows heard only for drops reaches nobody: constant rows open no cell, and a one-way list says so" in {
+        for
+            held           <- Signal.initRef[Seq[Item]](items)
+            edC            <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            edS            <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            (fixed, _, _)  <- editableOver(_.rows(items).editingCell(edC).onRowReorder(_ => ()))
+            (oneWay, _, _) <- editableOver(_.rows(held.readOnly).editingCell(edS).onRowReorder(_ => ()))
+            cell           <- elementWithId(fixed, "t-c0-0")
+            reported       <- cards(oneWay)
+        yield
+            assert(!declaresClick(cell), "onRowReorder hears no edit")
+            assert(reported.contains("onRowsChange"), s"an edit nobody hears: $reported")
+        end for
+    }
+
+    "a cell edit on rows heard only through onRowValueChanged reaches nobody, since a cell commit fires no row event" in {
+        for
+            held           <- Signal.initRef[Seq[Item]](items)
+            edC            <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            edS            <- Signal.initRef(Absent: Maybe[CellPath[Item]])
+            (fixed, _, _)  <- editableOver(_.rows(items).editingCell(edC).onRowValueChanged(_ => ()))
+            (oneWay, _, _) <- editableOver(_.rows(held.readOnly).editingCell(edS).onRowValueChanged(_ => ()))
+            cell           <- elementWithId(fixed, "t-c0-0")
+            reported       <- cards(oneWay)
+        yield
+            assert(!declaresClick(cell), "onRowValueChanged hears no cell commit")
+            assert(reported.contains("onRowsChange"), s"a cell commit nobody hears: $reported")
+        end for
+    }
+
     "a row whose second column refuses lands nowhere, not half written" in {
         for
             held              <- Signal.initRef[Seq[Item]](items)

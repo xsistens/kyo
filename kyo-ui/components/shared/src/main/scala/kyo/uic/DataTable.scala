@@ -682,8 +682,10 @@ final case class DataTable[A] private (
       * table store an edit or a drop itself. A signal nothing hears is reported in a card.
       *
       * The new list is reported through [[onRowsChange]]; [[onCellValueChanged]], [[onRowValueChanged]] and
-      * [[onRowReorder]] carry what changed and fire after it, and any of the four counts as hearing the rows. A row
-      * list computed elsewhere (a query state, a `combineLatestAll` over per-row signals) is a `Signal`, not a ref:
+      * [[onRowReorder]] carry what changed and fire after it. Each hears what it reports: a cell commit is heard by
+      * [[onRowsChange]] and [[onCellValueChanged]], a row commit by those and [[onRowValueChanged]], a drop by
+      * [[onRowsChange]] and [[onRowReorder]], so rows heard for one and not another are fixed or carded for that one
+      * alone. A row list computed elsewhere (a query state, a `combineLatestAll` over per-row signals) is a `Signal`, not a ref:
       * mirroring it into one puts a second thing in the program that claims to be the row list.
       *
       * A [[source]] holds the rows as well, so binding both is a mistake and says so; the source is what renders.
@@ -1268,17 +1270,33 @@ final case class DataTable[A] private (
             case Present(src) => Present(ReactiveValue.Dyn(src.rows))
             case Absent       => rowsTyped
 
-    /** Whether anybody takes the list an edit or a drop produces: a two-way [[rows]], or any of the four events. */
-    private def rowsReport: Maybe[Unit] =
-        if onRowsF.isDefined || onCellChangedF.isDefined || onRowChangedF.isDefined || onRowReorderF.isDefined then
-            Present(())
-        else Absent
+    /** Who hears a cell commit: [[onRowsChange]], or [[onCellValueChanged]]. A cell commit fires no row event. */
+    private def cellEditReport: Maybe[Unit] =
+        if onRowsF.isDefined || onCellChangedF.isDefined then Present(()) else Absent
 
-    /** Constant rows nobody hears: shown, with no editor opening and no row dragging. */
-    private def rowsFixed: Boolean = ReactiveValue.fixed(rowsSlot, rowsReport)
+    /** Who hears a row commit: whoever hears a cell commit, or [[onRowValueChanged]]. */
+    private def rowEditReport: Maybe[Unit] =
+        if cellEditReport.isDefined || onRowChangedF.isDefined then Present(()) else Absent
 
-    /** Rows bound one way that nobody hears: an edit or a drop is computed and reaches nobody. */
-    private def rowsDeaf: Boolean = ReactiveValue.deaf(rowsSlot, rowsReport)
+    /** Who hears a drop: [[onRowsChange]], or [[onRowReorder]]. A commit never fires the latter. */
+    private def moveReport: Maybe[Unit] =
+        if onRowsF.isDefined || onRowReorderF.isDefined then Present(()) else Absent
+
+    /** Constant rows nobody hears a cell commit on: shown, with no cell opening. */
+    private def cellEditsFixed: Boolean = ReactiveValue.fixed(rowsSlot, cellEditReport)
+
+    /** Constant rows nobody hears a row commit on: shown, with no row opening. */
+    private def rowEditsFixed: Boolean = ReactiveValue.fixed(rowsSlot, rowEditReport)
+
+    /** Rows bound one way that nobody hears a commit on in the mode the table edits by: a commit reaches nobody. */
+    private def editsDeaf: Boolean =
+        ReactiveValue.deaf(rowsSlot, if rowEditOn then rowEditReport else cellEditReport)
+
+    /** Constant rows nobody hears a drop on: shown, with no row dragging. */
+    private def movesFixed: Boolean = ReactiveValue.fixed(rowsSlot, moveReport)
+
+    /** Rows bound one way that nobody hears a drop on: a drop is computed and reaches nobody. */
+    private def movesDeaf: Boolean = ReactiveValue.deaf(rowsSlot, moveReport)
 
     /** Stores the list `step` makes of the rows where [[rows]] can be written, then hands it to [[onRowsChange]].
       *
@@ -3604,7 +3622,7 @@ final case class DataTable[A] private (
         // be fixed. Anything else and the column still renders, since it is part of the
         // anatomy, with nothing behind it.
         val moveOffered =
-            handleColumn && !rowsFixed && rowOrderOwners(sort, query, filterIn.specs).isEmpty
+            handleColumn && !movesFixed && rowOrderOwners(sort, query, filterIn.specs).isEmpty
         def moveFor(view: BodyView[A]): MoveState[A] =
             if moveOffered then moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
             else moveIn.copy(live = false, held = Absent)
@@ -4362,8 +4380,8 @@ final case class DataTable[A] private (
     private def moveCards(sort: List[SortKey], query: String, specs: Map[List[String], ColumnFilter])(using
         Frame
     ): List[UI] =
-        if !handleColumn || rowsFixed then Nil
-        else if rowsDeaf then
+        if !handleColumn || movesFixed then Nil
+        else if movesDeaf then
             List(KeyDiagnostics.card(
                 "DataTable",
                 "the rows are bound one way and nothing hears a row drag, so a drop reaches nobody; add " +
@@ -4542,7 +4560,7 @@ final case class DataTable[A] private (
         // write a value, and the rows it lands in are followed one way with nobody hearing,
         // so a commit is computed and dropped.
         val nowhere =
-            if !editable || !rowsDeaf then Nil
+            if !editable || !editsDeaf then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -5457,7 +5475,7 @@ final case class DataTable[A] private (
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = cellEditOn && !cellEditFixed && !rowsFixed && openable && edit.live
+                val cellMode = cellEditOn && !cellEditFixed && !cellEditsFixed && openable && edit.live
                 if cellMode then
                     cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
                     // The click picks a cell, it does not also pick the row; and while the
@@ -5526,7 +5544,7 @@ final case class DataTable[A] private (
                     // it renders and the grid keeps its column count, but there is nothing
                     // for a click to write into until the mount has run. Fixed editing rows, or
                     // fixed rows, keep the buttons reachable and say they do nothing.
-                    if rowEditFixed || rowsFixed then b = b.ariaDisabled(true)
+                    if rowEditFixed || rowEditsFixed then b = b.ariaDisabled(true)
                     else if edit.live then b = b.onClick(action)
                     b.render
                 end btn
@@ -5871,7 +5889,7 @@ final case class DataTable[A] private (
             rows = nav.rows.size,
             cols = leafPaths.size,
             editable = pos =>
-                cellEditOn && !cellEditFixed && !rowsFixed && ((rowAt(nav, pos), colAt(pos)) match
+                cellEditOn && !cellEditFixed && !cellEditsFixed && ((rowAt(nav, pos), colAt(pos)) match
                     case (Present(r), Present((_, c))) => c.isNavigable && c.isEditableAt(r)
                     case _                             => false),
             page = math.max(nav.page, 1),
