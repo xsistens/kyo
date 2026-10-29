@@ -4724,7 +4724,7 @@ final case class DataTable[A] private (
             // Prime renders this one as a Button too, and the extracted sheet carries no
             // rule of its own for it, so the component is what gives it its look and the
             // Prime class rides along as the hook a consumer's own CSS would reach for.
-            def trigger(onOpen: Maybe[SignalRef[Boolean]]): UI =
+            def trigger(onOpen: Maybe[SignalRef[Boolean]]): Button =
                 var b = Button()
                     .icon(glyph)
                     .variant(ButtonVariant.Text)
@@ -4734,7 +4734,7 @@ final case class DataTable[A] private (
                     .accessibleName(s"Filter mode for ${c.headerV}")
                     .extraClass("p-datatable-column-filter-button")
                 onOpen.foreach(ref => b = b.onClick(ref.getAndUpdate(!_)))
-                b.render
+                b
             end trigger
             filter.openOf(path) match
                 case Present(openRef) if filter.live =>
@@ -4748,7 +4748,7 @@ final case class DataTable[A] private (
                             .trigger(trigger(Present(openRef)))(constraintList(path, cur, cf, openRef))
                             .renderGated(isOpen, Present(filterPanelId(filter.idPrefix, path)))
                     )
-                case _ => List(trigger(Absent))
+                case _ => List(trigger(Absent).render)
             end match
         end if
     end modeMenu
@@ -4789,7 +4789,7 @@ final case class DataTable[A] private (
                 case Present(cf) =>
                     given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
                     val spec: Reading[ColumnFilter]            = live.specs.map(_.getOrElse(path, ColumnFilter.empty(cf.default)))
-                    def trigger(cur: ColumnFilter, open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): UI =
+                    def trigger(cur: ColumnFilter, open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): Button =
                         // Filled while the column is filtering, hollow while it is not: which
                         // columns are narrowing the table has to be readable without opening
                         // anything.
@@ -4806,7 +4806,7 @@ final case class DataTable[A] private (
                         (open, openRef) match
                             case (Present(draft), Present(o)) => b = b.onClick(openFilterMenu(cur, draft, o))
                             case _                            => ()
-                        b.render
+                        b
                     end trigger
                     (filter.openOf(path), filter.draftOf(path)) match
                         case (Present(openRef), Present(draft)) if filter.live =>
@@ -4829,7 +4829,9 @@ final case class DataTable[A] private (
                                 )
                             )
                         case _ =>
-                            List(span.cssClass("p-datatable-popover-filter")(toChild(spec.render(cur => trigger(cur, Absent, Absent)))))
+                            List(span.cssClass("p-datatable-popover-filter")(toChild(spec.render(cur =>
+                                trigger(cur, Absent, Absent).render
+                            ))))
                     end match
             end match
         end if

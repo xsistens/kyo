@@ -128,7 +128,7 @@ final case class Overlay private (
     panelIdV: Maybe[String] = Absent,
     backdropCtxV: Maybe[MouseEvent => UI.Action] = Absent,
     containClicksV: Boolean = false,
-    triggerV: Maybe[UI] = Absent,
+    triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
     kids: List[UI] = Nil,
     closeV: Maybe[UI.Action] = Absent,
     onOpenF: Maybe[Boolean => UI.Action] = Absent,
@@ -139,11 +139,13 @@ final case class Overlay private (
 
     /** The element the panel anchors to. Rendering it here rather than beside the
       * overlay is what makes the anchor correct by construction: the overlay wraps
-      * `ui` and its own panel in a `div.p-uic-overlay-anchor`, so the caller never
-      * has to know that class exists. The trigger's own handlers are untouched:
-      * this primitive does not toggle the ref for you.
+      * the trigger and its own panel in a `div.p-uic-overlay-anchor`, so the caller
+      * never has to know that class exists. The trigger's own handlers are untouched:
+      * this primitive does not toggle the ref for you. What it does know it says on the
+      * trigger: that it opens a popup (`aria-haspopup`) and whether that popup is open
+      * (`aria-expanded`). See [[PopupTrigger]] for what can be a trigger.
       */
-    def trigger(ui: UI): Overlay = copy(triggerV = Present(ui))
+    def trigger(t: UI.Ast.Interactive | PopupTrigger): Overlay = copy(triggerV = Present(t))
 
     /** Which anchor corner the panel opens from (default [[OverlayAnchor.BottomStart]]). */
     def anchor(v: OverlayAnchor): Overlay = copy(anchorV = v)
@@ -302,8 +304,10 @@ final case class Overlay private (
                     case Present(v) => if v then openContent else UI.empty
                     case Absent     => when(slot.signal)(openContent)
         val drawn = triggerV match
-            case Present(t) => div.cssClass("p-uic-overlay-anchor")(toChild(t), toChild(gated))
-            case Absent     => gated
+            case Present(t) =>
+                val announced = PopupTrigger.announced(t, "dialog", PopupTrigger.expanded(openSlot))
+                div.cssClass("p-uic-overlay-anchor")(toChild(announced), toChild(gated))
+            case _ => gated
         // A signal nobody hears: every dismissal the reader asks for is painted away again.
         if quietFlag || !ReactiveValue.deaf(openSlot, onOpenF) then drawn
         else
@@ -524,8 +528,11 @@ final case class Overlay private (
     private[uic] def renderGated(open: Boolean, panelId: Maybe[String])(using Frame): UI =
         val content: List[UI] = if open then List(copy(panelIdV = panelId.orElse(panelIdV)).openContent) else Nil
         triggerV match
-            case Present(t) => div.cssClass("p-uic-overlay-anchor")((t :: content).map(toChild)*)
-            case Absent     => content.headOption.getOrElse(UI.empty)
+            case Present(t) =>
+                val announced = PopupTrigger.announced(t, "dialog", open.toString)
+                div.cssClass("p-uic-overlay-anchor")((announced :: content).map(toChild)*)
+            case _ => content.headOption.getOrElse(UI.empty)
+        end match
     end renderGated
 
     private[uic] def renderOpen(using Frame): UI =

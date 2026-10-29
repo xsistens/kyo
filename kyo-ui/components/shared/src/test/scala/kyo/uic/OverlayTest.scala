@@ -184,4 +184,21 @@ class OverlayTest extends ReactiveValueContract:
         yield assert(shut.isEmpty, "a constant false shows nothing")
     }
 
+    "a trigger says the overlay is a popup and whether it is open, and nothing more: its handlers are the caller's" in {
+        for
+            closed <- renderHtml(Overlay(false).autoFlip(false).trigger(uic.Button("More"))(UI.span("inside")).render)
+            open   <- renderHtml(Overlay(true).autoFlip(false).trigger(uic.Button("More"))(UI.span("inside")).render)
+            plain  <-
+                elementWithClass(Overlay(true).autoFlip(false).trigger(UI.span.cssClass("more")("More"))(UI.span("inside")).render, "more")
+        yield
+            assert(closed.contains("""aria-haspopup="dialog"""") && closed.contains("""aria-expanded="false""""), closed)
+            assert(open.contains("""aria-expanded="true""""), open)
+            assert(plain.attrs.ariaAttrs.get("haspopup").contains("dialog"), s"aria: ${plain.attrs.ariaAttrs}")
+            assert(
+                plain.attrs.role.isEmpty && plain.attrs.tabIndex.isEmpty && plain.attrs.onKeyDownSelf.isEmpty,
+                "the overlay does not toggle, so it does not make the trigger a control"
+            )
+        end for
+    }
+
 end OverlayTest
