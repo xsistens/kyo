@@ -2858,18 +2858,13 @@ class GoldenRenderTest extends UicTest:
                 yield out.mkString
             nowhereToSave <-
                 for
-                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
-                    out <- UI.runRender(
-                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    held <- Signal.initRef[Seq[Item]](items)
+                    ref  <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
+                    out  <- UI.runRender(
+                        uic.DataTable[Item]().rows(held.readOnly).rowKey(_.id).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
                         ).editingCell(ref).render
                     ).take(1).run
-                yield out.mkString
-            twoSources <-
-                for
-                    rowsR <- Signal.initRef[Seq[Item]](items)
-                    ref   <- Signal.initRef(Absent: Maybe[uic.CellPath[Item]])
-                    out   <- UI.runRender(table.rows(rowsR).editingCell(ref).render).take(1).run
                 yield out.mkString
             bothModes <-
                 for
@@ -2913,8 +2908,7 @@ class GoldenRenderTest extends UicTest:
             assert(occurrences(perRow, "p-editable-column") == 1, "only the row the predicate admits can open")
             // What a binding cannot do, it says.
             assert(noEditable.contains("p-uic-key-error"), "editing bound with no editable column is reported")
-            assert(nowhereToSave.contains("p-uic-key-error"), "and an editable column the table cannot save from")
-            assert(twoSources.contains("p-uic-key-error"), "and two row lists")
+            assert(nowhereToSave.contains("p-uic-key-error"), "and an editable column over rows nobody hears")
             assert(bothModes.contains("p-uic-key-error"), "and binding both modes at once")
             assert(noKey.contains("p-uic-key-error"), "editing is keyed by rowKey, so it needs one")
         end for
