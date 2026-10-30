@@ -2005,6 +2005,7 @@ private[kyo] object DomBackend:
                 // The keydown is still forwarded. Twin of the `data-kyo-inert` block in clientJs.
                 if tgt != null && KeyPolicy.suppressesActivation(ke.key) && tgt.closest("[data-kyo-inert]") != null then
                     e.preventDefault()
+                if tgt != null && radioArrow(ke.key, tgt) then e.preventDefault()
                 if tgt != null && scrollKeyPrevented(ke.key, tgt) && tgt.closest("[data-kyo-scroll-keys]") != null then
                     e.preventDefault()
                 if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
@@ -2597,6 +2598,38 @@ private[kyo] object DomBackend:
       * `target`. The rule itself is [[KeyPolicy.preventsPageScroll]], shared with the server-push
       * client; this reads the two facts it needs off the DOM.
       */
+    /** Walks a radio group that has an inert radio in it, the way [[KeyPolicy.radioStep]] says, and whether it did, in
+      * which case the browser's own walk has to be declined. The browser's walk lands on the inert radio and sticks there;
+      * this one lands where the browser's would if the inert radios were disabled, focusing that radio and clicking it, so
+      * the selection and its change event are the browser's own. Twin of the radio block in clientJs.
+      */
+    private[kyo] def radioArrow(key: String, target: dom.Element): Boolean =
+        // Tag and type are read as attributes, the way the rest of this client tells inputs apart: a type test against
+        // HTMLInputElement needs that constructor as a global, which a DOM without it (jsdom as the tests install it) lacks.
+        target.tagName == "INPUT" && KeyPolicy.radioStepKeys.contains(key) && {
+            val r = target.asInstanceOf[dom.html.Input]
+            r.`type` == "radio" && r.name.nonEmpty && {
+                val radios = "input[type=\"radio\"]"
+                val all    = if r.form != null then r.form.querySelectorAll(radios) else r.ownerDocument.querySelectorAll(radios)
+                val group  = (0 until all.length).map(all(_).asInstanceOf[dom.html.Input])
+                    .filter(x => x.name == r.name && (x.form eq r.form))
+                val from = group.indexWhere(_ eq r)
+                from >= 0 && {
+                    val inert = group.map(_.closest("[data-kyo-inert]") != null)
+                    val rtl   = dom.window.getComputedStyle(r).direction == "rtl"
+                    KeyPolicy.radioStep(key, rtl, inert, group.map(_.disabled), from, r.checked) match
+                        case KeyPolicy.RadioStep.Native    => false
+                        case KeyPolicy.RadioStep.Hold      => true
+                        case KeyPolicy.RadioStep.Select(i) =>
+                            group(i).focus()
+                            group(i).click()
+                            true
+                    end match
+                }
+            }
+        }
+    end radioArrow
+
     private def scrollKeyPrevented(key: String, target: dom.Element): Boolean =
         // `isContentEditable` is an HTMLElement member: an SVG target does not carry it, and jsdom implements
         // contentEditable on no element at all, so the property reads as undefined. Casting undefined straight to

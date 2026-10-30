@@ -2726,6 +2726,26 @@ private[kyo] object HtmlRenderer:
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]')&&(${KeyPolicy.jsKeyTest(
               KeyPolicy.activationKeys
           )}))e.preventDefault();
+           |    // A radio group with an inert radio in it: the browser's own walk lands on the inert radio, whose selection
+           |    // the inert click block declines, and sticks there. The client walks instead, to where the browser lands
+           |    // when the inert radios are disabled, and an inert radio that is selected holds the group. Twin of
+           |    // KeyPolicy.radioStep, which carries the rule; RadioTest holds this script to it in Chrome.
+           |    if(e.target&&e.target.tagName==="INPUT"&&e.target.type==="radio"&&e.target.name&&(${KeyPolicy.jsKeyTest(
+              KeyPolicy.radioStepKeys
+          )})){
+           |      var __rb=e.target,__ra=(__rb.form||__rb.ownerDocument).querySelectorAll('input[type="radio"]'),__rg=[],__rf=-1;
+           |      for(var __ri=0;__ri<__ra.length;__ri++){var __rx=__ra[__ri];if(__rx.name===__rb.name&&__rx.form===__rb.form){if(__rx===__rb)__rf=__rg.length;__rg.push(__rx);}}
+           |      var __rin=function(x){return !!x.closest('[data-kyo-inert]');};
+           |      if(__rf>=0&&__rg.some(__rin)){
+           |        e.preventDefault();
+           |        if(!(__rin(__rb)&&__rb.checked)){
+           |          var __rtl=getComputedStyle(__rb).direction==="rtl",__rk=e.key;
+           |          var __rfw=__rk==="ArrowDown"||(__rk==="ArrowRight"&&!__rtl)||(__rk==="ArrowLeft"&&__rtl);
+           |          var __rn=__rg.length,__rs=__rfw?1:__rn-1,__rj=(__rf+__rs)%__rn;
+           |          for(var __rl=__rn-1;__rl>0;__rl--){var __ry=__rg[__rj];if(!__rin(__ry)&&!__ry.disabled){__ry.focus();__ry.click();break;}__rj=(__rj+__rs)%__rn;}
+           |        }
+           |      }
+           |    }
            |    // preventScrollKeys: suppress native page-scroll for nav keys in a data-kyo-scroll-keys region; keydown still posts below.
            |    // Every key and tag list below is interpolated from KeyPolicy, which the SPA client calls directly,
            |    // so the two transports cannot answer this differently; KeyPolicyTest holds this text against it.

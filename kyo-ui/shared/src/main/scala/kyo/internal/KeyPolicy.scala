@@ -158,6 +158,71 @@ private[kyo] object KeyPolicy:
       */
     def suppressesActivation(key: String): Boolean = activationKeys.contains(key)
 
+    /** The keys a browser walks a radio group with: each one moves the focus AND the selection to the next radio. */
+    val radioStepKeys: Seq[String] = Seq("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight")
+
+    /** What an arrow pressed on a radio does to its group, see [[radioStep]]. */
+    enum RadioStep derives CanEqual:
+        /** The browser's own walk: right as long as no radio in the group is inert. */
+        case Native
+
+        /** Nothing moves: no other radio may be selected, or the focused one is inert and selected, so leaving it would
+          * change it.
+          */
+        case Hold
+
+        /** The client focuses and selects the radio at this index of the group, which is where the browser's walk would
+          * land if every inert radio were disabled.
+          */
+        case Select(index: Int)
+    end RadioStep
+
+    /** The walk an arrow key takes through a radio group in which some radio is inert (`preventActivation`).
+      *
+      * The browser's walk skips a disabled radio, but an inert one is focusable, so the walk lands on it: its selection
+      * is declined (the client cancels the click the walk simulates), the focus stays on it, and every further arrow is
+      * declined there too, which leaves the reader stuck on a radio they cannot select (measured in Chrome, `RadioTest`).
+      * So the client walks instead: on in the key's direction, wrapping, to the next radio that is neither inert nor
+      * disabled, which is where the browser's walk lands when the inert radios are disabled. An inert radio that is
+      * selected holds the group, because walking away from it would change it. Down and Right walk forward, Up and Left
+      * back; in a right-to-left group Left and Right swap, as they do natively.
+      *
+      * @param inert
+      *   for each radio of the group in tree order, whether it is inside an inert region
+      * @param disabled
+      *   for each radio of the group in tree order, whether it is disabled
+      * @param from
+      *   the index of the radio the key was pressed on
+      * @param fromChecked
+      *   whether that radio is selected
+      */
+    def radioStep(
+        key: String,
+        rtl: Boolean,
+        inert: Seq[Boolean],
+        disabled: Seq[Boolean],
+        from: Int,
+        fromChecked: Boolean
+    ): RadioStep =
+        val n = inert.size
+        if !radioStepKeys.contains(key) || !inert.contains(true) then RadioStep.Native
+        else if inert(from) && fromChecked then RadioStep.Hold
+        else
+            val forward = key match
+                case "ArrowDown"  => true
+                case "ArrowUp"    => false
+                case "ArrowRight" => !rtl
+                case _            => rtl
+            val step = if forward then 1 else n - 1
+            @scala.annotation.tailrec
+            def walk(i: Int, left: Int): RadioStep =
+                if left == 0 then RadioStep.Hold
+                else if !inert(i) && !disabled(i) then RadioStep.Select(i)
+                else walk((i + step) % n, left - 1)
+            walk((from + step) % n, n - 1)
+        end if
+    end radioStep
+
     /** `keys` as a JavaScript disjunction over `e.key`, for the server-push client. */
     def jsKeyTest(keys: Seq[String]): String = keys.map(k => s"""e.key==="$k"""").mkString("||")
 

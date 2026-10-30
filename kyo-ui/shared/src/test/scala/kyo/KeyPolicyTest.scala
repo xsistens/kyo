@@ -151,6 +151,62 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
         assert(!KeyPolicy.mayActivate("a") && !KeyPolicy.mayActivate("Tab"))
     }
 
+    // ---- radio groups with an inert radio ----
+
+    import KeyPolicy.RadioStep
+
+    /** The walk over a group of three, the middle one inert, from `from`. */
+    private def step(key: String, from: Int, inert: Seq[Boolean] = Seq(false, true, false), rtl: Boolean = false): RadioStep =
+        KeyPolicy.radioStep(key, rtl, inert, disabled = Seq.fill(inert.size)(false), from = from, fromChecked = !inert(from))
+
+    "a group with no inert radio keeps the browser's own walk" in {
+        for key <- KeyPolicy.radioStepKeys do
+            assert(step(key, 0, inert = Seq(false, false, false)) == RadioStep.Native, key)
+    }
+
+    "an arrow walks past an inert radio to the next one the reader may select, the way it walks past a disabled one" in {
+        // Measured in Chrome (RadioTest): with the middle radio disabled, Down and Right from the first select the third.
+        assert(step("ArrowDown", 0) == RadioStep.Select(2))
+        assert(step("ArrowRight", 0) == RadioStep.Select(2))
+        assert(step("ArrowUp", 2) == RadioStep.Select(0))
+        assert(step("ArrowLeft", 2) == RadioStep.Select(0))
+    }
+
+    "the walk wraps around the group, past an inert radio at either end" in {
+        assert(step("ArrowDown", 1, inert = Seq(false, false, true)) == RadioStep.Select(0))
+        assert(step("ArrowUp", 0, inert = Seq(true, false, false)) == RadioStep.Select(2))
+        assert(step("ArrowDown", 2) == RadioStep.Select(0))
+    }
+
+    "a disabled radio is passed over too" in {
+        val s = KeyPolicy.radioStep("ArrowDown", rtl = false, Seq(false, true, false, false), Seq(false, false, true, false), 0, true)
+        assert(s == RadioStep.Select(3))
+    }
+
+    "an inert radio that is not selected is left for the next one the reader may select" in {
+        assert(KeyPolicy.radioStep("ArrowDown", rtl = false, Seq(false, true, false), Seq.fill(3)(false), 1, false) == RadioStep.Select(2))
+    }
+
+    "an inert radio that is selected holds the group, since any walk away from it would change it" in {
+        assert(KeyPolicy.radioStep("ArrowDown", rtl = false, Seq(false, true, false), Seq.fill(3)(false), 1, true) == RadioStep.Hold)
+    }
+
+    "a group with no other radio the reader may select holds" in {
+        assert(step("ArrowDown", 0, inert = Seq(false, true, true)) == RadioStep.Hold)
+    }
+
+    "right to left swaps Left and Right, and leaves Up and Down" in {
+        assert(step("ArrowLeft", 0, rtl = true) == RadioStep.Select(2))
+        assert(step("ArrowRight", 2, rtl = true) == RadioStep.Select(0))
+        assert(step("ArrowDown", 0, rtl = true) == RadioStep.Select(2))
+    }
+
+    "a key that does not walk a group leaves it to the browser" in {
+        assert(step(" ", 0) == RadioStep.Native)
+        assert(step("Enter", 0) == RadioStep.Native)
+        assert(step("Home", 0) == RadioStep.Native)
+    }
+
     // ---- the two clients agree ----
 
     /** The server-push client's script, which is where the JavaScript twin of these rules lives. */
@@ -164,7 +220,8 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
             KeyPolicy.linkActivationKeys,
             KeyPolicy.implicitSubmissionKeys,
             KeyPolicy.anyActivationKeys,
-            KeyPolicy.activationKeys
+            KeyPolicy.activationKeys,
+            KeyPolicy.radioStepKeys
         )
         val missing = expected.filterNot(keys => clientJs.contains(KeyPolicy.jsKeyTest(keys)))
         assert(missing.isEmpty, s"the client script does not carry these key sets verbatim: $missing")

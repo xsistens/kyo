@@ -265,4 +265,109 @@ class RadioTest extends UITest:
         }
     }
 
+    // ---- Arrow keys in a group with an inert radio ----
+
+    /** A group of radios with the ids `ids`, the one with id `b` shaped by `mid`, each reporting its changes to a log. */
+    private def group(mid: UI.Ast.Radio => UI.Ast.Radio, ids: Seq[String] = Seq("a", "b", "c")): UI < Async =
+        for
+            log  <- Signal.initRef("")
+            done <- Signal.initRef("")
+        yield
+            val radios = ids.map { id =>
+                val r = UI.radio.name("g").id(id).onChange(v => log.updateAndGet(_ + s"$id$v,").unit)
+                if id == "b" then mid(r) else r
+            }
+            UI.div(
+                UI.div(UI.fragment(radios*)),
+                UI.button("done").id("d").onClick(done.set("done")),
+                log.map(v => UI.span(v).id("log")),
+                done.map(v => UI.span(v).id("done"))
+            )
+
+    /** The selected radios and the focused one, read right after the key, then the log, read once a click after the key
+      * has been answered: the session answers events in order, so every change the key caused is in the log by then.
+      */
+    private def pressed(on: String, key: Key)(using Frame): (String, String) < (Browser & Abort[BrowserReadException]) =
+        val state =
+            "(() => Array.from(document.querySelectorAll('input[type=radio]')).filter(r => r.checked).map(r => r.id).join('') + ' focus ' + " +
+                "(document.activeElement && document.activeElement.id))()"
+        for
+            _   <- Browser.press(Selector.id(on), key)
+            now <- kyo.internal.BrowserEval.evalJs(state)
+            _   <- Browser.click(Selector.id("d"))
+            _   <- Browser.assertText(Selector.id("done"), "done")
+            log <- kyo.internal.BrowserEval.evalJs("document.getElementById('log').textContent")
+        yield (now, log)
+        end for
+    end pressed
+
+    "an arrow walks past a disabled radio by itself: the behavior an inert one has to match" in {
+        withUI(group(_.disabled(true))) {
+            for
+                _ <- Browser.click(Selector.id("a"))
+                _ <- Browser.assertChecked(Selector.id("a"))
+                r <- pressed("a", Key.ArrowDown)
+            yield assert(r == ("c focus c", "atrue,ctrue,"), s"selected and focused, log: $r")
+        }
+    }
+
+    "an arrow walks past an inert radio to the next one the reader may select, and reports that one" in {
+        withUI(group(_.preventActivation)) {
+            for
+                _ <- Browser.click(Selector.id("a"))
+                _ <- Browser.assertChecked(Selector.id("a"))
+                r <- pressed("a", Key.ArrowDown)
+            yield assert(r == ("c focus c", "atrue,ctrue,"), s"selected and focused, log: $r")
+        }
+    }
+
+    "an arrow back walks past an inert radio the same way" in {
+        withUI(group(_.preventActivation)) {
+            for
+                _ <- Browser.click(Selector.id("c"))
+                _ <- Browser.assertChecked(Selector.id("c"))
+                r <- pressed("c", Key.ArrowLeft)
+            yield assert(r == ("a focus a", "ctrue,atrue,"), s"selected and focused, log: $r")
+        }
+    }
+
+    "an inert radio the reader is on, and that is not selected, is left for the next one the reader may select" in {
+        withUI(group(_.preventActivation)) {
+            for
+                _ <- Browser.click(Selector.id("a"))
+                _ <- Browser.assertChecked(Selector.id("a"))
+                r <- pressed("b", Key.ArrowDown)
+            yield assert(r == ("c focus c", "atrue,ctrue,"), s"selected and focused, log: $r")
+        }
+    }
+
+    "an inert radio that is selected keeps the group where it is" in {
+        withUI(group(_.checked(true).preventActivation)) {
+            for
+                _ <- Browser.assertChecked(Selector.id("b"))
+                r <- pressed("b", Key.ArrowDown)
+            yield assert(r == ("b focus b", ""), s"selected and focused, log: $r")
+        }
+    }
+
+    "in a right-to-left group Left walks forward and Right back, by itself" in {
+        withUI(group(identity).map(g => UI.div(g).jsProp("dir", "rtl"))) {
+            for
+                _ <- Browser.click(Selector.id("b"))
+                _ <- Browser.assertChecked(Selector.id("b"))
+                r <- pressed("b", Key.ArrowLeft)
+            yield assert(r == ("c focus c", "btrue,ctrue,"), s"selected and focused, log: $r")
+        }
+    }
+
+    "in a right-to-left group the walk past an inert radio keeps that direction" in {
+        withUI(group(_.preventActivation, Seq("a", "b", "c", "e")).map(g => UI.div(g).jsProp("dir", "rtl"))) {
+            for
+                _ <- Browser.click(Selector.id("c"))
+                _ <- Browser.assertChecked(Selector.id("c"))
+                r <- pressed("c", Key.ArrowRight)
+            yield assert(r == ("a focus a", "ctrue,atrue,"), s"selected and focused, log: $r")
+        }
+    }
+
 end RadioTest
