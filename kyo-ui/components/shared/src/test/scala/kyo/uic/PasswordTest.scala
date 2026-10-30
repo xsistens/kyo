@@ -153,4 +153,34 @@ class PasswordTest extends ReactiveValueContract:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    /** Whether the wrapper of `t` says it is filled. */
+    private def filled(t: UI)(using Frame): Boolean < Sync = elementWithClass(t, "p-password").map(carriesClass(_, "p-inputwrapper-filled"))
+
+    // Without the meter a ref is bound to the field directly and nothing renders per keystroke, so the wrapper follows the
+    // ref through a class channel, as the meter's render follows it by drawing again.
+    "bound to a ref with the meter off, the wrapper is filled while the ref holds text" in {
+        for
+            held <- Signal.initRef("abc")
+            ui = uic.Password().value(held).render
+            first <- filled(ui)
+            _     <- held.set("")
+            empty <- filled(ui)
+            _     <- held.set("x")
+            again <- filled(ui)
+        yield assert((first, empty, again) == (true, false, true), s"filled over abc, empty, x: ${(first, empty, again)}")
+    }
+
+    "bound to a ref with the mask toggle and the meter off, the wrapper is filled while the ref holds text" in {
+        for
+            held <- Signal.initRef("abc")
+            t    <- readyTree(uic.Password().toggleMask(true).value(held).render)(elementsWithClass(
+                _,
+                "p-password-toggle-mask-icon"
+            ).map(_.nonEmpty))
+            first <- filled(t)
+            _     <- held.set("")
+            empty <- filled(t)
+        yield assert((first, empty) == (true, false), s"filled over abc, then empty: ${(first, empty)}")
+    }
+
 end PasswordTest

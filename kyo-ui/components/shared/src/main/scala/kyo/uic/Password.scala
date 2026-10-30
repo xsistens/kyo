@@ -272,7 +272,11 @@ final case class Password private (
             .cssClass("p-password")
             .cssClass("p-component")
             .cssClass("p-inputwrapper")
-        if current.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        // Without the meter a ref binds the field directly and nothing draws again per keystroke, so the wrapper
+        // follows the ref through a class channel; every other path draws from the text it renders.
+        el = valueBinding match
+            case Present(ReactiveVariable(r)) if !feedbackFlag => el.cssClass("p-inputwrapper-filled", r.map(_.nonEmpty))
+            case _                                             => el.cssClass("p-inputwrapper-filled", current.nonEmpty)
         if fluidFlag then el = el.cssClass("p-password-fluid")
         val root = el(((in: UI) :: toggle).map(toChild)*)
 
