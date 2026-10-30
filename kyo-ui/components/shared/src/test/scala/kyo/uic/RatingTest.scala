@@ -15,15 +15,73 @@ import kyo.UI.*
   * One activation, one handler. The click is the one that survives, because it is the one both
   * inputs produce: a mouse press on the visible star reaches only the option (the radio is
   * clipped away), and a key press reaches it through the input.
+  *
+  * Both `value` slots hold to rule A ([[ReactiveValueContract]]) through a click on the fourth star, and say they are fixed
+  * on the group, which is where a radio group's `aria-readonly` lives.
   */
-class RatingTest extends UicTest:
+class RatingTest extends ReactiveValueContract:
 
-    /** The five `p-rating-option` boxes, in star order. */
+    /** The five `p-rating-option` boxes, in star order: those of the tree published last, where several are. */
     private def options(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
-        elementsWithClass(ui, "p-rating-option")
+        elementsWithClass(ui, "p-rating-option").map(_.take(5))
 
     private def radios(ui: UI)(using Frame): Chunk[UI.Ast.Radio] < Sync =
-        elements(ui).map(_.collect { case r: UI.Ast.Radio => r })
+        elements(ui).map(_.collect { case r: UI.Ast.Radio => r }.take(5))
+
+    /** The stars a render shows: the radio that is checked (0 where none is), which the stars drawn active must agree with. */
+    private def stars(t: UI)(using Frame): Int < Sync =
+        for
+            rs <- radios(t)
+            os <- options(t)
+        yield
+            val native = rs.indexWhere(_.checked.exists { case UI.Bound.Const(c) => c; case _ => false }) + 1
+            val drawn  = os.count(_.attrs.cssClasses.contains("p-rating-option-active"))
+            if drawn != native then throw new AssertionError(s"drawn $drawn active stars over a checked star $native")
+            native
+
+    /** The group, which says the rating is fixed: a radio has no readonly state of its own. */
+    private def group(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-rating")
+
+    private def readonlyGroup(g: UI.Ast.Element): Boolean =
+        g.attrs.ariaAttrs.get("readonly").contains("true") && g.attrs.cssClasses.contains("p-readonly") &&
+            g.attrs.dataAttrs.get("kyo-inert").contains("1")
+
+    /** The radios grouped by the name the mount mints, which is when the tree the reader clicks in is the one it meets. */
+    private def named(t: UI)(using Frame): Boolean < Sync = radios(t).map(rs => rs.size == 5 && rs.forall(_.name.isDefined))
+
+    holds(new Slot[uic.Rating, Int](
+        name = "value",
+        bare = Present(uic.Rating()),
+        bind = uic.Rating().value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = 0,
+        next = 4,
+        control = t => options(t).map(_(3)),
+        shows = stars(_),
+        ready = Present(named(_)),
+        fixedOn = Present(group(_)),
+        saysFixed = readonlyGroup
+    ))
+
+    // The form layer's `Double` binding reports through the same `onChange(Int)`: the slot is held with that report read
+    // as the `Double` it is. Unbound there is one state, the `Int` slot's, so this slot has no unbound form of its own.
+    holds(new Slot[uic.Rating, Double](
+        name = "value as a Double",
+        bare = Absent,
+        bind = uic.Rating().value(_),
+        hear = (c, f) => c.onChange((stars: Int) => f(stars.toDouble)),
+        event = "onChange",
+        render = _.render,
+        start = 0.0,
+        next = 4.0,
+        control = t => options(t).map(_(3)),
+        shows = t => stars(t).map(_.toDouble),
+        ready = Present(named(_)),
+        fixedOn = Present(group(_)),
+        saysFixed = readonlyGroup
+    ))
 
     /** What the browser does for one arrow key: check the radio, fire its `change`, then let the
       * activation click bubble to the option.
@@ -115,37 +173,21 @@ class RatingTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a value bound one way that nothing hears says so; onChange, a ref or disabled keep it quiet" in {
+    "a value bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
         def errors(c: uic.Rating): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
             held   <- Signal.initRef(2)
-            deaf   <- errors(uic.Rating().value(held.readOnly))
-            change <- errors(uic.Rating().value(held.readOnly).onChange(_ => ()))
             twoWay <- errors(uic.Rating().value(held))
             off    <- errors(uic.Rating().value(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(change.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can change it")
+        yield assert(twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can change it")
         end for
     }
 
-    "a constant nobody hears is fixed: read-only, and no card" in {
+    "a fixed constant is drawn with its stars, whichever slot holds it" in {
         for
-            root <- elementWithClass(uic.Rating().value(2).render, "p-rating")
-            card <- elementsWithClass(uic.Rating().value(2).render, "p-uic-key-error")
-        yield
-            assert(root.attrs.ariaAttrs.get("readonly").contains("true"), "a fixed rating says it is read-only")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound rating keeps the stars the reader picks" in {
-        def fourChecked(t: UI): Boolean < Sync =
-            radios(t).map(rs => rs.size == 5 && rs(3).checked.exists { case UI.Bound.Const(c) => c; case _ => false })
-        for
-            after <- publishedAfterReady(uic.Rating().render, t => options(t).map(_.exists(declaresClick)), until = fourChecked)(t =>
-                options(t).map(os => click(os(3)))
-            )
-        yield assert(after.nonEmpty, "the rating never showed the stars the reader picked")
+            int    <- stars(uic.Rating().value(2).render)
+            double <- stars(uic.Rating().value(2.0).render)
+        yield assert(int == 2 && double == 2, s"shows $int and $double for the constant 2")
     }
 
 end RatingTest
