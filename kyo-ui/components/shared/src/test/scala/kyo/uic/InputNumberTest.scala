@@ -64,16 +64,6 @@ class InputNumberTest extends UicTest:
             case Present(UI.Bound.Const(v)) => Kyo.lift(v)
             case _                          => Kyo.lift("")
 
-    // The way the runtime dispatches an input event: the bound ref is written first, then onInput is told.
-    private def typeText(n: UI.Ast.NumberInput, text: String)(using Frame): Any < Async =
-        val write: UI.Action = n.value match
-            case Present(UI.Bound.Ref(ref)) => ref.set(text)
-            case _                          => ()
-        n.onInput match
-            case Present(f) => handled(write.andThen(f(text)))
-            case Absent     => throw new AssertionError("the field hears no typing")
-    end typeText
-
     "a constant text is the starting text, kept by the field" in {
         for
             t    <- mountedWhen(uic.InputNumber().text("4.").render)(t => number(t).map(_.value.isDefined))
@@ -95,7 +85,7 @@ class InputNumberTest extends UicTest:
             )
             n     <- number(t)
             shown <- textOf(n)
-            _     <- typeText(n, "123")
+            _     <- typeInto(n, "123")
             h     <- held.get
             s     <- seen.get
             deaf  <- elementsWithClass(uic.InputNumber().text(held.readOnly).render, "p-uic-key-error")
@@ -111,9 +101,107 @@ class InputNumberTest extends UicTest:
             held <- Signal.initRef("")
             seen <- Signal.initRef(List.empty[(String, String)])
             n    <- number(uic.InputNumber().text(held).onTextChange(v => held.get.map(h => seen.updateAndGet(_ :+ (v, h)).unit)).render)
-            _    <- typeText(n, "-")
+            _    <- typeInto(n, "-")
             s    <- seen.get
         yield assert(s == List(("-", "-")), s"reported, held: $s")
+    }
+
+    // The client toggles the wrapper's class from the text the number field holds (kyo-ui's filledClass with an ancestor
+    // target), so a field bound to a constant the reader empties, or one keeping text, is not left with a stale class. The
+    // wrapper's starting class comes from the starting text. The browser half is held in kyo-ui.
+    "every path marks the field for the wrapper's filled class, and the page as first rendered stamps it from a starting text" in {
+        def marked(h: String) = h.contains("""data-kyo-filled-up="p-inputwrapper-filled"""") &&
+            h.contains("""data-kyo-filled-on=".p-inputnumber"""")
+        for
+            held    <- Signal.initRef("4.5")
+            number  <- renderHtml(uic.InputNumber().value(5.0).onChange(_ => ()).render)
+            text    <- renderHtml(uic.InputNumber().text("4.").render)
+            textRef <- renderHtml(uic.InputNumber().text(held).render)
+            bare    <- renderHtml(uic.InputNumber().render)
+            textNo  <- renderHtml(uic.InputNumber().text("").render)
+        yield
+            Seq(number, text, textRef).foreach(h => assert(classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+            Seq(bare, textNo).foreach(h => assert(!classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+        end for
+    }
+
+    // The field keeps what the reader types as text (unbound, or bound to a text), so the number a blur reports is the
+    // text the field holds as focus leaves it, read the way a spin reads it.
+    "unbound, a blur reports the number the reader typed" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            t    <- mountedWhen(uic.InputNumber().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(t =>
+                number(t).map(_.value.isDefined)
+            )
+            n   <- number(t)
+            _   <- typeInto(n, "5")
+            _   <- blurOut(n, "5")
+            got <- seen.get
+        yield assert(got == Chunk(5.0), s"reported $got")
+    }
+
+    "bound to a text, a blur reports the number the text holds, and a text that is no number as zero" in {
+        for
+            held <- Signal.initRef("")
+            seen <- Signal.initRef(Chunk.empty[Double])
+            n    <- number(uic.InputNumber().text(held).onBlur(v => seen.updateAndGet(_.append(v)).unit).render)
+            _    <- typeInto(n, "4.5")
+            _    <- blurOut(n, "4.5")
+            _    <- typeInto(n, "-")
+            _    <- blurOut(n, "-")
+            got  <- seen.get
+        yield assert(got == Chunk(4.5, 0.0), s"reported $got")
+    }
+
+    // A number field commits on change, clamped into its bounds, so what it holds as focus leaves is the committed
+    // number, not the text the reader left in the field.
+    "bound to a number, a blur reports the number committed, clamped, not the text typed" in {
+        for
+            held <- Signal.initRef(3.0)
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(held).max(10).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(15.0))
+            n2  <- number(ui)
+            _   <- blurOut(n2, "15")
+            got <- seen.get
+        yield assert(got == Chunk(10.0), s"reported $got")
+    }
+
+    // With no ref a commit writes nowhere, so the field alone holds what the reader typed: the blur reports that, read
+    // off the field the way a spin reads a text and clamped the way a commit is.
+    "from a constant somebody hears, a blur reports the number the reader typed, not the constant" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(5.0).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0))
+            n2  <- number(ui)
+            _   <- blurOut(n2, "7")
+            got <- seen.get
+        yield assert(got == Chunk(7.0), s"reported $got")
+    }
+
+    "bound one way, a blur before the repaint reports the number the reader typed, not the owner's" in {
+        for
+            held <- Signal.initRef(5.0)
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(held.readOnly).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- blurOut(n, "7")
+            got <- seen.get
+        yield assert(got == Chunk(7.0), s"reported $got")
+    }
+
+    "with no ref, a blur reports the typed number clamped into the bounds, and a field holding no number as zero, clamped" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(5.0).min(1).max(10).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- blurOut(n, "15")
+            _   <- blurOut(n, "")
+            got <- seen.get
+        yield assert(got == Chunk(10.0, 1.0), s"reported $got")
     }
 
 end InputNumberTest

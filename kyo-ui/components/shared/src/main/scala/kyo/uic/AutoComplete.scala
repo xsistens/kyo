@@ -124,8 +124,9 @@ final case class AutoComplete[A] private (
     /** The raw text. A `SignalRef` binds TWO-WAY: typing, option picks and a clear write back into the ref, and ref
       * changes update the field and re-filter the suggestions. Any other signal binds ONE-WAY: the field shows it, and an
       * edit writes nothing and only reports: typing through [[onInput]], a pick through [[onChange]] and [[onSelect]], a
-      * clear through [[onChange]]. A card names each edit nothing hears. A constant is the starting text. `ref.readOnly`
-      * opts a ref out.
+      * clear through [[onChange]]. A card names each edit nothing hears. A constant is the starting text: unbound or from
+      * a constant, the field keeps the text itself, so the suggestions follow what the reader types, a pick shows its
+      * label and the clear button empties it. `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): AutoComplete[A] = copy(valueBinding = Present(ReactiveValue(v)))
 
@@ -206,9 +207,10 @@ final case class AutoComplete[A] private (
     /** Fired with the picked option after its label is written into the ref. */
     def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = copy(onSelectF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current text. Unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the text the field holds as focus
+      * leaves it, what the reader typed or picked. Unlike `onChange` it fires even
+      * when the value was not edited. The form-validation layer wires its `Blur`
+      * trigger here.
       */
     def onBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onBlurF = Present(Callback.of(f)))
 
@@ -289,14 +291,28 @@ final case class AutoComplete[A] private (
     end fieldKey
 
     private[uic] def render(using Frame): UI =
+        valueBinding match
+            case Present(ReactiveValue.Dyn(_)) => drawn
+            // Unbound or started from a constant, the text is the field's own: the suggestions filter by it, a pick writes
+            // its label into it and a clear empties it, and a field drawn with a constant would be given the constant back
+            // by the render that typing's open causes. A ref the field keeps for as long as it is shown holds it.
+            case other if interactive =>
+                ReactiveValue.owned(other.flatMap(_.const).getOrElse(""))(own => copy(valueBinding = Present(own)).drawn)(stat)
+            case _ => drawn
+
+    /** The closed anatomy over the text as bound, with nothing wired: what a static projection shows. */
+    private def stat(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
+            copy(optionsV = opts).body(cur, Absent, validity)
+        ))
+    end stat
+
+    private def drawn(using Frame): UI =
         // The interaction state (open/highlight/show-all) lives in signals allocated
         // by this effectful mount. Static projections (SSG, the SSR page GET,
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val stat: UI = validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
-            copy(optionsV = opts).body(cur, Absent, validity)
-        ))
         if !interactive then stat
         else
             val field = UI.mounted {
@@ -324,7 +340,7 @@ final case class AutoComplete[A] private (
                 )
             end if
         end if
-    end render
+    end drawn
 
     /** The edits of a one-way text that reach nobody, each with the event that would hear it. They report through
       * different events: typing through `onInput` (without it the suggestions keep filtering the text the owner holds),
@@ -478,9 +494,9 @@ final case class AutoComplete[A] private (
             // ArrowDown opens / moves the highlight down, ArrowUp up (no wrap),
             // Enter picks the highlighted suggestion, Escape closes.
             f = f.preventScrollKeys.onKeyDown(fieldKey(visible, query, panelShown, s, pick))
-            // Native onBlur carries no payload → read the current text from the binding
-            // (unbound falls back to the empty value).
-            onBlurF.foreach(g => f = f.onBlur(valueBinding.fold(g(""))(_.current.map(g))))
+            // The blur carries the text the field holds as focus leaves it, the same text the field's own (or the
+            // caller's) ref holds, since kyo-ui writes it on every keystroke; a one-way text reports the field's.
+            onBlurF.foreach(g => f = f.onBlur((_, text) => g(text)))
         }
         val field: UI = onChangeF.map(g => f.onChange(v => g(v).andThen(st.fold[UI.Action](())(_.repaint)))).getOrElse(f)
 

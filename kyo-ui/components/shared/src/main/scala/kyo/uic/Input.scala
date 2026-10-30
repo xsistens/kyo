@@ -50,7 +50,8 @@ final case class Input private (
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     focusAutoFlag: Boolean = false,
-    unheardAsV: (String, String) = ("Input", "onInput or onChange")
+    unheardAsV: (String, String) = ("Input", "onInput or onChange"),
+    filledUpV: Maybe[(String, String)] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Input
 
@@ -63,6 +64,11 @@ final case class Input private (
       * own events are what hear it ([[InputMask]]).
       */
     private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = (component, events))
+
+    /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
+      * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
+      */
+    private[uic] def filledOn(cls: String, closest: String): Input = copy(filledUpV = Present((cls, closest)))
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
@@ -135,7 +141,9 @@ final case class Input private (
     def onInput(f: String => UI.Action)(using Frame): Input  = copy(onInputF = Present(Callback.of(f)))
     def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current value. Unlike
+    /** Fires on focus loss (native `blur`) with the text the field holds as focus
+      * leaves it, which kyo-ui's blur carries (its two-parameter `onBlur`): what the reader typed,
+      * also when nothing binds the field or it started from a constant. Unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
@@ -171,7 +179,6 @@ final case class Input private (
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
-                    (bb, e) => bb.onBlur(e),
                     validity
                 )
             case InputType.Email =>
@@ -182,11 +189,10 @@ final case class Input private (
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
-                    (bb, e) => bb.onBlur(e),
                     validity
                 )
             case InputType.Number =>
-                buildField(numberInput, shown, repaint, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e), validity)
+                buildField(numberInput, shown, repaint, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
             case InputType.Password =>
                 buildField(
                     withConstraints(passwordInput),
@@ -195,7 +201,6 @@ final case class Input private (
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
-                    (bb, e) => bb.onBlur(e),
                     validity
                 )
             case InputType.Tel =>
@@ -206,7 +211,6 @@ final case class Input private (
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
-                    (bb, e) => bb.onBlur(e),
                     validity
                 )
             case InputType.URL =>
@@ -217,7 +221,6 @@ final case class Input private (
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
-                    (bb, e) => bb.onBlur(e),
                     validity
                 )
         // A two-way ref is kyo-ui's own binding. A one-way signal draws the field from what its owner holds and paints it
@@ -237,7 +240,7 @@ final case class Input private (
     /** Applies the shared attribute chain to a concrete kyo text-input factory. The
       * F-bounded refinement (`Self <: T`) keeps every `Self`-returning setter
       * chainable across the six concrete input types selected by [[InputType]]; the
-      * four setters kyo declares only on the concrete classes (not on the
+      * three setters kyo declares only on the concrete classes (not on the
       * `TextInput` trait) arrive as lambdas. The bound intersects `Interactive` because
       * focus seeding lives there and not on `TextInput`, while every concrete input class
       * is both.
@@ -249,7 +252,6 @@ final case class Input private (
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
-        setOnBlur: (T, UI.Action) => T,
         validity: FieldValidity
     )(using Frame): UI =
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
@@ -264,6 +266,10 @@ final case class Input private (
         if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
         b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-inputtext-fluid")
+        // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
+        // field's text, the reader's edit of a starting one): kyo-ui toggles it there, the static render from the start.
+        b = b.filledClass("p-filled")
+        filledUpV.foreach((cls, closest) => b = b.filledClass(cls, closest))
         valueBinding match
             case Present(ReactiveVariable(r)) => b = b.value(r)
             case _                            => shown.foreach(v => b = b.value(v))
@@ -291,12 +297,8 @@ final case class Input private (
             case Absent                      => b
         b = onInputF.map(f => setOnInput(b, v => f(v).andThen(repaint))).getOrElse(b)
         b = onChangeF.map(f => setOnChange(b, v => f(v).andThen(repaint))).getOrElse(b)
-        // onBlur carries no payload, so the current value is read from the binding
-        // and the prepared effect is handed to the concrete factory's onBlur (passed
-        // in like onInput/onChange, since neither is on the TextInput bound).
-        b = onBlurF match
-            case Present(f) => setOnBlur(b, valueBinding.fold(f(""))(_.current.map(f)))
-            case Absent     => b
+        // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
+        b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
         b
     end buildField
 

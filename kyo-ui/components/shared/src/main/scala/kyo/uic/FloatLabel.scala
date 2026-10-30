@@ -28,9 +28,10 @@ end FloatLabelVariant
   *
   * The float mechanics are pure CSS: `:has(input:focus)` floats the label on
   * focus with no JS, and the filled state is Prime's `.p-filled` class on the
-  * field, stamped here at render time from the wrapped field's value binding
-  * (a `SignalRef` value re-renders on change, so `.p-filled` tracks the bound
-  * text; a `change` event commits on blur, exactly when the focus float ends).
+  * field, which [[Input]] and [[TextArea]] carry themselves: kyo-ui's client
+  * toggles it from the text the field holds as the reader types (`filledClass`),
+  * whatever binds the field, and the page as first rendered carries it from the
+  * starting text.
   * NOTE: Prime floats the label permanently when the field has a `placeholder`
   * (they would overlap); same behaviour here via `:has(input[placeholder])`.
   *
@@ -92,9 +93,8 @@ object FloatLabel:
     def apply(autoComplete: AutoComplete[?], label: String): FloatLabel =
         new FloatLabel(Host.Ac(autoComplete), label)
 
-    /** Shared FloatLabel/IftaLabel body: renders through the field's value
-      * binding so Prime's `.p-filled` / `.p-inputwrapper-filled` classes track
-      * the current value.
+    /** Shared FloatLabel/IftaLabel body: the field and the label. Each host carries
+      * Prime's `.p-filled` / `.p-inputwrapper-filled` class itself.
       */
     private[uic] def renderWrapper(
         base: Ast.Div,
@@ -109,23 +109,11 @@ object FloatLabel:
         end labelled
 
         host match
-            case Host.In(input) =>
-                def body(filled: Boolean): UI =
-                    labelled((if filled then input.extraClass("p-filled") else input).render)
-                input.valueBinding match
-                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v.nonEmpty))
-                    case Present(ReactiveValue.Const(v)) => body(v.nonEmpty)
-                    case Absent                          => body(false)
-                end match
-
-            case Host.Ta(textArea) =>
-                def body(filled: Boolean): UI =
-                    labelled((if filled then textArea.extraClass("p-filled") else textArea).render)
-                textArea.valueBinding match
-                    case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v.nonEmpty))
-                    case Present(ReactiveValue.Const(v)) => body(v.nonEmpty)
-                    case Absent                          => body(false)
-                end match
+            // The field marks itself `p-filled` for kyo-ui's client from the text it holds (`filledClass`), so the label
+            // needs no region of its own around it: one drew the whole field again on every keystroke into a ref, and could
+            // not know the text of a field nothing binds or the reader's edit of a starting one.
+            case Host.In(input)    => labelled(input.render)
+            case Host.Ta(textArea) => labelled(textArea.render)
 
             case Host.Ac(auto) =>
                 // The AutoComplete stamps p-filled INSIDE its own region, from the text it reads there: a region here would

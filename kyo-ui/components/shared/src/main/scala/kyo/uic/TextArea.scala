@@ -103,8 +103,9 @@ final case class TextArea private (
     def onInput(f: String => UI.Action)(using Frame): TextArea  = copy(onInputF = Present(Callback.of(f)))
     def onChange(f: String => UI.Action)(using Frame): TextArea = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the field's current value; unlike onChange it
-      * fires even when the value was not edited. The validation layer's Blur trigger.
+    /** Fires on focus loss with the text the field holds as focus leaves it (what
+      * the reader typed, also unbound or from a constant); unlike onChange it fires
+      * even when the value was not edited. The validation layer's Blur trigger.
       */
     def onBlur(f: String => UI.Action)(using Frame): TextArea = copy(onBlurF = Present(Callback.of(f)))
 
@@ -136,6 +137,8 @@ final case class TextArea private (
         b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-textarea-fluid")
         if autoResizeFlag then b = b.cssClass("p-textarea-resizable").cssClass("p-uic-autoresize")
+        // Prime's `p-filled` follows the text the field holds, which kyo-ui toggles in the client (see Input).
+        b = b.filledClass("p-filled")
         valueBinding match
             case Present(ReactiveVariable(r)) => b = b.value(r)
             case _                            => shown.foreach(v => b = b.value(v))
@@ -160,9 +163,8 @@ final case class TextArea private (
         b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
         b = onInputF.map(f => b.onInput(v => f(v).andThen(repaint))).getOrElse(b)
         b = onChangeF.map(f => b.onChange(v => f(v).andThen(repaint))).getOrElse(b)
-        b = onBlurF match
-            case Present(f) => b.onBlur(valueBinding.fold(f(""))(_.current.map(f)))
-            case Absent     => b
+        // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
+        b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
         b
     end body
 end TextArea

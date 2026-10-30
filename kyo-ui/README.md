@@ -107,7 +107,7 @@ By default an event bubbles through the tree: every ancestor that declared a han
 
 `onContextMenu` fires on right-click (the `contextmenu` event). When the right-click lands on an element (or a descendant) that declared a handler, the client suppresses the browser's native context menu (`preventDefault`); a right-click with no context-menu handler anywhere in its ancestor chain keeps the native menu. Like `onClick`, it is available as a by-name action or a `MouseEvent`-typed handler.
 
-> **Note:** `onClick`, `onClickSelf`, `onContextMenu`, `onFocus`, `onBlur`, and `Form.onSubmit` each available as a by-name `=> UI.Action` or as a typed handler receiving `MouseEvent` or `KeyboardEvent`. `onKeyDown` and `onKeyUp` take a `KeyboardEvent => UI.Action`; the function shape is required because the handler receives the key. Per-input change handlers take `String => UI.Action`, `Boolean => UI.Action`, or `Double => UI.Action`.
+> **Note:** `onClick`, `onClickSelf`, `onContextMenu`, `onFocus`, `onBlur`, and `Form.onSubmit` each available as a by-name `=> UI.Action` or as a typed handler receiving `MouseEvent` or `KeyboardEvent`. `onKeyDown` and `onKeyUp` take a `KeyboardEvent => UI.Action`; the function shape is required because the handler receives the key. Per-input change handlers take `String => UI.Action`, `Boolean => UI.Action`, or `Double => UI.Action`. A text field also takes `onBlur((e, text) => ...)`, told apart from the `MouseEvent` form by the lambda's arity, which hears the text the field holds as focus leaves it, so a field nothing binds still reports what the reader typed.
 
 ### Invalid states do not compile
 

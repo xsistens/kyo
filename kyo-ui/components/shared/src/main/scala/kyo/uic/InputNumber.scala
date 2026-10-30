@@ -171,9 +171,13 @@ final case class InputNumber private (
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current number; unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the field's current number: bound to
+      * a ref, the number the ref holds (committed, clamped); otherwise the number in
+      * the text the field holds as focus leaves it, `0` for a text that is no number,
+      * clamped into the bounds where the field is bound to a number (a constant or a
+      * one-way signal) and as typed where it keeps text (unbound, or bound to a text).
+      * Unlike `onChange` it fires even when the value was not edited. The
+      * form-validation layer wires its `Blur` trigger here.
       */
     def onBlur(f: Double => UI.Action)(using Frame): InputNumber = copy(onBlurF = Present(Callback.of(f)))
 
@@ -258,10 +262,13 @@ final case class InputNumber private (
         textShown: Maybe[String] = Absent
     )(using Frame): UI =
         // === the native number field ============================================
+        // The wrapper's `p-inputwrapper-filled` follows the text the number field holds, toggled by kyo-ui's client, so a
+        // field the reader empties (from a constant, or keeping text) does not keep a class no render takes off.
         var in = numberInput
             .cssClass("p-inputnumber-input")
             .cssClass("p-inputtext")
             .cssClass("p-component")
+            .filledClass("p-inputwrapper-filled", ".p-inputnumber")
         idV.foreach(v => in = in.id(v))
         if focusAutoFlag then in = in.focusAuto(true)
         sizeV match
@@ -308,13 +315,16 @@ final case class InputNumber private (
         // text-bound field is left out of it: its content is what the reader typed, and
         // normalising a Double back into it would rewrite `4.` to `4` under them.
         if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref).andThen(repaint))
-        // onBlur carries no payload, so the current number is read from the bound ref
-        // (or the resolved current value when unbound) and handed to the native blur.
+        // A field bound to a ref holds the number it committed, clamped, so the blur reports the ref as focus leaves.
+        // Anywhere else only the field holds what the reader typed (a commit with no ref writes nowhere, and a one-way
+        // owner's repaint can land after the blur), so the blur reports the text the field carries, read the way a spin
+        // reads a text (no number is 0). Bound to a number it is clamped as a commit is; a text binding keeps the text.
         if interactive then
             onBlurF.foreach { f =>
-                in = in.onBlur(ref match
-                    case Present(r) => r.use(f)
-                    case Absent     => f(value.getOrElse(0.0)))
+                in = ref match
+                    case Present(r)                => in.onBlur(r.use(f))
+                    case Absent if value.isDefined => in.onBlur((_, t) => f(clamp(t.toDoubleOption.getOrElse(0.0))))
+                    case Absent                    => in.onBlur((_, t) => f(t.toDoubleOption.getOrElse(0.0)))
             }
         end if
 
@@ -371,7 +381,11 @@ final case class InputNumber private (
             .cssClass("p-inputnumber")
             .cssClass("p-component")
             .cssClass("p-inputwrapper")
-        if value.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        // The wrapper's starting class: from the number, or from the text the field keeps (a text ref through a class
+        // channel, so a write by the program reaches it too). The client keeps it right from the field's own text after.
+        el = text match
+            case Present(t) => el.cssClass("p-inputwrapper-filled", t.map(_.nonEmpty))
+            case Absent     => el.cssClass("p-inputwrapper-filled", value.nonEmpty || textShown.exists(_.nonEmpty))
         if showButtonsFlag then el = el.cssClass(s"p-inputnumber-${buttonLayoutV.token}")
         if fluidFlag then el = el.cssClass("p-inputnumber-fluid")
         el = validity.markClass(el)

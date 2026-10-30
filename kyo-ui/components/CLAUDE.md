@@ -63,8 +63,20 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   own values came last, through the traits: `BooleanFormControl.checked(Boolean | Signal[Boolean])` and
   `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`Input`, `TextArea`,
   `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it. A text
-  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, nothing
-  paints it away, so it gets no card. A boolean field's constant is FIXED, as below.
+  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, so it gets
+  no card. A boolean field's constant is FIXED, as below. The edit stays only while nothing draws the field again: every
+  render gives a field its `value` attribute back (`__kyoMorphAttrs` in kyo-ui's client), and a field drawn with no
+  `value` keeps what was typed. So a plain field leaves an unbound text to the browser, but a field that draws anything
+  from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
+  from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
+  (`ReactiveValue.owned`), and its handlers read the value live, since a keystroke can land before the render of the one
+  before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
+  field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
+  its binding: unbound or from a constant the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
+  holds Input, TextArea, InputMask, Password and AutoComplete to it. A blur whose value is not the field's own text keeps
+  reading what is held: InputOtp's code (a cell carries one character), ColorPicker's colour, DatePicker's parsed value,
+  InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
+  bound to a number), since a commit with no ref writes nowhere and only the field holds what the reader typed.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
   every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
   `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is
@@ -388,8 +400,8 @@ the ordered short-circuit (`Rule[A, B] and Rule[B, C]: Rule[A, C]`), `Validator.
   between the two: the edit took the earlier epoch, and the run on the old value, now the last, published its
   verdict over the edit's (a submit even took the field from the edit, so the edit ran nothing). Epoch-then-read
   makes every later write a later event. `FormField.startingRun` is the test seam between the two steps.
-  `bind`'s blur therefore calls `blurred`, which ignores the value the control hands its blur (every control
-  reads it from the field's ref anyway). `onEvent(v, event)` judges the value it is given: its one production
+  `bind`'s blur therefore calls `blurred`, which ignores the value the control hands its blur (the field's ref
+  holds the same text, written by every input event before the blur). `onEvent(v, event)` judges the value it is given: its one production
   caller is the change observer, whose next emission handles any write after its read; tests use it too.
 - **A reset is judged like a mount.** `resetField` claims the field quietly, clears the store, touched,
   the named gate, the client verdict and the server error, writes the baseline if the value differs, and
@@ -758,6 +770,15 @@ refs themselves held the correct result.
 - **A wrapper adds no region around a mount.** A state the wrapper needs from the control (FloatLabel's
   `p-filled`) is stamped by the control inside its own region (`AutoComplete.stampFilled`), and an
   embedding host binds a control one way (`CellEditor.select`) rather than rendering it per value.
+- **A class that follows a field's native text is the client's** (kyo-ui's `filledClass`), never a region and never
+  a stamp from the binding: the binding does not have the text of an unbound field or the reader's edit of a starting
+  one, and a region over a ref draws the field again on every keystroke. Input, TextArea and InputMask (through its
+  Input) mark `p-filled` on the field; Password and InputNumber mark Prime's `p-inputwrapper-filled` on their wrapper
+  (`filledClass(name, closest)`, `Input.filledOn`), and since the static render cannot reach an ancestor, the wrapper
+  stamps the starting class itself (Password's ref path and InputNumber's text ref through a class channel, which agrees
+  with the client because the ref holds the field's text). AutoComplete keeps its stamp: it draws its field from the
+  text it owns on every keystroke, so the stamp is never behind. The browser half is held in kyo-ui
+  (`FilledClassTest`, `DomBackendFilledTest`); the JVM suites here check the marker and the starting class.
 - `UicTest.regionsAbove` counts the subscriptions a control wraps its markup in, so the rule is
   checked rather than remembered.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of

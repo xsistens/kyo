@@ -1324,7 +1324,20 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Blur =>
                 if isTarget then
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
+                    // A text field's blur carries the text the client read off it; one that carries none (a transport
+                    // with no element to read) reports what the field holds instead.
+                    val text: Unit < (Async & Abort[Any]) = elem match
+                        case ti: TextInput if ti.onBlurText.nonEmpty =>
+                            val held: String < Sync = ev.value match
+                                case Present(v) => v
+                                case Absent     =>
+                                    ti.value match
+                                        case Present(Bound.Ref(ref)) => ref.get
+                                        case Present(Bound.Const(v)) => v
+                                        case _                       => ""
+                            held.map(v => ti.onBlurText.get(mouse, v).unit)
+                        case _ => ()
+                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(text).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
                 unlessInert(isTarget, isDisabled(elem)) {

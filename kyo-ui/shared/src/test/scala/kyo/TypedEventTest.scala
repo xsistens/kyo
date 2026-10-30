@@ -204,6 +204,91 @@ class TypedEventTest extends kyo.test.Test[Any]:
             assert(result.get.targetId == Present("my-input"))
     }
 
+    // ---- onBlur((e, text) => ...): a text field's blur carries its text ----
+
+    private val noMouse = MouseEventData(UI.Modifiers.none, Absent)
+
+    /** A text field built with a payload-free `onBlur` and the one with the text, in that order. */
+    private type Blurring = (UI.Action, String => UI.Action) => UI
+
+    /** What a field's blur with the text hears for a blur carrying `carried`, and whether its payload-free `onBlur` ran too. */
+    private def blurredText(field: Blurring, carried: Maybe[String])(using Frame): (Maybe[String], Boolean) < Async =
+        for
+            text  <- AtomicRef.init(Absent: Maybe[String])
+            plain <- AtomicRef.init(false)
+            ui = field(plain.set(true), v => text.set(Present(v)))
+            dispatch <- makeDispatch(ui)
+            _        <- dispatch(Seq.empty, UIEvent.Blur(Seq.empty, noMouse, carried))
+            t        <- text.get
+            p        <- plain.get
+        yield (t, p)
+
+    "the blur with the text hears what the blur carries, on every text field, beside the payload-free onBlur" in {
+        val fields = Chunk[Blurring](
+            (p, f) => UI.input.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.input.value("x").onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.textarea.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.passwordInput.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.emailInput.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.telInput.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.urlInput.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.searchInput.onBlur(p).onBlur((_, v) => f(v)),
+            (p, f) => UI.numberInput.onBlur(p).onBlur((_, v) => f(v))
+        )
+        Kyo.foreach(fields)(f => blurredText(f, Present("ab"))).map(got =>
+            assert(got == fields.map(_ => (Present("ab"), true)), s"heard, onBlur ran: $got")
+        )
+    }
+
+    "a blur that carries no text reports what the field holds: its ref, else its constant, else the empty text" in {
+        for
+            ref    <- Signal.initRef("held")
+            byRef  <- blurredText((p, f) => UI.input.value(ref).onBlur(p).onBlur((_, v) => f(v)), Absent)
+            byText <- blurredText((p, f) => UI.input.value("x").onBlur(p).onBlur((_, v) => f(v)), Absent)
+            bare   <- blurredText((p, f) => UI.input.onBlur(p).onBlur((_, v) => f(v)), Absent)
+        yield assert((byRef._1, byText._1, bare._1) == (Present("held"), Present("x"), Present("")), s"$byRef, $byText, $bare")
+    }
+
+    "a blur carrying text leaves a field's ref alone: the input events are what write it" in {
+        for
+            ref <- Signal.initRef("held")
+            got <- blurredText((p, f) => UI.input.value(ref).onBlur(p).onBlur((_, v) => f(v)), Present("typed"))
+            now <- ref.get
+        yield assert(got._1 == Present("typed") && now == "held", s"heard $got, ref holds $now")
+    }
+
+    "the blur with the text hears the event too" in {
+        for
+            heard <- AtomicRef.init(Absent: Maybe[(Maybe[String], String)])
+            ui = UI.input.onBlur((e, v) => heard.set(Present((e.targetId, v))))
+            dispatch <- makeDispatch(ui)
+            _        <- dispatch(Seq.empty, UIEvent.Blur(Seq.empty, MouseEventData(UI.Modifiers.none, Present("f")), Present("ab")))
+            got      <- heard.get
+        yield assert(got == Present((Present("f"), "ab")), s"heard $got")
+    }
+
+    // The overloads are told apart by the lambda's arity, so none of these lambdas names a parameter type: a one-parameter
+    // lambda is the MouseEvent form (it reads `position`, which only a MouseEvent has) and a two-parameter one is the form
+    // with the text (it reads `length` off the second parameter).
+    "a text field takes onBlur in its three forms with no type ascription" in {
+        typeCheck("""
+            import kyo.*
+            val plain   = UI.input.onBlur(Kyo.unit)
+            val event   = UI.input.onBlur(e => Kyo.lift(e.position.isEmpty))
+            val text    = UI.input.onBlur((e, v) => Kyo.lift(e.targetId.isEmpty || v.length > 0))
+            val area    = UI.textarea.onBlur(Kyo.unit).onBlur(e => Kyo.lift(e.position)).onBlur((e, v) => Kyo.lift(v.length))
+            val secret  = UI.passwordInput.onBlur(Kyo.unit).onBlur(e => Kyo.lift(e.position)).onBlur((e, v) => Kyo.lift(v.length))
+            val chained = UI.input.onBlur((_, v) => Kyo.lift(v.length)).onBlur(e => Kyo.lift(e.position))
+        """)
+    }
+
+    "an element that is no text field has no onBlur with the text" in {
+        typeCheckFailure("""
+            import kyo.*
+            val x = UI.div.onBlur((e, v) => Kyo.lift(v.length))
+        """)
+    }
+
     // ---- dispatch reads the CURRENT state behind a signal-typed setter ----
     //
     // `.disabled(Signal)` and `.readOnly(Signal)` do not wrap their element: they register a
