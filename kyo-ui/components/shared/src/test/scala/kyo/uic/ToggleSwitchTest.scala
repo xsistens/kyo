@@ -2,79 +2,72 @@ package kyo.uic
 
 import kyo.*
 
-/** The `checked` slot: a `SignalRef` binds two-way, any other signal or a constant one way, and a one-way binding nobody
-  * hears says so.
+/** The `checked` slot holds to rule A ([[ReactiveValueContract]]); the cases after it are what only a native switch does: it
+  * paints a toggle its owner does not take away again, and it stays quiet wherever nobody can toggle it.
   */
-class ToggleSwitchTest extends UicTest:
+class ToggleSwitchTest extends ReactiveValueContract:
 
-    /** Whether a field's binding is the constant `v`, which is how a one-way value reaches the element. */
-    private def shows[V](bound: Maybe[UI.Bound[V]], v: V)(using CanEqual[V, V]): Boolean =
-        bound.exists { case UI.Bound.Const(c) => c == v; case _ => false }
+    holds(nativeBoolean[uic.ToggleSwitch](
+        name = "checked",
+        bare = Present(uic.ToggleSwitch()),
+        bind = uic.ToggleSwitch().checked(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        input = "p-toggleswitch-input",
+        root = "p-toggleswitch",
+        checkedClass = "p-toggleswitch-checked"
+    ))
 
     private def box(ui: UI)(using Frame): UI.Ast.Checkbox < Sync =
         elements(ui).map(_.collectFirst { case c: UI.Ast.Checkbox => c }.getOrElse(throw new AssertionError("no switch input")))
 
-    "a state bound one way is shown, and a toggle is reported without being written" in {
-        for
-            held <- Signal.initRef(true)
-            seen <- Signal.initRef(List.empty[Boolean])
-            b    <- box(uic.ToggleSwitch().checked(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render)
-            _    <- handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(false))
-            h    <- held.get
-            s    <- seen.get
-        yield
-            assert(shows(b.checked, true), s"shows the signal: ${b.checked}")
-            assert(s == List(false) && h, s"reported $s, held $h")
-    }
+    private def toggle(b: UI.Ast.Checkbox, to: Boolean)(using Frame): Any < Async =
+        handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(to))
 
-    "a state bound one way that nothing hears says so; onChange, a ref, readonly or disabled keep it quiet" in {
+    "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
         def errors(c: uic.ToggleSwitch): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
             held   <- Signal.initRef(false)
-            deaf   <- errors(uic.ToggleSwitch().checked(held.readOnly))
-            heard  <- errors(uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()))
             twoWay <- errors(uic.ToggleSwitch().checked(held))
             ro     <- errors(uic.ToggleSwitch().checked(held.readOnly).readonly(true))
             off    <- errors(uic.ToggleSwitch().checked(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty && twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
+        yield assert(twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
         end for
     }
 
     "a toggle its owner does not take is painted away again" in {
         for
             held  <- Signal.initRef(false)
-            again <- repaintsAfter(uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()).render, held)(t =>
-                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(true)))
-            )
+            again <-
+                repaintsAfter(uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()).render, held)(t => box(t).map(toggle(_, true)))
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
     "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
-        for again <- repaintsAfter(uic.ToggleSwitch().checked(false).onChange(_ => ()).render)(t =>
-                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(true)))
-            )
+        for again <- repaintsAfter(uic.ToggleSwitch().checked(false).onChange(_ => ()).render)(t => box(t).map(toggle(_, true)))
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a constant nobody hears is fixed: read-only, nothing to toggle, and no card" in {
+    "a fixed constant of true is drawn on" in {
         for
-            b    <- box(uic.ToggleSwitch().checked(true).render)
-            card <- elementsWithClass(uic.ToggleSwitch().checked(true).render, "p-uic-key-error")
-        yield
-            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
-            assert(b.onChange.isEmpty, "with no handler behind it")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+            b       <- box(uic.ToggleSwitch().checked(true).render)
+            root    <- elementWithClass(uic.ToggleSwitch().checked(true).render, "p-toggleswitch")
+            checked <- carriesClass(root, "p-toggleswitch-checked")
+        yield assert(b.checked.exists { case UI.Bound.Const(c) => c; case _ => false } && checked, s"shows the constant: ${b.checked}")
     }
 
-    "an unbound one keeps its own state, so a toggle shows in what it draws" in {
+    "a signal bound one way to true is shown on, and turning it off is reported without being written" in {
         for
-            after <- publishedAfter(uic.ToggleSwitch().onChange(_ => ()).render)(t =>
-                box(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
-            )
-            shown <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-toggleswitch-checked"))
-        yield assert(shown.nonEmpty, "what it draws stayed off after the reader turned it on")
+            held <- Signal.initRef(true)
+            seen <- Signal.initRef(List.empty[Boolean])
+            b    <- box(uic.ToggleSwitch().checked(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render)
+            _    <- toggle(b, false)
+            h    <- held.get
+            s    <- seen.get
+        yield
+            assert(b.checked.exists { case UI.Bound.Const(c) => c; case _ => false }, s"shows the signal: ${b.checked}")
+            assert(s == List(false) && h, s"reported $s, held $h")
     }
 
 end ToggleSwitchTest

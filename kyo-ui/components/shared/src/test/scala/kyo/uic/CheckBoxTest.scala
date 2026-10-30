@@ -2,14 +2,22 @@ package kyo.uic
 
 import kyo.*
 
-/** The `checked` slot: a `SignalRef` binds two-way, any other signal or a constant one way, and a one-way binding nobody
-  * hears says so.
+/** The `checked` slot holds to rule A ([[ReactiveValueContract]]); the cases after it are what only a native box does: it
+  * paints a toggle its owner does not take away again, and it stays quiet wherever nobody can toggle it.
   */
-class CheckBoxTest extends UicTest:
+class CheckBoxTest extends ReactiveValueContract:
 
-    /** Whether a field's binding is the constant `v`, which is how a one-way value reaches the element. */
-    private def shows[V](bound: Maybe[UI.Bound[V]], v: V)(using CanEqual[V, V]): Boolean =
-        bound.exists { case UI.Bound.Const(c) => c == v; case _ => false }
+    holds(nativeBoolean[uic.CheckBox](
+        name = "checked",
+        bare = Present(uic.CheckBox()),
+        bind = uic.CheckBox().checked(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        input = "p-checkbox-input",
+        root = "p-checkbox",
+        checkedClass = "p-checkbox-checked"
+    ))
 
     private def box(ui: UI)(using Frame): UI.Ast.Checkbox < Sync =
         elements(ui).map(_.collectFirst { case c: UI.Ast.Checkbox => c }.getOrElse(throw new AssertionError("no checkbox")))
@@ -17,44 +25,14 @@ class CheckBoxTest extends UicTest:
     private def toggle(b: UI.Ast.Checkbox, to: Boolean)(using Frame): Any < Async =
         handled(b.onChange.getOrElse(throw new AssertionError("no toggle wired"))(to))
 
-    "a state bound one way is shown, and a toggle is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(List.empty[Boolean])
-            b    <- box(uic.CheckBox().checked(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render)
-            _    <- toggle(b, true)
-            h    <- held.get
-            s    <- seen.get
-        yield
-            assert(shows(b.checked, false), s"shows the signal: ${b.checked}")
-            assert(s == List(true) && !h, s"reported $s, held $h")
-    }
-
-    "a ref is written before onChange hears the new state" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            b    <- box(uic.CheckBox().checked(held).onChange(v => held.get.map(h => seen.set((v, h)))).render)
-            _    <- toggle(b, true)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
-    }
-
-    "a state bound one way that nothing hears says so; onChange, a ref, readonly or disabled keep it quiet" in {
+    "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
         def errors(c: uic.CheckBox): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
-            held     <- Signal.initRef(false)
-            deaf     <- errors(uic.CheckBox().checked(held.readOnly))
-            constant <- errors(uic.CheckBox().checked(true))
-            heard    <- errors(uic.CheckBox().checked(held.readOnly).onChange(_ => ()))
-            twoWay   <- errors(uic.CheckBox().checked(held))
-            ro       <- errors(uic.CheckBox().checked(held.readOnly).readonly(true))
-            off      <- errors(uic.CheckBox().checked(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the test below).
-            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
-            assert(heard.isEmpty && twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
+            held   <- Signal.initRef(false)
+            twoWay <- errors(uic.CheckBox().checked(held))
+            ro     <- errors(uic.CheckBox().checked(held.readOnly).readonly(true))
+            off    <- errors(uic.CheckBox().checked(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
         end for
     }
 
@@ -70,16 +48,15 @@ class CheckBoxTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a constant nobody hears is fixed: reachable, read-only, and nothing to toggle" in {
-        for b <- box(uic.CheckBox().checked(true).render)
-        yield
-            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
-            assert(b.attrs.dataAttrs.get("kyo-inert").contains("1"), "the browser's own toggle is declined")
-            assert(b.attrs.ariaAttrs.get("readonly").contains("true"), "and it says it is read-only")
-            assert(b.onChange.isEmpty, "with no handler behind it")
+    "a fixed constant of true is drawn ticked" in {
+        for
+            b       <- box(uic.CheckBox().checked(true).render)
+            root    <- elementWithClass(uic.CheckBox().checked(true).render, "p-checkbox")
+            checked <- carriesClass(root, "p-checkbox-checked")
+        yield assert(b.checked.exists { case UI.Bound.Const(c) => c; case _ => false } && checked, s"shows the constant: ${b.checked}")
     }
 
-    "an unbound box keeps its own state, so a toggle ticks the box it draws" in {
+    "an unbound box somebody hears keeps its own state and reports the toggle as well" in {
         for
             seen  <- Signal.initRef(List.empty[Boolean])
             after <- publishedAfter(uic.CheckBox("Free").onChange(v => seen.updateAndGet(_ :+ v).unit).render)(t =>

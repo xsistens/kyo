@@ -2,54 +2,53 @@ package kyo.uic
 
 import kyo.*
 
-/** The `checked` slot: a `SignalRef` binds two-way, any other signal or a constant one way, and a one-way binding nobody
-  * hears says so.
+/** The `checked` slot holds to rule A ([[ReactiveValueContract]]). The button draws its state itself, so it is a click on
+  * the button that asks for the other state, and `aria-disabled` (a `role="button"` has no readonly state) that says a
+  * fixed one changes nothing.
   */
-class ToggleButtonTest extends UicTest:
+class ToggleButtonTest extends ReactiveValueContract:
 
-    "a state bound one way is shown, and a click is reported without being written" in {
+    /** What the button shows: `aria-pressed`, which the checked class must agree with. */
+    private def pressed(t: UI)(using Frame): Boolean < Sync =
         for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(List.empty[Boolean])
-            ui = uic.ToggleButton().checked(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render
-            el <- elementWithClass(ui, "p-togglebutton")
-            _  <- click(el)
-            h  <- held.get
-            s  <- seen.get
+            el      <- elementWithClass(t, "p-togglebutton")
+            checked <- carriesClass(el, "p-togglebutton-checked")
         yield
-            assert(el.attrs.ariaAttrs.get("pressed").contains("false"), s"shows the signal: ${el.attrs.ariaAttrs}")
-            assert(s == List(true) && !h, s"reported $s, held $h")
-    }
+            val says = el.attrs.ariaAttrs.get("pressed").contains("true")
+            if says != checked then throw new AssertionError(s"aria-pressed says $says, the checked class $checked")
+            says
 
-    "a state bound one way that nothing hears says so; onChange, a ref, readonly or disabled keep it quiet" in {
+    holds(new Slot[uic.ToggleButton, Boolean](
+        name = "checked",
+        bare = Present(uic.ToggleButton()),
+        bind = uic.ToggleButton().checked(_),
+        hear = (b, f) => b.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = elementWithClass(_, "p-togglebutton"),
+        shows = pressed(_),
+        saysFixed = {
+            case b: UI.Ast.Button => b.attrs.ariaAttrs.get("disabled").contains("true") && !b.disabled.contains(true)
+            case _                => false
+        }
+    ))
+
+    "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
         def errors(c: uic.ToggleButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
             held   <- Signal.initRef(false)
-            deaf   <- errors(uic.ToggleButton().checked(held.readOnly))
-            heard  <- errors(uic.ToggleButton().checked(held.readOnly).onChange(_ => ()))
             twoWay <- errors(uic.ToggleButton().checked(held))
             ro     <- errors(uic.ToggleButton().checked(held.readOnly).readonly(true))
             off    <- errors(uic.ToggleButton().checked(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty && twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
+        yield assert(twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can toggle")
         end for
     }
 
-    "a constant nobody hears is fixed: no click handler, and no card" in {
-        for
-            el   <- elementWithClass(uic.ToggleButton().checked(true).render, "p-togglebutton")
-            card <- elementsWithClass(uic.ToggleButton().checked(true).render, "p-uic-key-error")
-        yield
-            assert(el.attrs.onClick.isEmpty, "a fixed button toggles nothing")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound button keeps its own state, so a click shows it pressed" in {
-        for
-            after <- publishedAfter(uic.ToggleButton().onChange(_ => ()).render)(t => elementWithClass(t, "p-togglebutton").map(click))
-            el    <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-togglebutton-checked"))
-        yield assert(el.nonEmpty, "the button stayed unpressed after the reader pressed it")
+    "a fixed constant of true is drawn pressed" in {
+        for p <- pressed(uic.ToggleButton().checked(true).render)
+        yield assert(p, "the constant is not shown")
     }
 
 end ToggleButtonTest
