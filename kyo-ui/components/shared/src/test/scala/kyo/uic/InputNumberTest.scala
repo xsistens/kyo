@@ -113,6 +113,18 @@ class InputNumberTest extends ReactiveValueContract:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant with a listener paints itself again after a report, so a number the owner does not take is put back" in {
+        for
+            first <- shownNumber(uic.InputNumber().value(3.0).onChange(_ => ()).render)
+            again <- repaintsAfter(uic.InputNumber().value(3.0).onChange(_ => ()).render)(t =>
+                number(t).map(n => handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0)))
+            )
+        yield
+            assert(first == 3.0, s"the page as first rendered shows $first for the constant 3")
+            assert(again, "the field kept what the reader did, though its owner never took it")
+        end for
+    }
+
     "a value bound one way says nothing where it reaches somebody or nobody can change it: a ref, disabled" in {
         def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
