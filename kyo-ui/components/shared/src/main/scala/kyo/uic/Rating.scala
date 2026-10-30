@@ -60,7 +60,8 @@ final case class Rating private (
     private[uic] def elementId: Maybe[String] = idV
 
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
-      * constant renders the stars statically. A writable `SignalRef[Int]` binds TWO-WAY: clicks
+      * constant nobody hears is fixed, drawn read-only; one [[onChange]] hears is reported and the
+      * stars painted back to the constant. A writable `SignalRef[Int]` binds TWO-WAY: clicks
       * write the new value back, and ref changes re-render. Any other `Signal[Int]` binds one-way,
       * so the stars track it and clicks write nowhere.
       *
@@ -181,6 +182,10 @@ final case class Rating private (
             case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent, validity))
             case Present(ReactiveValue.Dyn(sig)) =>
                 ReactiveValue.repainting(sig)((d, repaint) => body(math.rint(d).toInt, Absent, validity, repaint))
+            // A constant somebody hears is painted again after each report too, so a star its owner does not take is put
+            // back on the native radios; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+            case Present(ReactiveValue.Const(d)) if onChangeF.isDefined =>
+                ReactiveValue.repainting(Signal.initConst(d))((d, repaint) => body(math.rint(d).toInt, Absent, validity, repaint))
             case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent, validity)
             case Absent                          =>
                 valueBinding match
@@ -189,6 +194,8 @@ final case class Rating private (
                     // take is put back on the native radios as well.
                     case Present(ReactiveValue.Dyn(sig)) =>
                         ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
+                    case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
+                        ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(v, Absent, validity, repaint))
                     case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
                     case Absent                          => body(0, Absent, validity)
 

@@ -173,6 +173,26 @@ class RatingTest extends ReactiveValueContract:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant with a listener paints itself again after a report, so a star the owner does not take is put back" in {
+        for
+            first <- stars(uic.Rating().value(2).onChange(_ => ()).render)
+            again <- repaintsAfter(uic.Rating().value(2).onChange(_ => ()).render)(t => options(t).map(os => click(os(3))))
+        yield
+            assert(first == 2, s"the page as first rendered shows $first stars for the constant 2")
+            assert(again, "the field kept what the reader did, though its owner never took it")
+        end for
+    }
+
+    "and so does a constant bound as a Double" in {
+        for
+            first <- stars(uic.Rating().value(2.0).onChange(_ => ()).render)
+            again <- repaintsAfter(uic.Rating().value(2.0).onChange(_ => ()).render)(t => options(t).map(os => click(os(3))))
+        yield
+            assert(first == 2, s"the page as first rendered shows $first stars for the constant 2")
+            assert(again, "the field kept what the reader did, though its owner never took it")
+        end for
+    }
+
     "a value bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
         def errors(c: uic.Rating): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
