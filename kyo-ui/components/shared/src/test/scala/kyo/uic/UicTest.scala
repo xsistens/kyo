@@ -124,6 +124,13 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def mountedWhen(ui: UI)(ready: UI => Boolean < Sync)(using Frame, kyo.test.AssertScope): UI < Async =
         publishedAfterReady(ui, ready)().map(_.getOrElse(throw new AssertionError("never mounted")))
 
+    /** [[mountedWhen]] for a tree that may hold no mount at all (a field bound one way that draws its state through
+      * regions alone): once `ready` holds, everything its mounts published, newest first, or `ui` itself where nothing in
+      * it publishes. A tree that never becomes ready fails the test.
+      */
+    private[uic] def readyTree(ui: UI)(ready: UI => Boolean < Sync)(using Frame, kyo.test.AssertScope): UI < Async =
+        drive(ui, ready, Nil, Nil)(d => Sync.defer(d.published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*)))
+
     /** The first HTML a transport renders for `ui`, which is what a static page carries. */
     private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
         UI.runRender(ui).take(1).run.map(_.mkString)
@@ -442,6 +449,26 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 el.attrs.onClickEvt match
                     case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none)))
                     case Absent     => throw new AssertionError("the element declares no click handler")
+
+    /** The reader typing `text` into `field`, the way the transport dispatches an input event: a field bound to a ref has
+      * it written first, then `onInput` is told. A field that has neither sends nothing at all, since the browser keeps
+      * the text itself, so nothing happens here either.
+      */
+    private[uic] def typeInto(field: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
+        transported(field, text, field.onInput)
+
+    /** The reader committing `text` in `field` (a blur or Enter after an edit), the way the transport dispatches a change
+      * event: a field bound to a ref has it written first, then `onChange` is told.
+      */
+    private[uic] def commitInto(field: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
+        transported(field, text, field.onChange)
+
+    private def transported(field: UI.Ast.TextInput, text: String, told: Maybe[String => UI.Action])(using Frame): Any < Async =
+        val write: UI.Action = field.value match
+            case Present(UI.Bound.Ref(ref)) => ref.set(text)
+            case _                          => ()
+        handled(write.andThen(told.fold[UI.Action](())(f => f(text))))
+    end transported
 
     /** Clicks the first element `target` matches the way the dispatcher delivers a click: the target's own handlers
       * first, then each enclosing element's, innermost first, until an element that declared a click handler also set

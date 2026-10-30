@@ -64,16 +64,6 @@ class InputNumberTest extends UicTest:
             case Present(UI.Bound.Const(v)) => Kyo.lift(v)
             case _                          => Kyo.lift("")
 
-    // The way the runtime dispatches an input event: the bound ref is written first, then onInput is told.
-    private def typeText(n: UI.Ast.NumberInput, text: String)(using Frame): Any < Async =
-        val write: UI.Action = n.value match
-            case Present(UI.Bound.Ref(ref)) => ref.set(text)
-            case _                          => ()
-        n.onInput match
-            case Present(f) => handled(write.andThen(f(text)))
-            case Absent     => throw new AssertionError("the field hears no typing")
-    end typeText
-
     "a constant text is the starting text, kept by the field" in {
         for
             t    <- mountedWhen(uic.InputNumber().text("4.").render)(t => number(t).map(_.value.isDefined))
@@ -95,7 +85,7 @@ class InputNumberTest extends UicTest:
             )
             n     <- number(t)
             shown <- textOf(n)
-            _     <- typeText(n, "123")
+            _     <- typeInto(n, "123")
             h     <- held.get
             s     <- seen.get
             deaf  <- elementsWithClass(uic.InputNumber().text(held.readOnly).render, "p-uic-key-error")
@@ -111,7 +101,7 @@ class InputNumberTest extends UicTest:
             held <- Signal.initRef("")
             seen <- Signal.initRef(List.empty[(String, String)])
             n    <- number(uic.InputNumber().text(held).onTextChange(v => held.get.map(h => seen.updateAndGet(_ :+ (v, h)).unit)).render)
-            _    <- typeText(n, "-")
+            _    <- typeInto(n, "-")
             s    <- seen.get
         yield assert(s == List(("-", "-")), s"reported, held: $s")
     }
