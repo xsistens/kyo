@@ -52,7 +52,8 @@ final case class InputOtp private (
     /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
       * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
       * only reports the code it asks for through [[onChange]]; without it, a card says the reader cannot change it. A
-      * constant is the starting code. `ref.readOnly` opts a ref out.
+      * constant is the starting code. Unbound or from a constant, the field keeps the code itself, so a cell edit writes
+      * there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): InputOtp = copy(valueBinding = Present(ReactiveValue(v)))
 
@@ -123,11 +124,21 @@ final case class InputOtp private (
                     yield wired(sig, ids.toList, id => cmds.focusId(id), paints)
                 }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), (), validity))))
             case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), (), validity)))
-            case Present(ReactiveValue.Const(v)) => validity.follow(body(v, Absent, _ => (), (), validity))
-            case Absent                          => validity.follow(body("", Absent, _ => (), (), validity))
+            // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code
+            // the reader asks for is the one they hold, which a ref the field keeps for as long as it is shown remembers.
+            case Present(ReactiveValue.Const(v)) if interactive => owned(v, validity)
+            case Absent if interactive                          => owned("", validity)
+            case Present(ReactiveValue.Const(v))                => validity.follow(body(v, Absent, _ => (), (), validity))
+            case Absent                                         => validity.follow(body("", Absent, _ => (), (), validity))
         val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
         if unheard then fragment(field, KeyDiagnostics.unheard("InputOtp", "value", "onChange")) else field
     end renderResolved
+
+    /** The field over a code it keeps itself, starting at `initial`, drawn as a two-way binding of it. */
+    private def owned(initial: String, validity: FieldValidity)(using Frame): UI =
+        ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).renderResolved)(
+            validity.follow(body(initial, Absent, _ => (), (), validity))
+        )
 
     /** The advancing subscription the mount publishes: the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`). `paints`, where
@@ -148,13 +159,16 @@ final case class InputOtp private (
 
     /** Writes cell i's new content into the bound code (or, one-way, reports the code it asks for): the LAST accepted
       * character wins (a second keystroke in a full cell replaces it), an empty edit clears the position; gaps stay as
-      * spaces, trailing gaps trimmed.
+      * spaces, trailing gaps trimmed. The code it changes is the one the binding holds when the edit arrives, not the one
+      * the cells were drawn from: a keystroke can land before the render of the one before it.
       */
-    private def writeCell(i: Int, raw: String, current: String)(using Frame): UI.Action =
+    private def writeCell(i: Int, raw: String, drawn: String)(using Frame): UI.Action =
         val accepted = (if integerOnlyFlag then raw.filter(_.isDigit) else raw).takeRight(1)
-        val padded   = current.padTo(lengthV, ' ').take(lengthV)
-        val next     = padded.updated(i, if accepted.isEmpty then ' ' else accepted.head).mkString.reverse.dropWhile(_ == ' ').reverse
-        ReactiveValue.change(valueBinding, next, onChangeF)
+        valueBinding.fold[String < Sync](drawn)(_.current).map { current =>
+            val padded = current.padTo(lengthV, ' ').take(lengthV)
+            val next   = padded.updated(i, if accepted.isEmpty then ' ' else accepted.head).mkString.reverse.dropWhile(_ == ' ').reverse
+            ReactiveValue.change(valueBinding, next, onChangeF)
+        }
     end writeCell
 
     private def body(
