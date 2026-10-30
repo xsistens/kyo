@@ -55,6 +55,18 @@ class SliderTest extends ReactiveValueContract:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
+    "a constant with a listener paints itself again after a report, so a drag the owner does not take is put back" in {
+        for
+            first <- at(uic.Slider().value(30.0).onChange(_ => ()).render)
+            again <- repaintsAfter(uic.Slider().value(30.0).onChange(_ => ()).render)(t =>
+                range(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no change handler"))(60.0)))
+            )
+        yield
+            assert(first == 30.0, s"the page as first rendered shows $first for the constant 30")
+            assert(again, "the field kept what the reader did, though its owner never took it")
+        end for
+    }
+
     "a value bound one way says nothing where it reaches somebody or nobody can move it: a ref, disabled" in {
         def errors(c: uic.Slider): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for

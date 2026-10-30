@@ -54,8 +54,9 @@ final case class Slider private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    /** The slider's value, in any of the three bindings a value slot holds. A constant renders the
-      * fill/handle statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keys write the
+    /** The slider's value, in any of the three bindings a value slot holds. A constant nobody hears is
+      * fixed, drawn read-only; one [[onChange]] hears is reported and the thumb put back where the
+      * constant holds it. A writable `SignalRef[Double]` binds TWO-WAY: drags and keys write the
       * committed value back, and ref changes move the fill and handle. Any other `Signal[Double]` binds
       * one-way, so the fill and handle track it and drags write nowhere.
       *
@@ -134,6 +135,10 @@ final case class Slider private (
             case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity))
             // Bound one way, the thumb is painted again after each report, so a drag the owner does not take is put back.
             case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
+            // A constant somebody hears is painted again after each report too, so a drag its owner does not take is put
+            // back; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+            case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
+                ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(v, Absent, validity, repaint))
             case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
             case Absent                          => body(minV, Absent, validity)
 
