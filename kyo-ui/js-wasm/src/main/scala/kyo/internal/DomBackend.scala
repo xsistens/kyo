@@ -2147,8 +2147,18 @@ private[kyo] object DomBackend:
                             MouseEventData(UI.Modifiers.none, focusTargetId)
                         ))
                     else if t == "blur" && evTypes.contains("blur") then
-                        val blurTargetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
-                        Present(UIEvent.Blur(path, MouseEventData(UI.Modifiers.none, blurTargetId)))
+                        val blurred      = e.target.asInstanceOf[dom.Element]
+                        val blurTargetId = Maybe(blurred.id).filter(_.nonEmpty)
+                        // blurtext: a text field's blur carries the text it holds as focus leaves it, read off the field
+                        // itself. Twin of the blur branch in clientJs.
+                        val text: Maybe[String] =
+                            if !(blurred eq target) || !evTypes.contains("blurtext") then Absent
+                            else
+                                blurred.tagName.toUpperCase match
+                                    case "INPUT"    => Present(blurred.asInstanceOf[dom.html.Input].value)
+                                    case "TEXTAREA" => Present(blurred.asInstanceOf[dom.html.TextArea].value)
+                                    case _          => Absent
+                        Present(UIEvent.Blur(path, MouseEventData(UI.Modifiers.none, blurTargetId), text))
                     else if t == "mouseover" && evTypes.contains("mouseover") then
                         val hoverTargetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
                         val me            = e.asInstanceOf[dom.MouseEvent]

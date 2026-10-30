@@ -382,4 +382,29 @@ class TextareaTest extends UITest:
         }
     }
 
+    // The browser keeps the typed text until the blur carries it: nothing binds the field or hears its typing.
+    "a textarea's blur reports the text typed into it, unbound and from a constant" in {
+        val app: UI < Async =
+            for
+                bare  <- Signal.initRef("none")
+                start <- Signal.initRef("none")
+            yield UI.div(
+                UI.textarea.id("t").onBlur((_, v) => bare.set(s"[${v.replace("\n", "|")}]")),
+                UI.textarea.id("c").value("x").onBlur((_, v) => start.set(s"[$v]")),
+                UI.button("other").id("other"),
+                bare.map(v => UI.span(v).id("vt")),
+                start.map(v => UI.span(v).id("vc"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("t"), "line1\nline2")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("vt"), "[line1|line2]")
+                _ <- Browser.fill(Selector.id("c"), "xy")
+                _ <- Browser.click(Selector.id("other"))
+                _ <- Browser.assertText(Selector.id("vc"), "[xy]")
+            yield ()
+        }
+    }
+
 end TextareaTest

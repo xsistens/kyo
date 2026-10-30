@@ -87,6 +87,7 @@ class UIServerWsTest extends kyo.test.Test[Any]:
             UIEvent.KeyUp(Seq.empty, keyboard),
             UIEvent.Focus(Seq.empty, mouse),
             UIEvent.Blur(Seq.empty, mouse),
+            UIEvent.Blur(Seq.empty, mouse, Present("typed")),
             UIEvent.Scroll(Seq.empty, 1.0, 2.0, UI.Modifiers.none, Absent),
             UIEvent.Hover(Seq.empty, mouse),
             UIEvent.Unhover(Seq.empty, mouse),
@@ -100,6 +101,18 @@ class UIServerWsTest extends kyo.test.Test[Any]:
         events.foreach { event =>
             assert(DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default).map(_.wire) == Result.succeed(event))
         }
+    }
+
+    "the text a blur carries is bounded by the text limit, as an input event's is" in {
+        val limits = DragProtocol.Limits.default.copy(maxTextLength = 4)
+
+        def blur(value: Maybe[String]) =
+            DragProtocol.validateEventAndDomain(UIEvent.Blur(Seq.empty, MouseEventData(UI.Modifiers.none, Absent), value), limits)
+                .map(_.wire)
+        assert(blur(Present("abcd")).isSuccess)
+        assert(blur(Present("")).isSuccess)
+        assert(blur(Absent).isSuccess)
+        assert(blur(Present("abcde")) == Result.fail(DragProtocol.ValidationFailure.TooLong("value", 4, 5)))
     }
 
     "a selected file is bounded by the text limit, and a negative size is rejected as a number" in {

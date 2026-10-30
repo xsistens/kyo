@@ -1202,7 +1202,13 @@ private[kyo] object HtmlRenderer:
         then add("click")
         if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then add("contextmenu")
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then add("focus")
-        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then add("blur")
+        // "blurtext" marks a text field whose blur carries its text, so the client reads the text off the field only
+        // where a handler takes it.
+        val blurText = elem match
+            case ti: TextInput => ti.onBlurText.nonEmpty
+            case _             => false
+        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty || blurText then add("blur")
+        if blurText then add("blurtext")
         if attrs.onKeyDown.nonEmpty || attrs.onKeyDownSelf.nonEmpty then add("keydown")
         if attrs.onKeyUp.nonEmpty then add("keyup")
         if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then add("mouseover")
@@ -2925,7 +2931,8 @@ private[kyo] object HtmlRenderer:
            |  }
            |  else if(t==="keyup"&&he(el,"keyup")){var kutid=e.target&&e.target.id?e.target.id:null;post({KeyUp:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},kutid)}});}
            |  else if(t==="focus"&&he(el,"focus")){var ftid=e.target&&e.target.id?e.target.id:null;post({Focus:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},ftid)}});}
-           |  else if(t==="blur"&&he(el,"blur")){var btid=e.target&&e.target.id?e.target.id:null;post({Blur:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},btid)}});}
+           |  // blurtext: a text field's blur carries the text it holds as focus leaves it, read off the field itself.
+           |  else if(t==="blur"&&he(el,"blur")){var btid=e.target&&e.target.id?e.target.id:null;var bl={path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},btid)};var bt=e.target;if(bt===el&&he(el,"blurtext")&&bt.tagName&&(bt.tagName==="INPUT"||bt.tagName==="TEXTAREA"))bl.value=bt.value;post({Blur:bl});}
            |  else if(t==="mouseover"&&he(el,"mouseover")){var hotid=e.target&&e.target.id?e.target.id:null;post({Hover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},hotid,mkPos(e))}});}
            |  else if(t==="mouseout"&&he(el,"mouseout")){var uhotid=e.target&&e.target.id?e.target.id:null;post({Unhover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},uhotid,mkPos(e))}});}
            |  // Do NOT auto-call preventDefault: leave native-scroll suppression to the handler, matching DomBackend. Server-side rendering cannot synchronously decline the event, so the default is to NOT prevent.
