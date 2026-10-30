@@ -55,8 +55,9 @@ final case class RadioButton private (
       */
     def disabled(v: Boolean | Signal[Boolean]): RadioButton = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly`: interaction is blocked (`aria-readonly`), but unlike
-      * `disabled` the button keeps its normal look.
+    /** `readonly`: the button refuses to be selected, but unlike `disabled` it keeps its normal look AND its place in
+      * the tab order: a reader can land on it and read its state, and every key and click that would select it runs
+      * into nothing. A radio has no readonly state, so it says so with `aria-disabled`.
       */
     def readonly(v: Boolean): RadioButton = copy(readonlyFlag = Present(v))
 
@@ -128,16 +129,18 @@ final case class RadioButton private (
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
-        if isReadonly then box = box.aria("readonly", "true")
+        if isReadonly then box = box.aria("disabled", "true")
         box = accNameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
         box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
-        // readonly blocks interaction by disabling the native input; only `disabled`
-        // also gets the `.p-disabled` visual treatment.
-        if isReadonly then box = box.disabled(true)
-        else box = disabledFlag.foldFlag(box)(box.disabled(_))
+        // readonly keeps the radio FOCUSABLE and refuses to select it: the client declines the
+        // browser's own selection (`preventActivation`) and the handler is not wired. Disabling the
+        // native input instead took it out of the tab order (see CheckBox). Only `disabled` is
+        // native, and only `disabled` gets the `.p-disabled` visual treatment.
+        if isReadonly then box = box.preventActivation
+        box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !isReadonly then box = onChg.map(box.onChange(_)).getOrElse(box)
         if !isReadonly then
             box = onBlurF match

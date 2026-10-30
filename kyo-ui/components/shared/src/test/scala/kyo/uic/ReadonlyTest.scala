@@ -61,6 +61,19 @@ class ReadonlyTest extends UicTest:
             assert(!box.disabled.contains(true), "and it is still a tab stop")
     }
 
+    "a readonly radio stays reachable, refuses to be selected, and says so as a radio can" in {
+        for
+            ref <- Signal.initRef(false)
+            ui = uic.RadioButton().checked(ref).readonly(true).render
+            box <- elements(ui).map(_.collectFirst { case r: UI.Ast.Radio => r }.getOrElse(throw new AssertionError("no radio")))
+        yield
+            assert(!box.disabled.contains(true), "not natively disabled, or the reader could not reach it")
+            assert(box.attrs.dataAttrs.get("kyo-inert").contains("1"), "the browser's own selection is declined")
+            assert(box.attrs.ariaAttrs.get("disabled").contains("true"), "role=radio has no readonly state")
+            assert(box.attrs.ariaAttrs.get("readonly").isEmpty, "so it does not claim one")
+            assert(box.onChange.isEmpty, "with no handler wired behind it")
+    }
+
     "a readonly rating keeps its stars in the tab order" in {
         for
             ui   <- Kyo.lift(uic.Rating().value(3).readonly(true).wired("r"))

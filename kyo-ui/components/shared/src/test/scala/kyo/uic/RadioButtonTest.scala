@@ -2,79 +2,59 @@ package kyo.uic
 
 import kyo.*
 
-/** The `checked` slot: a `SignalRef` binds two-way, any other signal or a constant one way, and a one-way binding nobody
-  * hears says so.
+/** The `checked` slot holds to rule A ([[ReactiveValueContract]]); the cases after it are what only a native radio does: it
+  * paints a selection its owner does not take away again, and it stays quiet wherever nobody can select it.
   */
-class RadioButtonTest extends UicTest:
+class RadioButtonTest extends ReactiveValueContract:
 
-    /** Whether a field's binding is the constant `v`, which is how a one-way value reaches the element. */
-    private def shows[V](bound: Maybe[UI.Bound[V]], v: V)(using CanEqual[V, V]): Boolean =
-        bound.exists { case UI.Bound.Const(c) => c == v; case _ => false }
+    holds(nativeBoolean[uic.RadioButton](
+        name = "checked",
+        bare = Present(uic.RadioButton()),
+        bind = uic.RadioButton().checked(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        input = "p-radiobutton-input",
+        root = "p-radiobutton",
+        checkedClass = "p-radiobutton-checked",
+        fixedAria = "disabled"
+    ))
 
     private def radio(ui: UI)(using Frame): UI.Ast.Radio < Sync =
         elements(ui).map(_.collectFirst { case r: UI.Ast.Radio => r }.getOrElse(throw new AssertionError("no radio")))
 
-    "a state bound one way is shown, and a selection is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(List.empty[Boolean])
-            r    <- radio(uic.RadioButton().checked(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render)
-            _    <- handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true))
-            h    <- held.get
-            s    <- seen.get
-        yield
-            assert(shows(r.checked, false), s"shows the signal: ${r.checked}")
-            assert(s == List(true) && !h, s"reported $s, held $h")
-    }
+    private def select(r: UI.Ast.Radio)(using Frame): Any < Async =
+        handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true))
 
-    "a state bound one way that nothing hears says so; onChange, a ref, readonly or disabled keep it quiet" in {
+    "a signal nobody hears says nothing where it reaches somebody or nobody can select it: a ref, readonly, disabled" in {
         def errors(c: uic.RadioButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
             held   <- Signal.initRef(false)
-            deaf   <- errors(uic.RadioButton().checked(held.readOnly))
-            heard  <- errors(uic.RadioButton().checked(held.readOnly).onChange(_ => ()))
             twoWay <- errors(uic.RadioButton().checked(held))
             ro     <- errors(uic.RadioButton().checked(held.readOnly).readonly(true))
             off    <- errors(uic.RadioButton().checked(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty && twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can select")
+        yield assert(twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can select")
         end for
     }
 
     "a selection its owner does not take is painted away again" in {
         for
             held  <- Signal.initRef(false)
-            again <- repaintsAfter(uic.RadioButton().checked(held.readOnly).onChange(_ => ()).render, held)(t =>
-                radio(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
-            )
+            again <- repaintsAfter(uic.RadioButton().checked(held.readOnly).onChange(_ => ()).render, held)(t => radio(t).map(select))
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
-        for again <- repaintsAfter(uic.RadioButton().checked(false).onChange(_ => ()).render)(t =>
-                radio(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
-            )
+    "a constant with a listener paints itself again after a report, so a selection the owner does not take is put back" in {
+        for again <- repaintsAfter(uic.RadioButton().checked(false).onChange(_ => ()).render)(t => radio(t).map(select))
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a constant nobody hears is fixed: read-only, nothing to toggle, and no card" in {
+    "a fixed constant of true is drawn selected" in {
         for
-            b    <- radio(uic.RadioButton().checked(true).render)
-            card <- elementsWithClass(uic.RadioButton().checked(true).render, "p-uic-key-error")
-        yield
-            assert(shows(b.checked, true), s"shows the constant: ${b.checked}")
-            assert(b.onChange.isEmpty, "with no handler behind it")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound one keeps its own state, so a toggle shows in what it draws" in {
-        for
-            after <- publishedAfter(uic.RadioButton().onChange(_ => ()).render)(t =>
-                radio(t).map(b => handled(b.onChange.getOrElse(throw new AssertionError("no handler wired"))(true)))
-            )
-            shown <- after.fold(Kyo.lift(Chunk.empty[UI.Ast.Element]))(t => elementsWithClass(t, "p-radiobutton-checked"))
-        yield assert(shown.nonEmpty, "what it draws stayed off after the reader turned it on")
+            r       <- radio(uic.RadioButton().checked(true).render)
+            root    <- elementWithClass(uic.RadioButton().checked(true).render, "p-radiobutton")
+            checked <- carriesClass(root, "p-radiobutton-checked")
+        yield assert(r.checked.exists { case UI.Bound.Const(c) => c; case _ => false } && checked, s"shows the constant: ${r.checked}")
     }
 
 end RadioButtonTest
