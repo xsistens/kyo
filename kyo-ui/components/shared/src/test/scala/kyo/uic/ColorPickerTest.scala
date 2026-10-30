@@ -12,7 +12,7 @@ import kyo.UI.*
   * number, and `aria-valuetext` carries both. Both sliders are visually hidden because the visible
   * thing is the handle, which is also why the ring is drawn on the surface through `:focus-within`.
   */
-class ColorPickerTest extends UicTest:
+class ColorPickerTest extends ReactiveValueContract:
 
     /** Pure red: hue 0, saturation 100%, brightness 100%. */
     private val red = "#ff0000"
@@ -194,31 +194,69 @@ class ColorPickerTest extends UicTest:
         yield assert(!closed && opened && remembered == "#00ff00")
     }
 
-    "a color bound one way is shown, and a key reports the hex it asks for without writing it" in {
+    /** The colour the inline picker shows, read off what its two sliders announce: the hue bar's degrees, and the
+      * plane's saturation and brightness in words. Both ride the value signal as attributes, so the reading is what a
+      * screen reader hears now.
+      */
+    private def shown(t: UI)(using Frame): String < Sync =
+        def announced(el: UI.Ast.Element, name: String): String < Sync =
+            el.attrs.reactiveAttrs.get(name).fold(throw new AssertionError(s"the slider announces no $name"))(_.current)
+        for
+            all <- sliders(t)
+            planeEl = all.find(_.attrs.ariaAttrs.get("label").contains(plane))
+                .getOrElse(throw new AssertionError("no plane slider: the picker offers the reader nothing to change"))
+            hueEl = all.find(_.attrs.ariaAttrs.get("label").contains(hue)).getOrElse(throw new AssertionError("no hue slider"))
+            degrees <- announced(hueEl, "aria-valuenow")
+            words   <- announced(planeEl, "aria-valuetext")
+        yield words match
+            case s"Saturation $s%, brightness $v%" => uic.ColorPicker.hexOf(degrees.toDouble, s.toDouble / 100, v.toDouble / 100)
+            case other                             => throw new AssertionError(s"the plane says $other")
+        end for
+    end shown
+
+    private def planeOf(t: UI)(using Frame): UI.Ast.Element < Sync =
+        sliders(t).map(_.find(_.attrs.ariaAttrs.get("label").contains(plane))
+            .getOrElse(throw new AssertionError("no plane slider: the picker offers the reader nothing to change")))
+
+    // The colour is held to rule A as a text field's value is, a constant being the colour it starts from: the picker draws
+    // it entirely itself, so unbound or started from a constant it keeps the colour, and Home on the plane (no saturation
+    // left) is the gesture.
+    holds(new Slot[uic.ColorPicker, String](
+        name = "value",
+        bare = Present(uic.ColorPicker().inline(true)),
+        bind = uic.ColorPicker().inline(true).value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = red,
+        next = "#ffffff",
+        control = planeOf(_),
+        shows = shown(_),
+        gesture = (c: UI.Ast.Element) => press(c, UI.Keyboard.Home),
+        answers = _.attrs.onKeyDown.isDefined,
+        ready = Present(t => Abort.run[AssertionError](Abort.catching[AssertionError](planeOf(t))).map(_.isSuccess)),
+        // The sliders stay where they are while the colour moves (a rebuilt one would lose the focus that pressed it), so
+        // what says the reader's colour is shown is the plane announcing it in place.
+        nextPatch = Present((name, value) => name == "aria-valuetext" && value == "Saturation 0%, brightness 100%"),
+        startText = Present("#00ff00")
+    ))
+
+    "a color bound one way follows its owner" in {
         for
             held <- Signal.initRef(red)
-            seen <- Signal.initRef(List.empty[String])
-            ui = uic.ColorPicker().inline(true).value(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render
-            all <- sliders(ui)
-            el = all.find(_.attrs.ariaAttrs.get("label").contains(plane)).get
-            _ <- press(el, UI.Keyboard.Home)
-            h <- held.get
-            s <- seen.get
-        yield assert(s == List("#ffffff") && h == red, s"reported $s, held $h")
+            ui = uic.ColorPicker().inline(true).value(held.readOnly).onChange(_ => ()).render
+            _     <- held.set("#00ff00")
+            again <- shown(ui)
+        yield assert(again == "#00ff00", s"shows $again")
     }
 
-    "a color bound one way that nothing hears says so; onChange, a ref, a constant or disabled keep it quiet" in {
+    "a color bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
         def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
-            held     <- Signal.initRef(red)
-            deaf     <- errors(uic.ColorPicker().inline(true).value(held.readOnly))
-            constant <- errors(uic.ColorPicker().inline(true).value(red))
-            change   <- errors(uic.ColorPicker().inline(true).value(held.readOnly).onChange(_ => ()))
-            twoWay   <- errors(uic.ColorPicker().inline(true).value(held))
-            off      <- errors(uic.ColorPicker().inline(true).value(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(constant.isEmpty && change.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+            held   <- Signal.initRef(red)
+            twoWay <- errors(uic.ColorPicker().inline(true).value(held))
+            off    <- errors(uic.ColorPicker().inline(true).value(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
         end for
     }
 
