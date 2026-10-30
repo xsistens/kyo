@@ -54,7 +54,9 @@ final case class Password private (
     /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter
       * when `feedback(true)`). Any other signal binds ONE-WAY: the field and the meter show it, and an edit writes
       * nothing and only reports through [[onInput]] and [[onChange]]; with neither, a card says the reader cannot change
-      * it. A constant is the starting text. `ref.readOnly` opts a ref out.
+      * it. A constant is the starting text. With the meter or the mask toggle on, the field keeps the text itself, from a
+      * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
+      * `ref.readOnly` opts a ref out.
       */
     def value(v: String | Signal[String]): Password = copy(valueBinding = Present(ReactiveValue(v)))
 
@@ -132,16 +134,38 @@ final case class Password private (
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        val field =
-            if !toggleMaskFlag then validated(withValue(Absent, _))
-            else
-                UI.mounted {
-                    Signal.initRef(false).map(r => wired(r))
-                }.placeholder(validated(withValue(Absent, _)))
+        val field = valueBinding match
+            // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the
+            // reader types is the field's to keep: from a constant (which a reveal would otherwise give back), and with
+            // the meter unbound too. Unbound without the meter, the field draws no value and the text stays the browser's.
+            case Present(ReactiveValue.Const(v)) if keepsText => owned(v)
+            case Absent if keepsText && feedbackFlag          => owned("")
+            case _                                            => drawn
         val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputSF.orElse(onChangeSF)) &&
             !readonlyFlag.constTrue && !disabledFlag
         if unheard then fragment(field, KeyDiagnostics.unheard("Password", "value", "onInput or onChange")) else field
     end render
+
+    /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
+      * reader can change.
+      */
+    private def keepsText: Boolean = (feedbackFlag || toggleMaskFlag) && !readonlyFlag.constTrue && !disabledFlag
+
+    /** The field over a text it keeps itself, starting at `initial`, drawn as a two-way binding of it. The page as first
+      * rendered draws the text as bound with nothing wired, since nothing is wired before the mount runs.
+      */
+    private def owned(initial: String)(using Frame): UI =
+        ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).drawn)(
+            copy(onInputSF = Absent, onChangeSF = Absent, onBlurSF = Absent).drawn
+        )
+
+    /** The field with its mask toggle, where it has one, over the text as bound. */
+    private def drawn(using Frame): UI =
+        if !toggleMaskFlag then validated(withValue(Absent, _))
+        else
+            UI.mounted {
+                Signal.initRef(false).map(r => wired(r))
+            }.placeholder(validated(withValue(Absent, _)))
 
     /** The subscription tree the mount publishes (golden-test seam): the internal
       * reveal state driving the password/text type switch.
