@@ -9,7 +9,7 @@ import kyo.*
   */
 class InputMaskTest extends ReactiveValueContract:
 
-    holds(nativeText[uic.InputMask](
+    private val valueSlot = nativeText[uic.InputMask](
         name = "value",
         bare = Present(uic.InputMask("99")),
         bind = uic.InputMask("99").value(_),
@@ -20,7 +20,10 @@ class InputMaskTest extends ReactiveValueContract:
         next = "12",
         startText = "1",
         commit = true
-    ))
+    )
+
+    holds(valueSlot)
+    blurs(valueSlot, (c, f) => c.onBlur(f))
 
     heardBy(nativeText[uic.InputMask](
         name = "value heard by onComplete",

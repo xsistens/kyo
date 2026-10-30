@@ -389,6 +389,45 @@ abstract class ReactiveValueContract extends UicTest:
         heardBy(s)
     end holds
 
+    /** Registers the cases for the blur of a text slot: whatever binds the field, focus leaving it reports the text the
+      * reader left in it, which the transport reads off the field and carries with the blur ([[blurOut]]). The reader
+      * types `next` first, so a field that reported its binding instead would report `start` or the constant.
+      */
+    def blurs[C](s: Slot[C, String], onBlur: (C, String => UI.Action) => Frame ?=> C): Unit =
+
+        def reported(build: Frame ?=> C)(using Frame, kyo.test.AssertScope): Chunk[String] < Async =
+            for
+                seen <- Signal.initRef(Chunk.empty[String])
+                t    <- s.live(s.render(onBlur(build, v => seen.updateAndGet(_.append(v)).unit)))
+                _    <- s.ask(t)
+                c    <- s.control(t)
+                _    <- c match
+                    case f: UI.Ast.TextInput => blurOut(f, s.next)
+                    case other               => throw new AssertionError(s"not a text field: $other")
+                got <- seen.get
+            yield got
+
+        if s.bare.isDefined then
+            s"${s.name}: unbound, a blur reports what the reader typed" in {
+                reported(s.bare.get).map(got => assert(got == Chunk(s.next), s"reported $got"))
+            }
+        end if
+
+        s"${s.name}: from a constant, a blur reports the reader's edit, not the constant" in {
+            reported(s.bind(s.startText.getOrElse(s.start))).map(got => assert(got == Chunk(s.next), s"reported $got"))
+        }
+
+        s"${s.name}: bound one way, a blur reports the text the field holds" in {
+            Signal.initRef(s.start).map(held =>
+                reported(s.hear(s.bind(held.readOnly), _ => ())).map(got => assert(got == Chunk(s.next), s"reported $got"))
+            )
+        }
+
+        s"${s.name}: bound to a ref, a blur reports what the reader typed" in {
+            Signal.initRef(s.start).map(held => reported(s.bind(held)).map(got => assert(got == Chunk(s.next), s"reported $got")))
+        }
+    end blurs
+
     /** Registers the three cases of rule A a hearer takes part in (a constant somebody hears, a signal bound one way, a
       * ref) for a slot that has more than one event: [[holds]] holds the slot once, through one of them, and this holds
       * it through each of the others, which `s` names with its own `name`, `hear`, `event` and `gesture`.

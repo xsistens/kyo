@@ -127,9 +127,10 @@ final case class Password private (
     def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)))
     def onInput(f: String => UI.Action)(using Frame): Password  = copy(onInputSF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current value. Unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the text the field holds as focus
+      * leaves it: what the reader typed, also unbound or from a constant, with the
+      * meter and the reveal on or off. Unlike `onChange` it fires even when the value
+      * was not edited. The form-validation layer wires its `Blur` trigger here.
       */
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
