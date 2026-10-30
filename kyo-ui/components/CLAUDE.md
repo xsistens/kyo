@@ -866,10 +866,10 @@ exactly the state the reader is about to leave.
 
 A readonly control is one a reader can REACH and read the value of and cannot change:
 focusable, saying so in the vocabulary its own role has (`aria-readonly` where the role
-supports it, `aria-disabled` on a `role="button"`, which has no readonly state), and inert
-to every key and click that would change it. `disabled` is the different thing, and stays
-native. Select, CheckBox, ToggleSwitch, Rating and ToggleButton all answer this way;
-`ReadonlyTest` holds them to it.
+supports it, `aria-disabled` on a `role="button"` or a `role="radio"`, neither of which has a
+readonly state), and inert to every key and click that would change it. `disabled` is the
+different thing, and stays native. Select, CheckBox, ToggleSwitch, RadioButton, Rating and
+ToggleButton all answer this way; `ReadonlyTest` holds them to it.
 
 - **Do not implement readonly by disabling the native input.** It drops the tab stop, so a
   keyboard reader cannot reach the value at all, and it makes readonly and disabled the same
