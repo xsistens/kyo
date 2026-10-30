@@ -88,7 +88,8 @@ final case class InputMask private (
     /** Fired with the MASKED value on every change (native change commit). */
     def onChange(f: String => UI.Action)(using Frame): InputMask = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss with the field's current value. Unlike onChange it
+    /** Fires on focus loss with the MASKED text the field holds as focus leaves it
+      * (what the reader typed, also unbound or from a constant). Unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
     def onBlur(f: String => UI.Action)(using Frame): InputMask = copy(onBlurF = Present(Callback.of(f)))

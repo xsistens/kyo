@@ -9,7 +9,7 @@ import kyo.*
   */
 class TextAreaTest extends ReactiveValueContract:
 
-    holds(nativeText[uic.TextArea](
+    private val valueSlot = nativeText[uic.TextArea](
         name = "value",
         bare = Present(uic.TextArea()),
         bind = uic.TextArea().value(_),
@@ -17,7 +17,10 @@ class TextAreaTest extends ReactiveValueContract:
         event = "onInput or onChange",
         render = _.render,
         field = "p-textarea"
-    ))
+    )
+
+    holds(valueSlot)
+    blurs(valueSlot, (c, f) => c.onBlur(f))
 
     heardBy(nativeText[uic.TextArea](
         name = "value heard by onChange",

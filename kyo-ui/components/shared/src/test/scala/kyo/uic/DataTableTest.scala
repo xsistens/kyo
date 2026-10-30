@@ -382,10 +382,8 @@ class DataTableTest extends UicTest:
         yield bind(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy))
             .wired("t", Map.empty, err, _ => (), Map(List("Name") -> menus), filterTyped = Map(List("Name") -> typed))
 
-    private def blur(i: UI.Ast.TextInput)(using Frame): Any < Async =
-        i.attrs.onBlur match
-            case Present(eff) => handled(eff)
-            case Absent       => throw new AssertionError("the input declares no blur handler")
+    /** Focus leaving the filter field `i` while it holds `text`, as the transport dispatches it. */
+    private def blur(i: UI.Ast.TextInput, text: String)(using Frame): Any < Async = blurOut(i, text)
 
     private def shownQuery(ui: UI)(using Frame): String < Sync =
         inputs(ui).map(_.head.value match
@@ -468,7 +466,7 @@ class DataTableTest extends UicTest:
             _      <- type_(field, "ab")
             _      <- held.set(nameFilter("ab"))
             field2 <- inputs(ui).map(_.head)
-            _      <- blur(field2)
+            _      <- blur(field2, "ab")
             _      <- held.set(nameFilter("x"))
             after  <- shownQuery(ui)
         yield assert(after == "x", s"the owner's value after the reader left: $after")

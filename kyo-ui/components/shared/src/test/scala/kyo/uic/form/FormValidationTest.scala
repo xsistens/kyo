@@ -2848,11 +2848,14 @@ class FormValidationTest extends UicTest:
                     form   <- mkForm
                     f      <- form.field("").rules(Validator.required() and Validator.minLength(3)).declare
                     ui = uic.TextArea().bind(f).render
-                    area <- elementWithClass(ui, "p-textarea")
-                    blur = area.attrs.onBlur.getOrElse(throw new AssertionError("bind wires no blur trigger"))
+                    area <- elementWithClass(ui, "p-textarea").map {
+                        case t: UI.Ast.TextInput => t
+                        case other               => throw new AssertionError(s"not a text field: $other")
+                    }
                     out <- Scope.run {
                         for
-                            left <- FormField.startingRun.let(paused.release.andThen(resume.await))(Fiber.init(handled(blur)))
+                            // Focus leaves the field while it still holds the text the blur started on.
+                            left <- FormField.startingRun.let(paused.release.andThen(resume.await))(Fiber.init(blurOut(area, "")))
                             _    <- paused.await
                             _    <- f.valueRef.set("okay")
                             _    <- f.onEvent("okay", Activation.Change) // the edit, as the change observer delivers it
