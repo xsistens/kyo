@@ -463,6 +463,20 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def commitInto(field: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
         transported(field, text, field.onChange)
 
+    /** Focus leaving `field` while it holds `text`, the way the transport dispatches a blur: the payload-free `onBlur`,
+      * then the one with the event, then the one with the text the client read off the field. The field fails the
+      * test if it declares none of them.
+      */
+    private[uic] def blurOut(field: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
+        val attrs = field.attrs
+        if attrs.onBlur.isEmpty && attrs.onBlurEvt.isEmpty && field.onBlurText.isEmpty then
+            throw new AssertionError("the field declares no blur handler")
+        val plain: UI.Action = attrs.onBlur.fold[UI.Action](())(identity)
+        val evt: UI.Action   = attrs.onBlurEvt.fold[UI.Action](())(f => f(UI.MouseEvent(attrs.identifier, UI.Modifiers.none)))
+        val told: UI.Action  = field.onBlurText.fold[UI.Action](())(f => f(UI.MouseEvent(attrs.identifier, UI.Modifiers.none), text))
+        handled(plain.andThen(evt).andThen(told))
+    end blurOut
+
     private def transported(field: UI.Ast.TextInput, text: String, told: Maybe[String => UI.Action])(using Frame): Any < Async =
         val write: UI.Action = field.value match
             case Present(UI.Bound.Ref(ref)) => ref.set(text)

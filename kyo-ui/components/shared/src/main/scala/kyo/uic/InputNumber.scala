@@ -171,9 +171,13 @@ final case class InputNumber private (
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(onChangeF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current number; unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the field's current number: bound to
+      * a ref, the number the ref holds (committed, clamped); otherwise the number in
+      * the text the field holds as focus leaves it, `0` for a text that is no number,
+      * clamped into the bounds where the field is bound to a number (a constant or a
+      * one-way signal) and as typed where it keeps text (unbound, or bound to a text).
+      * Unlike `onChange` it fires even when the value was not edited. The
+      * form-validation layer wires its `Blur` trigger here.
       */
     def onBlur(f: Double => UI.Action)(using Frame): InputNumber = copy(onBlurF = Present(Callback.of(f)))
 
@@ -308,13 +312,16 @@ final case class InputNumber private (
         // text-bound field is left out of it: its content is what the reader typed, and
         // normalising a Double back into it would rewrite `4.` to `4` under them.
         if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref).andThen(repaint))
-        // onBlur carries no payload, so the current number is read from the bound ref
-        // (or the resolved current value when unbound) and handed to the native blur.
+        // A field bound to a ref holds the number it committed, clamped, so the blur reports the ref as focus leaves.
+        // Anywhere else only the field holds what the reader typed (a commit with no ref writes nowhere, and a one-way
+        // owner's repaint can land after the blur), so the blur reports the text the field carries, read the way a spin
+        // reads a text (no number is 0). Bound to a number it is clamped as a commit is; a text binding keeps the text.
         if interactive then
             onBlurF.foreach { f =>
-                in = in.onBlur(ref match
-                    case Present(r) => r.use(f)
-                    case Absent     => f(value.getOrElse(0.0)))
+                in = ref match
+                    case Present(r)                => in.onBlur(r.use(f))
+                    case Absent if value.isDefined => in.onBlur((_, t) => f(clamp(t.toDoubleOption.getOrElse(0.0))))
+                    case Absent                    => in.onBlur((_, t) => f(t.toDoubleOption.getOrElse(0.0)))
             }
         end if
 

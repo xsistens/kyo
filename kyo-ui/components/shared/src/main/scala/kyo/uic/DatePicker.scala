@@ -455,8 +455,9 @@ final case class DatePicker[A] private (
         i = accNameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
         nav.foreach { n =>
             if editable && interactive then i = i.onChange(typed => commitText(typed, n))
-            // onBlur carries no payload, so what is held is read from the bound refs. A rejected text goes back to the held
-            // value here, which is the moment the reader is done with it.
+            // The blur reports what is held, read from the bound refs, not the text in the field (which a blur could carry):
+            // typed text becomes a value only through a change that parses. A rejected text goes back to the held value
+            // here, which is the moment the reader is done with it.
             val blur: UI.Action = n.draft.set(Absent).andThen(blurReport)
             i = i.onBlur(blur)
             i = i.id(n.fieldId)

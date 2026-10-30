@@ -9,7 +9,7 @@ import kyo.*
   */
 class InputTest extends ReactiveValueContract:
 
-    holds(nativeText[uic.Input](
+    private val valueSlot = nativeText[uic.Input](
         name = "value",
         bare = Present(uic.Input()),
         bind = uic.Input().value(_),
@@ -17,7 +17,10 @@ class InputTest extends ReactiveValueContract:
         event = "onInput or onChange",
         render = _.render,
         field = "p-inputtext"
-    ))
+    )
+
+    holds(valueSlot)
+    blurs(valueSlot, (c, f) => c.onBlur(f))
 
     heardBy(nativeText[uic.Input](
         name = "value heard by onChange",

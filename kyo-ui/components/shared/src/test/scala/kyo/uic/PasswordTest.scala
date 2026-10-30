@@ -9,7 +9,7 @@ import kyo.*
   */
 class PasswordTest extends ReactiveValueContract:
 
-    holds(nativeText[uic.Password](
+    private val valueSlot = nativeText[uic.Password](
         name = "value",
         bare = Present(uic.Password()),
         bind = uic.Password().value(_),
@@ -17,7 +17,10 @@ class PasswordTest extends ReactiveValueContract:
         event = "onInput or onChange",
         render = _.render,
         field = "p-password-input"
-    ))
+    )
+
+    holds(valueSlot)
+    blurs(valueSlot, (c, f) => c.onBlur(f))
 
     heardBy(nativeText[uic.Password](
         name = "value heard by onChange",
@@ -46,7 +49,7 @@ class PasswordTest extends ReactiveValueContract:
 
     // With the meter on, the field draws the meter from its text, so the text is the field's to keep: unbound or from a
     // constant it keeps the text itself, and the meter judges what the reader typed.
-    holds(new Slot[uic.Password, String](
+    private val feedbackSlot = new Slot[uic.Password, String](
         name = "value with feedback",
         bare = Present(uic.Password().feedback(true)),
         bind = uic.Password().feedback(true).value(_),
@@ -66,11 +69,14 @@ class PasswordTest extends ReactiveValueContract:
         // The page as first rendered draws a text the field keeps itself with nothing wired, the mount wires the typing.
         ready = Present(t => textField(t, "p-password-input").map { case f: UI.Ast.TextInput => f.onInput.isDefined; case _ => false }),
         startText = Present("abc")
-    ))
+    )
+
+    holds(feedbackSlot)
+    blurs(feedbackSlot, (c, f) => c.onBlur(f))
 
     // The eye's reveal draws the field again, so a constant drawn as the field's value would be put back over what the
     // reader typed; unbound, the field draws no value and the text stays the browser's.
-    holds(nativeText[uic.Password](
+    private val toggleSlot = nativeText[uic.Password](
         name = "value with the mask toggle",
         bare = Present(uic.Password().toggleMask(true)),
         bind = uic.Password().toggleMask(true).value(_),
@@ -79,7 +85,10 @@ class PasswordTest extends ReactiveValueContract:
         render = _.render,
         field = "p-password-input",
         ready = Present(elementsWithClass(_, "p-password-toggle-mask-icon").map(_.nonEmpty))
-    ))
+    )
+
+    holds(toggleSlot)
+    blurs(toggleSlot, (c, f) => c.onBlur(f))
 
     "started from a constant, the meter judges what the reader types" in {
         for

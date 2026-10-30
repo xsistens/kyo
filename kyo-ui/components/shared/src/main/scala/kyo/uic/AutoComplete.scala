@@ -207,9 +207,10 @@ final case class AutoComplete[A] private (
     /** Fired with the picked option after its label is written into the ref. */
     def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = copy(onSelectF = Present(Callback.of(f)))
 
-    /** Fires on focus loss (native `blur`) with the field's current text. Unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** Fires on focus loss (native `blur`) with the text the field holds as focus
+      * leaves it, what the reader typed or picked. Unlike `onChange` it fires even
+      * when the value was not edited. The form-validation layer wires its `Blur`
+      * trigger here.
       */
     def onBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onBlurF = Present(Callback.of(f)))
 
@@ -493,9 +494,9 @@ final case class AutoComplete[A] private (
             // ArrowDown opens / moves the highlight down, ArrowUp up (no wrap),
             // Enter picks the highlighted suggestion, Escape closes.
             f = f.preventScrollKeys.onKeyDown(fieldKey(visible, query, panelShown, s, pick))
-            // Native onBlur carries no payload → read the current text from the binding
-            // (unbound falls back to the empty value).
-            onBlurF.foreach(g => f = f.onBlur(valueBinding.fold(g(""))(_.current.map(g))))
+            // The blur carries the text the field holds as focus leaves it, the same text the field's own (or the
+            // caller's) ref holds, since kyo-ui writes it on every keystroke; a one-way text reports the field's.
+            onBlurF.foreach(g => f = f.onBlur((_, text) => g(text)))
         }
         val field: UI = onChangeF.map(g => f.onChange(v => g(v).andThen(st.fold[UI.Action](())(_.repaint)))).getOrElse(f)
 

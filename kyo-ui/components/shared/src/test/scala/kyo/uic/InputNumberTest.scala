@@ -106,4 +106,83 @@ class InputNumberTest extends UicTest:
         yield assert(s == List(("-", "-")), s"reported, held: $s")
     }
 
+    // The field keeps what the reader types as text (unbound, or bound to a text), so the number a blur reports is the
+    // text the field holds as focus leaves it, read the way a spin reads it.
+    "unbound, a blur reports the number the reader typed" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            t    <- mountedWhen(uic.InputNumber().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(t =>
+                number(t).map(_.value.isDefined)
+            )
+            n   <- number(t)
+            _   <- typeInto(n, "5")
+            _   <- blurOut(n, "5")
+            got <- seen.get
+        yield assert(got == Chunk(5.0), s"reported $got")
+    }
+
+    "bound to a text, a blur reports the number the text holds, and a text that is no number as zero" in {
+        for
+            held <- Signal.initRef("")
+            seen <- Signal.initRef(Chunk.empty[Double])
+            n    <- number(uic.InputNumber().text(held).onBlur(v => seen.updateAndGet(_.append(v)).unit).render)
+            _    <- typeInto(n, "4.5")
+            _    <- blurOut(n, "4.5")
+            _    <- typeInto(n, "-")
+            _    <- blurOut(n, "-")
+            got  <- seen.get
+        yield assert(got == Chunk(4.5, 0.0), s"reported $got")
+    }
+
+    // A number field commits on change, clamped into its bounds, so what it holds as focus leaves is the committed
+    // number, not the text the reader left in the field.
+    "bound to a number, a blur reports the number committed, clamped, not the text typed" in {
+        for
+            held <- Signal.initRef(3.0)
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(held).max(10).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(15.0))
+            n2  <- number(ui)
+            _   <- blurOut(n2, "15")
+            got <- seen.get
+        yield assert(got == Chunk(10.0), s"reported $got")
+    }
+
+    // With no ref a commit writes nowhere, so the field alone holds what the reader typed: the blur reports that, read
+    // off the field the way a spin reads a text and clamped the way a commit is.
+    "from a constant somebody hears, a blur reports the number the reader typed, not the constant" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(5.0).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0))
+            n2  <- number(ui)
+            _   <- blurOut(n2, "7")
+            got <- seen.get
+        yield assert(got == Chunk(7.0), s"reported $got")
+    }
+
+    "bound one way, a blur before the repaint reports the number the reader typed, not the owner's" in {
+        for
+            held <- Signal.initRef(5.0)
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(held.readOnly).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- blurOut(n, "7")
+            got <- seen.get
+        yield assert(got == Chunk(7.0), s"reported $got")
+    }
+
+    "with no ref, a blur reports the typed number clamped into the bounds, and a field holding no number as zero, clamped" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Double])
+            ui = uic.InputNumber().value(5.0).min(1).max(10).onChange(_ => ()).onBlur(v => seen.updateAndGet(_.append(v)).unit).render
+            n   <- number(ui)
+            _   <- blurOut(n, "15")
+            _   <- blurOut(n, "")
+            got <- seen.get
+        yield assert(got == Chunk(10.0, 1.0), s"reported $got")
+    }
+
 end InputNumberTest
