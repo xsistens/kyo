@@ -106,6 +106,25 @@ class InputNumberTest extends UicTest:
         yield assert(s == List(("-", "-")), s"reported, held: $s")
     }
 
+    // The client toggles the wrapper's class from the text the number field holds (kyo-ui's filledClass with an ancestor
+    // target), so a field bound to a constant the reader empties, or one keeping text, is not left with a stale class. The
+    // wrapper's starting class comes from the starting text. The browser half is held in kyo-ui.
+    "every path marks the field for the wrapper's filled class, and the page as first rendered stamps it from a starting text" in {
+        def marked(h: String) = h.contains("""data-kyo-filled-up="p-inputwrapper-filled"""") &&
+            h.contains("""data-kyo-filled-on=".p-inputnumber"""")
+        for
+            held    <- Signal.initRef("4.5")
+            number  <- renderHtml(uic.InputNumber().value(5.0).onChange(_ => ()).render)
+            text    <- renderHtml(uic.InputNumber().text("4.").render)
+            textRef <- renderHtml(uic.InputNumber().text(held).render)
+            bare    <- renderHtml(uic.InputNumber().render)
+            textNo  <- renderHtml(uic.InputNumber().text("").render)
+        yield
+            Seq(number, text, textRef).foreach(h => assert(classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+            Seq(bare, textNo).foreach(h => assert(!classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+        end for
+    }
+
     // The field keeps what the reader types as text (unbound, or bound to a text), so the number a blur reports is the
     // text the field holds as focus leaves it, read the way a spin reads it.
     "unbound, a blur reports the number the reader typed" in {

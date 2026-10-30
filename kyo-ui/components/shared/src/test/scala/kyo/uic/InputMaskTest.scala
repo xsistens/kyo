@@ -42,6 +42,18 @@ class InputMaskTest extends ReactiveValueContract:
         elements(ui).map(_.collectFirst { case t: (UI.Ast.Element & UI.Ast.TextInput) => t }
             .getOrElse(throw new AssertionError("no masked field")))
 
+    // The field is an Input, so it carries the Input's marker; a starting text the mask shows counts.
+    "the field marks itself filled for the client, and the static render carries p-filled from a starting text" in {
+        for
+            started <- renderHtml(uic.InputMask("99").value("12").render)
+            empty   <- renderHtml(uic.InputMask("99").value("").render)
+            bare    <- renderHtml(uic.InputMask("99").render)
+        yield
+            assert(classInHtml(started, "p-filled") && started.contains("""data-kyo-filled="p-filled""""), started)
+            Seq(empty, bare).foreach(h => assert(!classInHtml(h, "p-filled") && h.contains("""data-kyo-filled="p-filled""""), h))
+        end for
+    }
+
     "a value bound one way follows its owner" in {
         for
             held <- Signal.initRef("1")

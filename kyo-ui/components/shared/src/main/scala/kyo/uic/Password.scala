@@ -200,8 +200,11 @@ final case class Password private (
         val revealed = rev.exists(_._2)
 
         // === the field (Input carries the shared text-field contract) ===========
+        // The wrapper's `p-inputwrapper-filled` follows the text the field holds: kyo-ui's client toggles it as the reader
+        // types (the static render cannot reach the wrapper, so the class below stamps the starting text).
         var in = Input()
             .extraClass("p-password-input")
+            .filledOn("p-inputwrapper-filled", ".p-password")
             .inputType(if revealed then InputType.Text else InputType.Password)
             .size(sizeV)
             .variant(variantV)

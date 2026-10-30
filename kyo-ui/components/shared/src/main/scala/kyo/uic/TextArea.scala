@@ -137,6 +137,8 @@ final case class TextArea private (
         b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-textarea-fluid")
         if autoResizeFlag then b = b.cssClass("p-textarea-resizable").cssClass("p-uic-autoresize")
+        // Prime's `p-filled` follows the text the field holds, which kyo-ui toggles in the client (see Input).
+        b = b.filledClass("p-filled")
         valueBinding match
             case Present(ReactiveVariable(r)) => b = b.value(r)
             case _                            => shown.foreach(v => b = b.value(v))
