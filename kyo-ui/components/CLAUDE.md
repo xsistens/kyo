@@ -63,8 +63,14 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   own values came last, through the traits: `BooleanFormControl.checked(Boolean | Signal[Boolean])` and
   `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`Input`, `TextArea`,
   `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it. A text
-  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, nothing
-  paints it away, so it gets no card. A boolean field's constant is FIXED, as below.
+  field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, so it gets
+  no card. A boolean field's constant is FIXED, as below. The edit stays only while nothing draws the field again: every
+  render gives a field its `value` attribute back (`__kyoMorphAttrs` in kyo-ui's client), and a field drawn with no
+  `value` keeps what was typed. So a plain field leaves an unbound text to the browser, but a field that draws anything
+  from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
+  from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
+  (`ReactiveValue.owned`), and its handlers read the value live, since a keystroke can land before the render of the one
+  before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
   every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
   `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is
