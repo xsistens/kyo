@@ -11,11 +11,7 @@ import kyo.UI.*
   * the hand-written loop it replaces is that ArrowUp from nothing lands on the LAST suggestion,
   * the way it does everywhere else in the library, instead of on the first.
   */
-class AutoCompleteTest extends UicTest:
-
-    /** Whether a field's binding is the constant `v`, which is how a one-way value reaches the element. */
-    private def shows[V](bound: Maybe[UI.Bound[V]], v: V)(using CanEqual[V, V]): Boolean =
-        bound.exists { case UI.Bound.Const(c) => c == v; case _ => false }
+class AutoCompleteTest extends ReactiveValueContract:
 
     private val cities = List("Amsterdam", "Berlin", "Cairo")
 
@@ -276,50 +272,98 @@ class AutoCompleteTest extends UicTest:
             assert(s == Chunk("Ada Lovelace", "Grace Hopper", "Alan Turing"), s"$s")
         )
 
-    "a text bound one way is shown, typing is reported without being written, and a clear reports to onChange" in {
+    private def plain(using Frame) = uic.AutoComplete[String]().options(cities)(identity).optionKey(identity)
+
+    /** The field the reader types into. */
+    private def input(t: UI)(using Frame): UI.Ast.Element < Sync = textField(t, "p-autocomplete-input")
+
+    /** Whether `t` is the field its mount wired: only that one carries the keyboard. */
+    private def wiredField(t: UI)(using Frame): Boolean < Sync =
+        Abort.run[AssertionError](Abort.catching[AssertionError](input(t))).map(_.toMaybe.exists(_.attrs.onKeyDown.isDefined))
+
+    // Typing reaches onInput; a pick and a clear reach other events, which hear them here so that the card a one-way text
+    // draws for every edit nobody hears says nothing about the edit this slot is not.
+    holds(new Slot[uic.AutoComplete[String], String](
+        name = "value",
+        bare = Present(plain),
+        bind = plain.value(_),
+        hear = (c, f) => c.onInput(f).onChange(_ => ()),
+        event = "onInput",
+        render = _.render,
+        start = "",
+        next = "Ber",
+        control = input(_),
+        shows = t => input(t).map(textIn),
+        gesture = (c: UI.Ast.Element) => typed(c, "Ber", commit = false),
+        answers = editable,
+        saysFixed = {
+            case t: UI.Ast.TextInput => t.readOnly.contains(true)
+            case _                   => false
+        },
+        ready = Present(wiredField(_)),
+        startText = Present("Ams")
+    ))
+
+    // The clear button, which a text drawn with nothing in it has no use for, so the slot starts from a text.
+    heardBy(new Slot[uic.AutoComplete[String], String](
+        name = "value cleared",
+        bare = Present(plain.showClear(true)),
+        bind = plain.showClear(true).value(_),
+        hear = (c, f) => c.onChange(f).onInput(_ => ()),
+        event = "onChange",
+        render = _.render,
+        start = "Ber",
+        next = "",
+        control = elementWithClass(_, "p-autocomplete-clear-icon"),
+        shows = t => input(t).map(textIn),
+        ready = Present(t =>
+            wiredField(t).map(w =>
+                if !w then Kyo.lift(false) else elementsWithClass(t, "p-autocomplete-clear-icon").map(_.nonEmpty)
+            )
+        )
+    ))
+
+    /** The suggestions the panel `t` shows, by label. */
+    private def suggested(t: UI)(using Frame): Chunk[String] < Sync =
+        elementsWithClass(t, "p-autocomplete-option").map(_.map(textOf))
+
+    "unbound, the suggestions follow what the reader types" in {
         for
-            openRef <- Signal.initRef(false)
-            hi      <- Signal.initRef(-1)
-            all     <- Signal.initRef(false)
-            held    <- Signal.initRef("Ber")
-            typed   <- Signal.initRef(List.empty[String])
-            changed <- Signal.initRef(List.empty[String])
-            ui = field.value(held.readOnly).showClear(true)
-                .onInput(v => typed.updateAndGet(_ :+ v).unit)
-                .onChange(v => changed.updateAndGet(_ :+ v).unit)
-                .wired(openRef, hi, all, Present("ac"))
-            input <- elementWithClass(ui, "p-autocomplete-input")
-            clear <- elementWithClass(ui, "p-autocomplete-clear-icon")
-            _     <- handled(input match
-                case t: UI.Ast.TextInput => t.onInput.getOrElse(throw new AssertionError("no input handler"))("Berl")
-                case other               => throw new AssertionError(s"not a text field: $other"))
-            _ <- click(clear)
-            h <- held.get
-            t <- typed.get
-            c <- changed.get
-        yield
-            val shown = input match
-                case t: UI.Ast.TextInput => t.value
-                case _                   => Absent
-            assert(shows(shown, "Ber"), s"shows the signal: $shown")
-            assert(t == List("Berl") && c == List("") && h == "Ber", s"typed $t, changed $c, held $h")
-        end for
+            after <- publishedAfterReady(plain.render, wiredField(_), until = t => suggested(t).map(_ == Chunk("Berlin")))(t =>
+                input(t).map(typed(_, "Ber", commit = false))
+            )
+            shown <- after.fold(Kyo.lift(Chunk.empty[String]))(suggested)
+        yield assert(shown == Chunk("Berlin"), s"suggests $shown for Ber")
     }
 
-    "a text a ref holds is cleared, and the clear reaches onChange too" in {
+    "unbound, a pick puts the label in the field" in {
         for
-            openRef <- Signal.initRef(false)
-            hi      <- Signal.initRef(-1)
-            all     <- Signal.initRef(false)
-            held    <- Signal.initRef("Ber")
-            changed <- Signal.initRef(List.empty[(String, String)])
-            ui = field.value(held).showClear(true)
-                .onChange(v => held.get.map(h => changed.updateAndGet(_ :+ (v, h)).unit))
-                .wired(openRef, hi, all, Present("ac"))
-            clear <- elementWithClass(ui, "p-autocomplete-clear-icon")
-            _     <- click(clear)
-            c     <- changed.get
-        yield assert(c == List(("", "")), s"reported, held: $c")
+            after <- publishedAfterReady(plain.render, wiredField(_), until = t => input(t).map(textIn).map(_ == "Berlin"))(
+                t => input(t).map(typed(_, "Ber", commit = false)),
+                // Each key acts on the field drawn after the one before it, whose keyboard knows what it shows: the panel
+                // filtered by what was typed, then the highlight on its one row.
+                t =>
+                    suggested(t).map(s =>
+                        if s != Chunk("Berlin") then throw new AssertionError(s"suggests $s")
+                        else input(t).map(press(_, UI.Keyboard.ArrowDown))
+                    ),
+                t =>
+                    input(t).map(f =>
+                        if f.attrs.ariaAttrs.get("activedescendant").isEmpty then throw new AssertionError("nothing highlighted")
+                        else press(f, UI.Keyboard.Enter)
+                    )
+            )
+        yield assert(after.nonEmpty, "the field never showed the label picked")
+    }
+
+    // A field drawn with a value is put back to it by the next render (`__kyoMorphAttrs` in kyo-ui's client), and typing
+    // opens the panel, which is a render.
+    "a starting text the reader types over is not drawn back over what they typed" in {
+        for
+            after <- publishedAfterReady(plain.value("Ams").render, wiredField(_), until = t => input(t).map(textIn).map(_ == "Ber"))(t =>
+                input(t).map(typed(_, "Ber", commit = false))
+            )
+        yield assert(after.nonEmpty, "the field was drawn with the starting text again")
     }
 
     "a text bound one way names each edit that reaches nobody: typing, a pick, a clear" in {
