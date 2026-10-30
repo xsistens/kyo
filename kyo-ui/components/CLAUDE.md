@@ -106,11 +106,13 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
 - **A field with NATIVE state paints itself again after a one-way report.** The browser moves a tick, a caret's text,
   a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it
   was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal (and a
-  boolean constant somebody hears, `Signal.initConst`) through `ReactiveValue.repainting`, whose body gets a `repaint` to run after each report: a count the mount owns is read
+  constant somebody hears, `Signal.initConst`) through `ReactiveValue.repainting`, whose body gets a `repaint` to run after each report: a count the mount owns is read
   beside the signal, so the field is drawn again from what the owner holds, and the morph puts the control back (a
-  bound box through kyo-ui's `data-kyo-bound` marker, a text field through its value, even while focused). A two-way
-  ref needs none of it, and a field that draws everything itself (ToggleButton, ColorPicker, the pickers) has nothing
-  native to fall out of step.
+  bound box through kyo-ui's `data-kyo-bound` marker, a text field through its value, even while focused). The heard
+  constant covers the boolean fields, Slider, InputNumber's `value` and Rating (both of its value slots); a text field's
+  constant is excluded, since it is the starting text the reader goes on editing, never a value to put back. A constant
+  nobody hears is fixed and has nothing to repaint. A two-way ref needs none of it, and a field that draws everything
+  itself (ToggleButton, ColorPicker, Knob, the pickers) has nothing native to fall out of step.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
   none (`Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike), so check which

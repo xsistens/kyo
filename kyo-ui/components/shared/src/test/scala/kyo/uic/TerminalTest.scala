@@ -3,10 +3,15 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** [[Terminal]]'s history under every way it can be bound: unbound it is the terminal's own, a constant nobody hears is
-  * fixed, a signal is followed and a commit only reported, and a ref is written before the report.
+/** [[Terminal]]'s history holds to rule A ([[ReactiveValueContract]]): unbound it is the terminal's own, a constant nobody
+  * hears is fixed, a signal is followed and a commit only reported, and a ref is written before the report. A terminal
+  * takes a command only with a handler, and wires its prompt in a mount, so every case starts from one with a handler
+  * and acts on what the mount published. The cases after it are what only a terminal does.
   */
-class TerminalTest extends UicTest:
+class TerminalTest extends ReactiveValueContract:
+
+    // A history compares by its commands, which are plain data.
+    private given CanEqual[Seq[uic.TerminalCommand], Seq[uic.TerminalCommand]] = CanEqual.derived
 
     private def shell(using Frame) = uic.Terminal().commandHandler(cmd => s"ran $cmd")
 
@@ -21,9 +26,49 @@ class TerminalTest extends UicTest:
             case Present(f) => handled(f(line))
             case Absent     => throw new AssertionError("the prompt takes no command")
 
+    /** The history the newest terminal in `t` shows, row by row. */
+    private def history(t: UI)(using Frame): Seq[uic.TerminalCommand] < Sync =
+        for
+            root <- elementWithClass(t, "p-terminal")
+            rows <- elementsWithClass(root, "p-terminal-command")
+            cmds <- Kyo.foreach(rows)(row =>
+                for
+                    cmd  <- elementWithClass(row, "p-terminal-command-value")
+                    resp <- elementWithClass(row, "p-terminal-command-response")
+                yield uic.TerminalCommand(textOf(cmd), textOf(resp))
+            )
+        yield cmds.toSeq
+
     private val ls = uic.TerminalCommand("ls", "ran ls")
 
-    "an unbound terminal with a handler keeps the history itself, so a commit shows" in {
+    holds(new Slot[uic.Terminal, Seq[uic.TerminalCommand]](
+        name = "commands",
+        bare = Present(shell),
+        bind = shell.commands(_),
+        hear = (c, f) => c.onCommandsChange(f),
+        event = "onCommandsChange",
+        render = _.render,
+        start = Seq.empty,
+        next = Seq(ls),
+        control = promptOf(_),
+        shows = history(_),
+        gesture = {
+            case i: UI.Ast.Input => commit(i, "ls")
+            case other           => throw new AssertionError(s"the prompt is not an input: $other")
+        },
+        answers = {
+            case i: UI.Ast.Input => i.onChange.isDefined
+            case _               => false
+        },
+        saysFixed = {
+            case i: UI.Ast.Input => i.readOnly.contains(true)
+            case _               => false
+        },
+        // The page as first rendered shows the history with a prompt that takes nothing yet; the mount wires it.
+        ready = Present(t => promptOf(t).map(_.onChange.isDefined))
+    ))
+
+    "an unbound terminal somebody hears keeps the history itself and reports the commit as well" in {
         for
             seen  <- Signal.initRef(List.empty[Seq[uic.TerminalCommand]])
             after <- publishedAfterReady(
@@ -37,44 +82,8 @@ class TerminalTest extends UicTest:
             assert(s == List(Seq(ls)), s"reported $s")
     }
 
-    "a constant nobody hears is fixed: the history shows, and the prompt takes no command" in {
-        for
-            in   <- promptOf(shell.commands(Seq(ls)).render)
-            rows <- elementsWithClass(shell.commands(Seq(ls)).render, "p-terminal-command")
-            card <- elementsWithClass(shell.commands(Seq(ls)).render, "p-uic-key-error")
-        yield
-            assert(rows.size == 1, "the history shows")
-            assert(in.onChange.isEmpty && in.readOnly.contains(true), "the prompt is read-only")
-            assert(card.isEmpty, s"a fixed history is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a history bound one way is followed, and a commit is reported without being written" in {
-        for
-            held <- Signal.initRef(Seq.empty[uic.TerminalCommand])
-            seen <- Signal.initRef(Seq.empty[uic.TerminalCommand])
-            t    <- mountedWhen(shell.commands(held.readOnly).onCommandsChange(seen.set).render)(t => promptOf(t).map(_.onChange.isDefined))
-            in   <- promptOf(t)
-            _    <- commit(in, "ls")
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(shell.commands(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s == Seq(ls), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onCommandsChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a ref is written before the terminal reports it" in {
-        for
-            held <- Signal.initRef(Seq.empty[uic.TerminalCommand])
-            seen <- Signal.initRef((Seq.empty[uic.TerminalCommand], Seq.empty[uic.TerminalCommand]))
-            t    <- mountedWhen(shell.commands(held).onCommandsChange(h => held.get.map(now => seen.set((h, now)))).render)(t =>
-                promptOf(t).map(_.onChange.isDefined)
-            )
-            in <- promptOf(t)
-            _  <- commit(in, "ls")
-            s  <- seen.get
-        yield assert(s == (Seq(ls), Seq(ls)), s"reported, held: $s")
+    "a fixed history shows its commands" in {
+        history(shell.commands(Seq(ls)).render).map(h => assert(h == Seq(ls), s"shows $h"))
     }
 
 end TerminalTest

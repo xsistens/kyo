@@ -68,8 +68,9 @@ final case class InputNumber private (
 ) extends Node, NumberFormControl, HasPlaceholder, HasAccessibleName:
     type Self = InputNumber
 
-    /** The field's value, in any of the three bindings a value slot holds. A constant renders it
-      * statically. A writable `SignalRef[Double]` binds TWO-WAY: edits and spin clicks write the
+    /** The field's value, in any of the three bindings a value slot holds. A constant nobody hears is
+      * fixed, drawn read-only; one [[onChange]] hears is reported and the field painted back to the
+      * constant. A writable `SignalRef[Double]` binds TWO-WAY: edits and spin clicks write the
       * clamped value back, and ref changes re-render the field. Any other `Signal[Double]` binds
       * one-way, so the field tracks it and edits write nowhere.
       *
@@ -226,6 +227,10 @@ final case class InputNumber private (
             // Bound one way, the field is painted again after each report, so a number the owner does not take is put back.
             case Present(InputNumber.Value.Dyn(sig)) =>
                 ReactiveValue.repainting(sig)((v, repaint) => body(Present(v), Absent, validity, repaint = repaint))
+            // A constant somebody hears is painted again after each report too, so a number its owner does not take is put
+            // back; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+            case Present(InputNumber.Value.Const(v)) if onChangeF.isDefined =>
+                ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(Present(v), Absent, validity, repaint = repaint))
             case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent, validity)
             // No `render` here on purpose: a text binding is kyo's own two-way channel on
             // the field, so the value travels without a subscription. Re-rendering the

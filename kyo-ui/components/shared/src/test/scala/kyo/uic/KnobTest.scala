@@ -2,58 +2,70 @@ package kyo.uic
 
 import kyo.*
 
-/** The `value` slot: a `SignalRef` binds two-way, any other signal one way, and either can be turned by the pointer as
-  * well as the keys. A one-way signal nobody hears says so.
+/** The `value` slot holds to rule A ([[ReactiveValueContract]]) through each of the two ways a reader turns the knob: the
+  * pointer on the outer box, which asks for the value under it whatever the knob held, and the keys on the dial, which
+  * step from it. Either way the dial is what says the knob is fixed (`aria-readonly` on its `slider` role), since the box
+  * the pointer lands on has no role to say it in.
   */
-class KnobTest extends UicTest:
+class KnobTest extends ReactiveValueContract:
 
     /** The top of a 100 by 100 dial: the middle of a 0 to 100 range. */
     private val top = UI.PointerEvent(50, 0, 0, 0, 100, 100, 1, Absent)
 
-    "a value bound one way is turned by the pointer, and the turn is reported without being written" in {
-        for
-            held <- Signal.initRef(10.0)
-            seen <- Signal.initRef(List.empty[Double])
-            root <- elementWithClass(uic.Knob().value(held.readOnly).onChange(v => seen.updateAndGet(_ :+ v).unit).render, "p-knob")
-            _    <- handled(root.attrs.onPointerDown.getOrElse(throw new AssertionError("the dial takes no pointer"))(top))
-            h    <- held.get
-            s    <- seen.get
-        yield assert(s == List(50.0) && h == 10.0, s"reported $s, held $h")
-    }
+    private def dial(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-uic-knob-dial")
 
-    "a value bound one way that nothing hears says so; onChange, a ref, a constant or disabled keep it quiet" in {
+    /** The value the dial announces, which its arcs and label are drawn from. */
+    private def announced(t: UI)(using Frame): Double < Sync =
+        dial(t).map(d =>
+            d.attrs.ariaAttrs.get("valuenow").flatMap(_.toDoubleOption)
+                .getOrElse(throw new AssertionError(s"the dial announces no value: ${d.attrs.ariaAttrs}"))
+        )
+
+    private def readonlyDial(d: UI.Ast.Element): Boolean = d.attrs.ariaAttrs.get("readonly").contains("true")
+
+    holds(new Slot[uic.Knob, Double](
+        name = "value turned by the pointer",
+        bare = Present(uic.Knob()),
+        bind = uic.Knob().value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = 0.0,
+        next = 50.0,
+        control = elementWithClass(_, "p-knob"),
+        shows = announced(_),
+        // A pointer asks for the value at the angle it lands on, here the top of the dial.
+        gesture = (c: UI.Ast.Element) =>
+            handled(c.attrs.onPointerDown.getOrElse(throw new AssertionError("the box takes no pointer"))(top)),
+        answers = _.attrs.onPointerDown.nonEmpty,
+        fixedOn = Present(dial(_)),
+        saysFixed = readonlyDial
+    ))
+
+    holds(new Slot[uic.Knob, Double](
+        name = "value stepped by the keys",
+        bare = Present(uic.Knob()),
+        bind = uic.Knob().value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = 0.0,
+        next = 1.0,
+        control = dial(_),
+        shows = announced(_),
+        gesture = (c: UI.Ast.Element) => press(c, UI.Keyboard.ArrowUp),
+        answers = _.attrs.onKeyDown.nonEmpty,
+        saysFixed = readonlyDial
+    ))
+
+    "a value bound one way says nothing where it reaches somebody or nobody can turn it: a ref, disabled" in {
         def errors(k: uic.Knob): Chunk[UI.Ast.Element] < Sync = elementsWithClass(k.render, "p-uic-key-error")
         for
-            held     <- Signal.initRef(10.0)
-            deaf     <- errors(uic.Knob().value(held.readOnly))
-            change   <- errors(uic.Knob().value(held.readOnly).onChange(_ => ()))
-            twoWay   <- errors(uic.Knob().value(held))
-            constant <- errors(uic.Knob().value(10.0))
-            off      <- errors(uic.Knob().value(held.readOnly).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(change.isEmpty && twoWay.isEmpty && constant.isEmpty && off.isEmpty, "somebody hears, or nobody can turn it")
+            held   <- Signal.initRef(10.0)
+            twoWay <- errors(uic.Knob().value(held))
+            off    <- errors(uic.Knob().value(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can turn it")
         end for
-    }
-
-    "a constant nobody hears is fixed: read-only, turned by nothing, and no card" in {
-        for
-            root <- elementWithClass(uic.Knob().value(10.0).render, "p-knob")
-            card <- elementsWithClass(uic.Knob().value(10.0).render, "p-uic-key-error")
-        yield
-            assert(root.attrs.onPointerDown.isEmpty, "a fixed dial takes no pointer")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound knob keeps where the reader turns it" in {
-        def reads50(t: UI): Boolean < Sync = elementsWithClass(t, "p-knob-text").map(_.exists(e => textOf(e) == "50"))
-        for
-            after <- publishedAfterReady(
-                uic.Knob().render,
-                t => elementsWithClass(t, "p-knob").map(_.exists(_.attrs.onPointerDown.nonEmpty)),
-                until = reads50
-            )(t => elementWithClass(t, "p-knob").map(r => handled(r.attrs.onPointerDown.get(top))))
-        yield assert(after.nonEmpty, "the knob never showed where the reader turned it")
     }
 
 end KnobTest

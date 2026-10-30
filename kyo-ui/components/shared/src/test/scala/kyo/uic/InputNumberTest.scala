@@ -2,13 +2,107 @@ package kyo.uic
 
 import kyo.*
 
-/** The `value` slot bound one way: the field shows what its owner holds, and a number its owner does not take is painted
-  * away again, since the native number field already shows what the reader typed.
+/** The field's two slots, one storage, both held to rule A ([[ReactiveValueContract]]), each through the native field and
+  * through the spin buttons. `value` is a number: a constant nobody hears is fixed (native `readonly`, the spin buttons
+  * off), and it has no unbound form of its own, since a field nobody binds keeps text. `text` is what the reader typed: its
+  * constant is the starting text, and unbound or from a constant the field keeps the text itself. The cases after them are
+  * what only this field does: a number its owner does not take is painted away again, the wrapper's filled class, and
+  * what a blur reports.
   */
-class InputNumberTest extends UicTest:
+class InputNumberTest extends ReactiveValueContract:
 
     private def number(ui: UI)(using Frame): UI.Ast.NumberInput < Sync =
         elements(ui).map(_.collectFirst { case n: UI.Ast.NumberInput => n }.getOrElse(throw new AssertionError("no number field")))
+
+    /** The number the field shows, drawn from the bound number. */
+    private def shownNumber(t: UI)(using Frame): Double < Sync =
+        number(t).map(_.value match
+            case Present(UI.Bound.Const(v)) => v.toDoubleOption.getOrElse(throw new AssertionError(s"the field shows no number: $v"))
+            case other                      => throw new AssertionError(s"the field is bound as $other"))
+
+    private def increment(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-inputnumber-increment-button")
+
+    private def readonlyField(e: UI.Ast.Element): Boolean = e match
+        case n: UI.Ast.NumberInput => n.readOnly.contains(true)
+        case _                     => false
+
+    /** The field takes typing: the mount of a field that keeps its text has wired it (the page as first rendered has not). */
+    private def typing(t: UI)(using Frame): Boolean < Sync = number(t).map(_.onInput.isDefined)
+
+    holds(new Slot[uic.InputNumber, Double](
+        name = "value",
+        bare = Absent,
+        bind = uic.InputNumber().value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = 0.0,
+        next = 7.0,
+        control = number(_),
+        shows = shownNumber(_),
+        // The field commits the number the reader typed, delivered as a number.
+        gesture = {
+            case n: UI.Ast.NumberInput => handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0))
+            case other                 => throw new AssertionError(s"not a number field: $other")
+        },
+        answers = {
+            case n: UI.Ast.NumberInput => n.onChangeNumeric.nonEmpty
+            case _                     => false
+        },
+        saysFixed = readonlyField
+    ))
+
+    holds(new Slot[uic.InputNumber, Double](
+        name = "value spun",
+        bare = Absent,
+        bind = uic.InputNumber().showButtons(true).value(_),
+        hear = (c, f) => c.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = 0.0,
+        next = 1.0,
+        control = increment(_),
+        shows = shownNumber(_),
+        fixedOn = Present(number(_)),
+        saysFixed = readonlyField
+    ))
+
+    holds(new Slot[uic.InputNumber, String](
+        name = "text",
+        bare = Present(uic.InputNumber()),
+        bind = uic.InputNumber().text(_),
+        hear = (c, f) => c.onTextChange(f),
+        event = "onTextChange",
+        render = _.render,
+        start = "",
+        // A text no number can hold, which is what the text slot is for: it travels as typed.
+        next = "-",
+        control = number(_),
+        shows = t => number(t).map(textIn),
+        gesture = (c: UI.Ast.Element) => typed(c, "-", commit = false),
+        answers = editable,
+        saysFixed = readonlyField,
+        ready = Present(typing(_)),
+        startText = Present("4.")
+    ))
+
+    holds(new Slot[uic.InputNumber, String](
+        name = "text spun",
+        bare = Present(uic.InputNumber().showButtons(true)),
+        bind = uic.InputNumber().showButtons(true).text(_),
+        hear = (c, f) => c.onTextChange(f),
+        event = "onTextChange",
+        render = _.render,
+        start = "",
+        next = "1",
+        control = increment(_),
+        shows = t => number(t).map(textIn),
+        // No `ready`: the spin buttons are wired on the page as first rendered, and a field bound to a text ref has no
+        // mount, only a region around the field itself, which holds no button to act on.
+        fixedOn = Present(number(_)),
+        saysFixed = readonlyField,
+        startText = Present("4.")
+    ))
 
     "a number its owner does not take is painted away again" in {
         for
@@ -19,91 +113,38 @@ class InputNumberTest extends UicTest:
         yield assert(again, "the field kept what the reader did, though its owner never took it")
     }
 
-    "a value bound one way that nothing hears says so; onChange, a ref or disabled keep it quiet" in {
-        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+    "a constant with a listener paints itself again after a report, so a number the owner does not take is put back" in {
         for
-            held   <- Signal.initRef(3.0)
-            deaf   <- errors(uic.InputNumber().value(held.readOnly))
-            change <- errors(uic.InputNumber().value(held.readOnly).onChange(_ => ()))
-            twoWay <- errors(uic.InputNumber().value(held))
-            off    <- errors(uic.InputNumber().value(held.readOnly).disabled(true))
+            first <- shownNumber(uic.InputNumber().value(3.0).onChange(_ => ()).render)
+            again <- repaintsAfter(uic.InputNumber().value(3.0).onChange(_ => ()).render)(t =>
+                number(t).map(n => handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0)))
+            )
         yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(change.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can change it")
+            assert(first == 3.0, s"the page as first rendered shows $first for the constant 3")
+            assert(again, "the field kept what the reader did, though its owner never took it")
         end for
     }
 
-    "a constant nobody hears is fixed: read-only, and no card" in {
+    "a value bound one way says nothing where it reaches somebody or nobody can change it: a ref, disabled" in {
+        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
         for
-            n    <- number(uic.InputNumber().value(3.0).render)
-            card <- elementsWithClass(uic.InputNumber().value(3.0).render, "p-uic-key-error")
-        yield
-            assert(n.readOnly.contains(true) && n.onChangeNumeric.isEmpty, "a fixed field takes no number")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
+            held   <- Signal.initRef(3.0)
+            twoWay <- errors(uic.InputNumber().value(held))
+            off    <- errors(uic.InputNumber().value(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can change it")
+        end for
     }
 
-    "an unbound field keeps what the spin buttons make of it" in {
-        def holds(text: String)(t: UI): Boolean < Sync =
-            elements(t).map(_.collectFirst { case n: UI.Ast.NumberInput => n.value }).map {
-                case Some(Present(UI.Bound.Ref(r)))   => r.get.map(_ == text)
-                case Some(Present(UI.Bound.Const(v))) => Kyo.lift(v == text)
-                case _                                => Kyo.lift(false)
-            }
+    "a constant text is still the text shown once the mount keeps it" in {
         for
-            after <- publishedAfterReady(
-                uic.InputNumber().showButtons(true).render,
-                t => elementsWithClass(t, "p-inputnumber-increment-button").map(_.exists(declaresClick)),
-                until = holds("1")
-            )(t => elementWithClass(t, "p-inputnumber-increment-button").map(click))
-        yield assert(after.nonEmpty, "the field never showed what the spin button made of it")
-    }
-
-    private def textOf(n: UI.Ast.NumberInput)(using Frame): String < Sync =
-        n.value match
-            case Present(UI.Bound.Ref(r))   => r.get
-            case Present(UI.Bound.Const(v)) => Kyo.lift(v)
-            case _                          => Kyo.lift("")
-
-    "a constant text is the starting text, kept by the field" in {
-        for
-            t    <- mountedWhen(uic.InputNumber().text("4.").render)(t => number(t).map(_.value.isDefined))
+            t    <- mountedWhen(uic.InputNumber().text("4.").render)(typing)
             n    <- number(t)
-            text <- textOf(n)
+            text <- textIn(n)
             card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-key-error")
         yield
             assert(text == "4.", s"the field starts from $text")
             assert(n.readOnly.isEmpty, "and the reader goes on typing from it")
             assert(card.isEmpty, s"a starting text is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a text bound one way is shown, and typing is reported without being written" in {
-        for
-            held <- Signal.initRef("12")
-            seen <- Signal.initRef(List.empty[String])
-            t    <- mountedWhen(uic.InputNumber().text(held.readOnly).onTextChange(v => seen.updateAndGet(_ :+ v).unit).render)(t =>
-                number(t).map(_.onInput.isDefined)
-            )
-            n     <- number(t)
-            shown <- textOf(n)
-            _     <- typeInto(n, "123")
-            h     <- held.get
-            s     <- seen.get
-            deaf  <- elementsWithClass(uic.InputNumber().text(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(shown == "12", s"the field shows the owner's text: $shown")
-            assert(h == "12" && s == List("123"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onTextChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a text ref is written before every keystroke is reported" in {
-        for
-            held <- Signal.initRef("")
-            seen <- Signal.initRef(List.empty[(String, String)])
-            n    <- number(uic.InputNumber().text(held).onTextChange(v => held.get.map(h => seen.updateAndGet(_ :+ (v, h)).unit)).render)
-            _    <- typeInto(n, "-")
-            s    <- seen.get
-        yield assert(s == List(("-", "-")), s"reported, held: $s")
     }
 
     // The client toggles the wrapper's class from the text the number field holds (kyo-ui's filledClass with an ancestor
