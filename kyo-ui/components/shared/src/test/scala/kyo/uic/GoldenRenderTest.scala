@@ -3686,11 +3686,11 @@ class GoldenRenderTest extends UicTest:
             assert(filled.contains("""for="uname""""), "label for binding")
             assert(filled.contains("""id="uname""""), "input id rendered")
             assert(filled.contains("Username"), "label text")
-            assert(filled.contains("p-filled"), "non-empty bound value stamps p-filled (CSS float hook)")
-            assert(!empty.contains("p-filled"), "empty bound value leaves p-filled off")
+            assert(classInHtml(filled, "p-filled"), "non-empty bound value stamps p-filled (CSS float hook)")
+            assert(!classInHtml(empty, "p-filled"), "empty bound value leaves p-filled off")
             assert(onVar.contains("p-floatlabel-on"), "on variant class")
             assert(ifta.contains("p-iftalabel"), "iftalabel root class")
-            assert(ifta.contains("p-filled"), "iftalabel stamps p-filled too")
+            assert(classInHtml(ifta, "p-filled"), "iftalabel stamps p-filled too")
             assert(iftaTextArea.contains("p-iftalabel"), "TextArea host wraps in the iftalabel root")
             assert(iftaTextArea.contains("<textarea"), "TextArea host renders its own field")
             assert(iftaTextArea.contains("Notes"), "TextArea host renders the label text")
@@ -4450,8 +4450,8 @@ class GoldenRenderTest extends UicTest:
                 yield out.mkString
         yield
             assert(taFilled.contains("p-floatlabel"), "textarea host: floatlabel root")
-            assert(taFilled.contains("p-filled"), "textarea host: non-empty value stamps p-filled")
-            assert(!taEmpty.contains("p-filled"), "textarea host: empty value leaves p-filled off")
+            assert(classInHtml(taFilled, "p-filled"), "textarea host: non-empty value stamps p-filled")
+            assert(!classInHtml(taEmpty, "p-filled"), "textarea host: empty value leaves p-filled off")
             assert(taFilled.contains("""for="msg""""), "textarea host: label for binding")
             assert(taFilled.contains("""id="msg""""), "textarea host: field id rendered")
             assert(selFilled.contains("p-inputwrapper"), "select host: Prime wrapper class")
@@ -4460,7 +4460,7 @@ class GoldenRenderTest extends UicTest:
             assert(selEmpty.contains("p-placeholder"), "select host: auto empty placeholder keeps the closed field blank")
             assert(selFilled.contains("""id="unit""""), "select host: native select id rendered")
             assert(acFilled.contains("p-autocomplete"), "autocomplete host: field rendered")
-            assert(acFilled.contains("p-filled"), "autocomplete host: non-empty value stamps p-filled on the inner input")
+            assert(classInHtml(acFilled, "p-filled"), "autocomplete host: non-empty value stamps p-filled on the inner input")
             assert(acFilled.contains("""id="city""""), "autocomplete host: inner input id rendered")
         end for
     }

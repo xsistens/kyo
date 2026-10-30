@@ -36,6 +36,18 @@ class TextAreaTest extends ReactiveValueContract:
     private def field(ui: UI)(using Frame): UI.Ast.Textarea < Sync =
         elements(ui).map(_.collectFirst { case t: UI.Ast.Textarea => t }.getOrElse(throw new AssertionError("no textarea")))
 
+    // The browser half is held in kyo-ui (FilledClassTest, DomBackendFilledTest).
+    "the field marks itself filled for the client, and the static render carries p-filled from a starting text" in {
+        for
+            started <- renderHtml(uic.TextArea().value("x").render)
+            empty   <- renderHtml(uic.TextArea().value("").render)
+            bare    <- renderHtml(uic.TextArea().render)
+        yield
+            assert(classInHtml(started, "p-filled") && started.contains("""data-kyo-filled="p-filled""""), started)
+            Seq(empty, bare).foreach(h => assert(!classInHtml(h, "p-filled") && h.contains("""data-kyo-filled="p-filled""""), h))
+        end for
+    }
+
     "a value bound one way follows its owner" in {
         for
             held <- Signal.initRef("a")

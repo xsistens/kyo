@@ -158,6 +158,25 @@ class PasswordTest extends ReactiveValueContract:
 
     // Without the meter a ref is bound to the field directly and nothing renders per keystroke, so the wrapper follows the
     // ref through a class channel, as the meter's render follows it by drawing again.
+    // The client toggles the wrapper's class from the field's text (kyo-ui's filledClass with an ancestor target); the
+    // wrapper's starting class is the field's own to stamp. The browser half is held in kyo-ui (FilledClassTest,
+    // DomBackendFilledTest).
+    "every path marks the field for the wrapper's filled class, and the page as first rendered stamps it from a starting text" in {
+        def marked(h: String) = h.contains("""data-kyo-filled-up="p-inputwrapper-filled"""") &&
+            h.contains("""data-kyo-filled-on=".p-password"""")
+        for
+            plain    <- renderHtml(uic.Password().value("x").render)
+            plainNo  <- renderHtml(uic.Password().render)
+            meter    <- renderHtml(uic.Password().feedback(true).value("x").render)
+            meterNo  <- renderHtml(uic.Password().feedback(true).render)
+            toggle   <- renderHtml(uic.Password().toggleMask(true).value("x").render)
+            toggleNo <- renderHtml(uic.Password().toggleMask(true).render)
+        yield
+            Seq(plain, meter, toggle).foreach(h => assert(classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+            Seq(plainNo, meterNo, toggleNo).foreach(h => assert(!classInHtml(h, "p-inputwrapper-filled") && marked(h), h))
+        end for
+    }
+
     "bound to a ref with the meter off, the wrapper is filled while the ref holds text" in {
         for
             held <- Signal.initRef("abc")

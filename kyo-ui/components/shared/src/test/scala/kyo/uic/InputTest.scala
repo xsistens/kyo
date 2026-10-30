@@ -37,6 +37,19 @@ class InputTest extends ReactiveValueContract:
         elements(ui).map(_.collectFirst { case t: (UI.Ast.Element & UI.Ast.TextInput) => t }
             .getOrElse(throw new AssertionError("no text field")))
 
+    // The client toggles p-filled from the text the field holds (kyo-ui's filledClass); the page as first rendered already
+    // carries it where the starting text is not empty. The browser half is held in kyo-ui (FilledClassTest, DomBackendFilledTest).
+    "the field marks itself filled for the client, and the static render carries p-filled from a starting text" in {
+        for
+            started <- renderHtml(uic.Input().value("x").render)
+            empty   <- renderHtml(uic.Input().value("").render)
+            bare    <- renderHtml(uic.Input().render)
+        yield
+            assert(classInHtml(started, "p-filled") && started.contains("""data-kyo-filled="p-filled""""), started)
+            Seq(empty, bare).foreach(h => assert(!classInHtml(h, "p-filled") && h.contains("""data-kyo-filled="p-filled""""), h))
+        end for
+    }
+
     "a value bound one way follows its owner" in {
         for
             held <- Signal.initRef("a")
