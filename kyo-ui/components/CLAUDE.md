@@ -880,6 +880,11 @@ native. Select, CheckBox, ToggleSwitch, Rating and ToggleButton all answer this 
   is the kyo-ui primitive that declines it in the client, the same way `preventScrollKeys`
   declines the page scroll. Both read from `kyo.internal.KeyPolicy`, and `KeyPolicyTest`
   holds the two transports against it.
+- **A radio group walks past an inert radio the way it walks past a disabled one.** The
+  browser's arrow walk would land on the focusable inert radio and stick there, so both
+  clients walk a group that has one themselves (`KeyPolicy.radioStep`): on to the next
+  radio that is neither inert nor disabled, and an inert radio that is selected holds the
+  group. `RadioTest` measures the native walk in Chrome and holds the client to it.
 
 ## Enter vs leave animations
 
