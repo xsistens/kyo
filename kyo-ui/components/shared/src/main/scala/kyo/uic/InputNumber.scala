@@ -262,10 +262,13 @@ final case class InputNumber private (
         textShown: Maybe[String] = Absent
     )(using Frame): UI =
         // === the native number field ============================================
+        // The wrapper's `p-inputwrapper-filled` follows the text the number field holds, toggled by kyo-ui's client, so a
+        // field the reader empties (from a constant, or keeping text) does not keep a class no render takes off.
         var in = numberInput
             .cssClass("p-inputnumber-input")
             .cssClass("p-inputtext")
             .cssClass("p-component")
+            .filledClass("p-inputwrapper-filled", ".p-inputnumber")
         idV.foreach(v => in = in.id(v))
         if focusAutoFlag then in = in.focusAuto(true)
         sizeV match
@@ -378,7 +381,11 @@ final case class InputNumber private (
             .cssClass("p-inputnumber")
             .cssClass("p-component")
             .cssClass("p-inputwrapper")
-        if value.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
+        // The wrapper's starting class: from the number, or from the text the field keeps (a text ref through a class
+        // channel, so a write by the program reaches it too). The client keeps it right from the field's own text after.
+        el = text match
+            case Present(t) => el.cssClass("p-inputwrapper-filled", t.map(_.nonEmpty))
+            case Absent     => el.cssClass("p-inputwrapper-filled", value.nonEmpty || textShown.exists(_.nonEmpty))
         if showButtonsFlag then el = el.cssClass(s"p-inputnumber-${buttonLayoutV.token}")
         if fluidFlag then el = el.cssClass("p-inputnumber-fluid")
         el = validity.markClass(el)

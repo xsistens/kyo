@@ -135,6 +135,12 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
         UI.runRender(ui).take(1).run.map(_.mkString)
 
+    /** Whether an element in `html` carries `cls` among the classes of its `class` attribute (a marker attribute that
+      * names the class does not count).
+      */
+    private[uic] def classInHtml(html: String, cls: String): Boolean =
+        "class=\"([^\"]*)\"".r.findAllMatchIn(html).exists(_.group(1).split(' ').contains(cls))
+
     /** [[publishedAfterReady]] for what reaches the page as an attribute patch rather than a region: whether, after the
       * gestures, the field patched an attribute `holds` accepts, as `(name, value)`. A header's sort state, say, rides
       * that channel and never publishes a region of its own.

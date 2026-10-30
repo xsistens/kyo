@@ -50,7 +50,8 @@ final case class Input private (
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     focusAutoFlag: Boolean = false,
-    unheardAsV: (String, String) = ("Input", "onInput or onChange")
+    unheardAsV: (String, String) = ("Input", "onInput or onChange"),
+    filledUpV: Maybe[(String, String)] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Input
 
@@ -63,6 +64,11 @@ final case class Input private (
       * own events are what hear it ([[InputMask]]).
       */
     private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = (component, events))
+
+    /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
+      * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
+      */
+    private[uic] def filledOn(cls: String, closest: String): Input = copy(filledUpV = Present((cls, closest)))
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
@@ -260,6 +266,10 @@ final case class Input private (
         if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
         b = validity.mark(b)
         if fluidFlag then b = b.cssClass("p-inputtext-fluid")
+        // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
+        // field's text, the reader's edit of a starting one): kyo-ui toggles it there, the static render from the start.
+        b = b.filledClass("p-filled")
+        filledUpV.foreach((cls, closest) => b = b.filledClass(cls, closest))
         valueBinding match
             case Present(ReactiveVariable(r)) => b = b.value(r)
             case _                            => shown.foreach(v => b = b.value(v))

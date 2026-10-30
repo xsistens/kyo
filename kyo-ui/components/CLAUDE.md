@@ -770,6 +770,15 @@ refs themselves held the correct result.
 - **A wrapper adds no region around a mount.** A state the wrapper needs from the control (FloatLabel's
   `p-filled`) is stamped by the control inside its own region (`AutoComplete.stampFilled`), and an
   embedding host binds a control one way (`CellEditor.select`) rather than rendering it per value.
+- **A class that follows a field's native text is the client's** (kyo-ui's `filledClass`), never a region and never
+  a stamp from the binding: the binding does not have the text of an unbound field or the reader's edit of a starting
+  one, and a region over a ref draws the field again on every keystroke. Input, TextArea and InputMask (through its
+  Input) mark `p-filled` on the field; Password and InputNumber mark Prime's `p-inputwrapper-filled` on their wrapper
+  (`filledClass(name, closest)`, `Input.filledOn`), and since the static render cannot reach an ancestor, the wrapper
+  stamps the starting class itself (Password's ref path and InputNumber's text ref through a class channel, which agrees
+  with the client because the ref holds the field's text). AutoComplete keeps its stamp: it draws its field from the
+  text it owns on every keystroke, so the stamp is never behind. The browser half is held in kyo-ui
+  (`FilledClassTest`, `DomBackendFilledTest`); the JVM suites here check the marker and the starting class.
 - `UicTest.regionsAbove` counts the subscriptions a control wraps its markup in, so the rule is
   checked rather than remembered.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of
