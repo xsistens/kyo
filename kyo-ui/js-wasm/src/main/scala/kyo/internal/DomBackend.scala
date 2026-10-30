@@ -669,6 +669,7 @@ private[kyo] object DomBackend:
             spawnGhosts(ghosts)
             sweepFocusAuto()
             sweepScrollAuto()
+            sweepFilled()
             true
         end if
     end applyListPatch
@@ -896,8 +897,37 @@ private[kyo] object DomBackend:
     private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
         if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
             val dyn = el.asInstanceOf[js.Dynamic]
-            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+            if dyn.value.asInstanceOf[String] != value then
+                dyn.value = value
+                applyFilled(el)
+            end if
     end syncFieldProperty
+
+    /** `filledClass`: toggles the classes `field` marks (on itself, and on the closest ancestor its selector names) from
+      * whether it holds text. Twin of `__kyoFilled` in HtmlRenderer.clientJs; both read `FilledClass`.
+      */
+    private[kyo] def applyFilled(field: dom.Element): Unit =
+        val self = field.getAttribute(FilledClass.classAttr)
+        val up   = field.getAttribute(FilledClass.upAttr)
+        if self != null || up != null then
+            val text = field.asInstanceOf[js.Dynamic].value
+            val on   = js.typeOf(text) == "string" && FilledClass.filled(text.asInstanceOf[String])
+            if self != null && self.nonEmpty then discard(field.classList.toggle(self, on))
+            if up != null && up.nonEmpty then
+                val target = field.closest(field.getAttribute(FilledClass.targetAttr))
+                if target != null then discard(target.classList.toggle(up, on))
+            end if
+        end if
+    end applyFilled
+
+    /** [[applyFilled]] for every field that carries a marker: after a patch, which may have written a target's `class`
+      * attribute from what the server last knew, and at boot. Twin of `__kyoSweepFilled` in HtmlRenderer.clientJs.
+      */
+    private def sweepFilled(): Unit =
+        if saw(Marker.Filled) then
+            val fs = document.querySelectorAll(s"[${FilledClass.classAttr}],[${FilledClass.upAttr}]")
+            (0 until fs.length).foreach(i => applyFilled(fs(i).asInstanceOf[dom.Element]))
+    end sweepFilled
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
@@ -947,6 +977,7 @@ private[kyo] object DomBackend:
             // Record the initial carriers without scrolling: the first paint is where the reader starts, not a
             // movement to follow.
             _ <- Sync.defer(sweepScrollAuto(scroll = false))
+            _ <- Sync.defer(sweepFilled())
             // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
             _        <- Sync.defer { adoptPortals(container); retireOrphanTwins() }
             _        <- Sync.defer(beginAnimationsSync(container))
@@ -1515,6 +1546,7 @@ private[kyo] object DomBackend:
             // A patch that left the flag on a different element scrolls that element into view; one that left it
             // where it was scrolls nothing.
             sweepScrollAuto()
+            sweepFilled()
         end finishRangePatch
 
         /** Replaces the SVG region's element with `html`, answering the element that shows it afterwards. */
@@ -2010,6 +2042,11 @@ private[kyo] object DomBackend:
                     e.preventDefault()
                 if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
             end if
+            // filledClass: the class follows the field's text where the reader changes it, before any event is forwarded.
+            if e.`type` == "input" || e.`type` == "change" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && js.typeOf(tgt.asInstanceOf[js.Dynamic].getAttribute) == "function" then applyFilled(tgt)
+            end if
             // The click's default goes the same way, so a readonly control does not toggle under the pointer.
             if e.`type` == "click" then
                 val tgt = e.target.asInstanceOf[dom.Element]
@@ -2265,7 +2302,8 @@ private[kyo] object DomBackend:
         inline val SvgAnim    = 32
         inline val Portal     = 64
         inline val Attach     = 128
-        inline val All        = 255
+        inline val Filled     = 256
+        inline val All        = 511
     end Marker
 
     /** The markers `html` carries, among those not already in `known`. */
@@ -2280,6 +2318,8 @@ private[kyo] object DomBackend:
         if (known & Marker.SvgAnim) == 0 && html.contains("<animate") then found |= Marker.SvgAnim
         if (known & Marker.Portal) == 0 && html.contains("data-kyo-portal") then found |= Marker.Portal
         if (known & Marker.Attach) == 0 && html.contains("data-kyo-attach") then found |= Marker.Attach
+        // One search covers data-kyo-filled and data-kyo-filled-up.
+        if (known & Marker.Filled) == 0 && html.contains(FilledClass.classAttr) then found |= Marker.Filled
         found
     end markersIn
 

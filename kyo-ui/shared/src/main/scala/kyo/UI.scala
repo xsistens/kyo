@@ -2008,6 +2008,7 @@ object UI:
             def readOnly(v: Boolean): Self
             def onInput: Maybe[String => Action]
             def onChange: Maybe[String => Action]
+
             /** The handler the two-parameter `onBlur` stores. */
             def onBlurText: Maybe[(MouseEvent, String) => Action]
 
@@ -2022,6 +2023,33 @@ object UI:
               * reports the field's `SignalRef` value, else its constant, else the empty text.
               */
             def onBlur(f: (MouseEvent, String) => Action): Self
+
+            /** Puts the class `name` on this field while it holds text, and takes it off while it is empty, in the client:
+              * as the reader types, as a patch writes the field's value, and after every patch. Nothing goes to the server
+              * and nothing renders again, so the class follows the text the browser keeps for a field nothing binds, and
+              * the reader's edit of a field started from a constant, which no render knows about.
+              *
+              * The static render carries the class already when the field's starting text (its constant, or what its
+              * `SignalRef` holds) is not empty, so a page shown before the client attaches is right. Emits
+              * `data-kyo-filled`, which both clients read through `kyo.internal.FilledClass`.
+              *
+              * Declarative for the reason [[preventScrollKeys]] is: a handler would learn of the text only after a round
+              * trip, and of an unbound field's text not at all.
+              */
+            def filledClass(name: String): Self =
+                withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated(kyo.internal.FilledClass.classKey, name)))
+
+            /** [[filledClass]] with the class put on the closest ancestor that `closest` (a CSS selector) matches, for a
+              * stylesheet that marks the wrapper around a field (Prime's `.p-inputwrapper-filled`). It sits beside a class on
+              * the field itself, so a field can mark both. The static render cannot reach an ancestor it has already
+              * written, so the component that draws the wrapper stamps the starting class on it from the starting text; the
+              * client keeps it right from there. Emits `data-kyo-filled-up` and `data-kyo-filled-on`.
+              */
+            def filledClass(name: String, closest: String): Self =
+                withAttrs(attrs.copy(dataAttrs =
+                    attrs.dataAttrs.updated(kyo.internal.FilledClass.upKey, name).updated(kyo.internal.FilledClass.targetKey, closest)
+                ))
+
             def value(v: String): Self
 
             /** Binds the input to a `SignalRef` two-way: edits write the new text back into the ref, and ref changes update the input. */

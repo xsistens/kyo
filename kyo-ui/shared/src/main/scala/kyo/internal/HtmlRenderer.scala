@@ -433,7 +433,7 @@ private[kyo] object HtmlRenderer:
                             discard(sb.append(" data-kyo-attach=\"")
                                 .append(Integer.toHexString(java.lang.System.identityHashCode(elem))).append('"'))
                     end openTag
-                    openTag(reactiveTrueClasses(elem.attrs), reactiveStyleNow(elem.attrs))
+                    openTag(reactiveTrueClasses(elem.attrs) ++ filledNow(elem), reactiveStyleNow(elem.attrs))
                     renderElementAttrs(sb, elem)
                     renderReactiveAttrs(sb, elem.attrs)
                     renderReactiveBoolAttrs(sb, elem.attrs)
@@ -965,6 +965,25 @@ private[kyo] object HtmlRenderer:
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
       */
+    /** The `filledClass` a text field carries on itself as first rendered: present while its starting text, as the field
+      * shows it (masked), is not empty. The client keeps it right from there (`FilledClass`).
+      */
+    private def filledNow(elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
+        elem match
+            case ti: TextInput =>
+                elem.attrs.dataAttrs.get(FilledClass.classKey) match
+                    case Some(name) =>
+                        val mask = ti match
+                            case ci: ConstrainedInput => ci.inputMask
+                            case _                    => Absent
+                        val text = ti.value match
+                            case Present(Bound.Const(v)) => masked(mask, v)
+                            case Present(Bound.Ref(ref)) => masked(mask, SignalNow(ref))
+                            case _                       => ""
+                        if FilledClass.filled(text) then Seq(name) else Seq.empty
+                    case None => Seq.empty
+            case _ => Seq.empty
+
     private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
         if attrs.reactiveClasses.isEmpty then Seq.empty
         else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
@@ -2141,6 +2160,8 @@ private[kyo] object HtmlRenderer:
            |    if(!__live){__live=true;__wsRetries=0;var pending=__q;__q=[];for(var i=0;i<pending.length;i++)sock.send(pending[i]);
            |      var waiters=__liveWaiters;__liveWaiters=[];for(var j=0;j<waiters.length;j++)waiters[j](true);}
            |    kyoOnMessage(e);
+           |    // A patch may have written a field's value or its target's class from what the server last knew.
+           |    __kyoSweepFilled();
            |  };
            |  // A connect that never completes reports here and then closes, so recovery is driven from onclose alone;
            |  // this handler exists so the failure does not surface as an unhandled error.
@@ -2337,8 +2358,10 @@ private[kyo] object HtmlRenderer:
            |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
            |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
            |function __kyoSyncField(el,name,value){
-           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value){el.value=value;__kyoFilled(el);}
            |}
+           |// filledClass: a text field's class follows whether it holds text (kyo.internal.FilledClass, shared with DomBackend).
+           |${FilledClass.js}
            |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
            |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
            |// reconciliation. Mirrors markOwned in DomBackend.
@@ -2634,6 +2657,10 @@ private[kyo] object HtmlRenderer:
            |// Record what already carries the scroll flag without acting on it: a page that arrives with a
            |// highlight has not moved it, and scrolling on load would fight the browser's own restoration.
            |sweepScrollAuto(false);
+           |// filledClass: a field the reader typed into before the script ran (or one the browser refilled) is put right, and
+           |// every later keystroke, paste or autofill toggles its class where it happens.
+           |__kyoSweepFilled();
+           |["input","change"].forEach(function(t){document.body.addEventListener(t,function(e){var f=e.target;if(f&&f.getAttribute&&(f.getAttribute("${FilledClass.classAttr}")||f.getAttribute("${FilledClass.upAttr}")))__kyoFilled(f);},true);});
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoAdoptPortals(document.body);__kyoRetireOrphanTwins();
            |// Dropdown helpers: close all dropdowns except the given id
