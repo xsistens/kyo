@@ -8,7 +8,7 @@ import kyo.*
   *
   * A [[Slot]] names the slot through its setter and its event, the one control the reader changes it with, and what a
   * render shows of it. `start` is where an unbound slot starts and `next` is what one gesture on that control asks for
-  * from `start`; every case binds `start` and expects `next` to be asked for.
+  * from `start`; every case binds `start` and expects `next` to be asked for, and a report to say so exactly once.
   *
   * The file ends in `Test.scala` although nothing runs it on its own: inside the kyo package a `Frame` is derived only in
   * such a file, and the cases below derive one.
@@ -100,6 +100,82 @@ abstract class ReactiveValueContract extends UicTest:
 
     private def cards(t: UI)(using Frame) = elementsWithClass(t, "p-uic-key-error")
 
+    /** The slot of a field whose state is a native boolean input (a checkbox, a switch, a radio), from `false` to `true`.
+      *
+      * The reader changes it through the browser's change event, which carries the state asked for, not through a click.
+      * Fixed is what `readonly` is (see `ReadonlyTest`): the input says so in its role's vocabulary (`fixedAria`), the
+      * client declines the browser's own toggle (`preventActivation`), and it stays a tab stop, so it is not natively
+      * disabled. What a render shows is the native state, and the box drawn around it must agree: `checkedClass` on the
+      * element with class `root` is there exactly when the input is checked.
+      *
+      * @param input
+      *   the class of the native input
+      * @param root
+      *   the class of the element that draws the state
+      * @param checkedClass
+      *   the class that element carries while checked
+      * @param fixedAria
+      *   the `aria-*` state, set to `"true"`, that says the input changes nothing: `readonly` for a checkbox or a switch,
+      *   `disabled` for a radio, whose role has no readonly state
+      */
+    def nativeBoolean[C](
+        name: String,
+        bare: Frame ?=> Maybe[C],
+        bind: (Boolean | Signal[Boolean]) => Frame ?=> C,
+        hear: (C, Boolean => UI.Action) => Frame ?=> C,
+        event: String,
+        render: C => Frame ?=> UI,
+        input: String,
+        root: String,
+        checkedClass: String,
+        fixedAria: String = "readonly"
+    ): Slot[C, Boolean] =
+        def control(t: UI)(using Frame): UI.Ast.Element < Sync =
+            elements(t).map(_.collectFirst {
+                case b: UI.Ast.BooleanInput if b.attrs.cssClasses.contains(input) => b
+            }.getOrElse(throw new AssertionError(s"no input with class $input")))
+        def shows(t: UI)(using Frame): Boolean < Sync =
+            for
+                in    <- control(t)
+                box   <- elementWithClass(t, root)
+                drawn <- carriesClass(box, checkedClass)
+            yield
+                val native = in match
+                    case b: UI.Ast.BooleanInput =>
+                        b.checked match
+                            case Present(UI.Bound.Const(v)) => v
+                            case other                      => throw new AssertionError(s"the input is bound as $other")
+                    case other => throw new AssertionError(s"not a boolean input: $other")
+                if drawn != native then throw new AssertionError(s"drawn checked $drawn over a native state $native")
+                native
+        new Slot[C, Boolean](
+            name = name,
+            bare = bare,
+            bind = bind,
+            hear = hear,
+            event = event,
+            render = render,
+            start = false,
+            next = true,
+            control = control(_),
+            shows = shows(_),
+            gesture = (c: UI.Ast.Element) =>
+                c match
+                    case b: UI.Ast.BooleanInput => handled(b.onChange.getOrElse(throw new AssertionError("no change handler"))(true))
+                    case other                  => throw new AssertionError(s"not a boolean input: $other"),
+            answers = {
+                case b: UI.Ast.BooleanInput => b.onChange.nonEmpty
+                case _                      => false
+            },
+            saysFixed = {
+                case b: UI.Ast.BooleanInput =>
+                    b.attrs.ariaAttrs.get(fixedAria).contains("true") && b.attrs.dataAttrs.get("kyo-inert").contains("1") &&
+                    !b.disabled.contains(true)
+                case _ => false
+            }
+        )
+    end nativeBoolean
+
     /** Registers the cases of rule A for `s`: all six, or the four of them a slot with no unbound form has. */
     def holds[C, A](s: Slot[C, A]): Unit =
         import s.equal
@@ -156,18 +232,18 @@ abstract class ReactiveValueContract extends UicTest:
 
         s"${s.name}: a constant somebody hears reports the gesture with what it asks for" in {
             for
-                seen <- Signal.initRef(Absent: Maybe[A])
-                t    <- s.live(s.render(s.hear(s.bind(s.start), v => seen.set(Present(v)))))
+                seen <- Signal.initRef(Chunk.empty[A])
+                t    <- s.live(s.render(s.hear(s.bind(s.start), v => seen.updateAndGet(_.append(v)).unit)))
                 _    <- s.ask(t)
                 got  <- seen.get
-            yield assert(got == Present(s.next), s"reported $got")
+            yield assert(got.size == 1 && got.head == s.next, s"reported $got")
         }
 
         s"${s.name}: a signal bound one way is followed, and a gesture is reported without being written" in {
             for
                 held  <- Signal.initRef(s.start)
-                seen  <- Signal.initRef(Absent: Maybe[A])
-                t     <- s.live(s.render(s.hear(s.bind(held.readOnly), v => seen.set(Present(v)))))
+                seen  <- Signal.initRef(Chunk.empty[A])
+                t     <- s.live(s.render(s.hear(s.bind(held.readOnly), v => seen.updateAndGet(_.append(v)).unit)))
                 shown <- s.shows(t)
                 _     <- s.ask(t)
                 h     <- held.get
@@ -176,7 +252,7 @@ abstract class ReactiveValueContract extends UicTest:
                 heard <- cards(s.render(s.hear(s.bind(held.readOnly), _ => ())))
             yield
                 assert(shown == s.start, s"the component follows the signal: it shows $shown")
-                assert(h == s.start && got == Present(s.next), s"held $h, reported $got")
+                assert(h == s.start && got.size == 1 && got.head == s.next, s"held $h, reported $got")
                 assert(deaf.size == 1 && textOf(deaf.head).contains(s.event), s"nobody hears: ${deaf.map(textOf)}")
                 assert(heard.isEmpty, s"a signal somebody hears is no mistake: ${heard.map(textOf)}")
             end for
@@ -185,11 +261,11 @@ abstract class ReactiveValueContract extends UicTest:
         s"${s.name}: a ref is written before the component reports it" in {
             for
                 held <- Signal.initRef(s.start)
-                seen <- Signal.initRef(Absent: Maybe[(A, A)])
-                t    <- s.live(s.render(s.hear(s.bind(held), v => held.get.map(h => seen.set(Present((v, h)))))))
+                seen <- Signal.initRef(Chunk.empty[(A, A)])
+                t    <- s.live(s.render(s.hear(s.bind(held), v => held.get.map(h => seen.updateAndGet(_.append((v, h))).unit))))
                 _    <- s.ask(t)
                 got  <- seen.get
-            yield assert(got == Present((s.next, s.next)), s"reported, held: $got")
+            yield assert(got.size == 1 && got.head._1 == s.next && got.head._2 == s.next, s"reported, held: $got")
         }
     end holds
 
