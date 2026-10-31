@@ -17,15 +17,22 @@ abstract class UicTest extends kyo.test.Test[Any]:
 
     /** A session's command channel for a page with no layout: every measure is answered as for an element not on the
       * page (`Absent`), and every other command goes nowhere. A component that measures before it publishes (an overlay
-      * placing itself) then publishes, rather than waiting for a reply no page will send.
+      * placing itself) then publishes, rather than waiting for a reply no page will send. Under [[UicTest.layout]] a
+      * measure of an element it places is answered with its box.
       */
     private[uic] def headlessCommands(using Frame): UI.Commands < Sync =
-        AtomicRef.init(Maybe.empty[UI.Commands]).map { channel =>
-            UI.Commands.init {
-                case kyo.internal.HtmlOp.RequestMeasureById(id) =>
-                    channel.get.map(_.fold(Kyo.unit)(_.deliverMeasureMissing(id)))
-                case _ => Kyo.unit
-            }.map(cmds => channel.set(Present(cmds)).andThen(cmds))
+        UicTest.layout.use { placed =>
+            AtomicRef.init(Maybe.empty[UI.Commands]).map { channel =>
+                UI.Commands.init {
+                    case kyo.internal.HtmlOp.RequestMeasureById(id) =>
+                        channel.get.map(_.fold(Kyo.unit)(cmds =>
+                            placed.get(id) match
+                                case Some(rect) => cmds.deliverMeasureById(id, rect)
+                                case None       => cmds.deliverMeasureMissing(id)
+                        ))
+                    case _ => Kyo.unit
+                }.map(cmds => channel.set(Present(cmds)).andThen(cmds))
+            }
         }
 
     /** Whether `e` carries `cls` now: as a class of its own, or through a class channel whose signal holds true, which is
@@ -588,5 +595,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case Present(f) =>
                 handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none, Absent, onControl = true)))
             case Absent => throw new AssertionError("the element declares no typed click handler")
+
+end UicTest
+
+object UicTest:
+
+    /** Where the elements of a headless page sit, by id: what [[UicTest.headlessCommands]] answers a measure with. Empty,
+      * the page has no layout and every measure is answered as for an element not on it. A case that drives a gesture
+      * the component works out from geometry (a column dragged across the header) lets it run with the boxes it would
+      * meet in a browser.
+      */
+    private[uic] val layout: Local[Map[String, UI.Rect]] = Local.init(Map.empty[String, UI.Rect])
 
 end UicTest
