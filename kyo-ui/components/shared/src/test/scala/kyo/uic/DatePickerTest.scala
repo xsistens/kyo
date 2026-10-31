@@ -20,9 +20,10 @@ import kyo.uic.DateKind.given
   * moved into.
   *
   * The value type decides what the picker is, so each kind has its own section: what it shows, what a pick writes, and that
-  * a write naming the value already held leaves the app's own instance alone.
+  * a write naming the value already held leaves the app's own instance alone. Its state slots (the value, a set and each end
+  * of a range, the open state, the page and the view) are held to rule A ([[ReactiveValueContract]]).
   */
-class DatePickerTest extends UicTest:
+class DatePickerTest extends ReactiveValueContract:
 
     /** July 2026 starts on a Wednesday and has 31 days, so it spans five weeks. */
     private val july = "2026-07-15"
@@ -1030,18 +1031,6 @@ class DatePickerTest extends UicTest:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => dropdowns(t).map(_.exists(declaresClick)))
 
-    "a calendar fixed shut draws the picker read-only, and says nothing" in {
-        for
-            field <- elementWithClass(picker.open(false).render, "p-datepicker-input")
-            card  <- elementsWithClass(picker.open(false).render, "p-uic-key-error")
-        yield
-            val readOnly = field match
-                case i: UI.Ast.Input => i.readOnly
-                case _               => Absent
-            assert(readOnly.contains(true), "nothing may open it, and the field says so")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
     "a calendar fixed open stays: nothing outside dismisses it" in {
         for
             t     <- mounted(picker.open(true).render)
@@ -1052,165 +1041,11 @@ class DatePickerTest extends UicTest:
             assert(out.isEmpty, "no backdrop takes an outside click")
     }
 
-    "a calendar bound one way is followed, and a press is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(picker.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            dd   <- dropdowns(t).map(_.filter(declaresClick))
-            _    <- click(dd.head)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(picker.open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a calendar ref is written before the picker reports it" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            t    <- mounted(picker.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
-            dd   <- dropdowns(t).map(_.filter(declaresClick))
-            _    <- click(dd.head)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
-    }
-
     private def calendar(using Frame) = picker.open(true)
 
     private val july26 = YearMonth.of(2026, 7)
 
-    "a month bound one way is followed, and paging is reported without being written" in {
-        for
-            held <- Signal.initRef(july26)
-            seen <- Signal.initRef(Absent: Maybe[YearMonth])
-            t    <- mounted(calendar.month(held.readOnly).onMonthChange(m => seen.set(Present(m))).render)
-            next <- elementWithClass(t, "p-datepicker-next-button")
-            _    <- click(next)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(calendar.month(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h == july26 && s == Present(YearMonth.of(2026, 8)), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onMonthChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a month fixed by a constant nobody hears keeps its page: the page buttons stay, inert" in {
-        for
-            t    <- mounted(calendar.month(july26).render)
-            next <- elementWithClass(t, "p-datepicker-next-button")
-            card <- elementsWithClass(calendar.month(july26).render, "p-uic-key-error")
-        yield
-            assert(!declaresClick(next) && next.attrs.ariaAttrs.get("disabled").contains("true"), "the button is inert and says so")
-            assert(card.isEmpty, s"a fixed page is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a month ref is written before the picker reports it" in {
-        for
-            held <- Signal.initRef(july26)
-            seen <- Signal.initRef((july26, july26))
-            t    <- mounted(calendar.month(held).onMonthChange(m => held.get.map(h => seen.set((m, h)))).render)
-            next <- elementWithClass(t, "p-datepicker-next-button")
-            _    <- click(next)
-            s    <- seen.get
-        yield assert(s == (YearMonth.of(2026, 8), YearMonth.of(2026, 8)), s"reported, held: $s")
-    }
-
-    "a view bound one way is followed, and a drill is reported without being written" in {
-        for
-            held <- Signal.initRef(DatePickerView.Date)
-            seen <- Signal.initRef(Absent: Maybe[DatePickerView])
-            t    <- mounted(calendar.currentView(held.readOnly).onCurrentViewChange(v => seen.set(Present(v))).render)
-            b    <- elementWithClass(t, "p-datepicker-select-month")
-            _    <- click(b)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(calendar.currentView(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h == DatePickerView.Date && s == Present(DatePickerView.Month), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onCurrentViewChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a view fixed by a constant nobody hears stays: the title buttons are inert" in {
-        for
-            t    <- mounted(calendar.currentView(DatePickerView.Date).render)
-            b    <- elementWithClass(t, "p-datepicker-select-month")
-            card <- elementsWithClass(calendar.currentView(DatePickerView.Date).render, "p-uic-key-error")
-        yield
-            assert(!declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"), "the button is inert and says so")
-            assert(card.isEmpty, s"a fixed view is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a view ref is written before the picker reports it" in {
-        for
-            held <- Signal.initRef(DatePickerView.Date)
-            seen <- Signal.initRef((DatePickerView.Date, DatePickerView.Date))
-            t    <- mounted(calendar.currentView(held).onCurrentViewChange(v => held.get.map(h => seen.set((v, h)))).render)
-            b    <- elementWithClass(t, "p-datepicker-select-month")
-            _    <- click(b)
-            s    <- seen.get
-        yield assert(s == (DatePickerView.Month, DatePickerView.Month), s"reported, held: $s")
-    }
-
     private val july9 = day("2026-07-09")
-
-    "a value bound one way is followed, and a pick is reported without being written" in {
-        for
-            held <- Signal.initRef(Maybe.empty[LocalDate])
-            seen <- Signal.initRef(Absent: Maybe[Maybe[LocalDate]])
-            t    <- mounted(calendar.value(held.readOnly).onChange(v => seen.set(Present(v))).render)
-            cell <- dayCell(t, 9)
-            _    <- click(cell)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(calendar.value(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s == Present(Present(july9)), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a value held by a constant nobody hears draws the picker read-only, and says nothing" in {
-        for
-            field <- elementWithClass(picker.value(Present(july9)).render, "p-datepicker-input")
-            card  <- elementsWithClass(picker.value(Present(july9)).render, "p-uic-key-error")
-        yield
-            val readOnly = field match
-                case i: UI.Ast.Input => i.readOnly
-                case _               => Absent
-            assert(readOnly.contains(true), "the value is not the reader's to change, and the field says so")
-            assert(card.isEmpty, s"a fixed value is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a set bound one way is followed, and a toggle is reported without being written" in {
-        for
-            held <- Signal.initRef(Set.empty[LocalDate])
-            seen <- Signal.initRef(Absent: Maybe[Set[LocalDate]])
-            t    <- mounted(calendar.values(held.readOnly).onChange(v => seen.set(Present(v))).render)
-            cell <- dayCell(t, 9)
-            _    <- click(cell)
-            h    <- held.get
-            s    <- seen.get
-        yield assert(h.isEmpty && s == Present(Set(july9)), s"held $h, reported $s")
-    }
-
-    "a range bound one way is followed, and a pick is reported without being written" in {
-        for
-            start <- Signal.initRef(Maybe.empty[LocalDate])
-            end   <- Signal.initRef(Maybe.empty[LocalDate])
-            seen  <- Signal.initRef(Absent: Maybe[(Maybe[LocalDate], Maybe[LocalDate])])
-            t     <- mounted(calendar.range(start.readOnly, end.readOnly).onChange((a, b) => seen.set(Present((a, b)))).render)
-            cell  <- dayCell(t, 9)
-            _     <- click(cell)
-            sv    <- start.get
-            s     <- seen.get
-        yield assert(sv.isEmpty && s == Present((Present(july9), Absent)), s"held $sv, reported $s")
-    }
 
     "Escape puts back a set bound one way through its event, as it puts back a ref" in {
         for
@@ -1226,5 +1061,187 @@ class DatePickerTest extends UicTest:
             assert(picked == Set(july9), s"the owner took the pick: $picked")
             assert(undone.isEmpty, s"Escape asks the owner to put back what the panel held: $undone")
     }
+
+    // ---- rule A ----
+
+    /** The text field: what a reader reaches the picker by, and what says through native `readonly` that it is fixed. */
+    private def input(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-datepicker-input")
+
+    private def readOnlyField(c: UI.Ast.Element): Boolean =
+        c match
+            case i: UI.Ast.Input => i.readOnly.contains(true)
+            case _               => false
+
+    private def dropdown(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-datepicker-dropdown")
+
+    private def dropdownWired(t: UI)(using Frame): Boolean < Sync = dropdowns(t).map(_.exists(declaresClick))
+
+    /** The text the field shows. */
+    private def shownText(t: UI)(using Frame): String < Sync =
+        input(t).map {
+            case i: UI.Ast.Input =>
+                i.value match
+                    case Present(UI.Bound.Const(v)) => v
+                    case other                      => throw new AssertionError(s"the field holds no constant text: $other")
+            case other => throw new AssertionError(s"the field is not a text input: $other")
+        }
+
+    /** A click on the 9th in the calendar the dropdown opened. */
+    private def pickNinth(t: UI)(using Frame): Any < Async =
+        elementsWithClass(t, "p-datepicker-day").map(
+            _.find(d => !d.attrs.cssClasses.contains("p-disabled") && d.children.exists(_ == UI.Ast.Text("9"))) match
+                case Some(cell) => click(cell)
+                case None       => throw new AssertionError("no 9th on the page yet")
+        )
+
+    holds(new Slot[uic.DatePicker[LocalDate], Maybe[LocalDate]](
+        name = "value",
+        bare = Present(picker),
+        bind = picker.value(_),
+        hear = (p, f) => p.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Absent,
+        next = Present(july9),
+        control = dropdown(_),
+        shows = shownText(_).map(s => if s.isEmpty then Maybe.empty[LocalDate] else Present(LocalDate.parse(s))),
+        saysFixed = readOnlyField,
+        ready = Present(dropdownWired(_)),
+        fixedOn = Present(input(_)),
+        after = Seq(pickNinth(_))
+    ))
+
+    holds(new Slot[uic.DatePicker[LocalDate], Boolean](
+        name = "open",
+        bare = Present(picker),
+        bind = picker.open(_),
+        hear = (p, f) => p.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = dropdown(_),
+        shows = elementsWithClass(_, "p-datepicker-panel").map(_.nonEmpty),
+        saysFixed = readOnlyField,
+        ready = Present(dropdownWired(_)),
+        fixedOn = Present(input(_))
+    ))
+
+    /** The page the calendar shows, read off its title. */
+    private def shownMonth(t: UI)(using Frame): YearMonth < Sync =
+        for
+            m <- elementWithClass(t, "p-datepicker-select-month")
+            y <- elementWithClass(t, "p-datepicker-select-year")
+        yield YearMonth.of(textOf(y).toInt, java.time.Month.valueOf(textOf(m).toUpperCase))
+
+    // The page and the view are drawn only in the open calendar, which only the mount draws: the calendar is held open here,
+    // so the page and the view are the slots under test.
+    holds(new Slot[uic.DatePicker[LocalDate], YearMonth](
+        name = "month",
+        bare = Present(calendar),
+        bind = calendar.month(_),
+        hear = (p, f) => p.onMonthChange(f),
+        event = "onMonthChange",
+        render = _.render,
+        start = july26,
+        next = YearMonth.of(2026, 8),
+        control = elementWithClass(_, "p-datepicker-next-button"),
+        shows = shownMonth(_),
+        ready = Present(elementsWithClass(_, "p-datepicker-next-button").map(_.nonEmpty)),
+        mountDraws = true
+    ))
+
+    /** The view the calendar shows, read off the buttons its newest title offers. */
+    private def shownView(t: UI)(using Frame): DatePickerView < Sync =
+        elementWithClass(t, "p-datepicker-title").map(title =>
+            elements(title).map { es =>
+                def has(cls: String) = es.exists(_.attrs.cssClasses.contains(cls))
+                if has("p-datepicker-select-month") then DatePickerView.Date
+                else if has("p-datepicker-select-year") then DatePickerView.Month
+                else DatePickerView.Year
+            }
+        )
+
+    holds(new Slot[uic.DatePicker[LocalDate], DatePickerView](
+        name = "currentView",
+        bare = Present(calendar),
+        bind = calendar.currentView(_),
+        hear = (p, f) => p.onCurrentViewChange(f),
+        event = "onCurrentViewChange",
+        render = _.render,
+        start = DatePickerView.Date,
+        next = DatePickerView.Month,
+        control = elementWithClass(_, "p-datepicker-select-month"),
+        shows = shownView(_),
+        ready = Present(elementsWithClass(_, "p-datepicker-select-month").map(_.nonEmpty)),
+        mountDraws = true
+    ))
+
+    // A set binds the picker into another type, so this slot has no unbound form. Its field is read-only whatever binds it,
+    // since the set is picked in the calendar: fixed is the dropdown opening nothing besides.
+    holds(new Slot[uic.MultiDatePicker[LocalDate], Set[LocalDate]](
+        name = "values",
+        bare = Absent,
+        bind = picker.values(_),
+        hear = (p, f) => p.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(july9),
+        control = dropdown(_),
+        shows = shownText(_).map(s => if s.isEmpty then Set.empty[LocalDate] else s.split(", ").map(LocalDate.parse).toSet),
+        saysFixed = readOnlyField,
+        ready = Present(dropdownWired(_)),
+        fixedOn = Present(input(_)),
+        after = Seq(pickNinth(_))
+    ))
+
+    /** The two ends of the range the field shows. */
+    private def shownRange(t: UI)(using Frame): (Maybe[LocalDate], Maybe[LocalDate]) < Sync =
+        shownText(t).map(s =>
+            s.split(" - ").toList.filter(_.nonEmpty).map(LocalDate.parse) match
+                case Nil        => (Absent, Absent)
+                case List(a)    => (Present(a), Absent)
+                case List(a, b) => (Present(a), Present(b))
+                case _          => throw new AssertionError(s"the field shows more than a range: $s")
+        )
+
+    private val july2 = day("2026-07-02")
+
+    // A range is two bindings and one event over both, so each end is a slot, held with the other end a constant: the
+    // picker is fixed only where both are constants nobody hears, and a pick reports both ends.
+    holds(new Slot[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
+        name = "range, its start",
+        bare = Absent,
+        bind = picker.range(_, Maybe.empty[LocalDate]),
+        hear = (p, f) => p.onChange((s, _) => f(s)),
+        event = "onChange",
+        render = _.render,
+        start = Absent,
+        next = Present(july9),
+        control = dropdown(_),
+        shows = shownRange(_).map(_._1),
+        saysFixed = readOnlyField,
+        ready = Present(dropdownWired(_)),
+        fixedOn = Present(input(_)),
+        after = Seq(pickNinth(_))
+    ))
+
+    holds(new Slot[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
+        name = "range, its end",
+        bare = Absent,
+        bind = picker.range(Present(july2), _),
+        hear = (p, f) => p.onChange((_, e) => f(e)),
+        event = "onChange",
+        render = _.render,
+        start = Absent,
+        next = Present(july9),
+        control = dropdown(_),
+        shows = shownRange(_).map(_._2),
+        saysFixed = readOnlyField,
+        ready = Present(dropdownWired(_)),
+        fixedOn = Present(input(_)),
+        after = Seq(pickNinth(_))
+    ))
 
 end DatePickerTest
