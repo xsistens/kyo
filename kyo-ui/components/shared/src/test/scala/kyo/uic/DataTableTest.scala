@@ -4416,6 +4416,14 @@ class DataTableTest extends UicTest:
         end for
     }
 
+    "the page as first rendered draws a cell the table opens itself as the editable one it will be" in {
+        for cells <- cellsIn(editableBare.editingCell().render)
+        yield assert(
+            cells.nonEmpty && cells.forall(_.attrs.cssClasses.contains("p-editable-column")),
+            s"an unbound editing cell is the reader's: ${cells.map(_.attrs.cssClasses)}"
+        )
+    }
+
     private def filterable(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
 
     "the page as first rendered draws an unbound filter's row as the one the reader will type in" in {

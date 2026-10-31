@@ -5520,13 +5520,16 @@ final case class DataTable[A] private (
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = cellEditOn && !cellEditFixed && !cellEditsFixed && openable && edit.live
-                if cellMode then
-                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
-                    // The click picks a cell, it does not also pick the row; and while the
-                    // editor is open the keystrokes that leave it stop here rather than
-                    // reaching the row's own handler.
-                    cell = cell.stopPropagation(true)
+                // The page as first rendered already marks the cell the reader will open, whoever keeps the editing cell;
+                // only the mount's own state gives the click something to write into.
+                if cellEditOn && !cellEditFixed && !cellEditsFixed && openable then
+                    cell = cell.cssClass("p-editable-column")
+                    if edit.live then
+                        // The click picks a cell, it does not also pick the row; and while the
+                        // editor is open the keystrokes that leave it stop here rather than
+                        // reaching the row's own handler.
+                        cell = cell.onClick(beginCellEditing(here, a, c, nav, edit)).stopPropagation(true)
+                    end if
                 end if
                 if cellEdit then cell = cell.cssClass("p-cell-editing")
                 // A selected CELL: the extracted sheet carries a token for its border and no
