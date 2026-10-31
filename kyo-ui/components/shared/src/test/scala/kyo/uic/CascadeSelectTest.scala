@@ -400,18 +400,40 @@ class CascadeSelectTest extends ReactiveValueContract:
 
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-cascadeselect-overlay").map(_.nonEmpty)
 
-    /** The field as its mount publishes it, the trigger wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => elementsWithClass(t, "p-cascadeselect-dropdown").map(_.nonEmpty))
+    // A chain open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and
+    // the owner decides.
+    heardBy(new Slot[uic.CascadeSelect[String], Boolean](
+        name = "open, from open",
+        bare = Absent,
+        bind = cascade.open(_),
+        hear = (c, f) => c.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        ready = Present(triggered(_)),
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-cascadeselect-dropdown")))
+    ))
 
-    "a panel fixed open stays: nothing outside dismisses it" in {
+    // The combobox has no readonly state for whether its list is open, so a chain fixed open says nothing beyond
+    // aria-expanded: it is fixed because nothing on the field pretends to close it, while the leaves stay the reader's.
+    "a panel fixed open stays: nothing outside dismisses it, and the field answers no click that would close it" in {
         for
-            t     <- mounted(cascade.open(true).render)
+            t     <- mountedWhen(cascade.open(true).render)(opened(_))
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+            tr    <- trigger(t)
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
+            assert(!declaresClick(tr), "a click on the field would close nothing, so the field takes none")
+            assert(tr.attrs.tabIndex.contains(0) && tr.attrs.onKeyDown.nonEmpty, "the field stays the tab stop with the chain's keyboard")
+            assert(tr.attrs.ariaAttrs.get("expanded").contains("true"), "and says the list is open")
+            assert(!readOnly(tr), "the selection is still the reader's, so the field is not read-only")
+        end for
     }
 
 end CascadeSelectTest

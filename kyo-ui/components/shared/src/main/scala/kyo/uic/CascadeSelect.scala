@@ -148,9 +148,11 @@ final case class CascadeSelect[A] private (
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
       * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
-      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only,
-      * `true` keeps the panel open whatever the reader does. Unbound, the field keeps the state itself, starting
-      * closed. A signal nothing hears is reported in a card.
+      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only;
+      * `true` keeps the panel open with nothing that closes it (no backdrop, no click on the field), while the field stays
+      * the tab stop with the cascade keyboard and a pick is still the reader's. The combobox has no readonly state for its
+      * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
+      * signal nothing hears is reported in a card.
       */
     def open(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(openSlot = Present(ReactiveValue(v)))
 
@@ -164,6 +166,10 @@ final case class CascadeSelect[A] private (
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean =
         ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+
+    /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
+    private def openFixedOpen: Boolean =
+        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = copy(placeholderV = v)
 
@@ -481,7 +487,8 @@ final case class CascadeSelect[A] private (
             el = el.tabIndex(0).preventScrollKeys
             if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the chain.
-            if st.isDefined && !fixed then el = el.onClick(toggleRoot)
+            // A panel fixed open has no close for a click to ask for, so the field takes none.
+            if st.isDefined && !fixed && !openFixedOpen then el = el.onClick(toggleRoot)
             // Focus never leaves the trigger, however deep the chain of panels goes, so the whole
             // cascade keyboard lives here: closed, the three opening keys; open, one [[MenuNav]]
             // walk that steps into groups, back out of them, picks a leaf and closes on Escape.
