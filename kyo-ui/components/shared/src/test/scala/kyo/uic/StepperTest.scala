@@ -221,4 +221,11 @@ class StepperTest extends UicTest:
         yield assert(s == (2, 2), s"reported, held: $s")
     }
 
+    "a step value bound one way that nothing hears names the event that would hear it" in {
+        for
+            held <- Signal.initRef("one")
+            deaf <- elementsWithClass(valued.value(held.readOnly).render, "p-uic-key-error")
+        yield assert(deaf.size == 1 && textOf(deaf.head).contains("onValueChange"), s"nobody hears: ${deaf.map(textOf)}")
+    }
+
 end StepperTest
