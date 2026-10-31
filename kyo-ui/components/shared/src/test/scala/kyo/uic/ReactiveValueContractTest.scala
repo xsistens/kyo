@@ -473,12 +473,16 @@ abstract class ReactiveValueContract extends UicTest:
     def heardBy[C, A](s: Slot[C, A]): Unit =
         import s.equal
 
-        s"${s.name}: a constant somebody hears reports the gesture with what it asks for" in {
+        s"${s.name}: a constant somebody hears reports the gesture with what it asks for, and is no mistake" in {
             for
                 seen <- Signal.initRef(Chunk.empty[A])
                 _    <- s.asked(s.render(s.hear(s.bind(s.start), v => seen.updateAndGet(_.append(v)).unit)))
                 got  <- seen.get
-            yield assert(got.size == 1 && got.head == s.next, s"reported $got")
+                card <- cards(s.render(s.hear(s.bind(s.start), _ => ())))
+            yield
+                assert(got.size == 1 && got.head == s.next, s"reported $got")
+                assert(card.isEmpty, s"a constant somebody hears is no mistake: ${card.map(textOf)}")
+            end for
         }
 
         s"${s.name}: a signal bound one way is followed, and a gesture is reported without being written" in {
