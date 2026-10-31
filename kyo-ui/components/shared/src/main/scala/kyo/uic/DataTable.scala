@@ -5427,8 +5427,8 @@ final case class DataTable[A] private (
                     .jsProp("type", "button")
                     .aria("expanded", open.toString)
                     .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
-                // Fixed open groups show their toggle and open or close nothing with it.
-                if !groupsFixed then b = b.onClick(toggleGroup(path))
+                // Fixed open groups show their toggle, a button that says it opens or closes nothing.
+                b = if groupsFixed then b.aria("disabled", "true") else b.onClick(toggleGroup(path))
                 List(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
         val content: UI = level.headerF match
             case Present(f) => f(path, rows)
@@ -5481,8 +5481,8 @@ final case class DataTable[A] private (
                     .jsProp("type", "button")
                     .aria("expanded", isExp.toString)
                     .aria("label", if isExp then "Row Collapse" else "Row Expand")
-                // A fixed expansion shows its toggle and opens or closes nothing with it.
-                if !expansionFixed then b = b.onClick(toggleExpand(id))
+                // A fixed expansion shows its toggle, a button that says it opens or closes nothing.
+                b = if expansionFixed then b.aria("disabled", "true") else b.onClick(toggleExpand(id))
                 val cell = td(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
                 List(freeze(cell, frozen.leadAt(expanderSlot)))
 
@@ -5657,6 +5657,9 @@ final case class DataTable[A] private (
             // while an editor is open Enter commits the row rather than re-selecting it.
             row = row.tabIndex(0).onClick(clicked)
                 .onKeyDown(e => if activationOf(e).isDefined then actPlain else ())
+        // A fixed selection is drawn, not removed: each row stays the tab stop it is when live, so the reader still lands on
+        // it and hears aria-selected, and answers nothing.
+        else if selectionFixed && !cellSelectOn && selectionModeV != SelectionMode.Checkbox then row = row.tabIndex(0)
         end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a
