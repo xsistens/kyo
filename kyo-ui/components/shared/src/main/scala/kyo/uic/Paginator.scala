@@ -69,7 +69,8 @@ final case class Paginator private (
       * A `SignalRef` binds two way: the [[rowsPerPageOptions]] dropdown writes the reader's pick into it. A plain
       * `Signal` binds one way: the dropdown shows it and hands the pick to [[onRowsChange]] without writing. A constant
       * is a count the reader cannot change unless [[onRowsChange]] is there to take the pick, so without one its
-      * dropdown is drawn disabled.
+      * dropdown is drawn read-only. Unbound, the paginator keeps the count the reader picks itself, starting at the first
+      * [[rowsPerPageOptions]] entry (at one where there are none).
       */
     def rows(n: Int | Signal[Int]): Paginator = copy(rowsV = Present(ReactiveValue(n)))
 
@@ -93,9 +94,8 @@ final case class Paginator private (
     def pageLinkSize(n: Int): Paginator = copy(pageLinkSizeV = math.max(1, n))
 
     /** Renders Prime's rows-per-page Select (`.p-paginator-rpp-dropdown`) after
-      * the nav buttons. Interactive only with the `rows(SignalRef[Int])` binding:
-      * picking an option writes the ref and repositions to the page that keeps
-      * the first visible record visible; without the binding it renders disabled.
+      * the nav buttons. A pick changes the [[rows]] (as that slot binds them) and
+      * repositions to the page that keeps the first visible record visible.
       */
     def rowsPerPageOptions(opts: Seq[Int]): Paginator =
         copy(rppOptionsV = opts.toList.filter(_ >= 1))
@@ -170,8 +170,13 @@ final case class Paginator private (
 
     private def rowsReading(using Frame): Reading[Int] = Reading.of(rowsSlot).map(math.max(1, _))
 
-    /** The rows a page holds: one where nothing set them, which is where an unbound paginator's own count starts too. */
-    private def rowsSlot: ReactiveValue[Int] = rowsV.getOrElse(ReactiveValue.Const(1))
+    /** The rows a page holds where nothing set them, which is where an unbound paginator's own count starts too: the first
+      * [[rowsPerPageOptions]] entry, so the dropdown shows a count it offers, and one where there are no options.
+      */
+    private def rowsStart: Int = rppOptionsV.headOption.getOrElse(1)
+
+    /** The rows a page holds: the bound count, else [[rowsStart]]. */
+    private def rowsSlot: ReactiveValue[Int] = rowsV.getOrElse(ReactiveValue.Const(rowsStart))
 
     /** A constant page nobody hears is fixed: the links show it and go nowhere. A host drawing the page owns its clicks. */
     private def pageFixed: Boolean = currentPageV.isEmpty && ReactiveValue.fixed(pageV, onPageF)
@@ -202,7 +207,7 @@ final case class Paginator private (
                     page <-
                         if ownsPage then Signal.initRef(0).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(pageV)
                     rows <-
-                        if ownsRows then Signal.initRef(1).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(rowsV)
+                        if ownsRows then Signal.initRef(rowsStart).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(rowsV)
                 yield copy(pageV = page, rowsV = rows).renderLive
             }.placeholder(renderLive)
         end if
@@ -231,8 +236,9 @@ final case class Paginator private (
                     .extraClass("p-paginator-rpp-dropdown")
                     .selection(rows.slot)
                     .accessibleName("Rows per page")
+                // A fixed count is drawn read-only: reachable and readable, with nothing to pick.
                 if rowsPickable then sel = sel.onChange(rowsChange)
-                else sel = sel.disabled(true)
+                else sel = sel.readonly(true)
                 List(sel.render)
 
         // Prime's second way to reach a page directly: the same targets as the page links,
@@ -244,7 +250,7 @@ final case class Paginator private (
                 .extraClass("p-paginator-jtp-dropdown")
                 .selection(state.map((p, s) => View.clamp(p, totalPages(s._2, s._1))).slot)
                 .accessibleName("Jump to page")
-            List((if pageFixed then sel.disabled(true) else sel.onChange(jumpChange)).render)
+            List((if pageFixed then sel.readonly(true) else sel.onChange(jumpChange)).render)
         end jtpDropdown
 
         def elementUI(e: PaginatorElement): List[UI] = e match
@@ -375,8 +381,10 @@ final case class Paginator private (
         end if
     end cards
 
-    /** Whether a rows-per-page pick reaches anybody: a two-way binding, or [[onRowsChange]]. */
-    private def rowsPickable: Boolean = ReactiveValue.heard(Present(rowsSlot), onRowsF)
+    /** Whether a rows-per-page pick reaches anybody: a two-way binding, or [[onRowsChange]]. Unbound, the count is the
+      * paginator's own, which its mount keeps, so the page as first rendered already draws the dropdown the reader will use.
+      */
+    private def rowsPickable: Boolean = rowsV.isEmpty || ReactiveValue.heard(rowsV, onRowsF)
 
     /** One-way bindings a reader's pick cannot move: a page with no [[onPageChange]], and a signal of rows behind a
       * shown rows-per-page dropdown with no [[onRowsChange]]. A host that draws the page itself (`currentPage`) owns its
