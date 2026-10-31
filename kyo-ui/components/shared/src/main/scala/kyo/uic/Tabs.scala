@@ -166,7 +166,9 @@ final case class Tabs[K] private (
       * switcher. Any other `Signal` binds ONE way: the strip renders what the signal
       * says and fires `onSelectedChange`, and never writes, which is what a selection
       * owned elsewhere needs: a route is a `map` over the location and has no ref
-      * to write into. A plain `String` is the same contract without a stream.
+      * to write into. A plain `String` is the same contract without a stream, and one nothing hears is fixed: the strip
+      * shows that tab, switches to no other, and its inactive headers say so. Unbound, the strip keeps the tab the reader
+      * picks itself, starting on the first.
       *
       * Reading needs no ref at all (`Signal.render` serves every case); only the
       * write-back does. Demanding a `SignalRef` from every caller to serve the
@@ -319,6 +321,11 @@ final case class Tabs[K] private (
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
             if (t.urlV.isEmpty || onSelectedF.isDefined) && !fixedFlag then
                 out = out.onClick(select(t.id, write = t.urlV.isEmpty))
+            // A fixed strip keeps every header a stop the arrows reach, and an inactive one says it switches nothing: a
+            // tab has no readonly state, so it says it the way a radio does. A url header still navigates, so it says
+            // nothing.
+            else if fixedFlag && !isActive && t.urlV.isEmpty then out = out.aria("disabled", "true")
+            end if
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
             // way back to them. Without this handler they were simply unreachable.
