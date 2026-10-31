@@ -117,6 +117,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
             yield if holds then Present(answer) else Absent
         }
 
+    /** Runs `ui` under the engine and, once what it published satisfies `ready`, the gestures in a row, each on every tree
+      * published so far, newest first, and tried again until it finds what it acts on. It ends with the last gesture, for a
+      * test that reads what the gestures reported rather than what was drawn after them.
+      */
+    private[uic] def actedOn(ui: UI, ready: UI => Boolean < Sync)(acts: (UI => Any < Async)*)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Unit < Async =
+        drive(ui, ready, Nil, acts)(_ => Kyo.unit)
+
     /** `ui` as its mount publishes it once `ready` holds, the tree a gesture acts on: the walks above see a mount as its
       * placeholder, which carries none of the wiring the mount adds. A mount that never publishes such a tree fails the
       * test.

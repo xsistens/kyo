@@ -69,6 +69,15 @@ abstract class ReactiveValueContract extends UicTest:
       *   typed, and a headless run has no browser to keep it): whether the tree leaves it to the browser, drawing nothing
       *   of its own over it. The unbound case then checks that instead of watching a gesture. Absent, the unbound case
       *   watches a gesture change what the component shows.
+      * @param after
+      *   for a slot the reader changes in more than one step (open a panel with the control, then pick a row in it): the
+      *   steps after the gesture on the control, each acting on what was published since and tried again until it finds
+      *   what it acts on, since what the gesture opened is published after it. Empty, the gesture alone asks for `next`.
+      * @param mountDraws
+      *   for a slot only the mount draws (a field or a page button inside a panel the page as first rendered shows
+      *   closed): every case reads the tree the mount published once `ready` holds, the fixed one included, since the
+      *   page as first rendered shows nothing of the slot. Absent, the cases that judge the page as first rendered read
+      *   the static render.
       */
     final class Slot[C, A](
         val name: String,
@@ -90,7 +99,9 @@ abstract class ReactiveValueContract extends UicTest:
         val nextPatch: Maybe[((String, String)) => Boolean] = Absent,
         val fixedOn: Maybe[UI => Frame ?=> UI.Ast.Element < Sync] = Absent,
         val startText: Maybe[A] = Absent,
-        val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent
+        val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
+        val after: Seq[UI => Frame ?=> Any < Async] = Nil,
+        val mountDraws: Boolean = false
     )(using val equal: CanEqual[A, A]):
 
         /** The element that says whether the slot is fixed. */
@@ -112,6 +123,34 @@ abstract class ReactiveValueContract extends UicTest:
             ready match
                 case Present(r) => readyTree(ui)(t => r(t))
                 case Absent     => Kyo.lift(ui)
+
+        /** The tree a case that judges the page as first rendered reads: [[live]] for a slot only the mount draws, else the
+          * static render.
+          */
+        def page(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+            if mountDraws then live(ui) else Kyo.lift(ui)
+
+        /** Whether `t` is a tree a gesture acts on: ready, and with a control that answers. A tree the control is not in yet
+          * is not ready: the first tree a mount publishes can be empty, and a lookup that fails there must wait for the next
+          * one rather than end the wait.
+          */
+        def wired(t: UI)(using Frame): Boolean < Sync =
+            ready.fold(Kyo.lift(true))(r => r(t)).map(mounted =>
+                if !mounted then Kyo.lift(false)
+                else
+                    Abort.run[AssertionError](Abort.catching[AssertionError](control(t).map(answers)))
+                        .map(_.getOrElse(false))
+            )
+
+        /** Every step of the reader asking for `next`: the gesture, then [[after]]. */
+        def steps(using Frame): Seq[UI => Any < Async] = ((t: UI) => ask(t)) +: after.map(f => (t: UI) => f(t))
+
+        /** The reader asking for `next` on `ui` as it runs: on the tree [[live]] gives where the gesture is the whole of it,
+          * else under the engine, each step on what was published before it.
+          */
+        def asked(ui: UI)(using Frame, kyo.test.AssertScope): Any < Async =
+            if after.isEmpty then live(ui).map(t => ask(t))
+            else actedOn(ui, t => wired(t))(steps*)
     end Slot
 
     private def cards(t: UI)(using Frame) = elementsWithClass(t, "p-uic-key-error")
@@ -289,19 +328,14 @@ abstract class ReactiveValueContract extends UicTest:
       */
     private def changes[C, A](s: Slot[C, A], ui: => UI)(using Frame, kyo.test.AssertScope): Boolean < Async =
         import s.equal
-        // A tree the control is not in yet is not ready: the first tree a mount publishes can be empty, and a lookup that
-        // fails there must wait for the next one rather than end the wait.
-        val wired: UI => Boolean < Sync = t =>
-            s.ready.fold(Kyo.lift(true))(r => r(t)).map(mounted =>
-                if !mounted then Kyo.lift(false)
-                else
-                    Abort.run[AssertionError](Abort.catching[AssertionError](s.control(t).map(s.answers)))
-                        .map(_.getOrElse(false))
-            )
+        // What was published since the gesture is read the way a ready tree is: a component of several regions publishes
+        // them in either order, so a lookup that fails because the region showing the slot has not come yet means "not
+        // yet", never "no", or the wait ends at the first region that publishes (a closing panel before its field).
+        val shown: UI => Boolean < Sync = t =>
+            Abort.run[AssertionError](Abort.catching[AssertionError](s.shows(t))).map(_.toMaybe.exists(_ == s.next))
         s.nextPatch match
-            case Present(patch) => attrPatchedAfter(ui, wired)(t => s.ask(t))(patch)
-            case Absent         =>
-                publishedAfterReady(ui, wired, until = t => s.shows(t).map(_ == s.next))(t => s.ask(t)).map(_.nonEmpty)
+            case Present(patch) => attrPatchedAfter(ui, t => s.wired(t))(s.steps*)(patch)
+            case Absent         => publishedAfterReady(ui, t => s.wired(t), until = shown)(s.steps*).map(_.nonEmpty)
         end match
     end changes
 
@@ -318,9 +352,10 @@ abstract class ReactiveValueContract extends UicTest:
                     s"${s.name}: unbound, the text is the browser's: it starts at its start, the reader edits it, and the component leaves it there" in {
                         val bare = s.bare.get
                         for
-                            first <- s.shows(s.render(bare))
-                            edits <- s.control(s.render(bare)).map(s.answers)
-                            left  <- kept(s.render(bare))
+                            page  <- s.page(s.render(bare))
+                            first <- s.shows(page)
+                            edits <- s.control(page).map(s.answers)
+                            left  <- kept(page)
                             card  <- cards(s.render(bare))
                         yield
                             assert(first == s.start, s"the page as first rendered shows $first")
@@ -333,7 +368,7 @@ abstract class ReactiveValueContract extends UicTest:
                     s"${s.name}: unbound, the slot is the component's own: it starts at its start and a gesture changes it" in {
                         val bare = s.bare.get
                         for
-                            first   <- s.shows(s.render(bare))
+                            first   <- s.page(s.render(bare)).map(s.shows(_))
                             changed <- changes(s, s.render(bare))
                             card    <- cards(s.render(bare))
                         yield
@@ -345,7 +380,7 @@ abstract class ReactiveValueContract extends UicTest:
             end match
 
             s"${s.name}: the page as first rendered does not call an unbound slot fixed" in {
-                for fixed <- s.fixedIn(s.render(s.bare.get))
+                for fixed <- s.page(s.render(s.bare.get)).map(s.fixedIn(_))
                 yield assert(!fixed, "the control the reader will use does not say it changes nothing")
             }
         end if
@@ -355,8 +390,9 @@ abstract class ReactiveValueContract extends UicTest:
                 s"${s.name}: a constant nobody hears is the text it starts with: shown, editable, and nothing to say" in {
                     val started = s.render(s.bind(text))
                     for
-                        isFixed <- s.fixedIn(started)
-                        shown   <- s.shows(started)
+                        page    <- s.page(started)
+                        isFixed <- s.fixedIn(page)
+                        shown   <- s.shows(page)
                         card    <- cards(started)
                     yield
                         assert(shown == text, s"the component shows $shown for the constant $text")
@@ -373,10 +409,12 @@ abstract class ReactiveValueContract extends UicTest:
             case Absent =>
                 s"${s.name}: a constant nobody hears is fixed: nothing changes it, and it says so" in {
                     val fixed = s.render(s.bind(s.start))
-                    // The page as first rendered already says it: a fixed slot is no mount's to wire.
+                    // The page as first rendered already says it: a fixed slot is no mount's to wire, unless only the mount
+                    // draws the slot at all.
                     for
-                        isFixed <- s.fixedIn(fixed)
-                        shown   <- s.shows(fixed)
+                        page    <- s.page(fixed)
+                        isFixed <- s.fixedIn(page)
+                        shown   <- s.shows(page)
                         card    <- cards(fixed)
                     yield
                         assert(shown == s.start, s"the component shows $shown for the constant ${s.start}")
@@ -438,19 +476,20 @@ abstract class ReactiveValueContract extends UicTest:
         s"${s.name}: a constant somebody hears reports the gesture with what it asks for" in {
             for
                 seen <- Signal.initRef(Chunk.empty[A])
-                t    <- s.live(s.render(s.hear(s.bind(s.start), v => seen.updateAndGet(_.append(v)).unit)))
-                _    <- s.ask(t)
+                _    <- s.asked(s.render(s.hear(s.bind(s.start), v => seen.updateAndGet(_.append(v)).unit)))
                 got  <- seen.get
             yield assert(got.size == 1 && got.head == s.next, s"reported $got")
         }
 
         s"${s.name}: a signal bound one way is followed, and a gesture is reported without being written" in {
             for
-                held  <- Signal.initRef(s.start)
-                seen  <- Signal.initRef(Chunk.empty[A])
-                t     <- s.live(s.render(s.hear(s.bind(held.readOnly), v => seen.updateAndGet(_.append(v)).unit)))
+                held <- Signal.initRef(s.start)
+                seen <- Signal.initRef(Chunk.empty[A])
+                ui = s.render(s.hear(s.bind(held.readOnly), v => seen.updateAndGet(_.append(v)).unit))
+                t     <- s.live(ui)
                 shown <- s.shows(t)
-                _     <- s.ask(t)
+                // A gesture of several steps acts on the tree as it runs, which the one read above has stopped running.
+                _     <- if s.after.isEmpty then s.ask(t) else s.asked(ui)
                 h     <- held.get
                 got   <- seen.get
                 deaf  <- cards(s.render(s.bind(held.readOnly)))
@@ -467,8 +506,7 @@ abstract class ReactiveValueContract extends UicTest:
             for
                 held <- Signal.initRef(s.start)
                 seen <- Signal.initRef(Chunk.empty[(A, A)])
-                t    <- s.live(s.render(s.hear(s.bind(held), v => held.get.map(h => seen.updateAndGet(_.append((v, h))).unit))))
-                _    <- s.ask(t)
+                _    <- s.asked(s.render(s.hear(s.bind(held), v => held.get.map(h => seen.updateAndGet(_.append((v, h))).unit))))
                 got  <- seen.get
             yield assert(got.size == 1 && got.head._1 == s.next && got.head._2 == s.next, s"reported, held: $got")
         }
