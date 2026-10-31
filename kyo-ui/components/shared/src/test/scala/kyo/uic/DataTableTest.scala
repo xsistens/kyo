@@ -3242,7 +3242,9 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "constant rows nobody hears keep their grips and drag nothing, with no card" in {
+    // A grip is only an affordance: fixed rows keep the column as anatomy, so the grid lines up, and drop the move cursor the
+    // grip class carries, since it says a drag would change something.
+    "constant rows nobody hears keep the grip column without the grip, and drag nothing, with no card" in {
         for
             drag <- Signal.initRef(Absent: Maybe[uic.RowDrag])
             ui   <- wiredDrag(
@@ -3250,10 +3252,17 @@ class DataTableTest extends UicTest:
                     .reorderableRows(true),
                 drag
             )
+            trs      <- bodyTrs(ui)
+            cells    <- Kyo.foreach(trs)(rowsUnder)
             handles  <- grips(ui)
             reported <- cards(ui)
         yield
-            assert(handles.size == 3 && handles.forall(_.attrs.onPointerDown.isEmpty), "the grips show and drag nothing")
+            assert(cells.forall(_.size == 2), s"the grip column stays: ${cells.map(_.size)}")
+            assert(
+                cells.forall(cs => cs.head.attrs.ariaAttrs.get("hidden").contains("true") && cs.head.attrs.onPointerDown.isEmpty),
+                "and drags nothing"
+            )
+            assert(handles.isEmpty, s"no grip says a drag would move the row: ${handles.size}")
             assert(reported.isEmpty, s"fixed rows are not a mistake: $reported")
     }
 
@@ -4484,6 +4493,44 @@ class DataTableTest extends UicTest:
                 buttons.forall(_.attrs.cssClasses.contains("p-datatable-column-filter-button")),
                 s"and there is nothing to apply, clear, add or remove: ${buttons.map(textOf)}"
             )
+        end for
+    }
+
+    private def expanding(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).width(220),
+            uic.column("Price")(_.price.toString).width(120),
+            uic.column("Id")(_.id).width(60)
+        ).columnResizeMode(uic.ColumnResizeMode.Expand)
+
+    // A resize handle is only an affordance: fixed widths drop it and keep the layout the widths make.
+    "fixed widths lay the table out as live ones do, and offer no handle" in {
+        val wide = Map(List("Name") -> 300.0)
+        for
+            held  <- Signal.initRef(wide)
+            err   <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
+            fixed <- renderHtml(expanding.columnWidths(wide).render)
+            live  <- renderHtml(expanding.columnWidths(held).wired("t", Map.empty, err, _ => ()))
+            card  <- cards(expanding.columnWidths(wide).render)
+        yield
+            assert(live.contains("width: 480px"), "a live expanding table states its width")
+            assert(fixed.contains("width: 480px"), "and a fixed one states the same, since the widths are the same")
+            assert(!fixed.contains("p-datatable-column-resizer"), "but no handle offers a drag")
+            assert(card.isEmpty, s"fixed widths are not a mistake: $card")
+        end for
+    }
+
+    // A column drag is only an affordance: a fixed order keeps every header, in that order, and drops the move cursor.
+    "a fixed column order keeps every header in its order, and none offers a drag" in {
+        val order = threeColumns.columnOrder(List(List("Id"), List("Name"), List("Price"))).render
+        for
+            headers <- elementsWithClass(order, "p-datatable-header-cell")
+            movers  <- elementsWithClass(order, "p-datatable-reorderable-column")
+            card    <- cards(order)
+        yield
+            assert(headers.map(textOf) == Chunk("Id", "Name", "Price"), s"the headers stand in the fixed order: ${headers.map(textOf)}")
+            assert(movers.isEmpty && headers.forall(_.attrs.onPointerDown.isEmpty), "and none offers a drag")
+            assert(card.isEmpty, s"a fixed order is not a mistake: $card")
         end for
     }
 
