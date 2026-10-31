@@ -8,9 +8,10 @@ import kyo.UI.*
   *
   * Focus never leaves the trigger, however deep the chain goes, so the whole cascade keyboard runs
   * from there: the key that opens it has to land ON a row, and the Tab that carries the reader out
-  * of the widget has to take every open panel with it.
+  * of the widget has to take every open panel with it. Its selection and its open state are held to
+  * rule A ([[ReactiveValueContract]]).
   */
-class CascadeSelectTest extends UicTest:
+class CascadeSelectTest extends ReactiveValueContract:
 
     private val options = List(
         uic.CascadeItem.group("Europe")(
@@ -150,20 +151,13 @@ class CascadeSelectTest extends UicTest:
         yield assert(got == List("change Sydney", "pick Sydney"))
     }
 
-    "a one-way selection shows the signal, and a pick reports through onPick without writing" in {
+    // Shown, reported and not written is the contract's (see the selection slots below); this is the row the panel marks.
+    "a one-way selection marks the leaf it holds in the panel" in {
         for
             route  <- Signal.initRef("Bern")
-            picks  <- Signal.initRef(List.empty[String])
-            ui     <- allOpen(cascade.selection(route.readOnly).onPick(l => picks.updateAndGet(_ :+ l).unit))
+            ui     <- allOpen(cascade.selection(route.readOnly).onPick(_ => ()))
             chosen <- elementsWithClass(ui, "p-cascadeselect-option-selected")
-            target <- leaf(ui, "Hamburg")
-            _      <- click(target)
-            held   <- route.get
-            got    <- picks.get
-        yield
-            assert(chosen.size == 1, "the leaf the signal holds is the chosen one")
-            assert(got == List("Hamburg"))
-            assert(held == "Bern")
+        yield assert(chosen.size == 1 && textOf(chosen.head).contains("Bern"), "the leaf the signal holds is the chosen one")
     }
 
     private def classed(cls: String)(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains(cls)
@@ -299,68 +293,116 @@ class CascadeSelectTest extends UicTest:
         end for
     }
 
-    "a selection bound one way that nothing hears says so; onChange, onPick, a ref or disabled keep it quiet" in {
+    // ---- rule A ----
+
+    private val leaves = Set("Berlin", "Hamburg", "Bern", "Sydney")
+
+    /** The trigger, which opens the chain and carries its keyboard: what a reader reaches, and what says it is fixed. */
+    private def trigger(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-cascadeselect")
+
+    private def opens(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+
+    private def readOnly(c: UI.Ast.Element): Boolean = c.attrs.ariaAttrs.get("readonly").contains("true")
+
+    private def triggered(t: UI)(using Frame): Boolean < Sync = elementsWithClass(t, "p-cascadeselect").map(_.exists(declaresClick))
+
+    /** The leaf the label shows. */
+    private def picked(t: UI)(using Frame): Maybe[String] < Sync =
+        elementWithClass(t, "p-cascadeselect-label").map(l => Maybe(textOf(l)).filter(leaves.contains))
+
+    /** A click on the root leaf Sydney in the chain the trigger opened. */
+    private def pickSydney(t: UI)(using Frame): Any < Async =
+        clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-cascadeselect-option-text") && textOf(e) == "Sydney")
+
+    private def maybeSlot(
+        name: String,
+        hear: (uic.CascadeSelect[String], Maybe[String] => UI.Action) => Frame ?=> uic.CascadeSelect[String],
+        event: String
+    ) =
+        new Slot[uic.CascadeSelect[String], Maybe[String]](
+            name = name,
+            bare = Present(cascade),
+            bind = v => cascade.selection(v),
+            hear = hear,
+            event = event,
+            render = _.render,
+            start = Absent,
+            next = Present("Sydney"),
+            control = trigger(_),
+            shows = picked(_),
+            answers = opens,
+            saysFixed = readOnly,
+            ready = Present(triggered(_)),
+            after = Seq(pickSydney(_))
+        )
+
+    // A pick is reported to onChange, then to onPick: each of them hears it.
+    holds(maybeSlot("selection over Maybe", (c, f) => c.onChange(f), "onChange"))
+    heardBy(maybeSlot("selection over Maybe, heard by onPick", (c, f) => c.onPick(l => f(Present(l))), "onPick"))
+
+    private def leafSlot(
+        name: String,
+        hear: (uic.CascadeSelect[String], String => UI.Action) => Frame ?=> uic.CascadeSelect[String],
+        event: String
+    ) =
+        new Slot[uic.CascadeSelect[String], String](
+            name = name,
+            // A field over the leaf itself always holds one: unbound, a cascade holds `Maybe`.
+            bare = Absent,
+            bind = v => cascade.selection(v),
+            hear = hear,
+            event = event,
+            render = _.render,
+            start = "Bern",
+            next = "Sydney",
+            control = trigger(_),
+            shows = t => picked(t).map(_.getOrElse(throw new AssertionError("the field shows no leaf"))),
+            answers = opens,
+            saysFixed = readOnly,
+            ready = Present(triggered(_)),
+            after = Seq(pickSydney(_))
+        )
+
+    holds(leafSlot("selection", (c, f) => c.onPick(f), "onPick"))
+    heardBy(leafSlot(
+        "selection, heard by onChange",
+        (c, f) => c.onChange(m => m.fold(throw new AssertionError("a field over the leaf reported none"))(f)),
+        "onChange"
+    ))
+
+    "a selection a ref holds, or one a disabled field shows, draws no card" in {
         def errors(c: uic.CascadeSelect[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(c.render, "p-uic-key-error")
         for
-            held     <- Signal.initRef("Bern")
-            deaf     <- errors(cascade.selection(held.readOnly))
-            constant <- errors(cascade.selection("Bern"))
-            change   <- errors(cascade.selection(held.readOnly).onChange(_ => ()))
-            pick     <- errors(cascade.selection("Bern").onPick(_ => ()))
-            twoWay   <- errors(cascade.selection(held))
-            off      <- errors(cascade.selection("Bern").disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the fixed test).
-            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
-            assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+            held   <- Signal.initRef("Bern")
+            twoWay <- errors(cascade.selection(held))
+            off    <- errors(cascade.selection(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && off.isEmpty, s"the ref takes the pick, or nobody can pick: ${(twoWay ++ off).map(textOf)}")
         end for
     }
 
-    "a constant nobody hears is fixed: no panel to open, and no card" in {
-        val fixed = cascade.selection("Bern")
-        for
-            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
-            field <- elementWithClass(fixed.render, "p-cascadeselect")
-        yield
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
-        end for
-    }
-
-    "an unbound cascade keeps the leaf the reader picks" in {
-        for
-            after <- publishedAfterReady(
-                cascade.render,
-                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("cs") && declaresClick(e))),
-                until = t => elementsWithClass(t, "p-cascadeselect-label").map(_.exists(e => textOf(e) == "Sydney"))
-            )(
-                t => clickBubbling(t)(_.attrs.identifier.contains("cs")),
-                t =>
-                    clickBubbling(t)((e: UI.Ast.Element) =>
-                        e.attrs.cssClasses.contains("p-cascadeselect-option-text") && textOf(e) == "Sydney"
-                    )
-            )
-        yield assert(after.nonEmpty, "the field never showed the leaf the reader picked")
-    }
+    holds(new Slot[uic.CascadeSelect[String], Boolean](
+        name = "open",
+        bare = Present(cascade),
+        bind = cascade.open(_),
+        hear = (c, f) => c.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        saysFixed = readOnly,
+        ready = Present(triggered(_)),
+        // A click on the chevron reaches the trigger: the field is the one element listening.
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-cascadeselect-dropdown")))
+    ))
 
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-cascadeselect-overlay").map(_.nonEmpty)
 
     /** The field as its mount publishes it, the trigger wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => elementsWithClass(t, "p-cascadeselect-dropdown").map(_.nonEmpty))
-
-    private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-cascadeselect-dropdown")
-
-    "a panel fixed shut draws the field read-only, and says nothing" in {
-        for
-            field <- elementWithClass(cascade.open(false).render, "p-cascadeselect")
-            card  <- elementsWithClass(cascade.open(false).render, "p-uic-key-error")
-        yield
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "nothing may open it")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
 
     "a panel fixed open stays: nothing outside dismisses it" in {
         for
@@ -370,31 +412,6 @@ class CascadeSelectTest extends UicTest:
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
-    }
-
-    "a panel bound one way is followed, and a press is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(cascade.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(cascade.open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a panel ref is written before the field reports it" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            t    <- mounted(cascade.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
     }
 
 end CascadeSelectTest
