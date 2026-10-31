@@ -45,7 +45,10 @@ final case class OrgChartNode[K](
   * same over subtrees the chart keeps itself; without either the chart is static,
   * which is Prime's `collapsible=false`.
   *
-  * Selection (`Single`/`Multiple` + `selection` ref) follows the Tree contract.
+  * Selection (`Single`/`Multiple` + `selection` ref) follows the Tree contract. A chart the
+  * reader picks in is ONE tab stop, on the node box its cursor is on (else the chosen node,
+  * else the root): the arrows move the cursor the way the chart is drawn ([[OrgChartNav]]),
+  * Enter and Space pick the node as a click does, and a click moves the cursor there too.
   * Every nested table puts its rows in a real `tbody`, which is what the sheet's
   * `.p-organizationchart-table > tbody > tr > td` cell rule is scoped to.
   */
@@ -122,8 +125,11 @@ final case class OrganizationChart[K] private (
     /** Fired with the node id after a node-box click (after the selection write). */
     def onNodeClick(f: K => UI.Action)(using Frame): OrganizationChart[K] = copy(onNodeClickF = Present(Callback.of(f)))
 
-    private def selectable: Boolean =
-        (selectionModeV != SelectionMode.None || onNodeClickF.isDefined) && !ReactiveValue.fixed(selectedSlot, selectHeard)
+    /** Whether a node box is something the reader picks: there is a mode to select in, or an `onNodeClick` to hear it. */
+    private def pickable: Boolean = selectionModeV != SelectionMode.None || onNodeClickF.isDefined
+
+    /** Whether a pick does something: a fixed selection keeps its node cursor and its keys, and takes no pick. */
+    private def selectable: Boolean = pickable && !ReactiveValue.fixed(selectedSlot, selectHeard)
 
     private[uic] def render(using Frame): UI =
         // `expanded()`: the open subtrees are the chart's own, starting fully open. An unbound selection with a mode to
@@ -131,10 +137,10 @@ final case class OrganizationChart[K] private (
         if expandedSlot.isEmpty && ownExpandedFlag then
             val start = parents
             ReactiveValue.owned(start)(own => copy(expandedSlot = Present(own), ownExpandedFlag = false).render)(
-                copy(expandedSlot = Present(ReactiveValue[Set[K]](Signal.initConst(start))), ownExpandedFlag = false).drawn
+                copy(expandedSlot = Present(ReactiveValue[Set[K]](Signal.initConst(start))), ownExpandedFlag = false).drawn(Absent)
             )
         else if selectedSlot.isEmpty && selectionModeV != SelectionMode.None then
-            ReactiveValue.owned(Set.empty[K])(own => copy(selectedSlot = Present(own)).render)(drawn)
+            ReactiveValue.owned(Set.empty[K])(own => copy(selectedSlot = Present(own)).render)(drawn(Absent))
         else
             // A binding one way that nothing hears: every toggle or click there is painted away again.
             val unheard =
@@ -144,30 +150,72 @@ final case class OrganizationChart[K] private (
                     (if ReactiveValue.deaf(selectedSlot, selectHeard) then
                          List("the selection is bound one way and nothing hears a click; add onSelectionChange")
                      else Nil)
-            if unheard.isEmpty then drawn
-            else fragment((unheard.map(a => KeyDiagnostics.card("OrganizationChart", a + ", or bind a SignalRef", Nil)) :+ drawn)*)
+            if unheard.isEmpty then withCursor
+            else fragment((unheard.map(a => KeyDiagnostics.card("OrganizationChart", a + ", or bind a SignalRef", Nil)) :+ withCursor)*)
             end if
         end if
     end render
 
-    /** The chart over its bindings, read as ONE region. With no `expanded` the chart renders no toggles, so an empty set
-      * would leave every subtree hidden with nothing to open it: a static chart shows its whole hierarchy.
+    /** The chart with its node cursor, which a chart the reader picks in keeps in a ref its mount mints, beside the id the
+      * node boxes derive theirs from. Before the mount runs the page already holds the one tab stop the attached chart
+      * puts on the chosen node or the root; only the keys wait for it.
       */
-    private def drawn(using Frame): UI =
-        given CanEqual[Set[K], Set[K]] = CanEqual.derived
-        val exp                        = expandedSlot.fold(Reading.Fixed(Maybe.empty[Set[K]]))(e => Reading.of(e).map(Present(_)))
-        val sel                        = selectedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
-        exp.and(sel).render((e, s) => body(id => e.forall(_.contains(id)), s))
+    private def withCursor(using Frame): UI =
+        if !pickable then drawn(Absent)
+        else
+            UI.mounted {
+                for
+                    cmds   <- UI.commands
+                    base   <- cmds.freshId
+                    cursor <- Signal.initRef(Absent: Maybe[K])(using summon[Frame], CanEqual.derived)
+                yield drawn(Present(OrganizationChart.Cursor(cursor, base, id => cmds.focusId(id))))
+            }.placeholder(drawn(Absent))
+
+    /** The chart over its bindings and its node cursor, read as ONE region: a pick writes the selection and the cursor
+      * together. With no `expanded` the chart renders no toggles, so an empty set would leave every subtree hidden with
+      * nothing to open it: a static chart shows its whole hierarchy.
+      */
+    private def drawn(cursor: Maybe[OrganizationChart.Cursor[K]])(using Frame): UI =
+        given CanEqual[Set[K], Set[K]]     = CanEqual.derived
+        given CanEqual[Maybe[K], Maybe[K]] = CanEqual.derived
+        val exp                            = expandedSlot.fold(Reading.Fixed(Maybe.empty[Set[K]]))(e => Reading.of(e).map(Present(_)))
+        val sel                            = selectedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
+        val at                             = cursor.fold(Reading.Fixed(Maybe.empty[K]))(c => Reading.Live(c.ref))
+        exp.and(sel).and(at).render { case ((e, s), c) => body(id => e.forall(_.contains(id)), s, c, cursor) }
     end drawn
 
-    private def body(isExpanded: K => Boolean, sel: Set[K])(using Frame): UI =
-        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel))
+    private def body(isExpanded: K => Boolean, sel: Set[K], at: Maybe[K], cursor: Maybe[OrganizationChart.Cursor[K]])(using
+        Frame
+    ): UI =
+        // The one tab stop, in the order the reader would expect: the cursor, else the node they chose, else the root. A
+        // cursor on a node a collapse took off the screen falls back the same way.
+        val shown          = rootNode.toList.flatMap(r => OrgChartNav.visible(r, isExpanded)).map(_.id)
+        val stop: Maybe[K] =
+            if !pickable then Absent
+            else at.filter(shown.contains).orElse(Maybe.fromOption(shown.find(sel.contains))).orElse(Maybe.fromOption(shown.headOption))
+        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel, stop, cursor))
         div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
+    end body
+
+    /** Every node's place in the chart, root first, which is what a node box's id is derived from: a collapse does not
+      * renumber what it hides.
+      */
+    private lazy val places: Map[K, Int] =
+        def walk(n: OrgChartNode[K]): List[K] = n.id :: n.children.flatMap(walk)
+        rootNode.toList.flatMap(walk).zipWithIndex.toMap
+
+    private def nodeId(base: String, id: K): String = s"$base-n${places.getOrElse(id, -1)}"
 
     /** One node's nested table: node row, connector rows (visibility-hidden while
       * collapsed, exactly Prime), and the children row of recursive subtrees.
       */
-    private def renderNode(node: OrgChartNode[K], expandedAt: K => Boolean, sel: Set[K])(using Frame): UI =
+    private def renderNode(
+        node: OrgChartNode[K],
+        expandedAt: K => Boolean,
+        sel: Set[K],
+        stop: Maybe[K],
+        cursor: Maybe[OrganizationChart.Cursor[K]]
+    )(using Frame): UI =
         val hasChildren = node.children.nonEmpty
         val isExpanded  = expandedAt(node.id)
         val isSelected  = sel.contains(node.id)
@@ -176,7 +224,22 @@ final case class OrganizationChart[K] private (
         // The node box: label/template + the round toggle anchor (chevron-down
         // while expanded, chevron-up while collapsed, Prime's glyphs).
         var box = div.cssClass("p-organizationchart-node")
-        if selectable then box = box.cssClass("p-organizationchart-node-selectable").onClick(clickNode(node.id))
+        // A pointer seeds the cursor too, so a click leaves the chart where the next arrow reads.
+        val seed: UI.Action = cursor.fold[UI.Action](())(_.ref.set(Present(node.id)))
+        if selectable then box = box.cssClass("p-organizationchart-node-selectable").onClick(seed.andThen(clickNode(node.id)))
+        // The chart is ONE tab stop where the reader picks: the node box the cursor is on, which the arrows move. A fixed
+        // selection keeps it, and its keys pick nothing.
+        if stop.contains(node.id) then box = box.tabIndex(0)
+        else if pickable && cursor.isDefined then box = box.tabIndex(-1)
+        cursor.foreach { c =>
+            box = box.id(nodeId(c.base, node.id)).preventScrollKeys.onKeyDown { e =>
+                e.key match
+                    case Keyboard.Enter | Keyboard.Space => if selectable then seed.andThen(clickNode(node.id)) else ()
+                    case key                             =>
+                        rootNode.flatMap(r => OrgChartNav.onKey(r, expandedAt, node.id, key))
+                            .fold[UI.Action](())(to => c.ref.set(Present(to)).andThen(c.focus(nodeId(c.base, to))))
+            }
+        }
         if isSelected then box = box.cssClass("p-organizationchart-node-selected")
         node.className.foreach(c => box = box.cssClass(c))
         val labelSlot: UI = node.template match
@@ -248,7 +311,7 @@ final case class OrganizationChart[K] private (
                 val childrenRow: UI =
                     var r = tr.cssClass("p-organizationchart-node-children")
                     if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
-                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expandedAt, sel)))))*)
+                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expandedAt, sel, stop, cursor)))))*)
                 end childrenRow
 
                 List(downRow, linesRow, childrenRow)
@@ -296,4 +359,9 @@ end OrganizationChart
 
 object OrganizationChart:
     def apply[K](): OrganizationChart[K] = new OrganizationChart[K]()
+
+    /** The node cursor a chart's mount mints: the node the reader is on, the id base its node boxes derive theirs from,
+      * and the command that moves focus to one of them.
+      */
+    final private[uic] case class Cursor[K](ref: SignalRef[Maybe[K]], base: String, focus: String => UI.Action)
 end OrganizationChart
