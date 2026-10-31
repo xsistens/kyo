@@ -775,7 +775,9 @@ final case class DataTable[A] private (
       * how filters held in a route or a parent are changed there. While the reader types
       * into a one-way filter row the field keeps their text until they leave it, so an
       * owner that answers late does not take a keystroke back. A one-way binding with no
-      * [[onColumnFiltersChange]] is reported in a card.
+      * [[onColumnFiltersChange]] is reported in a card. A constant nobody hears is fixed: the
+      * filter row shows it read-only, and a funnel still opens the mode or the conditions it
+      * filters by, read-only. Unbound, the table keeps the filters itself.
       *
       * The filters are read the way the reader sees the table. A column that is hidden
       * ([[Column.visible]]) does not filter, exactly as the global filter does not search
@@ -1971,10 +1973,12 @@ final case class DataTable[A] private (
       */
     private def mintsAnchor: Boolean = rangeOn && anchorSlot.isEmpty
 
-    /** Whether the filter row is rendered: the filters have to be bound somewhere, and
-      * some column has to carry a pipeline for the row to hold anything.
+    /** Whether the filter row, or the funnels of the menu display, are rendered: some column has to carry a pipeline for
+      * them to hold anything. Whatever binds the filters they are drawn: unbound the table keeps them (before its mount
+      * runs it has no ref yet and draws them all the same), and fixed ones are drawn read-only. Their menus open in
+      * either case, which is the open state the mount keeps.
       */
-    private def filterBound: Boolean = columnFiltersSlot.isDefined && !filtersFixed && leafCols.exists(_.isFilterable)
+    private def filterBound: Boolean = leafCols.exists(_.isFilterable)
 
     /** Whether the filters are edited in a second header row. */
     private def filterRowOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Row
@@ -4695,8 +4699,14 @@ final case class DataTable[A] private (
                         .fluid(true)
                         .invalid(unusable)
                         .accessibleName(s"Filter by ${c.headerV}")
-                        .onInput(t => typedRef.fold[UI.Action](())(_.set(Present(t))).andThen(writeFilter(path, cur.mode, t)))
-                    typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
+                    // A fixed filter is drawn, not removed: the field shows the query read-only and takes no keystroke.
+                    if filtersFixed then input = input.readonly(true)
+                    else
+                        input = input.onInput(t =>
+                            typedRef.fold[UI.Action](())(_.set(Present(t))).andThen(writeFilter(path, cur.mode, t))
+                        )
+                        typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
+                    end if
                     val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
                     div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter, isOpen)).map(toChild)*)
                 }))
@@ -4766,10 +4776,15 @@ final case class DataTable[A] private (
             cf.modes.map { m =>
                 var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
                 if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
-                val pick: UI.Action = pickMode(path, cur, m, openRef)
-                // An `li` is not a control either: the constraint list is a row of tab stops, and
-                // without this a reader could reach every one of them and pick none.
-                item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
+                // A fixed filter's list is read-only: it is the one place that names the mode the column filters by, so it
+                // still opens and keeps its tab stops, and no mode in it is picked.
+                if filtersFixed then item(m.label)
+                else
+                    val pick: UI.Action = pickMode(path, cur, m, openRef)
+                    // An `li` is not a control either: the constraint list is a row of tab stops, and
+                    // without this a reader could reach every one of them and pick none.
+                    item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
+                end if
             }.map(toChild)*
         )
 
@@ -4806,8 +4821,12 @@ final case class DataTable[A] private (
                             .extraClass("p-datatable-column-filter-button")
                         if cur.active.nonEmpty then b = b.extraClass("p-datatable-column-filter-button-active")
                         (open, openRef) match
-                            case (Present(draft), Present(o)) => b = b.onClick(openFilterMenu(cur, draft, o))
-                            case _                            => ()
+                            // A fixed filter opens its conditions to be read, so the funnel only opens and closes: there is no
+                            // draft to seed, since nothing in the panel writes one.
+                            case (Present(_), Present(o)) if filtersFixed => b = b.onClick(o.getAndUpdate(!_))
+                            case (Present(draft), Present(o))             => b = b.onClick(openFilterMenu(cur, draft, o))
+                            case _                                        => ()
+                        end match
                         b
                     end trigger
                     (filter.openOf(path), filter.draftOf(path)) match
@@ -4824,7 +4843,8 @@ final case class DataTable[A] private (
                                             .panelClass("p-datatable-filter-overlay-popover")
                                             .panelClass("p-component")
                                             .trigger(trigger(cur, Present(draft), Present(openRef)))(
-                                                filterMenu(path, c, cf, d, draft, openRef)
+                                                // A fixed filter shows what it runs, read-only; a live one the draft the reader edits.
+                                                filterMenu(path, c, cf, if filtersFixed then cur else d, draft, openRef)
                                             )
                                             .renderGated(open, Present(filterPanelId(filter.idPrefix, path)))
                                     })
@@ -4841,6 +4861,10 @@ final case class DataTable[A] private (
 
     /** Prime's filter popover, over the DRAFT: the operator, one row per rule, the buttons
       * that add and remove them, and the bar that clears or applies the lot.
+      *
+      * Over a fixed filter it shows the filter itself, read-only: the operator, each rule's
+      * mode and query the reader can reach and read, and none of the buttons, since there is
+      * nothing to add, remove, clear or apply.
       */
     private def filterMenu(
         path: List[String],
@@ -4850,41 +4874,36 @@ final case class DataTable[A] private (
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
     )(using Frame): UI =
+        val fixed = filtersFixed
         // One rule joins with nothing, so the operator has nothing to say until there are two.
         val operator: List[UI] =
             if d.rules.sizeIs < 2 then Nil
             else
-                List(
-                    Select[FilterOperator]()
-                        .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
-                        .current(Present(d.operator))
-                        .accessibleName(s"Match mode for ${c.headerV}")
-                        .extraClass("p-datatable-filter-operator-dropdown")
-                        .onChange(operatorPicked(draft, d))
-                        .render
-                )
+                val pick = Select[FilterOperator]()
+                    .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
+                    .current(Present(d.operator))
+                    .accessibleName(s"Match mode for ${c.headerV}")
+                    .extraClass("p-datatable-filter-operator-dropdown")
+                List((if fixed then pick.readonly(true) else pick.onChange(operatorPicked(draft, d))).render)
 
         val rules: List[UI] = d.rules.zipWithIndex.map { (rule, i) =>
-            val modes =
-                Select[MatchMode]()
-                    .options(cf.modes)(_.label)
-                    .current(Present(rule.mode))
-                    .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
-                    .onChange(modePicked(draft, d, i))
-                    .render
+            val pick = Select[MatchMode]()
+                .options(cf.modes)(_.label)
+                .current(Present(rule.mode))
+                .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
+            val modes = (if fixed then pick.readonly(true) else pick.onChange(modePicked(draft, d, i))).render
+            val field = Input()
+                .value(rule.query)
+                .fluid(true)
+                .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
                     toChild(
-                        Input()
-                            .value(rule.query)
-                            .fluid(true)
-                            .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
-                            .onInput(t => draft.set(setRule(d, i, _.copy(query = t))))
-                            .render
+                        (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
                     )
                 )
             val remove: List[UI] =
-                if d.rules.sizeIs < 2 then Nil
+                if fixed || d.rules.sizeIs < 2 then Nil
                 else
                     List(
                         Button("Remove Rule")
@@ -4920,9 +4939,8 @@ final case class DataTable[A] private (
                 toChild(Button("Apply").size(Size.Small).onClick(applyFilter(path, d, draft, openRef)).render)
             )
 
-        UI.fragment(
-            (operator ++ List(div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*), add, bar))*
-        )
+        val list = div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*)
+        UI.fragment((operator ++ (if fixed then List(list) else List(list, add, bar)))*)
     end filterMenu
 
     /** One rule of a draft, rewritten in place. */
