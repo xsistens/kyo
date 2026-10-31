@@ -224,4 +224,36 @@ class PaginatorTest extends UicTest:
         yield assert(after.nonEmpty, "the dropdown was never live")
     }
 
+    /** The rows-per-page dropdown's trigger, which opens its panel: what a reader reaches, and what says it is fixed. */
+    private def rowsTrigger(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-rpp-dropdown")
+
+    private def opens(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+
+    private def readOnly(c: UI.Ast.Element): Boolean = c.attrs.ariaAttrs.get("readonly").contains("true")
+
+    "the page as first rendered draws an unbound rows dropdown the reader can use, before any mount runs" in {
+        for d <- rowsTrigger(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render)
+        yield assert(
+            !d.attrs.cssClasses.contains("p-disabled") && !readOnly(d),
+            s"an unbound rows count is the reader's: ${d.attrs.cssClasses}, ${d.attrs.ariaAttrs}"
+        )
+    }
+
+    "an unbound rows count starts at the first count the dropdown offers" in {
+        for labels <- elementsWithClass(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render, "p-select-label")
+        yield assert(labels.map(textOf).toList == List("10"), s"the dropdown shows ${labels.map(textOf)}")
+    }
+
+    "a fixed page draws its jump list read-only: a tab stop that says it goes nowhere, and no card" in {
+        val fixed = uic.Paginator().totalRecords(120).rows(10).page(2).template(PaginatorElement.JumpToPageDropdown).render
+        for
+            d    <- elementWithClass(fixed, "p-paginator-jtp-dropdown")
+            card <- elementsWithClass(fixed, "p-uic-key-error")
+        yield
+            assert(!d.attrs.cssClasses.contains("p-disabled"), "a fixed page is not a disabled one")
+            assert(readOnly(d) && d.attrs.tabIndex.contains(0) && !opens(d), s"reachable and inert: ${d.attrs.ariaAttrs}")
+            assert(card.isEmpty, s"a fixed page is no mistake: ${card.map(textOf)}")
+        end for
+    }
+
 end PaginatorTest
