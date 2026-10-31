@@ -112,7 +112,8 @@ final case class Carousel[A] private (
     /** The 0-based page (clamped into range at render). A `SignalRef` binds two way: a turn (a nav button, a dot, a
       * swipe, an autoplay step) writes it, then [[onPageChange]] hears the page. A plain `Signal` or a constant binds one
       * way: the carousel shows that page and only reports a turn. A one-way page with no [[onPageChange]] is reported in a
-      * card.
+      * card, and a constant nobody hears is fixed: its navigators and dots stay reachable, turn nothing and say so.
+      * Unbound, the carousel keeps the page itself, starting on the first.
       */
     def page(v: Int | Signal[Int]): Carousel[A] = copy(pageSlot = Present(ReactiveValue[Int](v)))
 
@@ -449,8 +450,8 @@ final case class Carousel[A] private (
             .accessibleName(name)
             .disabled(off)
             .extraClass(cls)
-        // A fixed carousel shows its navigators and turns nothing with them.
-        (if fixedFlag then b else b.onClick(setPage(target, pages))).render
+        // A fixed carousel shows its navigators, turns nothing with them, and says so: a tab stop with aria-disabled.
+        (if fixedFlag then b.ariaDisabled(true) else b.onClick(setPage(target, pages))).render
     end navButton
 
     /** One id per indicator dot, derived from the strip's own minted id. */
@@ -475,7 +476,9 @@ final case class Carousel[A] private (
                     .aria("label", s"Page ${i + 1}")
                     .tabIndex(if i == page then 0 else -1)
                 if i == page then btn = btn.aria("current", "page")
+                // A fixed carousel's dots turn nothing, and the ones off the page say so; the current one names the page.
                 if !fixedFlag then btn = btn.onClick(setPage(i, pages))
+                else if i != page then btn = btn.aria("disabled", "true")
                 if ids.isDefinedAt(i) then
                     btn = btn.id(ids(i)).onKeyDown { e =>
                         // A dot IS a button, so Enter and Space are the browser's; this moves
