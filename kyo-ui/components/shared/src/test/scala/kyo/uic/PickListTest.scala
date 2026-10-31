@@ -13,8 +13,10 @@ import kyo.UI.*
   * The library already had the answer, written in [[Button.ariaDisabled]]'s own scaladoc: a
   * control that can disable itself as a RESULT of being pressed stays in the tab order and says
   * `aria-disabled` instead.
+  *
+  * Both columns and both selections are held to rule A ([[ReactiveValueContract]]).
   */
-class PickListTest extends UicTest:
+class PickListTest extends ReactiveValueContract:
 
     private def picks(source: Seq[String], target: Seq[String], selected: Set[String])(using
         Frame
@@ -263,26 +265,6 @@ class PickListTest extends UicTest:
             assert(rs == Seq("b") && rt == Seq("c", "a") && rsel.isEmpty, s"reported $rs, $rt, $rsel")
     }
 
-    "one-way columns nothing hears say so" in {
-        for
-            src <- Signal.initRef(Seq("a"))
-            tgt <- Signal.initRef(Seq.empty[String])
-            sel <- Signal.initRef(Set.empty[String])
-            // Signals, all four: a constant nobody hears is fixed rather than a mistake, and says nothing.
-            deaf <- elementsWithClass(
-                uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(tgt.readOnly)
-                    .sourceSelection(sel.readOnly).targetSelection(sel.readOnly).render,
-                "p-uic-key-error"
-            )
-        yield
-            val text = deaf.map(textOf).mkString
-            assert(
-                text.contains("onSourceItemsChange") && text.contains("onTargetItemsChange") &&
-                    text.contains("onSourceSelectionChange") && text.contains("onTargetSelectionChange"),
-                s"nobody hears: $text"
-            )
-    }
-
     "disabled columns say nothing about who hears them, since the reader cannot change them" in {
         for
             src <- Signal.initRef(Seq("a"))
@@ -293,39 +275,114 @@ class PickListTest extends UicTest:
         yield assert(off.isEmpty, s"nobody can change them: ${off.map(textOf)}")
     }
 
-    "constants nobody hears are fixed: no button moves or transfers, no click picks, and no card" in {
-        val fixed = uic.PickList[String]().sourceItems(Seq("a", "b"))(identity).targetItems(Seq("c"))
-            .sourceSelection(Set("a")).targetSelection(Set.empty[String])
-        for
-            buttons <- elementsWithClass(fixed.render, "p-button")
-            rows    <- elementsWithClass(fixed.render, "p-listbox-option")
-            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(buttons.nonEmpty && buttons.forall(b => !declaresClick(b)), "fixed columns move nothing")
-            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "fixed selections pick nothing")
-            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
-        end for
-    }
+    // ---- rule A ----
 
-    "an unbound target and selection are the list's own, so a pick transfers into its own column" in {
-        def onTheRight(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-picklist-target-list-container").map(_.exists(c => textOf(c).contains("a")))
+    /** The buttons inside the element with class `cls` (a rail, or the transfer controls). */
+    private def buttonsIn(t: UI, cls: String)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elementWithClass(t, cls).map(c => elements(c).map(_.filter(_.attrs.cssClasses.contains("p-button"))))
+
+    /** The button labelled `name` inside the element with class `cls`: both rails have a "Move Down". */
+    private def buttonIn(t: UI, cls: String, name: String)(using Frame): UI.Ast.Element < Sync =
+        buttonsIn(t, cls).map(_.find(_.attrs.ariaAttrs.get("label").contains(name)).getOrElse(
+            throw new AssertionError(s"no button labelled $name in $cls")
+        ))
+
+    /** Whether every button in the elements with these classes moves nothing and says so. */
+    private def buttonsFixed(t: UI, classes: String*)(using Frame): Boolean < Sync =
+        Kyo.foreach(classes)(buttonsIn(t, _)).map(_.flatten).map(bs =>
+            bs.nonEmpty && bs.forall(b => !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"))
+        )
+
+    /** The column container with class `cls`, and the rows and the list in it. */
+    private def columnRows(t: UI, cls: String)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elementWithClass(t, cls).map(c => elements(c).map(_.filter(_.attrs.cssClasses.contains("p-listbox-option"))))
+
+    private def rowTexts(t: UI, cls: String)(using Frame): Seq[String] < Sync = columnRows(t, cls).map(_.map(textOf).toList)
+
+    private def chosenIn(t: UI, cls: String)(using Frame): Set[String] < Sync =
+        columnRows(t, cls).map(_.filter(_.attrs.cssClasses.contains("p-listbox-option-selected")).map(textOf).toSet)
+
+    private def rowIn(t: UI, cls: String, text: String)(using Frame): UI.Ast.Element < Sync =
+        columnRows(t, cls).map(_.find(textOf(_) == text).getOrElse(throw new AssertionError(s"no row $text in $cls")))
+
+    /** Whether no row of the column picks anything, and its list says the selection is read-only. */
+    private def picksFixed(t: UI, cls: String)(using Frame): Boolean < Sync =
         for
-            src   <- Signal.initRef(Seq("a", "b"))
-            after <- publishedAfterReady(
-                uic.PickList[String]().sourceItems(src)(identity).render,
-                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
-                until = onTheRight
-            )(
-                t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "a"),
-                t =>
-                    // A button that is off still carries an empty click, so the live one is the one not marked off.
-                    elements(t).map(_.find(e =>
-                        e.attrs.ariaAttrs.get("label").contains("Move to Target") && !e.attrs.ariaAttrs.get("disabled").contains("true")
-                    ).map(click).getOrElse(throw new AssertionError("no live transfer button")))
-            )
-        yield assert(after.nonEmpty, "the target column never showed what the reader transferred")
-        end for
-    }
+            rows <- columnRows(t, cls)
+            list <- elementWithClass(t, cls).map(c => elements(c).map(_.find(_.attrs.cssClasses.contains("p-listbox-list"))))
+        yield rows.nonEmpty && rows.forall(r => !declaresClick(r)) && list.exists(_.attrs.ariaAttrs.get("readonly").contains("true"))
+
+    private val sourceCls = "p-picklist-source-list-container"
+    private val targetCls = "p-picklist-target-list-container"
+
+    // An unbound column starts empty, so no gesture reaches one; the target's unbound case is where a column of the
+    // list's own shows. A reorder in the source rail moves the selected row, held at `a`.
+    holds(new Slot[uic.PickList[String], Seq[String]](
+        name = "sourceItems",
+        bare = Absent,
+        bind = uic.PickList[String]().sourceItems(_)(identity).sourceSelection(Set("a")),
+        hear = (p, f) => p.onSourceItemsChange(f),
+        event = "onSourceItemsChange",
+        render = _.render,
+        start = Seq("a", "b"),
+        next = Seq("b", "a"),
+        control = buttonIn(_, "p-picklist-source-controls", "Move Down"),
+        shows = rowTexts(_, sourceCls),
+        isFixed = Present(buttonsFixed(_, "p-picklist-source-controls"))
+    ))
+
+    // The source and its selection are heard constants, so a transfer changes only the target the list keeps or is bound to.
+    private def toTransfer(using Frame) =
+        uic.PickList[String]().sourceItems(Seq("a", "b"))(identity).onSourceItemsChange(_ => ())
+            .sourceSelection(Set("a")).onSourceSelectionChange(_ => ())
+
+    holds(new Slot[uic.PickList[String], Seq[String]](
+        name = "targetItems",
+        bare = Present(toTransfer),
+        bind = toTransfer.targetItems(_),
+        hear = (p, f) => p.onTargetItemsChange(f),
+        event = "onTargetItemsChange",
+        render = _.render,
+        start = Seq.empty,
+        next = Seq("a"),
+        control = buttonIn(_, "p-picklist-transfer-controls", "Move to Target"),
+        shows = rowTexts(_, targetCls),
+        // A transfer changes both columns, so a fixed target holds every transfer, and its own rail.
+        isFixed = Present(buttonsFixed(_, "p-picklist-transfer-controls", "p-picklist-target-controls")),
+        // Unbound, the target is the mount's.
+        ready = Present(t => elements(t).map(_.exists(e => e.attrs.ariaAttrs.get("label").contains("Move to Target") && declaresClick(e))))
+    ))
+
+    private def selectionSlot(name: String, base: uic.PickList[String], cls: String, row: String)(
+        bind: (uic.PickList[String], Set[String] | Signal[Set[String]]) => Frame ?=> uic.PickList[String],
+        hear: (uic.PickList[String], Set[String] => UI.Action) => Frame ?=> uic.PickList[String],
+        event: String
+    )(using Frame) = new Slot[uic.PickList[String], Set[String]](
+        name = name,
+        bare = Present(base),
+        bind = bind(base, _),
+        hear = hear,
+        event = event,
+        render = _.render,
+        start = Set.empty,
+        next = Set(row),
+        control = rowIn(_, cls, row),
+        shows = chosenIn(_, cls),
+        isFixed = Present(picksFixed(_, cls)),
+        // Unbound, the selection is the mount's.
+        ready = Present(t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)))
+    )
+
+    holds(selectionSlot("sourceSelection", uic.PickList[String]().sourceItems(Seq("a", "b"))(identity), sourceCls, "a")(
+        _.sourceSelection(_),
+        (p, f) => p.onSourceSelectionChange(f),
+        "onSourceSelectionChange"
+    ))
+
+    holds(selectionSlot("targetSelection", uic.PickList[String]().targetItems(Seq("c", "d")), targetCls, "c")(
+        _.targetSelection(_),
+        (p, f) => p.onTargetSelectionChange(f),
+        "onTargetSelectionChange"
+    ))
 
 end PickListTest
