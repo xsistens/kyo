@@ -4496,6 +4496,36 @@ class DataTableTest extends UicTest:
         end for
     }
 
+    // The toggles are buttons and nothing else, so a fixed one stays a tab stop that says, the way a button can, that it
+    // changes nothing (OrganizationChart's toggle answers the same way).
+    "a fixed expansion's row toggles are buttons that say they open nothing" in {
+        for toggles <- elementsWithClass(expandable.expanded(Set(items(0))).render, "p-datatable-row-toggle-button")
+        yield assert(
+            toggles.size == 2 && toggles.forall(t => !declaresClick(t) && t.attrs.ariaAttrs.get("disabled").contains("true")),
+            s"fixed toggles: ${toggles.map(_.attrs.ariaAttrs)}"
+        )
+    }
+
+    "fixed open groups' toggles are buttons that say they open nothing" in {
+        for toggles <- elementsWithClass(grouped.expandedGroups(Set(GroupPath(List("A")))).render, "p-datatable-row-toggle-button")
+        yield assert(
+            toggles.size == 2 && toggles.forall(t => !declaresClick(t) && t.attrs.ariaAttrs.get("disabled").contains("true")),
+            s"fixed toggles: ${toggles.map(_.attrs.ariaAttrs)}"
+        )
+    }
+
+    // A row's aria-selected says the selection, and a grid's readonly state is about its cells: a fixed selection keeps the
+    // tab stop each selectable row is, answers nothing, and drops the selectable class, whose pointer says a press picks.
+    "a fixed selection keeps each row's tab stop, says which row is picked, and picks nothing" in {
+        for trs <- bodyTrs(bare.selectionMode(uic.SelectionMode.Single).selection(Set(items(0))).render)
+        yield
+            assert(trs.size == 2 && trs.forall(_.attrs.tabIndex.contains(0)), "a fixed selection is drawn, not removed")
+            assert(trs.forall(r => !declaresClick(r) && r.attrs.onKeyDown.isEmpty), "and nothing changes it")
+            assert(trs.forall(!_.attrs.cssClasses.contains("p-datatable-selectable-row")), "nor offers a press")
+            assert(trs.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true"), Some("false")), "and it says which row")
+        end for
+    }
+
     private def expanding(using Frame) =
         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
             uic.column("Name")(_.name).width(220),
