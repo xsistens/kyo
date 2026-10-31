@@ -4424,6 +4424,18 @@ class DataTableTest extends UicTest:
         )
     }
 
+    // A hearer turns the context row on as a binding does: unbound and heard, the table keeps the row itself and marks it.
+    "unbound and heard, the context row is the table's own: a right-click marks the row it landed on" in {
+        def menus(t: UI)(using Frame) = elements(t).map(_.filter(_.attrs.onContextMenu.isDefined))
+        for
+            after <- publishedAfterReady(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name)).onContextMenuRowChange(_ => ()).render,
+                t => menus(t).map(_.size == 2),
+                until = t => elementsWithClass(t, "p-datatable-contextmenu-row-selected").map(rs => rs.size == 1 && textOf(rs.head) == "B")
+            )(t => menus(t).map(rs => handled(rs(1).attrs.onContextMenu.getOrElse(throw new AssertionError("no context handler")))))
+        yield assert(after.nonEmpty, "the table never marked the row the reader right-clicked")
+    }
+
     private def filterable(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
 
     "the page as first rendered draws an unbound filter's row as the one the reader will type in" in {
