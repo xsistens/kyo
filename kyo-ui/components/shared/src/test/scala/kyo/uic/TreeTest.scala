@@ -3,8 +3,10 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** How `uic.Tree` subscribes the state its rows are drawn from. */
-class TreeTest extends UicTest:
+/** How `uic.Tree` subscribes the state its rows are drawn from, and its expansion and selection held to rule A
+  * ([[ReactiveValueContract]]).
+  */
+class TreeTest extends ReactiveValueContract:
 
     private val nodes = List(
         TreeNode("src", "src", children = List(TreeNode("main", "main"), TreeNode("test", "test"))),
@@ -27,79 +29,67 @@ class TreeTest extends UicTest:
     private def labelOf(ui: UI, text: String)(using Frame): UI.Ast.Element < Sync =
         elementsWithClass(ui, "p-tree-node-label").map(_.find(textOf(_) == text).getOrElse(throw new AssertionError(s"no node $text")))
 
-    // Which nodes are open and chosen lives somewhere else: the tree shows it and hands a toggle or a pick over.
-    "expansion and selection bound one way are reported and not written" in {
-        for
-            exp     <- Signal.initRef(Set("src"))
-            sel     <- Signal.initRef(Set.empty[String])
-            seenExp <- Signal.initRef(Set.empty[String])
-            seenSel <- Signal.initRef(Set.empty[String])
-            hi      <- Signal.initRef(-1)
-            ui = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single)
-                .expanded(exp.readOnly).onExpandedChange(seenExp.set)
-                .selection(sel.readOnly).onSelectionChange(seenSel.set).wired(hi, "t")
-            toggles <- elementsWithClass(ui, "p-tree-node-toggle-button")
-            _       <- click(toggles(0))
-            main    <- labelOf(ui, "main")
-            _       <- click(main)
-            e       <- exp.get
-            s       <- sel.get
-            se      <- seenExp.get
-            ss      <- seenSel.get
-        yield
-            assert(e == Set("src") && se.isEmpty, s"expansion held $e, reported $se")
-            assert(s.isEmpty && ss == Set("main"), s"selection held $s, reported $ss")
-    }
-
-    "one-way bindings that nothing hears say so, and onNodeToggle or onItemClick count as hearing" in {
+    "onNodeToggle and onItemClick hear the slots too: neither a constant they hear nor a signal is a mistake" in {
         for
             exp <- Signal.initRef(Set.empty[String])
             sel <- Signal.initRef(Set.empty[String])
             hi  <- Signal.initRef(-1)
             base = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(exp.readOnly).selection(sel.readOnly)
-            deaf  <- elementsWithClass(base.wired(hi, "t"), "p-uic-key-error")
             byOld <- elementsWithClass(base.onNodeToggle(_ => ()).onItemClick(_ => ()).wired(hi, "t"), "p-uic-key-error")
+            live = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(Set.empty[String])
+                .onNodeToggle(_ => ()).selection(Set.empty[String]).onItemClick(_ => ()).render
+            toggles <- elementsWithClass(live, "p-tree-node-toggle-button")
+            label   <- labelOf(live, "build.sbt")
         yield
-            val text = deaf.map(textOf).mkString
-            assert(text.contains("onExpandedChange") && text.contains("onSelectionChange"), s"nobody hears: $text")
             assert(byOld.isEmpty, s"the older events hear: ${byOld.map(textOf)}")
-    }
-
-    "constants nobody hears are fixed: no toggle opens, no click picks, and no card" in {
-        val fixed = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(Set("src")).selection(Set("main"))
-        for
-            toggles <- elementsWithClass(fixed.render, "p-tree-node-toggle-button")
-            labels  <- elementsWithClass(fixed.render, "p-tree-node-label")
-            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(toggles.nonEmpty && toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
-            assert(labels.nonEmpty && labels.forall(l => !declaresClick(l)), "a fixed selection picks nothing")
-            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
+            assert(toggles.exists(declaresClick) && declaresClick(label), "a constant somebody hears is not fixed")
         end for
     }
 
-    "an unbound tree keeps what the reader opens and picks" in {
-        def opened(t: UI): Boolean < Sync = elementsWithClass(t, "p-tree-node-label").map(_.exists(l => textOf(l) == "main"))
-        def picked(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-tree-node-selected").map(_.exists(n => textOf(n).contains("build.sbt")))
-        val free = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single)
-        for
-            open <- publishedAfterReady(
-                free.render,
-                t => elementsWithClass(t, "p-tree-node-toggle-button").map(_.exists(declaresClick)),
-                until = opened
-            )(t => elementsWithClass(t, "p-tree-node-toggle-button").map(bs => click(bs.head)))
-            pick <- publishedAfterReady(
-                free.render,
-                t => elementsWithClass(t, "p-tree-node-label").map(_.exists(declaresClick)),
-                until = picked
-            )(t =>
-                labelOf(t, "build.sbt").map(click)
-            )
-        yield
-            assert(open.nonEmpty, "the tree never showed the branch the reader opened")
-            assert(pick.nonEmpty, "the tree never showed the node the reader picked")
-        end for
-    }
+    // ---- rule A ----
+
+    private def tree(using Frame) = uic.Tree[String]().nodes(nodes*)
+
+    private def toggles(t: UI)(using Frame) = elementsWithClass(t, "p-tree-node-toggle-button")
+
+    // The toggle is what a pointer opens a branch with. A tree has no readonly state for its expansion and its toggles are
+    // hidden from assistive tech, so a fixed expansion says nothing beyond each branch's aria-expanded: it is fixed because
+    // no toggle answers (the keys ignore a fixed expansion too, `toggleNode`'s guard).
+    holds(new Slot[uic.Tree[String], Set[String]](
+        name = "expanded",
+        bare = Present(tree),
+        bind = tree.expanded(_),
+        hear = (t, f) => t.onExpandedChange(f),
+        event = "onExpandedChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("src"),
+        control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+        shows = elementsWithClass(_, "p-tree-node-label").map(ls => if ls.exists(textOf(_) == "main") then Set("src") else Set.empty),
+        isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
+        ready = Present(toggles(_).map(_.exists(declaresClick)))
+    ))
+
+    private val idsByLabel = Map("src" -> "src", "main" -> "main", "test" -> "test", "build.sbt" -> "build")
+
+    private def single(using Frame) = tree.selectionMode(uic.SelectionMode.Single)
+
+    // A tree has no readonly state for its selection either, and a treeitem's aria-disabled would also take the branch it
+    // opens away from the reader, so a fixed selection says nothing beyond each node's aria-selected: it is fixed because no
+    // label takes a click (the keys ignore it too, `selectNode`'s guard).
+    holds(new Slot[uic.Tree[String], Set[String]](
+        name = "selection",
+        bare = Present(single),
+        bind = single.selection(_),
+        hear = (t, f) => t.onSelectionChange(f),
+        event = "onSelectionChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("build"),
+        control = labelOf(_, "build.sbt"),
+        shows = elementsWithClass(_, "p-tree-node-selected").map(_.map(n => idsByLabel(textOf(n))).toSet),
+        isFixed = Present(elementsWithClass(_, "p-tree-node-label").map(ls => ls.nonEmpty && ls.forall(l => !declaresClick(l)))),
+        ready = Present(elementsWithClass(_, "p-tree-node-label").map(_.exists(declaresClick)))
+    ))
 
 end TreeTest
