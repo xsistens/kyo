@@ -178,20 +178,6 @@ class PaginatorTest extends ReactiveValueContract:
 
     private def next(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-next")
 
-    /** Whether nothing in the paginator goes to another page, and every link and button that would says so. */
-    private def pagesFixed(t: UI)(using Frame): Boolean < Sync =
-        for
-            links <- elementsWithClass(t, "p-paginator-page")
-            navs  <- Kyo.foreach(List("first", "prev", "next", "last"))(c => elementsWithClass(t, s"p-paginator-$c")).map(_.flatten)
-        yield
-            val says =
-                (links.filterNot(_.attrs.cssClasses.contains("p-paginator-page-selected")) ++
-                    navs.filterNot(_.attrs.cssClasses.contains("p-disabled")))
-            links.nonEmpty && (links ++ navs).forall(e => !declaresClick(e)) &&
-            says.nonEmpty && says.forall(_.attrs.ariaAttrs.get("disabled").contains("true"))
-        end for
-    end pagesFixed
-
     // Ten rows over 120 records is twelve pages; the next-page button goes from the first to the second.
     holds(new Slot[uic.Paginator, Int](
         name = "page",
@@ -204,7 +190,7 @@ class PaginatorTest extends ReactiveValueContract:
         next = 1,
         control = next(_),
         shows = selectedPage(_).map(_.toInt - 1),
-        isFixed = Present(pagesFixed(_))
+        isFixed = Present(paginatorPagesFixed(_))
     ))
 
     /** The rows-per-page dropdown's trigger, which opens its panel: what a reader reaches, and what says it is fixed. */

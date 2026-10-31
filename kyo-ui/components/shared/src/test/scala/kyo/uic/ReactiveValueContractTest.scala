@@ -78,6 +78,10 @@ abstract class ReactiveValueContract extends UicTest:
       *   closed): every case reads the tree the mount published once `ready` holds, the fixed one included, since the
       *   page as first rendered shows nothing of the slot. Absent, the cases that judge the page as first rendered read
       *   the static render.
+      * @param layout
+      *   for a gesture the component works out from geometry it measures (a column dragged across the header, a boundary
+      *   moved): where the elements it measures sit, by id, which the headless page answers its measures with
+      *   ([[UicTest.layout]]). Empty, the page has no layout.
       */
     final class Slot[C, A](
         val name: String,
@@ -101,8 +105,12 @@ abstract class ReactiveValueContract extends UicTest:
         val startText: Maybe[A] = Absent,
         val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         val after: Seq[UI => Frame ?=> Any < Async] = Nil,
-        val mountDraws: Boolean = false
+        val mountDraws: Boolean = false,
+        val layout: Map[String, UI.Rect] = Map.empty
     )(using val equal: CanEqual[A, A]):
+
+        /** `v` run on a page laid out as [[layout]] says. */
+        def laidOut[B, S](v: B < S)(using Frame): B < S = UicTest.layout.let(layout)(v)
 
         /** The element that says whether the slot is fixed. */
         def sayer(t: UI)(using Frame): UI.Ast.Element < Sync = fixedOn.fold(control(t))(f => f(t))
@@ -154,6 +162,22 @@ abstract class ReactiveValueContract extends UicTest:
     end Slot
 
     private def cards(t: UI)(using Frame) = elementsWithClass(t, "p-uic-key-error")
+
+    /** Whether nothing in a paginator (one of its own, or one a table or a view embeds) goes to another page, and every
+      * link and button that would says so: a fixed page.
+      */
+    def paginatorPagesFixed(t: UI)(using Frame): Boolean < Sync =
+        for
+            links <- elementsWithClass(t, "p-paginator-page")
+            navs  <- Kyo.foreach(List("first", "prev", "next", "last"))(c => elementsWithClass(t, s"p-paginator-$c")).map(_.flatten)
+        yield
+            val says =
+                (links.filterNot(_.attrs.cssClasses.contains("p-paginator-page-selected")) ++
+                    navs.filterNot(_.attrs.cssClasses.contains("p-disabled")))
+            links.nonEmpty && (links ++ navs).forall(e => !declaresClick(e)) &&
+            says.nonEmpty && says.forall(_.attrs.ariaAttrs.get("disabled").contains("true"))
+        end for
+    end paginatorPagesFixed
 
     /** The slot of a field whose state is a native boolean input (a checkbox, a switch, a radio), from `false` to `true`.
       *
@@ -349,23 +373,24 @@ abstract class ReactiveValueContract extends UicTest:
         if unbound then
             s.keptNatively match
                 case Present(kept) =>
-                    s"${s.name}: unbound, the text is the browser's: it starts at its start, the reader edits it, and the component leaves it there" in {
-                        val bare = s.bare.get
-                        for
-                            page  <- s.page(s.render(bare))
-                            first <- s.shows(page)
-                            edits <- s.control(page).map(s.answers)
-                            left  <- kept(page)
-                            card  <- cards(s.render(bare))
-                        yield
-                            assert(first == s.start, s"the page as first rendered shows $first")
-                            assert(edits, "the reader cannot edit it")
-                            assert(left, "the component draws a text of its own over what the reader types")
-                            assert(card.isEmpty, s"state the browser keeps: ${card.map(textOf)}")
-                        end for
-                    }
+                    s"${s.name}: unbound, the text is the browser's: it starts at its start, the reader edits it, and the component leaves it there" in
+                        s.laidOut {
+                            val bare = s.bare.get
+                            for
+                                page  <- s.page(s.render(bare))
+                                first <- s.shows(page)
+                                edits <- s.control(page).map(s.answers)
+                                left  <- kept(page)
+                                card  <- cards(s.render(bare))
+                            yield
+                                assert(first == s.start, s"the page as first rendered shows $first")
+                                assert(edits, "the reader cannot edit it")
+                                assert(left, "the component draws a text of its own over what the reader types")
+                                assert(card.isEmpty, s"state the browser keeps: ${card.map(textOf)}")
+                            end for
+                        }
                 case Absent =>
-                    s"${s.name}: unbound, the slot is the component's own: it starts at its start and a gesture changes it" in {
+                    s"${s.name}: unbound, the slot is the component's own: it starts at its start and a gesture changes it" in s.laidOut {
                         val bare = s.bare.get
                         for
                             first   <- s.page(s.render(bare)).map(s.shows(_))
@@ -379,7 +404,7 @@ abstract class ReactiveValueContract extends UicTest:
                     }
             end match
 
-            s"${s.name}: the page as first rendered does not call an unbound slot fixed" in {
+            s"${s.name}: the page as first rendered does not call an unbound slot fixed" in s.laidOut {
                 for fixed <- s.page(s.render(s.bare.get)).map(s.fixedIn(_))
                 yield assert(!fixed, "the control the reader will use does not say it changes nothing")
             }
@@ -387,7 +412,7 @@ abstract class ReactiveValueContract extends UicTest:
 
         s.startText match
             case Present(text) =>
-                s"${s.name}: a constant nobody hears is the text it starts with: shown, editable, and nothing to say" in {
+                s"${s.name}: a constant nobody hears is the text it starts with: shown, editable, and nothing to say" in s.laidOut {
                     val started = s.render(s.bind(text))
                     for
                         page    <- s.page(started)
@@ -401,13 +426,14 @@ abstract class ReactiveValueContract extends UicTest:
                     end for
                 }
                 if s.keptNatively.isEmpty then
-                    s"${s.name}: a constant is only where it starts: a gesture changes it, and the component keeps the change" in {
-                        for changed <- changes(s, s.render(s.bind(s.start)))
-                        yield assert(changed, s"a gesture never showed ${s.next}")
-                    }
+                    s"${s.name}: a constant is only where it starts: a gesture changes it, and the component keeps the change" in
+                        s.laidOut {
+                            for changed <- changes(s, s.render(s.bind(s.start)))
+                            yield assert(changed, s"a gesture never showed ${s.next}")
+                        }
                 end if
             case Absent =>
-                s"${s.name}: a constant nobody hears is fixed: nothing changes it, and it says so" in {
+                s"${s.name}: a constant nobody hears is fixed: nothing changes it, and it says so" in s.laidOut {
                     val fixed = s.render(s.bind(s.start))
                     // The page as first rendered already says it: a fixed slot is no mount's to wire, unless only the mount
                     // draws the slot at all.
@@ -473,7 +499,7 @@ abstract class ReactiveValueContract extends UicTest:
     def heardBy[C, A](s: Slot[C, A]): Unit =
         import s.equal
 
-        s"${s.name}: a constant somebody hears reports the gesture with what it asks for, and is no mistake" in {
+        s"${s.name}: a constant somebody hears reports the gesture with what it asks for, and is no mistake" in s.laidOut {
             for
                 seen <- Signal.initRef(Chunk.empty[A])
                 _    <- s.asked(s.render(s.hear(s.bind(s.start), v => seen.updateAndGet(_.append(v)).unit)))
@@ -485,7 +511,7 @@ abstract class ReactiveValueContract extends UicTest:
             end for
         }
 
-        s"${s.name}: a signal bound one way is followed, and a gesture is reported without being written" in {
+        s"${s.name}: a signal bound one way is followed, and a gesture is reported without being written" in s.laidOut {
             for
                 held <- Signal.initRef(s.start)
                 seen <- Signal.initRef(Chunk.empty[A])
@@ -506,7 +532,7 @@ abstract class ReactiveValueContract extends UicTest:
             end for
         }
 
-        s"${s.name}: a ref is written before the component reports it" in {
+        s"${s.name}: a ref is written before the component reports it" in s.laidOut {
             for
                 held <- Signal.initRef(s.start)
                 seen <- Signal.initRef(Chunk.empty[(A, A)])
