@@ -8,9 +8,10 @@ import kyo.UI.*
   * Horizontal puts every header in one `p-steplist`, which is a real tablist: `role="tab"`, ONE
   * tab stop, horizontal arrows between them. Vertical interleaves each header with its own panel
   * inside a `p-stepitem`, which is an accordion's shape rather than a tablist's, so the headers
-  * carry no `role="tab"` there, each stays its own tab stop, and the arrows are vertical.
+  * carry no `role="tab"` there, each stays its own tab stop, and the arrows are vertical. The active step and the step
+  * value are held to rule A ([[ReactiveValueContract]]).
   */
-class StepperTest extends UicTest:
+class StepperTest extends ReactiveValueContract:
 
     // The base the headers derive their ids from: `s"$base-$index"`, so "s-0", "s-1" and "s-2".
     private val base = "s"
@@ -170,31 +171,6 @@ class StepperTest extends UicTest:
             assert(s == List(1), s"reported $s")
     }
 
-    "a constant nobody hears is fixed: the headers stay reachable, move nothing, and say so" in {
-        for
-            hs   <- headersOf(steps.active(1).render)
-            card <- elementsWithClass(steps.active(1).render, "p-uic-key-error")
-        yield
-            assert(hs.forall(h => !declaresClick(h)), "nothing moves the stepper")
-            assert(hs.zipWithIndex.forall((h, i) => i == 1 || h.attrs.ariaAttrs.get("disabled").contains("true")), "and the headers say so")
-            assert(card.isEmpty, s"a fixed step is not a mistake: ${card.map(textOf)}")
-    }
-
-    "an index bound one way is followed, and a click is reported without being written" in {
-        for
-            held <- Signal.initRef(0)
-            seen <- Signal.initRef(Absent: Maybe[Int])
-            hs   <- headersOf(steps.active(held.readOnly).onActiveChange(i => seen.set(Present(i))).wired(base, _ => ()))
-            _    <- click(hs(2))
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(steps.active(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h == 0 && s == Present(2), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onActiveChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
     "a step value bound one way is reported before the index, and not written" in {
         for
             held  <- Signal.initRef("one")
@@ -211,21 +187,78 @@ class StepperTest extends UicTest:
         yield assert(h == "one" && o == List("value two", "index 1"), s"held $h, order $o")
     }
 
-    "an index ref is written before the stepper reports it" in {
-        for
-            held <- Signal.initRef(0)
-            seen <- Signal.initRef((0, 0))
-            hs   <- headersOf(steps.active(held).onActiveChange(i => held.get.map(h => seen.set((i, h)))).wired(base, _ => ()))
-            _    <- click(hs(2))
-            s    <- seen.get
-        yield assert(s == (2, 2), s"reported, held: $s")
-    }
+    // ---- rule A ----
 
-    "a step value bound one way that nothing hears names the event that would hear it" in {
+    /** The step the headers mark selected. */
+    private def activeShown(t: UI)(using Frame): Int < Sync =
+        headersOf(t).map(hs =>
+            hs.indexWhere(_.attrs.ariaAttrs.get("selected").contains("true")) match
+                case -1 => throw new AssertionError("no selected header")
+                case i  => i
+        )
+
+    /** Whether every header is inert, and every one but the active header says it moves nothing. */
+    private def headersFixed(t: UI)(using Frame): Boolean < Sync =
         for
-            held <- Signal.initRef("one")
-            deaf <- elementsWithClass(valued.value(held.readOnly).render, "p-uic-key-error")
-        yield assert(deaf.size == 1 && textOf(deaf.head).contains("onValueChange"), s"nobody hears: ${deaf.map(textOf)}")
-    }
+            hs <- headersOf(t)
+            at <- activeShown(t)
+        yield hs.nonEmpty && hs.zipWithIndex.forall((h, i) =>
+            !declaresClick(h) && (i == at || h.attrs.ariaAttrs.get("disabled").contains("true"))
+        )
+
+    /** Whether the mount has wired a header to take the gesture. */
+    private def headed(t: UI)(using Frame): Boolean < Sync = headersOf(t).map(_.nonEmpty)
+
+    // The active header takes no click (it asks for nothing), so the gesture is on the last one.
+    holds(new Slot[uic.Stepper[Nothing], Int](
+        name = "active",
+        bare = Present(steps),
+        bind = steps.active(_),
+        hear = (s, f) => s.onActiveChange(f),
+        event = "onActiveChange",
+        render = _.render,
+        start = 0,
+        next = 2,
+        control = headersOf(_).map(_(2)),
+        shows = activeShown(_),
+        isFixed = Present(headersFixed(_)),
+        ready = Present(headed(_))
+    ))
+
+    private val values = List("one", "two")
+
+    /** The value slot: unbound, the stepper is driven by position, so the slot has no unbound form of its own. */
+    private def valueSlot(using Frame) = new Slot[uic.Stepper[String], String](
+        name = "value",
+        bare = Absent,
+        bind = valued.value(_),
+        hear = (s, f) => s.onValueChange(f),
+        event = "onValueChange",
+        render = _.render,
+        start = "one",
+        next = "two",
+        control = headersOf(_).map(_(1)),
+        shows = activeShown(_).map(values(_)),
+        isFixed = Present(headersFixed(_)),
+        ready = Present(headed(_))
+    )
+
+    holds(valueSlot)
+
+    // onActiveChange hears a click in value mode too, with the index of the step whose value was asked for.
+    heardBy(new Slot[uic.Stepper[String], String](
+        name = "value, heard by onActiveChange",
+        bare = Absent,
+        bind = valued.value(_),
+        hear = (s, f) => s.onActiveChange(i => f(values(i))),
+        event = "onActiveChange",
+        render = _.render,
+        start = "one",
+        next = "two",
+        control = headersOf(_).map(_(1)),
+        shows = activeShown(_).map(values(_)),
+        isFixed = Present(headersFixed(_)),
+        ready = Present(headed(_))
+    ))
 
 end StepperTest
