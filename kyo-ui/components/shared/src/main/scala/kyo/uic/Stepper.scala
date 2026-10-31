@@ -175,11 +175,14 @@ final case class Stepper[K] private (
             case Absent     => ReactiveValue.deaf(activeSlot, heard)
         if !deaf then stepper
         else
+            // The card names the event of the slot that is bound: in value mode onValueChange hears the value, and
+            // onActiveChange hears the click as well.
+            val add = if valueSlot.isDefined then "onValueChange (or onActiveChange)" else "onActiveChange"
             fragment(
                 KeyDiagnostics.card(
                     "Stepper",
-                    "the active step is bound one way and nothing hears a click, so the reader cannot change it; add " +
-                        "onActiveChange, or bind a SignalRef",
+                    s"the active step is bound one way and nothing hears a click, so the reader cannot change it; add $add, " +
+                        "or bind a SignalRef",
                     Nil
                 ),
                 stepper
