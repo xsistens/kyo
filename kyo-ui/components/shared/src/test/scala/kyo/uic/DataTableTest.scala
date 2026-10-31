@@ -11,7 +11,7 @@ import kyo.uic.form.FieldError
   * The handlers are pulled straight off the rendered tree, so what runs here is what the
   * client would run. Nothing is simulated except the keystroke itself.
   */
-class DataTableTest extends UicTest:
+class DataTableTest extends ReactiveValueContract:
 
     final case class Item(id: String, name: String, price: Int) derives CanEqual
 
@@ -390,31 +390,14 @@ class DataTableTest extends UicTest:
             case Present(UI.Bound.Const(v)) => v
             case other                      => s"not a constant: $other")
 
-    // The filters live somewhere else (a route, a parent): the table filters by them and hands what the reader types over.
-    "column filters bound one way filter by the signal, and typing is reported without being written" in {
+    // The filters live somewhere else (a route, a parent): the table filters by them. That the reader's typing is handed
+    // over and not written is the contract's (rule A, below).
+    "column filters bound one way filter the rows by the signal" in {
         for
             held   <- Signal.initRef(nameFilter("A"))
-            seen   <- Signal.initRef(Map.empty[List[String], ColumnFilter])
-            ui     <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(seen.set))
+            ui     <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(_ => ()))
             before <- bodyNames(ui)
-            field  <- inputs(ui).map(_.head)
-            _      <- type_(field, "B")
-            h      <- held.get
-            s      <- seen.get
-        yield
-            assert(before == Chunk("A"), s"the rows follow the signal: $before")
-            assert(h == nameFilter("A") && s == nameFilter("B"), s"held $h, reported $s")
-    }
-
-    "two-way column filters are written before the table reports them" in {
-        for
-            filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
-            seen    <- Signal.initRef((Map.empty[List[String], ColumnFilter], Map.empty[List[String], ColumnFilter]))
-            ui      <- filteredBy(_.columnFilters(filters).onColumnFiltersChange(m => filters.get.map(h => seen.set((m, h)))))
-            field   <- inputs(ui).map(_.head)
-            _       <- type_(field, "B")
-            s       <- seen.get
-        yield assert(s == (nameFilter("B"), nameFilter("B")), s"reported, held: $s")
+        yield assert(before == Chunk("A"), s"the rows follow the signal: $before")
     }
 
     // An owner that writes back later than the reader types (through a route, say) answers the first keystroke after
@@ -472,16 +455,6 @@ class DataTableTest extends UicTest:
         yield assert(after == "x", s"the owner's value after the reader left: $after")
     }
 
-    "column filters bound one way with nothing to hear the reader say so" in {
-        for
-            held  <- Signal.initRef(Map.empty[List[String], ColumnFilter])
-            deaf  <- filteredBy(_.columnFilters(held.readOnly)).map(elementsWithClass(_, "p-uic-key-error"))
-            heard <- filteredBy(_.columnFilters(held.readOnly).onColumnFiltersChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onColumnFiltersChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
-    }
-
     "restore writes two-way column filters and leaves one-way ones to their owner" in {
         val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
         for
@@ -519,27 +492,6 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "two-way expansion is written before the table reports it" in {
-        for
-            exp  <- Signal.initRef(Set.empty[Item])
-            seen <- Signal.initRef((Set.empty[Item], Set.empty[Item]))
-            ui = expandable.expanded(exp).onExpandedChange(next => exp.get.map(h => seen.set((next, h)))).render
-            toggles <- elementsWithClass(ui, "p-datatable-row-toggle-button")
-            _       <- click(toggles(1))
-            s       <- seen.get
-        yield assert(s == (Set(items(1)), Set(items(1))), s"reported, held: $s")
-    }
-
-    "expansion bound one way with nothing to hear a toggle says so" in {
-        for
-            held  <- Signal.initRef(Set.empty[Item])
-            deaf  <- elementsWithClass(expandable.expanded(held.readOnly).render, "p-uic-key-error")
-            heard <- elementsWithClass(expandable.expanded(held.readOnly).onExpandedChange(_ => ()).render, "p-uic-key-error")
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onExpandedChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
-    }
-
     private def grouped(using Frame) =
         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
             .groupBy(uic.RowGroup((i: Item) => i.name))
@@ -554,13 +506,11 @@ class DataTableTest extends UicTest:
             _       <- click(toggles(0))
             h       <- held.get
             s       <- seen.get
-            deaf    <- elementsWithClass(grouped.expandedGroups(held.readOnly).render, "p-uic-key-error")
         yield
             // The body reads both group headers, A and B, and the rows of the open group alone.
             assert(shown == Chunk("A", "B", "B"), s"only the open group shows its rows: $shown")
             assert(h == Set(GroupPath(List("B"))), s"the signal still holds $h")
             assert(s == Set(GroupPath(List("A")), GroupPath(List("B"))), s"the toggle reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onExpandedGroupsChange"), s"nobody hears: ${deaf.map(textOf)}")
         end for
     }
 
@@ -820,50 +770,6 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "an editing cell bound one way is followed, and a click reported without being written" in {
-        for
-            held <- Signal.initRef(Absent: Maybe[CellPath[Item]])
-            seen <- Signal.initRef(List.empty[Maybe[CellPath[Item]]])
-            ui   <- editable(_.editingCell(held.readOnly).onEditingCellChange(c => seen.getAndUpdate(_ :+ c).unit))
-            cell <- elementWithId(ui, "t-c1-0")
-            _    <- click(cell)
-            h    <- held.get
-            told <- seen.get
-            deaf <- cards(editableBare.editingCell(held.readOnly).render)
-        yield
-            assert(h == Absent && told == List(Present(CellPath(items(1), List("Name")))), s"held $h, reported $told")
-            assert(deaf.contains("onEditingCellChange"), s"nobody hears: $deaf")
-        end for
-    }
-
-    "an editing cell ref is written before the click is reported" in {
-        for
-            held <- Signal.initRef(Absent: Maybe[CellPath[Item]])
-            seen <- Signal.initRef(List.empty[(Maybe[CellPath[Item]], Maybe[CellPath[Item]])])
-            ui   <- editable(_.editingCell(held).onEditingCellChange(c => held.get.map(h => seen.getAndUpdate(_ :+ (c, h)).unit)))
-            cell <- elementWithId(ui, "t-c1-0")
-            _    <- click(cell)
-            told <- seen.get
-        yield
-            val one = Present(CellPath(items(1), List("Name")))
-            assert(told == List((one, one)), s"reported, held: $told")
-    }
-
-    "editingCell() with no ref keeps the open cell itself, so a click opens the editor" in {
-        val table = editableBare.editingCell()
-        for
-            card  <- cards(table.render)
-            after <- publishedAfterReady(
-                table.render,
-                t => elementsWithClass(t, "p-editable-column").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-cell-editing").map(_.nonEmpty)
-            )(t => elementsWithClass(t, "p-editable-column").map(cs => click(cs.head)))
-        yield
-            assert(after.nonEmpty, "the table never opened the cell the reader clicked")
-            assert(card.isEmpty, s"an editing cell the table keeps itself: $card")
-        end for
-    }
-
     "constant editing rows nobody hears are fixed: their editors show, and no button changes them" in {
         for
             ui    <- editable(_.editingRows(Set(items(0))))
@@ -874,48 +780,6 @@ class DataTableTest extends UicTest:
             assert(save.attrs.ariaAttrs.get("disabled").contains("true"), "the open row's save is reachable and inert")
             assert(inits.nonEmpty && inits.forall(_.attrs.ariaAttrs.get("disabled").contains("true")), "no row opens")
             assert(card.isEmpty, s"fixed editing rows are not a mistake: $card")
-        end for
-    }
-
-    "editing rows bound one way are followed, and a row opened is reported without being written" in {
-        for
-            held  <- Signal.initRef(Set.empty[Item])
-            seen  <- Signal.initRef(List.empty[Set[Item]])
-            ui    <- editable(_.editingRows(held.readOnly).onEditingRowsChange(r => seen.getAndUpdate(_ :+ r).unit))
-            inits <- elementsWithClass(ui, "p-datatable-row-editor-init")
-            _     <- click(inits(1))
-            h     <- held.get
-            told  <- seen.get
-            deaf  <- cards(editableBare.editingRows(held.readOnly).render)
-        yield
-            assert(h.isEmpty && told == List(Set(items(1))), s"held $h, reported $told")
-            assert(deaf.contains("onEditingRowsChange"), s"nobody hears: $deaf")
-        end for
-    }
-
-    "an editing rows ref is written before the row opened is reported" in {
-        for
-            held  <- Signal.initRef(Set.empty[Item])
-            seen  <- Signal.initRef(List.empty[(Set[Item], Set[Item])])
-            ui    <- editable(_.editingRows(held).onEditingRowsChange(r => held.get.map(h => seen.getAndUpdate(_ :+ (r, h)).unit)))
-            inits <- elementsWithClass(ui, "p-datatable-row-editor-init")
-            _     <- click(inits(1))
-            told  <- seen.get
-        yield assert(told == List((Set(items(1)), Set(items(1)))), s"reported, held: $told")
-    }
-
-    "editingRows() with no ref keeps the open rows itself, so the row editor opens a row" in {
-        val table = editableBare.editingRows()
-        for
-            card  <- cards(table.render)
-            after <- publishedAfterReady(
-                table.render,
-                t => elementsWithClass(t, "p-datatable-row-editor-init").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-datatable-row-editor-save").map(_.nonEmpty)
-            )(t => elementsWithClass(t, "p-datatable-row-editor-init").map(bs => click(bs.head)))
-        yield
-            assert(after.nonEmpty, "the table never opened the row the reader asked for")
-            assert(card.isEmpty, s"editing rows the table keeps itself: $card")
         end for
     }
 
@@ -1286,53 +1150,6 @@ class DataTableTest extends UicTest:
             r <- handled(up(pointerAt(to)))
         yield r
 
-    // The layout lives somewhere else (a saved view, a parent): the table lays the columns out by it and hands a drag over.
-    "column widths bound one way are reported on every move of a drag and not written" in {
-        for
-            seen          <- Signal.initRef(Map.empty[List[String], Double])
-            (ui, cols, _) <-
-                sized(Map("t-h0" -> 200, "t-h1" -> 100), bind = (t, c) => t.columnWidths(c.readOnly).onColumnWidthsChange(seen.set))
-            handles <- resizers(ui)
-            _       <- drag(handles.head, 200, 240)
-            held    <- cols.get
-            s       <- seen.get
-        yield assert(held.isEmpty && s == Map(List("Name") -> 240.0, List("Price") -> 60.0), s"held $held, reported $s")
-    }
-
-    "two-way column widths are written before the table reports them" in {
-        for
-            seen          <- Signal.initRef((Map.empty[List[String], Double], Map.empty[List[String], Double]))
-            (ui, cols, _) <- sized(
-                Map("t-h0" -> 200, "t-h1" -> 100),
-                bind = (t, c) => t.columnWidths(c).onColumnWidthsChange(m => c.get.map(h => seen.set((m, h))))
-            )
-            handles <- resizers(ui)
-            _       <- drag(handles.head, 200, 240)
-            s       <- seen.get
-        yield assert(s._1 == s._2 && s._1.nonEmpty, s"reported, held: $s")
-    }
-
-    "a column order bound one way is reported on a drop and not written" in {
-        for
-            seen           <- Signal.initRef(List.empty[List[String]])
-            (ui, order, _) <- movable(bindOrder = (t, o) => t.columnOrder(o.readOnly).onColumnOrderChange(seen.set))
-            _              <- dragHeader(ui, "t-h0", 50, 210)
-            held           <- order.get
-            s              <- seen.get
-        yield assert(held.isEmpty && s == List(List("Price"), List("Name"), List("Id")), s"held $held, reported $s")
-    }
-
-    "a layout bound one way with nothing to hear the reader says so" in {
-        for
-            (widthsUi, _, _) <- sized(Map("t-h0" -> 200, "t-h1" -> 100), bind = (t, c) => t.columnWidths(c.readOnly))
-            (orderUi, _, _)  <- movable(bindOrder = (t, o) => t.columnOrder(o.readOnly))
-            widthCards       <- elementsWithClass(widthsUi, "p-uic-key-error")
-            orderCards       <- elementsWithClass(orderUi, "p-uic-key-error")
-        yield
-            assert(widthCards.map(textOf).mkString.contains("onColumnWidthsChange"), s"widths: ${widthCards.map(textOf)}")
-            assert(orderCards.map(textOf).mkString.contains("onColumnOrderChange"), s"order: ${orderCards.map(textOf)}")
-    }
-
     "a constant global filter filters, and restore leaves one-way layout and query to their owner" in {
         val table =
             uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name), uic.column("Price")(_.price.toString))
@@ -1626,35 +1443,6 @@ class DataTableTest extends UicTest:
         yield
             assert(current == List("2"), s"the page the signal holds is the one shown: $current")
             assert(h == 1 && s == 2, s"the signal still holds $h, the click reported $s")
-    }
-
-    "a two-way page is written before the table reports it" in {
-        for
-            rows <- Signal.initRef[Seq[Item]](unsorted)
-            page <- Signal.initRef(0)
-            seen <- Signal.initRef((-1, -1))
-            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .paginate(2)(page).lazyRows(7).onPageChange(p => page.get.map(held => seen.set((p, held)))).render
-            link <- pageLinkOf(ui, "4")
-            _    <- click(link)
-            s    <- seen.get
-        yield assert(s == (3, 3), s"reported, held: $s")
-    }
-
-    "a page size bound one way takes its picks through onPageSizeChange, and without it says so" in {
-        for
-            rows <- Signal.initRef[Seq[Item]](unsorted)
-            size <- Signal.initRef(2)
-            page <- Signal.initRef(0)
-            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .paginate(size.readOnly)(page).lazyRows(7).paginator(_.rowsPerPageOptions(Seq(2, 4)))
-            heard    <- elementsWithClass(base.onPageSizeChange(_ => ()).render, "p-uic-key-error")
-            deaf     <- elementsWithClass(base.render, "p-uic-key-error")
-            dropdown <- elementWithClass(base.onPageSizeChange(_ => ()).render, "p-paginator-rpp-dropdown")
-        yield
-            assert(heard.isEmpty, s"a size with somewhere to go: ${heard.map(textOf)}")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onPageSizeChange"), s"a size nobody hears: ${deaf.map(textOf)}")
-            assert(!dropdown.attrs.cssClasses.contains("p-disabled"), "a size someone hears is one the reader can pick")
     }
 
     "restore writes a two-way page and leaves a one-way page to its owner" in {
@@ -3266,66 +3054,6 @@ class DataTableTest extends UicTest:
             assert(reported.isEmpty, s"fixed rows are not a mistake: $reported")
     }
 
-    "rows bound one way are followed, and a commit is reported through onRowsChange without being written" in {
-        for
-            held       <- Signal.initRef[Seq[Item]](items)
-            seen       <- Signal.initRef(List.empty[Seq[Item]])
-            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
-            (ui, _, _) <- editableOver(_.rows(held.readOnly).editingCell(ed).onRowsChange(rs => seen.getAndUpdate(_ :+ rs).unit))
-            _          <- commitFirstName(ui, "Ada")
-            h          <- held.get
-            s          <- seen.get
-        yield
-            assert(h == items, s"a one-way list is not written: $h")
-            assert(s == List(Seq(items(0).copy(name = "Ada"), items(1))), s"reported $s")
-    }
-
-    "a one-way row list nobody hears is reported in a card that names onRowsChange" in {
-        for
-            held       <- Signal.initRef[Seq[Item]](trio)
-            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
-            drag       <- Signal.initRef(Absent: Maybe[uic.RowDrag])
-            (ui, _, _) <- editableOver(_.rows(held.readOnly).editingCell(ed))
-            moved      <- wiredDrag(
-                uic.DataTable[Item]().rows(held.readOnly).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .reorderableRows(true),
-                drag
-            )
-            edits <- cards(ui)
-            drops <- cards(moved)
-        yield
-            assert(edits.contains("onRowsChange"), s"an edit nobody hears: $edits")
-            assert(drops.contains("onRowsChange"), s"a drop nobody hears: $drops")
-    }
-
-    "a row list ref is written before onRowsChange hears it" in {
-        for
-            held       <- Signal.initRef[Seq[Item]](items)
-            seen       <- Signal.initRef((Seq.empty[Item], Seq.empty[Item]))
-            ed         <- Signal.initRef(Absent: Maybe[CellPath[Item]])
-            (ui, _, _) <- editableOver(_.rows(held).editingCell(ed).onRowsChange(rs => held.get.map(now => seen.set((rs, now)))))
-            _          <- commitFirstName(ui, "Ada")
-            s          <- seen.get
-        yield
-            val after = Seq(items(0).copy(name = "Ada"), items(1))
-            assert(s == (after, after), s"reported, held: $s")
-    }
-
-    "rows heard only through onRowsChange offer the grips, and a drop reports the new list" in {
-        for
-            seen <- Signal.initRef(List.empty[Seq[String]])
-            drag <- Signal.initRef(Absent: Maybe[uic.RowDrag])
-            ui   <- wiredDrag(
-                uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
-                    .reorderableRows(true).onRowsChange(rs => seen.getAndUpdate(_ :+ rs.map(_.name)).unit),
-                drag
-            )
-            handles <- grips(ui)
-            _       <- dragRow(handles.head, 10, 95)
-            s       <- seen.get
-        yield assert(s == List(Seq("B", "A", "C")), s"reported $s")
-    }
-
     "rows heard only through onRowValueChanged can be edited, with no card" in {
         for
             rowEd      <- Signal.initRef(Set.empty[Item])
@@ -3469,20 +3197,6 @@ class DataTableTest extends UicTest:
             assert(h == Present(items.head) && told == List(items(1)), s"held $h, reported $told")
             assert(deaf.contains("onContextMenuRowChange"), s"nobody hears: $deaf")
         end for
-    }
-
-    "a context row ref is written before the right-click is reported" in {
-        for
-            ctx  <- Signal.initRef(Absent: Maybe[Item])
-            seen <- Signal.initRef(List.empty[(Item, Maybe[Item])])
-            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .contextMenuRow(ctx).onContextMenuRowChange(t => ctx.get.map(c => seen.getAndUpdate(_ :+ (t.row, c)).unit))
-            trs <- bodyTrs(table.render)
-            _   <- trs(1).attrs.onContextMenu match
-                case Present(h) => h
-                case Absent     => throw new AssertionError("the row declares no context handler")
-            told <- seen.get
-        yield assert(told == List((items(1), Present(items(1)))), s"reported, held: $told")
     }
 
     "the right-click hands over the selected ROWS beside the one it landed on" in {
@@ -3714,21 +3428,6 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "a cell set ref is written before the click is reported" in {
-        for
-            picked <- Signal.initRef(Set.empty[CellPath[Item]])
-            seen   <- Signal.initRef(List.empty[(Set[CellPath[Item]], Set[CellPath[Item]])])
-            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-                .selectionMode(SelectionMode.Single).selectedCells(picked)
-                .onSelectedCellsChange(c => picked.get.map(p => seen.getAndUpdate(_ :+ (c, p)).unit))
-            tds  <- cellsIn(table.render)
-            _    <- click(tds(1))
-            told <- seen.get
-        yield
-            val one = Set(CellPath(items(1), List("Name")))
-            assert(told == List((one, one)), s"reported, held: $told")
-    }
-
     // A table with a selection mode and no row binding keeps a row selection of its own, which it allocates in a mount.
     // That selection must not count as a row binding: it switched cell selection off in every live table.
     "a live table picks cells into a bound ref, with no row selection bound" in {
@@ -3746,23 +3445,6 @@ class DataTableTest extends UicTest:
         yield
             assert(held == Set(CellPath(items(1), List("Name"))), s"picked $held")
             assert(after.nonEmpty, "the table never showed the cell the reader picked")
-    }
-
-    "selectedCells() with no ref keeps the picked cells itself" in {
-        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
-            .selectionMode(SelectionMode.Single).selectedCells()
-        for
-            card <- cards(table.render)
-            // A published region may be the row stream alone, with no table around it, so the mark is looked for anywhere.
-            after <- publishedAfterReady(
-                table.render,
-                t => cellsIn(t).map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-uic-dt-cell-selected").map(_.nonEmpty)
-            )(t => cellsIn(t).map(tds => click(tds(1))))
-        yield
-            assert(after.nonEmpty, "the table never showed the cell the reader picked")
-            assert(card.isEmpty, s"cells the table keeps itself: $card")
-        end for
     }
 
     "Single replaces the set rather than adding to it" in {
@@ -4028,34 +3710,6 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "a two-way sort is written before the table reports it" in {
-        for
-            sort <- Signal.initRef(List.empty[uic.SortKey])
-            seen <- Signal.initRef((List.empty[uic.SortKey], List.empty[uic.SortKey]))
-            ui = sortedTable.sort(sort).onSortChange(next => sort.get.map(held => seen.set((next, held)))).render
-            headers <- elementsWithClass(ui, "p-datatable-sortable-column")
-            _       <- press(headers(0), UI.Keyboard.Enter)
-            s       <- seen.get
-        yield assert(s._1.map(_.column) == List("Name") && s._1 == s._2, s"reported, held: $s")
-    }
-
-    "a sort bound one way with nothing to hear a press says so, and a constant one with onSortChange sorts" in {
-        for
-            held  <- Signal.initRef(List.empty[uic.SortKey])
-            seen  <- Signal.initRef(List.empty[uic.SortKey])
-            deaf  <- elementsWithClass(sortedTable.sort(held.readOnly).render, "p-uic-key-error")
-            heard <- elementsWithClass(sortedTable.sort(held.readOnly).onSortChange(_ => ()).render, "p-uic-key-error")
-            fixed = sortedTable.sort(List.empty[uic.SortKey]).onSortChange(seen.set).render
-            headers <- elementsWithClass(fixed, "p-datatable-sortable-column")
-            _       <- press(headers(0), UI.Keyboard.Enter)
-            s       <- seen.get
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onSortChange"), s"a sort nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, s"a sort with somewhere to go: ${heard.map(textOf)}")
-            assert(headers.size == 2 && s.map(_.column) == List("Name"), s"a constant sort reports a press: $s")
-        end for
-    }
-
     "restore writes a two-way sort and leaves a one-way sort to its owner" in {
         val restored = List(uic.SortKey("Price", uic.SortDirection.Ascending))
         for
@@ -4163,19 +3817,6 @@ class DataTableTest extends UicTest:
         end for
     }
 
-    "an anchor ref is written before the plain click is reported" in {
-        for
-            sel    <- Signal.initRef(Set.empty[Item])
-            anchor <- Signal.initRef(Absent: Maybe[Item])
-            seen   <- Signal.initRef(List.empty[(Maybe[Item], Maybe[Item])])
-            table = rangingOver(sel).selectionAnchor(anchor)
-                .onSelectionAnchorChange(a => anchor.get.map(h => seen.getAndUpdate(_ :+ (a, h)).unit))
-            trs  <- bodyTrs(table.render)
-            _    <- click(trs(2))
-            told <- seen.get
-        yield assert(told == List((Present(four(2)), Present(four(2)))), s"reported, held: $told")
-    }
-
     "a bound anchor is the only state a ranging table needed, so it stays a pure render" in {
         for
             sel    <- Signal.initRef(Set.empty[Item])
@@ -4272,56 +3913,6 @@ class DataTableTest extends UicTest:
             uic.column("Price")(_.price.toString)
         )
 
-    "constants nobody hears are fixed: no header sorts, no row picks, no toggle opens, and no card" in {
-        val fixed = bare.sort(List.empty[uic.SortKey]).selectionMode(uic.SelectionMode.Single).selection(Set(items(0)))
-            .expanded(Set(items(0))).rowExpansionTemplate(i => span(i.name))
-        for
-            headers <- elementsWithClass(fixed.render, "p-datatable-sortable-column")
-            rows    <- elementsWithClass(fixed.render, "p-datatable-selectable-row")
-            toggles <- elementsWithClass(fixed.render, "p-datatable-row-toggle-button")
-            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(headers.isEmpty, "a fixed sort offers no header")
-            assert(rows.isEmpty, "a fixed selection offers no row")
-            assert(toggles.nonEmpty && toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
-            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
-        end for
-    }
-
-    "an unbound sort is the table's own, so a header press sorts" in {
-        // The header's sort state rides the attribute channel, which no region publishes.
-        for
-            sorted <- attrPatchedAfter(bare.render, t => elementsWithClass(t, "p-datatable-sortable-column").map(_.exists(declaresClick)))(
-                t => elementWithClass(t, "p-datatable-sortable-column").map(click)
-            )((name, value) => name == "aria-sort" && value == "ascending")
-        yield assert(sorted, "the table never sorted by the header the reader pressed")
-    }
-
-    "an unbound selection is the table's own, so a row press picks the row" in {
-        for
-            after <- publishedAfterReady(
-                bare.selectionMode(uic.SelectionMode.Single).render,
-                t => elementsWithClass(t, "p-datatable-selectable-row").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-datatable-row-selected").map(_.nonEmpty)
-            )(t => elementsWithClass(t, "p-datatable-selectable-row").map(rs => click(rs.head)))
-        yield assert(after.nonEmpty, "the table never showed the row the reader picked")
-    }
-
-    "an unbound expansion is the table's own, so a toggle opens the row" in {
-        for
-            after <- publishedAfterReady(
-                bare.rowExpansionTemplate(i => span(i.name)).render,
-                t => elementsWithClass(t, "p-datatable-row-toggle-button").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-datatable-row-expansion").map(_.nonEmpty)
-            )(t => elementsWithClass(t, "p-datatable-row-toggle-button").map(ts => click(ts.head)))
-        yield assert(after.nonEmpty, "the table never opened the row the reader toggled")
-    }
-
-    "a column that filters with nothing bound keeps the filters itself, and says nothing" in {
-        for card <- elementsWithClass(bare.columns(uic.column("Name")(_.name).filterBy).render, "p-uic-key-error")
-        yield assert(card.isEmpty, s"an unbound filter is the table's own: ${card.map(textOf)}")
-    }
-
     private def threeColumns(using Frame) =
         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
             uic.column("Name")(_.name),
@@ -4329,57 +3920,18 @@ class DataTableTest extends UicTest:
             uic.column("Id")(_.id)
         )
 
-    // The drag itself measures the columns, which this harness does not answer; that path is the two-way ref's, held above.
-    "columnWidths() with no ref turns the boundary drag on, keeps the widths itself, and says nothing" in {
-        val table = threeColumns.columnWidths()
+    // The rest of what columnWidths() and columnOrder() keep is the contract's (rule A, below).
+    "columnWidths() and columnOrder() turn the drags on from the page as first rendered, and a table asking for neither has none" in {
+        def movers(t: UI)(using Frame) = elementsWithClass(t, "p-datatable-reorderable-column")
         for
-            static <- resizers(table.render)
-            card   <- elementsWithClass(table.render, "p-uic-key-error")
-            live   <- publishedAfterReady(table.render, t => resizers(t).map(_.exists(_.attrs.onPointerDown.isDefined)))()
-            off    <- resizers(threeColumns.render)
+            handles <- resizers(threeColumns.columnWidths().render)
+            headers <- movers(threeColumns.columnOrder().render)
+            noWidth <- resizers(threeColumns.render)
+            noOrder <- movers(threeColumns.render)
         yield
-            assert(static.size == 2, s"the page as first rendered already shows both boundaries: ${static.size}")
-            assert(live.nonEmpty, "the mounted table offers a grab on its boundaries")
-            assert(card.isEmpty, s"widths the table keeps itself: ${card.map(textOf)}")
-            assert(off.isEmpty, "a table nobody asked for the drag offers none")
-        end for
-    }
-
-    "columnOrder() with no ref turns the header drag on, keeps the order itself, and says nothing" in {
-        val table         = threeColumns.columnOrder()
-        def movers(t: UI) = elementsWithClass(t, "p-datatable-reorderable-column")
-        for
-            static <- movers(table.render)
-            card   <- elementsWithClass(table.render, "p-uic-key-error")
-            live   <- publishedAfterReady(table.render, t => movers(t).map(_.exists(_.attrs.onPointerDown.isDefined)))()
-            off    <- movers(threeColumns.render)
-        yield
-            assert(static.size == 3, s"the page as first rendered already marks every header: ${static.size}")
-            assert(live.nonEmpty, "the mounted table offers a grab on its headers")
-            assert(card.isEmpty, s"an order the table keeps itself: ${card.map(textOf)}")
-            assert(off.isEmpty, "a table nobody asked for the drag offers none")
-        end for
-    }
-
-    "expandedGroups() with no ref keeps the open groups itself, so a toggle opens the group" in {
-        val table          = grouped.expandedGroups()
-        def toggles(t: UI) = elementsWithClass(t, "p-datatable-row-toggle-button")
-        for
-            closed <- bodyNames(table.render)
-            card   <- elementsWithClass(table.render, "p-uic-key-error")
-            after  <- publishedAfterReady(
-                table.render,
-                t => toggles(t).map(_.exists(declaresClick)),
-                until = t =>
-                    for
-                        ts    <- toggles(t)
-                        names <- bodyNames(t)
-                    yield ts.exists(_.attrs.ariaAttrs.get("expanded").contains("true")) || names.count(_ == "A") == 2
-            )(t => toggles(t).map(ts => click(ts.head)))
-        yield
-            assert(closed == Chunk("A", "B"), s"every group starts collapsed: $closed")
-            assert(after.nonEmpty, "the table never opened the group the reader toggled")
-            assert(card.isEmpty, s"groups the table keeps itself: ${card.map(textOf)}")
+            assert(handles.size == 2, s"both boundaries: ${handles.size}")
+            assert(headers.size == 3, s"every header: ${headers.size}")
+            assert(noWidth.isEmpty && noOrder.isEmpty, "a table nobody asked for a drag offers none")
         end for
     }
 
@@ -4602,5 +4154,456 @@ class DataTableTest extends UicTest:
             assert(card.isEmpty, s"a fixed order is not a mistake: $card")
         end for
     }
+
+    // ---- rule A ----
+    //
+    // Every state slot the reader changes, held to rule A (ReactiveValueContract): unbound it is the table's own (or, for the
+    // layout, the groups, the picked cells and the editing state, what `columnWidths()` and its siblings turn on), a constant
+    // nobody hears is fixed, a signal is followed and a change reported, and a ref is written first.
+
+    private def headerCells(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elementsWithClass(t, "p-datatable-header-cell")
+
+    private def firstHeader(t: UI)(using Frame): UI.Ast.Element < Sync =
+        headerCells(t).map(_.headOption.getOrElse(throw new AssertionError("no header")))
+
+    /** What a header says of its sort, through the attribute channel a live table patches it by or as the page drew it. */
+    private def ariaSort(h: UI.Ast.Element)(using Frame): Maybe[String] < Sync =
+        h.attrs.reactiveAttrs.get("aria-sort") match
+            case Some(sig) => sig.current.map(Present(_))
+            case None      => Kyo.lift(Maybe.fromOption(h.attrs.ariaAttrs.get("sort")))
+
+    private val byName: Map[String, Item] = four.map(i => i.name -> i).toMap
+
+    /** The text of a row's first cell, which names its item. */
+    private def firstCell(r: UI.Ast.Element)(using Frame): String < Sync =
+        rowsUnder(r).map(cs => cs.headOption.map(textOf).getOrElse(throw new AssertionError("a row with no cell")))
+
+    // A sort is said by aria-sort, and a column header has no readonly state for it: a fixed sort is one no header changes,
+    // by a press or by a key, on a header that stays the tab stop it is when the sort is live.
+    holds(new Slot[uic.DataTable[Item], List[uic.SortKey]](
+        name = "sort",
+        bare = Present(bare),
+        bind = bare.sort(_),
+        hear = (t, f) => t.onSortChange(f),
+        event = "onSortChange",
+        render = _.render,
+        start = Nil,
+        next = List(uic.SortKey.ascending("Name")),
+        control = firstHeader(_),
+        shows = t => firstHeader(t).map(ariaSort).map(s => if s.contains("ascending") then List(uic.SortKey.ascending("Name")) else Nil),
+        isFixed = Present(firstHeader(_).map(h =>
+            !declaresClick(h) && h.attrs.onKeyDown.isEmpty && h.attrs.tabIndex.contains(0) &&
+                !h.attrs.cssClasses.contains("p-datatable-sortable-column")
+        )),
+        // The header's sort state rides the attribute channel, which no region publishes.
+        nextPatch = Present((name, value) => name == "aria-sort" && value == "ascending")
+    ))
+
+    /** The filter row's field. */
+    private def filterField(t: UI)(using Frame): UI.Ast.Element < Sync = textField(t, "p-inputtext")
+
+    // The field is a native text field, so a fixed filter is what native readonly is: reachable, readable, and edited by
+    // nobody. Its mode funnel is wired by the mount, which is what a ready tree has.
+    holds(new Slot[uic.DataTable[Item], Map[List[String], ColumnFilter]](
+        name = "columnFilters",
+        bare = Present(filterable),
+        bind = filterable.columnFilters(_),
+        hear = (t, f) => t.onColumnFiltersChange(f),
+        event = "onColumnFiltersChange",
+        render = _.render,
+        start = Map.empty,
+        next = nameFilter("B"),
+        control = filterField(_),
+        shows = filterField(_).map(textIn).map(q => if q.isEmpty then Map.empty else nameFilter(q)),
+        gesture = c => typed(c, "B", commit = false),
+        answers = {
+            case f: UI.Ast.TextInput => editable(f) && f.onInput.isDefined
+            case _                   => false
+        },
+        saysFixed = {
+            case f: UI.Ast.TextInput => f.readOnly.contains(true)
+            case _                   => false
+        },
+        ready = Present(elementsWithClass(_, "p-datatable-column-filter-button").map(_.exists(declaresClick)))
+    ))
+
+    /** The width the first column is laid out at. */
+    private def firstColWidth(t: UI)(using Frame): Maybe[Length] < Sync =
+        elements(t).map(_.collectFirst { case c: UI.Ast.Col => c }
+            .getOrElse(throw new AssertionError("no colgroup"))
+            .attrs.uiStyle.props.collectFirst { case Style.Prop.Width(v) => v }.fold(Absent: Maybe[Length])(Present(_)))
+
+    private def widths(using Frame) = expanding.id("t")
+
+    // The handles are only the affordance: fixed widths drop them, keep the layout, and say nothing. Under Expand a drag
+    // grows the one column it grabbed from the width the page measures it at.
+    holds(new Slot[uic.DataTable[Item], Map[List[String], Double]](
+        name = "columnWidths",
+        bare = Present(widths.columnWidths()),
+        bind = widths.columnWidths(_),
+        hear = (t, f) => t.onColumnWidthsChange(f),
+        event = "onColumnWidthsChange",
+        render = _.render,
+        start = Map.empty,
+        next = Map(List("Name") -> 270.0),
+        control = resizers(_).map(_.headOption.getOrElse(throw new AssertionError("no handle"))),
+        shows = firstColWidth(_).map(w =>
+            if w.contains(270.0.px) then Map(List("Name") -> 270.0)
+            else if w.contains(220.0.px) then Map.empty
+            else throw new AssertionError(s"the first column is $w wide")
+        ),
+        gesture = drag(_, 0, 50),
+        answers = _.attrs.onPointerDown.isDefined,
+        isFixed = Present(t =>
+            for
+                hs <- resizers(t)
+                cs <- headerCells(t)
+            yield hs.isEmpty && cs.nonEmpty && cs.forall(_.attrs.onPointerDown.isEmpty)
+        ),
+        ready = Present(resizers(_).map(_.exists(_.attrs.onPointerDown.isDefined))),
+        layout = Map(
+            "t-h0" -> UI.Rect(0, 0, 220, 30, 1000, 800),
+            "t-h1" -> UI.Rect(220, 0, 120, 30, 1000, 800),
+            "t-h2" -> UI.Rect(340, 0, 60, 30, 1000, 800)
+        )
+    ))
+
+    private def titles(t: UI)(using Frame): Chunk[String] < Sync = elementsWithClass(t, "p-datatable-column-title").map(_.map(textOf))
+
+    private def ordered(using Frame) = threeColumns.id("t")
+
+    // The drag is only the affordance: a fixed order keeps every header where it says and offers no drag. Each header is
+    // a hundred pixels wide, so letting go at 190 drops the first column in front of the third.
+    holds(new Slot[uic.DataTable[Item], List[List[String]]](
+        name = "columnOrder",
+        bare = Present(ordered.columnOrder()),
+        bind = ordered.columnOrder(_),
+        hear = (t, f) => t.onColumnOrderChange(f),
+        event = "onColumnOrderChange",
+        render = _.render,
+        start = Nil,
+        next = List(List("Price"), List("Name"), List("Id")),
+        control = firstHeader(_),
+        shows = titles(_).map(ts =>
+            ts.take(3).toList match
+                case List("Name", "Price", "Id") => Nil
+                case List("Price", "Name", "Id") => List(List("Price"), List("Name"), List("Id"))
+                case other                       => throw new AssertionError(s"the headers stand as $other")
+        ),
+        gesture = c =>
+            (c.attrs.onPointerDown, c.attrs.onPointerMove, c.attrs.onPointerUp) match
+                case (Present(down), Present(move), Present(up)) =>
+                    handled(down(pointerAt(10)).andThen(move(pointerAt(190))).andThen(up(pointerAt(190))))
+                case _ => throw new AssertionError("the header declares no drag"),
+        answers = _.attrs.onPointerDown.isDefined,
+        isFixed = Present(headerCells(_).map(hs =>
+            hs.nonEmpty && hs.forall(h => h.attrs.onPointerDown.isEmpty && !h.attrs.cssClasses.contains("p-datatable-reorderable-column"))
+        )),
+        ready = Present(headerCells(_).map(_.exists(_.attrs.onPointerDown.isDefined))),
+        layout = Map(
+            "t-h0" -> UI.Rect(0, 0, 100, 30, 1000, 800),
+            "t-h1" -> UI.Rect(100, 0, 100, 30, 1000, 800),
+            "t-h2" -> UI.Rect(200, 0, 100, 30, 1000, 800)
+        )
+    ))
+
+    private def paged(using Frame) = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+
+    /** The page the paginator shows as current, counted from zero. */
+    private def pageShown(t: UI)(using Frame): Int < Sync =
+        pages(t).map((_, current) => current.headOption.flatMap(_.toIntOption).map(_ - 1).getOrElse(throw new AssertionError("no page")))
+
+    // The page is the paginator's argument, so it has no unbound form; the embedded paginator's next-page button moves it,
+    // and a fixed page is the paginator's fixed page.
+    holds(new Slot[uic.DataTable[Item], Int](
+        name = "page",
+        bare = Absent,
+        bind = paged.paginate(2)(_),
+        hear = (t, f) => t.onPageChange(f),
+        event = "onPageChange",
+        render = _.render,
+        start = 0,
+        next = 1,
+        control = elementWithClass(_, "p-paginator-next"),
+        shows = pageShown(_),
+        isFixed = Present(paginatorPagesFixed(_))
+    ))
+
+    /** The rows a page holds, as the paginator's dropdown shows it. */
+    private def sizeShown(t: UI)(using Frame): Int < Sync =
+        elementsWithClass(t, "p-select-label").map(ls =>
+            ls.map(textOf).flatMap(_.toIntOption).headOption.getOrElse(throw new AssertionError(s"no size shown: ${ls.map(textOf)}"))
+        )
+
+    // The size is the paginator's argument too, picked from its rows-per-page dropdown; a fixed one is a readonly dropdown.
+    holds(new Slot[uic.DataTable[Item], Int](
+        name = "page size",
+        bare = Absent,
+        bind = paged.paginate(_)(0).paginator(_.rowsPerPageOptions(Seq(2, 4))),
+        hear = (t, f) => t.onPageSizeChange(f),
+        event = "onPageSizeChange",
+        render = _.render,
+        start = 2,
+        next = 4,
+        control = elementWithClass(_, "p-paginator-rpp-dropdown"),
+        shows = sizeShown(_),
+        answers = c => declaresClick(c) || c.attrs.onKeyDown.nonEmpty,
+        saysFixed = _.attrs.ariaAttrs.get("readonly").contains("true"),
+        // A lookup that finds no dropdown yet is not ready: the first tree published can be the rows alone.
+        ready = Present(elementsWithClass(_, "p-paginator-rpp-dropdown").map(_.exists(declaresClick))),
+        after = Seq(t => clickBubbling(t)(e => e.attrs.cssClasses.contains("p-select-option") && textOf(e) == "4"))
+    ))
+
+    private def picking(using Frame) = bare.selectionMode(uic.SelectionMode.Single)
+
+    // A row's aria-selected says the selection, and a grid's readonly state is about its cells: a fixed selection is one
+    // no row takes as a pick, on rows that stay the tab stops they are when it is live.
+    holds(new Slot[uic.DataTable[Item], Set[Item]](
+        name = "selection",
+        bare = Present(picking),
+        bind = picking.selection(_),
+        hear = (t, f) => t.onSelectionChange(f),
+        event = "onSelectionChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(items(0)),
+        control = bodyTrs(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
+        shows = elementsWithClass(_, "p-datatable-row-selected").map(rs => Kyo.foreach(rs)(firstCell).map(_.map(byName).toSet)),
+        isFixed = Present(bodyTrs(_).map(rs =>
+            rs.nonEmpty && rs.forall(r =>
+                !declaresClick(r) && r.attrs.onKeyDown.isEmpty && r.attrs.tabIndex.contains(0) &&
+                    !r.attrs.cssClasses.contains("p-datatable-selectable-row")
+            )
+        ))
+    ))
+
+    private def ranging(using Frame) =
+        uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .selectionMode(SelectionMode.Multiple).metaKeySelection(true).selection(Set.empty[Item]).onSelectionChange(_ => ())
+
+    // The anchor is never drawn, and the click that moves it is the row's own pick, which a fixed anchor leaves in place: a
+    // fixed anchor is one a range starts at whatever the reader clicks, which "a constant anchor nobody hears is fixed"
+    // holds above, beside "an unbound ranging table still mints its anchor". These are the cases a hearer takes part in.
+    heardBy(new Slot[uic.DataTable[Item], Maybe[Item]](
+        name = "selectionAnchor",
+        bare = Absent,
+        bind = ranging.selectionAnchor(_),
+        hear = (t, f) => t.onSelectionAnchorChange(f),
+        event = "onSelectionAnchorChange",
+        render = _.render,
+        start = Absent,
+        next = Present(four(0)),
+        control = bodyTrs(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
+        shows = _ => Kyo.lift(Absent)
+    ))
+
+    private def cellPicking(using Frame) =
+        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name), uic.column("Price")(_.price.toString))
+            .selectionMode(SelectionMode.Multiple)
+
+    private val cellOf: Map[String, CellPath[Item]] = Map(
+        "A"  -> CellPath(items(0), List("Name")),
+        "10" -> CellPath(items(0), List("Price")),
+        "B"  -> CellPath(items(1), List("Name")),
+        "20" -> CellPath(items(1), List("Price"))
+    )
+
+    // A picked cell says so by aria-selected, and a cell's readonly state is about its value: fixed cells are ones no
+    // click picks.
+    holds(new Slot[uic.DataTable[Item], Set[CellPath[Item]]](
+        name = "selectedCells",
+        bare = Present(cellPicking.selectedCells()),
+        bind = cellPicking.selectedCells(_),
+        hear = (t, f) => t.onSelectedCellsChange(f),
+        event = "onSelectedCellsChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(CellPath(items(0), List("Name"))),
+        control = cellsIn(_).map(_.headOption.getOrElse(throw new AssertionError("no cell"))),
+        // A published region may be the row stream alone, with no table around it, so the mark is looked for anywhere.
+        shows = elementsWithClass(_, "p-uic-dt-cell-selected").map(_.map(c => cellOf(textOf(c))).toSet),
+        isFixed = Present(cellsIn(_).map(cs => cs.nonEmpty && cs.forall(c => !declaresClick(c))))
+    ))
+
+    private def contextual(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+
+    // A context menu row has no vocabulary to say it is fixed: the right-click is left to the browser, and the mark stays.
+    // Unbound, a hearer is what turns it on, as a binding does ("a table with no context binding leaves the browser's own
+    // menu alone" holds the table with neither).
+    holds(new Slot[uic.DataTable[Item], Maybe[Item]](
+        name = "contextMenuRow",
+        bare = Present(contextual.onContextMenuRowChange(_ => ())),
+        bind = contextual.contextMenuRow(_),
+        hear = (t, f) => t.onContextMenuRowChange(c => f(Present(c.row))),
+        event = "onContextMenuRowChange",
+        render = _.render,
+        start = Absent,
+        next = Present(items(0)),
+        control = bodyTrs(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
+        shows = elementsWithClass(_, "p-datatable-contextmenu-row-selected").map(rs =>
+            Kyo.foreach(rs)(firstCell).map(ns => Maybe.fromOption(ns.headOption).map(byName))
+        ),
+        gesture = c => c.attrs.onContextMenu.fold(throw new AssertionError("the row declares no context handler"))(handled),
+        answers = _.attrs.onContextMenu.isDefined,
+        isFixed = Present(bodyTrs(_).map(rs => rs.nonEmpty && rs.forall(_.attrs.onContextMenu.isEmpty)))
+    ))
+
+    private def toggleButtons(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elementsWithClass(t, "p-datatable-row-toggle-button")
+
+    // The toggle is a button and nothing else, so a fixed one is a tab stop that says it changes nothing.
+    holds(new Slot[uic.DataTable[Item], Set[Item]](
+        name = "expanded",
+        bare = Present(expandable),
+        bind = expandable.expanded(_),
+        hear = (t, f) => t.onExpandedChange(f),
+        event = "onExpandedChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(items(0)),
+        control = toggleButtons(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+        shows = expansionTexts(_).map(ts => items.filter(i => ts.contains(s"more ${i.name}")).toSet)
+    ))
+
+    // A group's toggle is a button too, and expandedGroups() is what turns the collapsible groups on over the table's own.
+    holds(new Slot[uic.DataTable[Item], Set[GroupPath]](
+        name = "expandedGroups",
+        bare = Present(grouped.expandedGroups()),
+        bind = grouped.expandedGroups(_),
+        hear = (t, f) => t.onExpandedGroupsChange(f),
+        event = "onExpandedGroupsChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(GroupPath(List("A"))),
+        control = toggleButtons(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+        shows = toggleButtons(_).map(ts =>
+            ts.take(2).zip(List("A", "B")).collect {
+                case (b, k) if b.attrs.ariaAttrs.get("expanded").contains("true") => GroupPath(List(k))
+            }
+                .toSet
+        )
+    ))
+
+    // The row editor's buttons are buttons, so fixed editing rows are buttons that say they change nothing. The mount
+    // wires them: the page as first rendered has nothing for a click to write into.
+    holds(new Slot[uic.DataTable[Item], Set[Item]](
+        name = "editingRows",
+        bare = Present(editableBare.editingRows()),
+        bind = editableBare.editingRows(_),
+        hear = (t, f) => t.onEditingRowsChange(f),
+        event = "onEditingRowsChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(items(0)),
+        control = elementsWithClass(_, "p-datatable-row-editor-init").map(_.headOption.getOrElse(throw new AssertionError("no editor"))),
+        // A published region may be the row stream alone, so the open rows are looked for anywhere, and named by the text
+        // their editor opened on.
+        shows = elementsWithClass(_, "p-datatable-editing-row").map(rs =>
+            Kyo.foreach(rs)(r =>
+                elements(r).map(_.collectFirst { case f: (UI.Ast.Element & UI.Ast.TextInput) => f }
+                    .getOrElse(throw new AssertionError("an open row with no editor"))).map(textIn)
+            ).map(_.map(byName).toSet)
+        ),
+        ready = Present(elementsWithClass(_, "p-datatable-row-editor-init").map(_.exists(declaresClick)))
+    ))
+
+    // A cell that opens is marked p-editable-column and takes the click; a fixed editing cell is one no cell opens.
+    holds(new Slot[uic.DataTable[Item], Maybe[CellPath[Item]]](
+        name = "editingCell",
+        bare = Present(editableBare.editingCell()),
+        bind = editableBare.editingCell(_),
+        hear = (t, f) => t.onEditingCellChange(f),
+        event = "onEditingCellChange",
+        render = _.render,
+        start = Absent,
+        next = Present(CellPath(items(0), List("Name"))),
+        control = cellsIn(_).map(_.headOption.getOrElse(throw new AssertionError("no cell"))),
+        // A published region may be the row stream alone, so the open cell is looked for anywhere, and its row read off the
+        // id the grid gives it (`<prefix>-c<row>-<column>`).
+        shows = elementsWithClass(_, "p-cell-editing").map(cs =>
+            Maybe.fromOption(cs.headOption).map(c =>
+                c.attrs.identifier.flatMap(id => Maybe.fromOption("-c(\\d+)-0$".r.findFirstMatchIn(id).map(_.group(1).toInt)))
+                    .fold(throw new AssertionError(s"an open cell with no grid id: ${c.attrs.identifier}"))(row =>
+                        CellPath(items(row), List("Name"))
+                    )
+            )
+        ),
+        isFixed = Present(cellsIn(_).map(cs =>
+            cs.nonEmpty && cs.forall(c => !declaresClick(c) && !c.attrs.cssClasses.contains("p-editable-column"))
+        )),
+        ready = Present(elementsWithClass(_, "p-editable-column").map(_.exists(declaresClick)))
+    ))
+
+    private def committing(using Frame) =
+        uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))
+            .editingCell()
+
+    private val renamed = Seq(items(0).copy(name = "Ada"), items(1))
+
+    // The rows are the table's argument, so they have no unbound form. A commit opens a cell, types, and presses Enter; a
+    // fixed row list opens no cell.
+    holds(new Slot[uic.DataTable[Item], Seq[Item]](
+        name = "rows, by a commit",
+        bare = Absent,
+        bind = committing.rows(_),
+        hear = (t, f) => t.onRowsChange(f),
+        event = "onRowsChange",
+        render = _.render,
+        start = items,
+        next = renamed,
+        control = cellsIn(_).map(_.headOption.getOrElse(throw new AssertionError("no cell"))),
+        shows = bodyNames(_).map(ns =>
+            ns.headOption match
+                case Some("Ada") => renamed
+                case Some("A")   => items
+                case other       => throw new AssertionError(s"the first row is $other")
+        ),
+        isFixed = Present(cellsIn(_).map(cs =>
+            cs.nonEmpty && cs.forall(c => !declaresClick(c) && !c.attrs.cssClasses.contains("p-editable-column"))
+        )),
+        ready = Present(elementsWithClass(_, "p-editable-column").map(_.exists(declaresClick))),
+        after = Seq(
+            t =>
+                elementsWithClass(t, "p-cell-editing").map(cs =>
+                    typeInto(cs.headOption.getOrElse(throw new AssertionError("no open cell")), "Ada")
+                ),
+            t => elementsWithClass(t, "p-cell-editing").map(cs => press(cs.head, UI.Keyboard.Enter))
+        )
+    ))
+
+    private def droppable(using Frame) =
+        uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name)).reorderableRows(true).id("t")
+
+    // A drop on a row's grip moves it. The grip is only the affordance: fixed rows keep the column and lose the grip.
+    // Three rows forty pixels tall: letting the first go at 95 drops it after the second.
+    holds(new Slot[uic.DataTable[Item], Seq[Item]](
+        name = "rows, by a drop",
+        bare = Absent,
+        bind = droppable.rows(_),
+        hear = (t, f) => t.onRowsChange(f),
+        event = "onRowsChange",
+        render = _.render,
+        start = trio,
+        next = Seq(trio(1), trio(0), trio(2)),
+        control = grips(_).map(_.headOption.getOrElse(throw new AssertionError("no grip"))),
+        // The grip column comes first, so a row's item is named by its last cell.
+        shows = bodyTrs(_).map(trs =>
+            Kyo.foreach(trs)(r => rowsUnder(r).map(cs => textOf(cs.last)))
+                .map(_.toList.map(n => trio.find(_.name == n).getOrElse(throw new AssertionError(s"a row $n"))))
+        ),
+        gesture = dragRow(_, 10, 95),
+        answers = _.attrs.onPointerDown.isDefined,
+        isFixed = Present(t =>
+            for
+                gs  <- grips(t)
+                trs <- bodyTrs(t)
+            yield gs.isEmpty && trs.nonEmpty
+        ),
+        ready = Present(grips(_).map(_.exists(_.attrs.onPointerDown.isDefined))),
+        layout = Map(
+            "t-rw0" -> UI.Rect(0, 0, 200, 40, 1000, 800),
+            "t-rw1" -> UI.Rect(0, 40, 200, 40, 1000, 800),
+            "t-rw2" -> UI.Rect(0, 80, 200, 40, 1000, 800)
+        )
+    ))
 
 end DataTableTest
