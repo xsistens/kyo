@@ -1990,8 +1990,13 @@ final case class DataTable[A] private (
       * boundary needs a resizable column on both sides of it, so a single column has none
       * and neither does a table whose columns are all pinned.
       */
-    private def resizeOn: Boolean =
-        widthsOn && !widthsFixed && (resizeModeV match
+    private def resizeOn: Boolean = resizable && !widthsFixed
+
+    /** Whether the widths are laid out the way a draggable table lays them out, whatever binds them: fixed widths drop the
+      * handles, which are only the affordance, and keep the layout, so an expanding table still states its width.
+      */
+    private def resizable: Boolean =
+        widthsOn && (resizeModeV match
             case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
             case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
 
@@ -2068,7 +2073,12 @@ final case class DataTable[A] private (
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = orderOn && !orderFixed && leafCols.count(_.reorderableFlag) > 1
+    private def reorderOn: Boolean = reorderable && !orderFixed
+
+    /** Whether two columns are willing to trade places under an order the page asked for, whatever binds it. A fixed
+      * order is one of them: its headers stand where it says and offer no drag, and it is no mistake.
+      */
+    private def reorderable: Boolean = orderOn && leafCols.count(_.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -3169,14 +3179,18 @@ final case class DataTable[A] private (
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
         if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
+        // The two resizable-table classes serve the handles alone (they position and clip around them, and `-fit` hides the
+        // last column's), so fixed widths, which draw no handle, go without them.
         if resizeOn then
             tbl = tbl.cssClass("p-datatable-resizable-table")
             // Prime's `-fit` is what hides the last column's handle, which is the one thing
             // that is true of fitting and not of expanding: under `Expand` the last column
-            // needs no neighbour to trade with, so it keeps its handle. Under `Expand` the table
-            // states its own width, or the browser hands what the columns leave over back to them
-            // and a drag lands where it started; both follow the widths in place.
+            // needs no neighbour to trade with, so it keeps its handle.
             tbl = classWhen(tbl, "p-datatable-resizable-table-fit", expanding.map(!_))
+        end if
+        // Under `Expand` the table states its own width, or the browser hands what the columns leave over back to them and
+        // a drag lands where it started; it follows the widths in place. That is layout, so fixed widths state it too.
+        if resizable then
             head.widths.map(w =>
                 if resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand then Style.width(statedWidth(SizeState(widths = w)))
                 else Style.empty
@@ -4115,7 +4129,7 @@ final case class DataTable[A] private (
       */
     private def sizeCards(size: SizeState)(using Frame): List[UI] =
         val pinned =
-            if !widthsOn || resizeOn then Nil
+            if !widthsOn || resizable then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -4169,7 +4183,7 @@ final case class DataTable[A] private (
         else
             val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
             val nothing =
-                if reorderOn then Nil
+                if reorderable then Nil
                 else
                     List(KeyDiagnostics.card(
                         "DataTable",
@@ -5445,7 +5459,10 @@ final case class DataTable[A] private (
         val handleTd: List[UI] =
             if !handleColumn then Nil
             else
-                var cell = td.cssClass("p-datatable-reorderable-row-handle").aria("hidden", "true")
+                // Fixed rows keep the column, which is anatomy the grid lines up by, and drop the grip class, whose move
+                // cursor says a drag would change something.
+                var cell = td.aria("hidden", "true")
+                if !movesFixed then cell = cell.cssClass("p-datatable-reorderable-row-handle")
                 if move.live then
                     val at = move.base + index
                     cell = cell
