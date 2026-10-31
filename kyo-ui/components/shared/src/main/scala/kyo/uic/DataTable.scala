@@ -737,7 +737,9 @@ final case class DataTable[A] private (
       * [[onSortChange]] hears it. A plain `Signal` or a constant binds one way: the table
       * sorts by it and hands a press to [[onSortChange]] without writing, which is how a
       * sort held in a route or a parent is changed there. A one-way sort with no
-      * [[onSortChange]] cannot move and is reported in a card.
+      * [[onSortChange]] cannot move and is reported in a card, and a constant nobody hears is
+      * fixed: each sortable header stays a tab stop that says its sort and answers no press or
+      * key. Unbound, the table keeps the sort itself.
       *
       * A plain header click sorts by that column alone. A click holding Ctrl (or Cmd)
       * adds the column to the spec, or advances the one already there WITHOUT moving it:
@@ -773,7 +775,9 @@ final case class DataTable[A] private (
       * how filters held in a route or a parent are changed there. While the reader types
       * into a one-way filter row the field keeps their text until they leave it, so an
       * owner that answers late does not take a keystroke back. A one-way binding with no
-      * [[onColumnFiltersChange]] is reported in a card.
+      * [[onColumnFiltersChange]] is reported in a card. A constant nobody hears is fixed: the
+      * filter row shows it read-only, and a funnel still opens the mode or the conditions it
+      * filters by, read-only. Unbound, the table keeps the filters itself.
       *
       * The filters are read the way the reader sees the table. A column that is hidden
       * ([[Column.visible]]) does not filter, exactly as the global filter does not search
@@ -1121,7 +1125,9 @@ final case class DataTable[A] private (
       * right-click only reported; a constant nobody hears is fixed, so the rows take no
       * right-click of their own. Wherever a right-click is heard, the browser's own menu is
       * suppressed over the rows, which is what a context menu of one's own has to do. A
-      * signal nothing hears is reported in a card.
+      * signal nothing hears is reported in a card. Unbound, a hearer is what turns the row on:
+      * with [[onContextMenuRowChange]] the table keeps the row itself and marks it, and with
+      * nothing hearing the rows leave the browser its own menu.
       *
       * The menu itself is [[kyo.uic.ContextMenu]], which wraps the table: this says which
       * row it was opened on, and the binding is the caller's to clear when the menu closes,
@@ -1969,10 +1975,12 @@ final case class DataTable[A] private (
       */
     private def mintsAnchor: Boolean = rangeOn && anchorSlot.isEmpty
 
-    /** Whether the filter row is rendered: the filters have to be bound somewhere, and
-      * some column has to carry a pipeline for the row to hold anything.
+    /** Whether the filter row, or the funnels of the menu display, are rendered: some column has to carry a pipeline for
+      * them to hold anything. Whatever binds the filters they are drawn: unbound the table keeps them (before its mount
+      * runs it has no ref yet and draws them all the same), and fixed ones are drawn read-only. Their menus open in
+      * either case, which is the open state the mount keeps.
       */
-    private def filterBound: Boolean = columnFiltersSlot.isDefined && !filtersFixed && leafCols.exists(_.isFilterable)
+    private def filterBound: Boolean = leafCols.exists(_.isFilterable)
 
     /** Whether the filters are edited in a second header row. */
     private def filterRowOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Row
@@ -1984,8 +1992,13 @@ final case class DataTable[A] private (
       * boundary needs a resizable column on both sides of it, so a single column has none
       * and neither does a table whose columns are all pinned.
       */
-    private def resizeOn: Boolean =
-        widthsOn && !widthsFixed && (resizeModeV match
+    private def resizeOn: Boolean = resizable && !widthsFixed
+
+    /** Whether the widths are laid out the way a draggable table lays them out, whatever binds them: fixed widths drop the
+      * handles, which are only the affordance, and keep the layout, so an expanding table still states its width.
+      */
+    private def resizable: Boolean =
+        widthsOn && (resizeModeV match
             case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
             case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
 
@@ -2062,7 +2075,12 @@ final case class DataTable[A] private (
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = orderOn && !orderFixed && leafCols.count(_.reorderableFlag) > 1
+    private def reorderOn: Boolean = reorderable && !orderFixed
+
+    /** Whether two columns are willing to trade places under an order the page asked for, whatever binds it. A fixed
+      * order is one of them: its headers stand where it says and offer no drag, and it is no mistake.
+      */
+    private def reorderable: Boolean = orderOn && leafCols.count(_.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2541,8 +2559,11 @@ final case class DataTable[A] private (
         val ownsCells    = cellsTyped.isEmpty && ownCellsFlag
         val ownsEditRows = editingRowsTyped.isEmpty && ownEditRowsFlag
         val ownsEditCell = editingCellTyped.isEmpty && ownEditCellFlag
+        // The row a context menu was opened on is turned on by a binding or by a hearer: unbound and heard, the table
+        // keeps the row itself; unbound and unheard, the rows leave the browser its own menu.
+        val ownsContext = contextTyped.isEmpty && onRowContextF.isDefined
         if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups &&
-            !ownsCells && !ownsEditRows && !ownsEditCell
+            !ownsCells && !ownsEditRows && !ownsEditCell && !ownsContext
         then
             renderBound
         else
@@ -2593,6 +2614,11 @@ final case class DataTable[A] private (
                             Signal.initRef(Absent: Maybe[CellPath[A]])(using summon[Frame], CanEqual.derived)
                                 .map(r => Maybe(ReactiveValue[Maybe[CellPath[A]]](r)))
                         else Kyo.lift(editingCellTyped)
+                    context <-
+                        if ownsContext then
+                            Signal.initRef(Absent: Maybe[A])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Maybe[A]](r)))
+                        else Kyo.lift(contextTyped)
                 yield copy(
                     sortSlot = sort,
                     columnFiltersSlot = filters,
@@ -2606,7 +2632,8 @@ final case class DataTable[A] private (
                     editingRowsTyped = editRows,
                     ownEditRowsFlag = false,
                     editingCellTyped = editCell,
-                    ownEditCellFlag = false
+                    ownEditCellFlag = false,
+                    contextTyped = context
                 ).renderBound
             }.placeholder(renderBound)
         end if
@@ -3163,14 +3190,18 @@ final case class DataTable[A] private (
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
         if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
+        // The two resizable-table classes serve the handles alone (they position and clip around them, and `-fit` hides the
+        // last column's), so fixed widths, which draw no handle, go without them.
         if resizeOn then
             tbl = tbl.cssClass("p-datatable-resizable-table")
             // Prime's `-fit` is what hides the last column's handle, which is the one thing
             // that is true of fitting and not of expanding: under `Expand` the last column
-            // needs no neighbour to trade with, so it keeps its handle. Under `Expand` the table
-            // states its own width, or the browser hands what the columns leave over back to them
-            // and a drag lands where it started; both follow the widths in place.
+            // needs no neighbour to trade with, so it keeps its handle.
             tbl = classWhen(tbl, "p-datatable-resizable-table-fit", expanding.map(!_))
+        end if
+        // Under `Expand` the table states its own width, or the browser hands what the columns leave over back to them and
+        // a drag lands where it started; it follows the widths in place. That is layout, so fixed widths state it too.
+        if resizable then
             head.widths.map(w =>
                 if resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand then Style.width(statedWidth(SizeState(widths = w)))
                 else Style.empty
@@ -4109,7 +4140,7 @@ final case class DataTable[A] private (
       */
     private def sizeCards(size: SizeState)(using Frame): List[UI] =
         val pinned =
-            if !widthsOn || resizeOn then Nil
+            if !widthsOn || resizable then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
@@ -4163,7 +4194,7 @@ final case class DataTable[A] private (
         else
             val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
             val nothing =
-                if reorderOn then Nil
+                if reorderable then Nil
                 else
                     List(KeyDiagnostics.card(
                         "DataTable",
@@ -4693,8 +4724,14 @@ final case class DataTable[A] private (
                         .fluid(true)
                         .invalid(unusable)
                         .accessibleName(s"Filter by ${c.headerV}")
-                        .onInput(t => typedRef.fold[UI.Action](())(_.set(Present(t))).andThen(writeFilter(path, cur.mode, t)))
-                    typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
+                    // A fixed filter is drawn, not removed: the field shows the query read-only and takes no keystroke.
+                    if filtersFixed then input = input.readonly(true)
+                    else
+                        input = input.onInput(t =>
+                            typedRef.fold[UI.Action](())(_.set(Present(t))).andThen(writeFilter(path, cur.mode, t))
+                        )
+                        typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
+                    end if
                     val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
                     div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter, isOpen)).map(toChild)*)
                 }))
@@ -4764,10 +4801,15 @@ final case class DataTable[A] private (
             cf.modes.map { m =>
                 var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
                 if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
-                val pick: UI.Action = pickMode(path, cur, m, openRef)
-                // An `li` is not a control either: the constraint list is a row of tab stops, and
-                // without this a reader could reach every one of them and pick none.
-                item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
+                // A fixed filter's list is read-only: it is the one place that names the mode the column filters by, so it
+                // still opens and keeps its tab stops, and no mode in it is picked.
+                if filtersFixed then item(m.label)
+                else
+                    val pick: UI.Action = pickMode(path, cur, m, openRef)
+                    // An `li` is not a control either: the constraint list is a row of tab stops, and
+                    // without this a reader could reach every one of them and pick none.
+                    item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
+                end if
             }.map(toChild)*
         )
 
@@ -4804,8 +4846,12 @@ final case class DataTable[A] private (
                             .extraClass("p-datatable-column-filter-button")
                         if cur.active.nonEmpty then b = b.extraClass("p-datatable-column-filter-button-active")
                         (open, openRef) match
-                            case (Present(draft), Present(o)) => b = b.onClick(openFilterMenu(cur, draft, o))
-                            case _                            => ()
+                            // A fixed filter opens its conditions to be read, so the funnel only opens and closes: there is no
+                            // draft to seed, since nothing in the panel writes one.
+                            case (Present(_), Present(o)) if filtersFixed => b = b.onClick(o.getAndUpdate(!_))
+                            case (Present(draft), Present(o))             => b = b.onClick(openFilterMenu(cur, draft, o))
+                            case _                                        => ()
+                        end match
                         b
                     end trigger
                     (filter.openOf(path), filter.draftOf(path)) match
@@ -4822,7 +4868,8 @@ final case class DataTable[A] private (
                                             .panelClass("p-datatable-filter-overlay-popover")
                                             .panelClass("p-component")
                                             .trigger(trigger(cur, Present(draft), Present(openRef)))(
-                                                filterMenu(path, c, cf, d, draft, openRef)
+                                                // A fixed filter shows what it runs, read-only; a live one the draft the reader edits.
+                                                filterMenu(path, c, cf, if filtersFixed then cur else d, draft, openRef)
                                             )
                                             .renderGated(open, Present(filterPanelId(filter.idPrefix, path)))
                                     })
@@ -4839,6 +4886,10 @@ final case class DataTable[A] private (
 
     /** Prime's filter popover, over the DRAFT: the operator, one row per rule, the buttons
       * that add and remove them, and the bar that clears or applies the lot.
+      *
+      * Over a fixed filter it shows the filter itself, read-only: the operator, each rule's
+      * mode and query the reader can reach and read, and none of the buttons, since there is
+      * nothing to add, remove, clear or apply.
       */
     private def filterMenu(
         path: List[String],
@@ -4848,41 +4899,36 @@ final case class DataTable[A] private (
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
     )(using Frame): UI =
+        val fixed = filtersFixed
         // One rule joins with nothing, so the operator has nothing to say until there are two.
         val operator: List[UI] =
             if d.rules.sizeIs < 2 then Nil
             else
-                List(
-                    Select[FilterOperator]()
-                        .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
-                        .current(Present(d.operator))
-                        .accessibleName(s"Match mode for ${c.headerV}")
-                        .extraClass("p-datatable-filter-operator-dropdown")
-                        .onChange(operatorPicked(draft, d))
-                        .render
-                )
+                val pick = Select[FilterOperator]()
+                    .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
+                    .current(Present(d.operator))
+                    .accessibleName(s"Match mode for ${c.headerV}")
+                    .extraClass("p-datatable-filter-operator-dropdown")
+                List((if fixed then pick.readonly(true) else pick.onChange(operatorPicked(draft, d))).render)
 
         val rules: List[UI] = d.rules.zipWithIndex.map { (rule, i) =>
-            val modes =
-                Select[MatchMode]()
-                    .options(cf.modes)(_.label)
-                    .current(Present(rule.mode))
-                    .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
-                    .onChange(modePicked(draft, d, i))
-                    .render
+            val pick = Select[MatchMode]()
+                .options(cf.modes)(_.label)
+                .current(Present(rule.mode))
+                .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
+            val modes = (if fixed then pick.readonly(true) else pick.onChange(modePicked(draft, d, i))).render
+            val field = Input()
+                .value(rule.query)
+                .fluid(true)
+                .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
                     toChild(
-                        Input()
-                            .value(rule.query)
-                            .fluid(true)
-                            .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
-                            .onInput(t => draft.set(setRule(d, i, _.copy(query = t))))
-                            .render
+                        (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
                     )
                 )
             val remove: List[UI] =
-                if d.rules.sizeIs < 2 then Nil
+                if fixed || d.rules.sizeIs < 2 then Nil
                 else
                     List(
                         Button("Remove Rule")
@@ -4918,9 +4964,8 @@ final case class DataTable[A] private (
                 toChild(Button("Apply").size(Size.Small).onClick(applyFilter(path, d, draft, openRef)).render)
             )
 
-        UI.fragment(
-            (operator ++ List(div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*), add, bar))*
-        )
+        val list = div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*)
+        UI.fragment((operator ++ (if fixed then List(list) else List(list, add, bar)))*)
     end filterMenu
 
     /** One rule of a draft, rewritten in place. */
@@ -5115,8 +5160,10 @@ final case class DataTable[A] private (
         filter: FilterState
     )(using Frame): UI =
         given CanEqual[SortDirection, SortDirection] = CanEqual.derived
-        val sortable                                 = sorts && sortSlot.isDefined && !sortFixed
-        val direction: Reading[SortDirection]        =
+        // Unbound, the sort is the table's own, so the page as first rendered already draws the header the reader will
+        // press; only the mount's own sort makes the press do something.
+        val sortable                          = sorts && !sortFixed
+        val direction: Reading[SortDirection] =
             live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
         var cell = th.cssClass("p-datatable-header-cell")
@@ -5146,6 +5193,10 @@ final case class DataTable[A] private (
                 // that operate it are too. The modifiers ride along, which is what keeps
                 // Ctrl+Enter adding a column to the sort exactly as Ctrl+click does.
                 .onKeyDown(e => activationOf(e).map(m => headerClick(path, m, interactive, order)).getOrElse(()))
+        // A fixed sort is drawn, not removed: the header stays the tab stop it is when live, so the reader still lands on
+        // it and hears aria-sort, and answers nothing. It drops the sortable class, whose pointer cursor and hover say a
+        // press would change something.
+        else if sorts && sortFixed then cell = cell.tabIndex(0)
         end if
         // Which way the column sorts reaches the cell through a class and an attribute channel, so a sort click
         // patches the header rather than drawing it, and the column's filter menu in it, again. Prime's rule
@@ -5153,7 +5204,7 @@ final case class DataTable[A] private (
         // column carries the attribute. One rule for the static page and the live one, so the attribute never has to
         // leave the cell. A column locked against the reader's clicks is still one a sort can name.
         cell = classWhen(cell, "p-datatable-column-sorted", direction.map(_.isSorting))
-        if sortSlot.isDefined && !sortFixed && canSortBy(c) then
+        if canSortBy(c) then
             given CanEqual[String, String] = CanEqual.derived
             direction.map {
                 case SortDirection.Ascending  => "ascending"
@@ -5387,8 +5438,8 @@ final case class DataTable[A] private (
                     .jsProp("type", "button")
                     .aria("expanded", open.toString)
                     .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
-                // Fixed open groups show their toggle and open or close nothing with it.
-                if !groupsFixed then b = b.onClick(toggleGroup(path))
+                // Fixed open groups show their toggle, a button that says it opens or closes nothing.
+                b = if groupsFixed then b.aria("disabled", "true") else b.onClick(toggleGroup(path))
                 List(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
         val content: UI = level.headerF match
             case Present(f) => f(path, rows)
@@ -5419,7 +5470,10 @@ final case class DataTable[A] private (
         val handleTd: List[UI] =
             if !handleColumn then Nil
             else
-                var cell = td.cssClass("p-datatable-reorderable-row-handle").aria("hidden", "true")
+                // Fixed rows keep the column, which is anatomy the grid lines up by, and drop the grip class, whose move
+                // cursor says a drag would change something.
+                var cell = td.aria("hidden", "true")
+                if !movesFixed then cell = cell.cssClass("p-datatable-reorderable-row-handle")
                 if move.live then
                     val at = move.base + index
                     cell = cell
@@ -5438,8 +5492,8 @@ final case class DataTable[A] private (
                     .jsProp("type", "button")
                     .aria("expanded", isExp.toString)
                     .aria("label", if isExp then "Row Collapse" else "Row Expand")
-                // A fixed expansion shows its toggle and opens or closes nothing with it.
-                if !expansionFixed then b = b.onClick(toggleExpand(id))
+                // A fixed expansion shows its toggle, a button that says it opens or closes nothing.
+                b = if expansionFixed then b.aria("disabled", "true") else b.onClick(toggleExpand(id))
                 val cell = td(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
                 List(freeze(cell, frozen.leadAt(expanderSlot)))
 
@@ -5477,13 +5531,16 @@ final case class DataTable[A] private (
                 val cellEdit = edit.cell.exists(_ == here)
                 val openable = c.isEditableAt(a)
                 val editing  = openable && (rowEdit || cellEdit)
-                val cellMode = cellEditOn && !cellEditFixed && !cellEditsFixed && openable && edit.live
-                if cellMode then
-                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
-                    // The click picks a cell, it does not also pick the row; and while the
-                    // editor is open the keystrokes that leave it stop here rather than
-                    // reaching the row's own handler.
-                    cell = cell.stopPropagation(true)
+                // The page as first rendered already marks the cell the reader will open, whoever keeps the editing cell;
+                // only the mount's own state gives the click something to write into.
+                if cellEditOn && !cellEditFixed && !cellEditsFixed && openable then
+                    cell = cell.cssClass("p-editable-column")
+                    if edit.live then
+                        // The click picks a cell, it does not also pick the row; and while the
+                        // editor is open the keystrokes that leave it stop here rather than
+                        // reaching the row's own handler.
+                        cell = cell.onClick(beginCellEditing(here, a, c, nav, edit)).stopPropagation(true)
+                    end if
                 end if
                 if cellEdit then cell = cell.cssClass("p-cell-editing")
                 // A selected CELL: the extracted sheet carries a token for its border and no
@@ -5592,6 +5649,8 @@ final case class DataTable[A] private (
         // After a drop the browser still owes a click, and it does not land on the grip the
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
+        // A checkbox row's keys toggle its box, a click on the box being the pointer's way; a fixed selection's do nothing.
+        val boxKeys: Maybe[UI.Action] = if checkboxColumn && canSelect && !selectionFixed then Present(toggleSelect(id)) else Absent
         if rowInteractive then
             def act(e: MouseEvent): UI.Action =
                 // The drag's own ref, not the paint's copy of it: after a drop the browser still
@@ -5613,7 +5672,15 @@ final case class DataTable[A] private (
             // A row being edited overwrites this handler below, which is the order that belongs:
             // while an editor is open Enter commits the row rather than re-selecting it.
             row = row.tabIndex(0).onClick(clicked)
-                .onKeyDown(e => if activationOf(e).isDefined then actPlain else ())
+                .onKeyDown(e => if activationOf(e).isDefined then boxKeys.getOrElse(actPlain) else ())
+        // A checkbox row is the selectable thing aria-selected announces, and its box is hidden from assistive technology,
+        // so the row is the tab stop, the way a Single or Multiple row is, and Enter and Space toggle its box.
+        else if checkboxColumn then
+            row = row.tabIndex(0)
+            boxKeys.foreach(toggle => row = row.onKeyDown(e => if activationOf(e).isDefined then toggle else ()))
+        // A fixed selection is drawn, not removed: each row stays the tab stop it is when live, so the reader still lands on
+        // it and hears aria-selected, and answers nothing.
+        else if selectionFixed && !cellSelectOn then row = row.tabIndex(0)
         end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a

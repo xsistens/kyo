@@ -93,6 +93,87 @@ class OrganizationChartTest extends ReactiveValueContract:
         ready = Present(nodes(_).map(_.exists(declaresClick)))
     ))
 
+    // ---- the node cursor ----
+    //
+    // A selectable chart is ONE tab stop, on the node the cursor is on, and the arrows move it the way the chart is drawn:
+    // down to the first child, up to the parent, sideways to a sibling. The semantics are OrgChartNav's, so only the
+    // wiring is asserted here.
+
+    private val team = uic.OrgChartNode(
+        "CEO",
+        "ceo",
+        children = List(
+            uic.OrgChartNode("CFO", "cfo"),
+            uic.OrgChartNode("CTO", "cto", children = List(uic.OrgChartNode("Dev", "dev")))
+        )
+    )
+
+    private val labelOf = Map("CEO" -> "ceo", "CFO" -> "cfo", "CTO" -> "cto", "Dev" -> "dev")
+
+    private def teamChart(using Frame) = uic.OrganizationChart[String]().node(team).selectionMode(uic.SelectionMode.Single)
+
+    /** The node boxes that are tab stops, by id. */
+    private def stopsIn(t: UI)(using Frame): Chunk[String] < Sync =
+        nodes(t).map(_.filter(_.attrs.tabIndex.contains(0)).map(n => labelOf(textOf(n))))
+
+    /** Presses `key` on the node box `at` once the mount has wired the keys, and answers where the tab stop went. */
+    private def stopAfter(ui: UI, at: String, key: UI.Keyboard)(using Frame, kyo.test.AssertScope): Chunk[String] < Async =
+        publishedAfterReady(
+            ui,
+            t => nodes(t).map(_.exists(_.attrs.onKeyDown.isDefined)),
+            until = t => stopsIn(t).map(s => s.nonEmpty && !s.contains(at))
+        )(t => nodes(t).map(ns => press(ns.find(n => labelOf(textOf(n)) == at).get, key)))
+            .map(_.fold(Kyo.lift(Chunk.empty[String]))(stopsIn))
+
+    "the page as first rendered is one tab stop, on the root, where the attached chart puts it" in {
+        for
+            stops  <- stopsIn(teamChart.render)
+            chosen <- stopsIn(teamChart.selection(Set("cto")).onSelectionChange(_ => ()).render)
+        yield
+            assert(stops == Chunk("ceo"), s"one stop, on the root: $stops")
+            assert(chosen == Chunk("cto"), s"or on the chosen node: $chosen")
+        end for
+    }
+
+    "ArrowDown moves the tab stop to the first child, ArrowRight to the next sibling" in {
+        for
+            down  <- stopAfter(teamChart.render, "ceo", UI.Keyboard.ArrowDown)
+            right <- stopAfter(teamChart.selection(Set("cfo")).onSelectionChange(_ => ()).render, "cfo", UI.Keyboard.ArrowRight)
+        yield
+            assert(down == Chunk("cfo"), s"down to the first child: $down")
+            assert(right == Chunk("cto"), s"right to the next sibling: $right")
+        end for
+    }
+
+    "ArrowUp moves the tab stop to the parent" in {
+        for up <- stopAfter(teamChart.selection(Set("dev")).onSelectionChange(_ => ()).render, "dev", UI.Keyboard.ArrowUp)
+        yield assert(up == Chunk("cto"), s"up to the parent: $up")
+    }
+
+    "Enter and Space select the node they are pressed on" in {
+        for
+            seen <- Signal.initRef(List.empty[Set[String]])
+            _    <- actedOn(
+                teamChart.onSelectionChange(v => seen.updateAndGet(_ :+ v).unit).render,
+                t => nodes(t).map(_.exists(_.attrs.onKeyDown.isDefined))
+            )(
+                t => nodes(t).map(ns => press(ns.head, UI.Keyboard.Enter)),
+                t => nodes(t).map(ns => press(ns(1), UI.Keyboard.Space))
+            )
+            s <- seen.get
+        yield assert(s == List(Set("ceo"), Set("cfo")), s"reported $s")
+    }
+
+    "a click seeds the cursor, so the keyboard carries on from the node the pointer chose" in {
+        for
+            after <- publishedAfterReady(
+                teamChart.render,
+                t => nodes(t).map(_.exists(_.attrs.onKeyDown.isDefined)),
+                until = t => stopsIn(t).map(_ == Chunk("dev"))
+            )(t => nodes(t).map(ns => click(ns.find(n => textOf(n) == "Dev").get)))
+        yield assert(after.nonEmpty, "the tab stop never followed the click")
+    }
+
     "the older per-node events hear the slots too: neither a constant they hear nor a signal is a mistake" in {
         for
             held  <- Signal.initRef(Set("ceo"))

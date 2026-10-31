@@ -95,7 +95,9 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   and keeps nothing of its own, and so does a paginator a table or a view embeds. In a DataTable, binding
   `columnWidths`, `columnOrder` or `expandedGroups` is still what turns the drag or the collapsible group ON; unbound,
   those stay off rather than becoming the table's own. Each has a setter with no argument (`columnWidths()`) that turns
-  the feature on with the state kept by the table, for a page that would only hand over a ref nobody reads.
+  the feature on with the state kept by the table, for a page that would only hand over a ref nobody reads. A hearer
+  turns `contextMenuRow` on as well (decided 2026-10-31): unbound with an `onContextMenuRowChange` the table keeps the
+  row itself and marks it, and unbound with nothing hearing the rows leave the browser its own menu.
 - **A two-valued state has ONE event that carries the value, never a pair** (decided 2026-10-28): `onOpenChange(Boolean)`,
   `onCollapsedChange(Boolean)`, `onActiveChange(Boolean)`, not `onOpen`/`onClose`, since the two are never both. Events
   that carry something else stay (ConfirmDialog's `onAccept`/`onReject` are a choice, and each hears its own path).
@@ -737,7 +739,8 @@ another control, Shift+Tab back, and land at the top with every arrow press to m
   widget once got this wrong one way or the other: `Listbox`, a single `SelectButton`, `Rating` (no
   radio `name` yet, so the other stars take `tabIndex(-1)`), `TreeTable` and a horizontal `Stepper` made
   every row a stop; the four menus and `Tree` made none, since the list only took its stop with the
-  mount's focus ref. `ElementIdTest` and `GoldenRenderTest` ("every roving widget is one tab stop ...")
+  mount's focus ref, and a selectable `OrganizationChart` had neither a stop nor keys (its node cursor moves the way
+  the chart is drawn, `OrgChartNav`). `ElementIdTest` and `GoldenRenderTest` ("every roving widget is one tab stop ...")
   hold them; a new roving widget belongs in that sweep. Groups whose members are each their own stop by
   design (`MultiSelectButton`, `Accordion`, a vertical `Stepper`, `InputOtp`'s cells) are not roving.
 
@@ -921,7 +924,18 @@ ToggleButton all answer this way; `ReadonlyTest` holds them to it.
 - **A fixed sort header stays a tab stop with no handlers** (decided 2026-10-31). It keeps `tabIndex(0)`, `aria-sort`
   and its direction icon, answers no press or key, and says nothing more; it drops the sortable class, whose pointer
   cursor and hover highlight say a press would change something. Removing the stop was removing the control
-  (`TreeTableTest`'s sort slot holds it). DataTable's headers still drop it and owe the same change.
+  (the sort slots of `TreeTableTest` and `DataTableTest` hold it).
+- **A fixed state whose control is only an affordance drops the affordance and keeps the content and the layout**
+  (decided 2026-10-31). A sort header, a column resize handle, a column drag and a row grip are that: fixed widths draw
+  no `.p-datatable-column-resizer` (the resizable-table classes serve the handles alone and go with them) and an
+  expanding table still states its width; a fixed order keeps every header where it says, without
+  `p-datatable-reorderable-column`; fixed rows keep the grip column, without `p-datatable-reorderable-row-handle`. None
+  of them is a mistake, so none draws a card. A control that is a real control stays one: a fixed filter row is a native
+  readonly field showing the query, and its funnel (the mode list in the row display, the conditions in the menu
+  display) still opens what it holds, read-only, since nothing else lets the reader read the mode or the conditions; a
+  fixed expansion's row and group toggles are buttons with `aria-disabled`; a fixed selection's rows keep their tab
+  stops and `aria-selected` and drop `p-datatable-selectable-row`. A `Checkbox` row is a tab stop like a `Single` or
+  `Multiple` one (its box is `aria-hidden`), and Enter and Space toggle its box.
 - **Do not implement readonly by disabling the native input.** It drops the tab stop, so a
   keyboard reader cannot reach the value at all, and it makes readonly and disabled the same
   thing to a screen reader (which reports the disabled state and ignores `aria-readonly`

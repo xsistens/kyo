@@ -1349,6 +1349,10 @@ class GoldenRenderTest extends UicTest:
                 uic.TreeTable[Pet]().nodes(uic.TreeTableNode(Pet("a", "Al")), uic.TreeTableNode(Pet("b", "Bo"))).rowKey(_.id)
                     .columns(uic.column("Name")(_.name)).selectionMode(uic.SelectionMode.Single).selection(chosen).render
             )
+            org <- stops(
+                uic.OrganizationChart[String]().node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
+                    .selectionMode(uic.SelectionMode.Single).selection(Set("cto")).onSelectionChange(_ => ()).render
+            )
             stepper <- stops(uic.Stepper().step("One")(p("a")).step("Two")(p("b")).render)
             upright <- stops(uic.Stepper().vertical(true).step("One")(p("a")).step("Two")(p("b")).render)
         yield
@@ -1361,6 +1365,10 @@ class GoldenRenderTest extends UicTest:
             assert(mega.map(_.attrs.cssClasses) == Chunk(Chunk("p-megamenu-root-list")), s"MegaMenu: ${mega.map(_.attrs.cssClasses)}")
             assert(tree.map(_.attrs.role) == Chunk(Present("tree")), s"Tree: ${tree.map(_.attrs.cssClasses)}")
             assert(table.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")), s"TreeTable: the chosen row, ${table.size} stops")
+            assert(
+                org.map(_.attrs.cssClasses.contains("p-organizationchart-node-selected")) == Chunk(true),
+                s"OrganizationChart: the chosen node, ${org.size} stops"
+            )
             assert(
                 stepper.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")),
                 s"Stepper: the active header, ${stepper.size} stops"
@@ -2306,8 +2314,8 @@ class GoldenRenderTest extends UicTest:
             // Nothing to filter, nothing bound: the header is what it always was.
             assert(!plain.contains("p-datatable-inline-filter"))
             // Unbound, the table keeps the filters itself once its mount runs; the first frame is the placeholder, which
-            // has no row yet, and an unbound slot is no mistake, so it says nothing.
-            assert(!unbound.contains("p-datatable-inline-filter"), "the placeholder has no filter row yet")
+            // already draws the row the reader will type in, and an unbound slot is no mistake, so it says nothing.
+            assert(occurrences(unbound, "p-datatable-inline-filter") == 2, "the placeholder draws the filter row already")
             assert(!unbound.contains("p-uic-key-error"), "and an unbound filter is no mistake")
             // One inline filter per filterable column, and an empty header cell over the
             // column that carries no pipeline.
@@ -2881,9 +2889,11 @@ class GoldenRenderTest extends UicTest:
                     ).take(1).run
                 yield out.mkString
         yield
-            // The placeholder is the table without its editing state: same rows, no editor.
+            // The placeholder is the table without its editing state: same rows, no editor. It already marks the cells the
+            // reader will open, as the page as first rendered draws the control the reader will use; only the click waits.
             assert(placeholder.contains("p-datatable-table"), "the placeholder is still the table")
-            assert(!placeholder.contains("p-editable-column"), "and carries no editing affordance")
+            assert(occurrences(placeholder, "p-editable-column") == 4, "it marks the cells the reader will open")
+            assert(!placeholder.contains("p-cell-editing"), "and opens none")
             // Cell mode marks what can be opened, one cell at a time is open.
             assert(occurrences(idle, "p-editable-column") == 4, "two editable columns over two rows")
             assert(!idle.contains("p-cell-editing"), "and nothing is open")
