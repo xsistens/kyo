@@ -2881,9 +2881,11 @@ class GoldenRenderTest extends UicTest:
                     ).take(1).run
                 yield out.mkString
         yield
-            // The placeholder is the table without its editing state: same rows, no editor.
+            // The placeholder is the table without its editing state: same rows, no editor. It already marks the cells the
+            // reader will open, as the page as first rendered draws the control the reader will use; only the click waits.
             assert(placeholder.contains("p-datatable-table"), "the placeholder is still the table")
-            assert(!placeholder.contains("p-editable-column"), "and carries no editing affordance")
+            assert(occurrences(placeholder, "p-editable-column") == 4, "it marks the cells the reader will open")
+            assert(!placeholder.contains("p-cell-editing"), "and opens none")
             // Cell mode marks what can be opened, one cell at a time is open.
             assert(occurrences(idle, "p-editable-column") == 4, "two editable columns over two rows")
             assert(!idle.contains("p-cell-editing"), "and nothing is open")
