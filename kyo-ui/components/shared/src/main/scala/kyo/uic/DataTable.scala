@@ -5649,6 +5649,8 @@ final case class DataTable[A] private (
         // After a drop the browser still owes a click, and it does not land on the grip the
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
+        // A checkbox row's keys toggle its box, a click on the box being the pointer's way; a fixed selection's do nothing.
+        val boxKeys: Maybe[UI.Action] = if checkboxColumn && canSelect && !selectionFixed then Present(toggleSelect(id)) else Absent
         if rowInteractive then
             def act(e: MouseEvent): UI.Action =
                 // The drag's own ref, not the paint's copy of it: after a drop the browser still
@@ -5670,10 +5672,15 @@ final case class DataTable[A] private (
             // A row being edited overwrites this handler below, which is the order that belongs:
             // while an editor is open Enter commits the row rather than re-selecting it.
             row = row.tabIndex(0).onClick(clicked)
-                .onKeyDown(e => if activationOf(e).isDefined then actPlain else ())
+                .onKeyDown(e => if activationOf(e).isDefined then boxKeys.getOrElse(actPlain) else ())
+        // A checkbox row is the selectable thing aria-selected announces, and its box is hidden from assistive technology,
+        // so the row is the tab stop, the way a Single or Multiple row is, and Enter and Space toggle its box.
+        else if checkboxColumn then
+            row = row.tabIndex(0)
+            boxKeys.foreach(toggle => row = row.onKeyDown(e => if activationOf(e).isDefined then toggle else ()))
         // A fixed selection is drawn, not removed: each row stays the tab stop it is when live, so the reader still lands on
         // it and hears aria-selected, and answers nothing.
-        else if selectionFixed && !cellSelectOn && selectionModeV != SelectionMode.Checkbox then row = row.tabIndex(0)
+        else if selectionFixed && !cellSelectOn then row = row.tabIndex(0)
         end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a

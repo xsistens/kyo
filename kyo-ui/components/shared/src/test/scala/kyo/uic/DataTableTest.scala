@@ -4436,6 +4436,25 @@ class DataTableTest extends UicTest:
         yield assert(after.nonEmpty, "the table never marked the row the reader right-clicked")
     }
 
+    // A checkbox row is the selectable thing aria-selected announces, so it is a tab stop that Enter and Space toggle, the
+    // way a Single or Multiple row is.
+    "a checkbox row is a tab stop, and Space or Enter toggles its box" in {
+        for
+            sel <- Signal.initRef(Set.empty[Item])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Checkbox).selection(sel).render
+            trs        <- bodyTrs(ui)
+            _          <- press(trs(1), UI.Keyboard.Space)
+            afterSpace <- sel.get
+            _          <- press(trs(1), UI.Keyboard.Enter)
+            afterEnter <- sel.get
+        yield
+            assert(trs.forall(_.attrs.tabIndex.contains(0)), "every checkbox row is a tab stop")
+            assert(afterSpace == Set(items(1)), s"Space toggles the row's box on: $afterSpace")
+            assert(afterEnter.isEmpty, s"and Enter toggles it off again: $afterEnter")
+        end for
+    }
+
     private def filterable(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
 
     "the page as first rendered draws an unbound filter's row as the one the reader will type in" in {
