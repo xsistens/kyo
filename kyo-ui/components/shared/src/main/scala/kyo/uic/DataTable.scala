@@ -1125,7 +1125,9 @@ final case class DataTable[A] private (
       * right-click only reported; a constant nobody hears is fixed, so the rows take no
       * right-click of their own. Wherever a right-click is heard, the browser's own menu is
       * suppressed over the rows, which is what a context menu of one's own has to do. A
-      * signal nothing hears is reported in a card.
+      * signal nothing hears is reported in a card. Unbound, a hearer is what turns the row on:
+      * with [[onContextMenuRowChange]] the table keeps the row itself and marks it, and with
+      * nothing hearing the rows leave the browser its own menu.
       *
       * The menu itself is [[kyo.uic.ContextMenu]], which wraps the table: this says which
       * row it was opened on, and the binding is the caller's to clear when the menu closes,
@@ -2557,8 +2559,11 @@ final case class DataTable[A] private (
         val ownsCells    = cellsTyped.isEmpty && ownCellsFlag
         val ownsEditRows = editingRowsTyped.isEmpty && ownEditRowsFlag
         val ownsEditCell = editingCellTyped.isEmpty && ownEditCellFlag
+        // The row a context menu was opened on is turned on by a binding or by a hearer: unbound and heard, the table
+        // keeps the row itself; unbound and unheard, the rows leave the browser its own menu.
+        val ownsContext = contextTyped.isEmpty && onRowContextF.isDefined
         if !ownsSort && !ownsFilters && !ownsExpansion && !ownsSelection && !ownsWidths && !ownsOrder && !ownsGroups &&
-            !ownsCells && !ownsEditRows && !ownsEditCell
+            !ownsCells && !ownsEditRows && !ownsEditCell && !ownsContext
         then
             renderBound
         else
@@ -2609,6 +2614,11 @@ final case class DataTable[A] private (
                             Signal.initRef(Absent: Maybe[CellPath[A]])(using summon[Frame], CanEqual.derived)
                                 .map(r => Maybe(ReactiveValue[Maybe[CellPath[A]]](r)))
                         else Kyo.lift(editingCellTyped)
+                    context <-
+                        if ownsContext then
+                            Signal.initRef(Absent: Maybe[A])(using summon[Frame], CanEqual.derived)
+                                .map(r => Maybe(ReactiveValue[Maybe[A]](r)))
+                        else Kyo.lift(contextTyped)
                 yield copy(
                     sortSlot = sort,
                     columnFiltersSlot = filters,
@@ -2622,7 +2632,8 @@ final case class DataTable[A] private (
                     editingRowsTyped = editRows,
                     ownEditRowsFlag = false,
                     editingCellTyped = editCell,
-                    ownEditCellFlag = false
+                    ownEditCellFlag = false,
+                    contextTyped = context
                 ).renderBound
             }.placeholder(renderBound)
         end if
