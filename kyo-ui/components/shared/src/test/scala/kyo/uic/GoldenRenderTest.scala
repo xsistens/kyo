@@ -2306,8 +2306,8 @@ class GoldenRenderTest extends UicTest:
             // Nothing to filter, nothing bound: the header is what it always was.
             assert(!plain.contains("p-datatable-inline-filter"))
             // Unbound, the table keeps the filters itself once its mount runs; the first frame is the placeholder, which
-            // has no row yet, and an unbound slot is no mistake, so it says nothing.
-            assert(!unbound.contains("p-datatable-inline-filter"), "the placeholder has no filter row yet")
+            // already draws the row the reader will type in, and an unbound slot is no mistake, so it says nothing.
+            assert(occurrences(unbound, "p-datatable-inline-filter") == 2, "the placeholder draws the filter row already")
             assert(!unbound.contains("p-uic-key-error"), "and an unbound filter is no mistake")
             // One inline filter per filterable column, and an empty header cell over the
             // column that carries no pipeline.
