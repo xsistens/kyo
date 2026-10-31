@@ -184,4 +184,21 @@ class CarouselTest extends UicTest:
         yield assert(after.nonEmpty, "the carousel never showed the page the reader turned to")
     }
 
+    "a fixed carousel's navigators and indicators turn nothing, and say so where they would" in {
+        for
+            prev <- elementWithClass(strip.page(1).render, "p-carousel-prev-button")
+            next <- nextButton(strip.page(1).render)
+            dots <- elementsWithClass(strip.page(1).render, "p-carousel-indicator-button")
+        yield
+            assert(
+                List(prev, next).forall(b => !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true")),
+                "a fixed navigator is a tab stop that says it turns nothing"
+            )
+            assert(dots.size == 3 && dots.forall(d => !declaresClick(d)), "no dot turns a fixed carousel")
+            assert(
+                dots.zipWithIndex.forall((d, i) => d.attrs.ariaAttrs.get("disabled").contains("true") == (i != 1)),
+                s"every dot but the current one says it turns nothing: ${dots.map(_.attrs.ariaAttrs.get("disabled"))}"
+            )
+    }
+
 end CarouselTest
