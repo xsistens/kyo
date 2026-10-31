@@ -4,9 +4,9 @@ import kyo.*
 import kyo.UI.*
 
 /** `uic.OrderList`: the one-column half of the pair, and the same rules as [[PickListTest]] holds
-  * for the two-column one.
+  * for the two-column one. Its order and its selection are held to rule A ([[ReactiveValueContract]]).
   */
-class OrderListTest extends UicTest:
+class OrderListTest extends ReactiveValueContract:
 
     private def list(items: Seq[String], selected: Set[String])(using
         Frame
@@ -110,51 +110,6 @@ class OrderListTest extends UicTest:
         yield assert(order == Seq("a", "b"))
     }
 
-    // The order and the selection live somewhere else: the list shows them and hands a move or a pick over.
-    "an order and a selection bound one way are reported and not written" in {
-        for
-            xs        <- Signal.initRef(Seq("a", "b", "c"))
-            sel       <- Signal.initRef(Set("a"))
-            seenOrder <- Signal.initRef(Seq.empty[String])
-            seenSel   <- Signal.initRef(Set.empty[String])
-            ui = uic.OrderList[String]().items(xs.readOnly)(identity).onItemsChange(seenOrder.set)
-                .selection(sel.readOnly).onSelectionChange(seenSel.set).render
-            down <- button(ui, "Move Down")
-            _    <- click(down)
-            rows <- elementsWithClass(ui, "p-listbox-option")
-            _    <- click(rows(2))
-            o    <- xs.get
-            s    <- sel.get
-            so   <- seenOrder.get
-            ss   <- seenSel.get
-        yield
-            assert(o == Seq("a", "b", "c") && so == Seq("b", "a", "c"), s"order held $o, reported $so")
-            assert(s == Set("a") && ss == Set("a", "c"), s"selection held $s, reported $ss")
-    }
-
-    "a two-way order is written before the list reports it" in {
-        for
-            xs   <- Signal.initRef(Seq("a", "b", "c"))
-            sel  <- Signal.initRef(Set("c"))
-            seen <- Signal.initRef((Seq.empty[String], Seq.empty[String]))
-            ui = uic.OrderList[String]().items(xs)(identity).onItemsChange(n => xs.get.map(h => seen.set((n, h)))).selection(sel).render
-            up <- button(ui, "Move Up")
-            _  <- click(up)
-            s  <- seen.get
-        yield assert(s == (Seq("a", "c", "b"), Seq("a", "c", "b")), s"reported, held: $s")
-    }
-
-    "one-way bindings nothing hears say so" in {
-        for
-            xs   <- Signal.initRef(Seq("a", "b"))
-            sel  <- Signal.initRef(Set("a"))
-            deaf <-
-                elementsWithClass(uic.OrderList[String]().items(xs.readOnly)(identity).selection(sel.readOnly).render, "p-uic-key-error")
-        yield
-            val text = deaf.map(textOf).mkString
-            assert(text.contains("onItemsChange") && text.contains("onSelectionChange"), s"nobody hears: $text")
-    }
-
     "a disabled list says nothing about who hears it, since the reader cannot change it" in {
         for
             xs  <- Signal.initRef(Seq("a", "b"))
@@ -162,28 +117,57 @@ class OrderListTest extends UicTest:
         yield assert(off.isEmpty, s"nobody can change it: ${off.map(textOf)}")
     }
 
-    "constants nobody hears are fixed: no button moves, no click picks, and no card" in {
-        val fixed = uic.OrderList[String]().items(Seq("a", "b", "c"))(identity).selection(Set("b"))
-        for
-            moves <- elementsWithClass(fixed.render, "p-button")
-            rows  <- elementsWithClass(fixed.render, "p-listbox-option")
-            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(moves.nonEmpty && moves.forall(m => !declaresClick(m)), "a fixed order moves nothing")
-            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "a fixed selection picks nothing")
-            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
-        end for
-    }
+    // ---- rule A ----
 
-    "an unbound selection is the list's own, so a click picks the row" in {
+    private def rowTexts(t: UI)(using Frame): Seq[String] < Sync = elementsWithClass(t, "p-listbox-option").map(_.map(textOf).toList)
+
+    /** Whether no move button moves anything, and every one says so. */
+    private def movesFixed(t: UI)(using Frame): Boolean < Sync =
+        elementsWithClass(t, "p-button").map(bs =>
+            bs.size == 4 && bs.forall(b => !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true"))
+        )
+
+    // The rows are the items' own, so the slot has no unbound form. A move acts on the selection, which is held at `a`.
+    holds(new Slot[uic.OrderList[String], Seq[String]](
+        name = "items",
+        bare = Absent,
+        bind = uic.OrderList[String]().items(_)(identity).selection(Set("a")),
+        hear = (o, f) => o.onItemsChange(f),
+        event = "onItemsChange",
+        render = _.render,
+        start = Seq("a", "b", "c"),
+        next = Seq("b", "a", "c"),
+        control = button(_, "Move Down"),
+        shows = rowTexts(_),
+        isFixed = Present(movesFixed(_))
+    ))
+
+    private def row(t: UI, text: String)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(t, "p-listbox-option").map(_.find(textOf(_) == text).getOrElse(throw new AssertionError(s"no row $text")))
+
+    /** Whether no row picks anything, and the list says the selection is read-only (an option has no such state of its own). */
+    private def picksFixed(t: UI)(using Frame): Boolean < Sync =
         for
-            xs    <- Signal.initRef(Seq("a", "b", "c"))
-            after <- publishedAfterReady(
-                uic.OrderList[String]().items(xs)(identity).render,
-                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-listbox-option-selected").map(_.exists(r => textOf(r) == "b"))
-            )(t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "b"))
-        yield assert(after.nonEmpty, "the list never showed the row the reader picked")
-    }
+            rows <- elementsWithClass(t, "p-listbox-option")
+            list <- listOf(t)
+        yield rows.nonEmpty && rows.forall(r => !declaresClick(r)) && list.attrs.ariaAttrs.get("readonly").contains("true")
+
+    private def items(using Frame) = uic.OrderList[String]().items(Seq("a", "b", "c"))(identity)
+
+    holds(new Slot[uic.OrderList[String], Set[String]](
+        name = "selection",
+        bare = Present(items),
+        bind = items.selection(_),
+        hear = (o, f) => o.onSelectionChange(f),
+        event = "onSelectionChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("b"),
+        control = row(_, "b"),
+        shows = elementsWithClass(_, "p-listbox-option-selected").map(_.map(textOf).toSet),
+        isFixed = Present(picksFixed(_)),
+        // Unbound, the selection is the mount's.
+        ready = Present(elementsWithClass(_, "p-listbox-option").map(_.exists(declaresClick)))
+    ))
 
 end OrderListTest
