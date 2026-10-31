@@ -737,7 +737,9 @@ final case class DataTable[A] private (
       * [[onSortChange]] hears it. A plain `Signal` or a constant binds one way: the table
       * sorts by it and hands a press to [[onSortChange]] without writing, which is how a
       * sort held in a route or a parent is changed there. A one-way sort with no
-      * [[onSortChange]] cannot move and is reported in a card.
+      * [[onSortChange]] cannot move and is reported in a card, and a constant nobody hears is
+      * fixed: each sortable header stays a tab stop that says its sort and answers no press or
+      * key. Unbound, the table keeps the sort itself.
       *
       * A plain header click sorts by that column alone. A click holding Ctrl (or Cmd)
       * adds the column to the spec, or advances the one already there WITHOUT moving it:
@@ -5115,8 +5117,10 @@ final case class DataTable[A] private (
         filter: FilterState
     )(using Frame): UI =
         given CanEqual[SortDirection, SortDirection] = CanEqual.derived
-        val sortable                                 = sorts && sortSlot.isDefined && !sortFixed
-        val direction: Reading[SortDirection]        =
+        // Unbound, the sort is the table's own, so the page as first rendered already draws the header the reader will
+        // press; only the mount's own sort makes the press do something.
+        val sortable                          = sorts && !sortFixed
+        val direction: Reading[SortDirection] =
             live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
         var cell = th.cssClass("p-datatable-header-cell")
@@ -5146,6 +5150,10 @@ final case class DataTable[A] private (
                 // that operate it are too. The modifiers ride along, which is what keeps
                 // Ctrl+Enter adding a column to the sort exactly as Ctrl+click does.
                 .onKeyDown(e => activationOf(e).map(m => headerClick(path, m, interactive, order)).getOrElse(()))
+        // A fixed sort is drawn, not removed: the header stays the tab stop it is when live, so the reader still lands on
+        // it and hears aria-sort, and answers nothing. It drops the sortable class, whose pointer cursor and hover say a
+        // press would change something.
+        else if sorts && sortFixed then cell = cell.tabIndex(0)
         end if
         // Which way the column sorts reaches the cell through a class and an attribute channel, so a sort click
         // patches the header rather than drawing it, and the column's filter menu in it, again. Prime's rule
@@ -5153,7 +5161,7 @@ final case class DataTable[A] private (
         // column carries the attribute. One rule for the static page and the live one, so the attribute never has to
         // leave the cell. A column locked against the reader's clicks is still one a sort can name.
         cell = classWhen(cell, "p-datatable-column-sorted", direction.map(_.isSorting))
-        if sortSlot.isDefined && !sortFixed && canSortBy(c) then
+        if canSortBy(c) then
             given CanEqual[String, String] = CanEqual.derived
             direction.map {
                 case SortDirection.Ascending  => "ascending"

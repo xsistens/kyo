@@ -4388,4 +4388,23 @@ class DataTableTest extends UicTest:
         end for
     }
 
+    "the page as first rendered draws an unbound sort's header as the sortable one it will be" in {
+        for h <- elementsWithClass(bare.render, "p-datatable-header-cell").map(_.head)
+        yield assert(
+            h.attrs.cssClasses.contains("p-datatable-sortable-column") && h.attrs.tabIndex.contains(0) && declaresClick(h) &&
+                h.attrs.ariaAttrs.get("sort").contains("none"),
+            s"an unbound sort is the reader's: ${h.attrs.cssClasses}, ${h.attrs.ariaAttrs}"
+        )
+    }
+
+    "a fixed sort header stays a tab stop that says its sort and answers nothing" in {
+        for h <- elementsWithClass(bare.sort(List(uic.SortKey.ascending("Name"))).render, "p-datatable-header-cell").map(_.head)
+        yield
+            assert(h.attrs.tabIndex.contains(0), "a fixed sort is drawn, not removed")
+            assert(!declaresClick(h) && h.attrs.onKeyDown.isEmpty, "and nothing changes it")
+            assert(!h.attrs.cssClasses.contains("p-datatable-sortable-column"), "nor offers a press")
+            assert(h.attrs.ariaAttrs.get("sort").contains("ascending"), "and it says which way it sorts")
+        end for
+    }
+
 end DataTableTest
