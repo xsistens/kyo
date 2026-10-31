@@ -5,9 +5,9 @@ import kyo.UI.*
 
 /** Galleria carries the roving shape twice, on its indicator dots and on its thumbnail strip, so
   * before the arrows every inactive dot AND every inactive thumbnail was out of the Tab order with
-  * nothing to reach it by.
+  * nothing to reach it by. The active image is held to rule A ([[ReactiveValueContract]]).
   */
-class GalleriaTest extends UicTest:
+class GalleriaTest extends ReactiveValueContract:
 
     private val pics = List(
         uic.GalleriaItem("/a.png", "A"),
@@ -75,10 +75,6 @@ class GalleriaTest extends UicTest:
 
     private def nexts(t: UI)(using Frame) = elementsWithClass(t, "p-galleria-next-button")
 
-    /** The gallery as its mount publishes it, the navigators wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => nexts(t).map(_.exists(declaresClick)))
-
     "an unbound gallery keeps the active image itself, so each next press moves on from the last" in {
         // The second press is made on the tree that shows the second image, the one the first press asked for.
         def onSecond(t: UI): Boolean < Sync =
@@ -100,40 +96,36 @@ class GalleriaTest extends UicTest:
         end for
     }
 
-    "a constant nobody hears is fixed: the navigators stay reachable, move nothing, and say so" in {
-        for
-            t    <- elementWithClass(stepping.activeIndex(1).render, "p-galleria-next-button")
-            card <- elementsWithClass(stepping.activeIndex(1).render, "p-uic-key-error")
-        yield
-            assert(!declaresClick(t) && t.attrs.ariaAttrs.get("disabled").contains("true"), "the navigator is inert and says so")
-            assert(card.isEmpty, s"a fixed image is not a mistake: ${card.map(textOf)}")
-    }
+    // ---- rule A ----
 
-    "an index bound one way is followed, and a navigation is reported without being written" in {
-        for
-            held <- Signal.initRef(0)
-            seen <- Signal.initRef(Absent: Maybe[Int])
-            t    <- mounted(stepping.activeIndex(held.readOnly).onActiveIndexChange(i => seen.set(Present(i))).render)
-            next <- elementWithClass(t, "p-galleria-next-button")
-            _    <- click(next)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(stepping.activeIndex(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h == 0 && s == Present(1), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onActiveIndexChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
+    /** The image the thumbnail strip marks current. */
+    private def activeShown(t: UI)(using Frame): Int < Sync =
+        elementsWithClass(t, "p-galleria-thumbnail").map(ts =>
+            ts.indexWhere(_.attrs.ariaAttrs.get("current").contains("page")) match
+                case -1 => throw new AssertionError("no current thumbnail")
+                case i  => i
+        )
 
-    "a ref is written before the gallery reports it" in {
-        for
-            held <- Signal.initRef(0)
-            seen <- Signal.initRef((0, 0))
-            t    <- mounted(stepping.activeIndex(held).onActiveIndexChange(i => held.get.map(h => seen.set((i, h)))).render)
-            next <- elementWithClass(t, "p-galleria-next-button")
-            _    <- click(next)
-            s    <- seen.get
-        yield assert(s == (1, 1), s"reported, held: $s")
+    holds(new Slot[uic.Galleria, Int](
+        name = "activeIndex",
+        bare = Present(stepping),
+        bind = stepping.activeIndex(_),
+        hear = (g, f) => g.onActiveIndexChange(f),
+        event = "onActiveIndexChange",
+        render = _.render,
+        start = 0,
+        next = 1,
+        control = elementWithClass(_, "p-galleria-next-button"),
+        shows = activeShown(_),
+        ready = Present(t => nexts(t).map(_.exists(declaresClick)))
+    ))
+
+    "a fixed gallery's thumbnails move nothing either, and say so" in {
+        for thumbs <- elementsWithClass(stepping.activeIndex(1).render, "p-galleria-thumbnail")
+        yield assert(
+            thumbs.size == 3 && thumbs.forall(t => !declaresClick(t) && t.attrs.ariaAttrs.get("disabled").contains("true")),
+            "every thumbnail is inert and says so"
+        )
     }
 
 end GalleriaTest
