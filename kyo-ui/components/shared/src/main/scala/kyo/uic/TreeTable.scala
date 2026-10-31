@@ -154,7 +154,9 @@ final case class TreeTable[A] private (
       *
       * A `SignalRef` binds two way: a press writes it, then [[onSortChange]] hears the new
       * spec. A plain `Signal` or a constant binds one way: the table sorts by it and only
-      * reports a press. A one-way sort with no [[onSortChange]] is reported in a card.
+      * reports a press. A one-way sort with no [[onSortChange]] is reported in a card, and a constant nobody hears is
+      * fixed: each sortable header stays a tab stop that says its sort and answers no press or key. Unbound, the table
+      * keeps the sort itself.
       */
     def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = copy(sortSlot = Present(ReactiveValue[List[SortKey]](v)))
 
@@ -464,7 +466,9 @@ final case class TreeTable[A] private (
     private def headerCell(c: Column[A, AnyTable], sort: List[SortKey], flag: Boolean, interactive: Set[List[String]])(
         using Frame
     ): UI =
-        val sortable  = c.isSortable(flag) && sortSlot.isDefined && !sortFixed
+        // Unbound, the sort is the table's own, so the page as first rendered already draws the header the reader will press;
+        // only the mount's own sort makes the press do something.
+        val sortable  = c.isSortable(flag) && !sortFixed
         val sortingKs = SortKey.sorting(sort)
         // A TreeTable renders one header row, so a column's path is its header alone.
         val path      = List(c.headerV)
@@ -485,6 +489,10 @@ final case class TreeTable[A] private (
                 // A `th` is not a button: the tab stop above is this table's own, so the two keys
                 // that operate it are too, modifiers and all.
                 .onKeyDown(e => activationOf(e).map(m => toggleSort(path, m, interactive)).getOrElse(()))
+        // A fixed sort is drawn, not removed: the header stays the tab stop it is when live, so the reader still lands on
+        // it and hears aria-sort, and answers nothing. It drops the sortable class, whose pointer cursor and hover say a
+        // press would change something.
+        else if c.isSortable(flag) && sortFixed then cell = cell.tabIndex(0)
         end if
         if direction.isSorting then
             cell = cell

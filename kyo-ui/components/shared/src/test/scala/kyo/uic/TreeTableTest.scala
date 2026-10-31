@@ -386,4 +386,22 @@ class TreeTableTest extends UicTest:
         yield assert(after.nonEmpty, "the table never sorted by the header the reader pressed")
     }
 
+    "the page as first rendered draws an unbound sort's header as the sortable one it will be" in {
+        for h <- elementWithClass(table.render, "p-treetable-header-cell")
+        yield assert(
+            h.attrs.cssClasses.contains("p-treetable-sortable-column") && h.attrs.tabIndex.contains(0) && declaresClick(h),
+            s"an unbound sort is the reader's: ${h.attrs.cssClasses}"
+        )
+    }
+
+    "a fixed sort header stays a tab stop that says its sort and answers nothing" in {
+        for h <- elementWithClass(table.sort(List(uic.SortKey.ascending("Name"))).render, "p-treetable-header-cell")
+        yield
+            assert(h.attrs.tabIndex.contains(0), "a fixed sort is drawn, not removed")
+            assert(!declaresClick(h) && h.attrs.onKeyDown.isEmpty, "and nothing changes it")
+            assert(!h.attrs.cssClasses.contains("p-treetable-sortable-column"), "nor offers a press")
+            assert(h.attrs.ariaAttrs.get("sort").contains("ascending"), "and it says which way it sorts")
+        end for
+    }
+
 end TreeTableTest
