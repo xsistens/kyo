@@ -7,9 +7,9 @@ import kyo.UI.*
   * order and the arrows are the only way to reach it.
   *
   * The wiring lives in the mount that mints the strip id, so these drive the `wired` seam with a
-  * recording focus function rather than a `UI.Commands`.
+  * recording focus function rather than a `UI.Commands`. The page is held to rule A ([[ReactiveValueContract]]).
   */
-class CarouselTest extends UicTest:
+class CarouselTest extends ReactiveValueContract:
 
     private def strip(using Frame) =
         uic.Carousel[String]().items(Seq("a", "b", "c"))(s => p(s)).numVisible(1).numScroll(1)
@@ -30,40 +30,45 @@ class CarouselTest extends UicTest:
     private def nextButton(ui: UI)(using Frame): UI.Ast.Element < Sync =
         elementsWithClass(ui, "p-carousel-next-button").map(_.headOption.getOrElse(throw new AssertionError("no next button")))
 
-    // The page lives somewhere else (a route, a parent): the carousel shows it and hands a turn over.
-    "a page bound one way is shown, and a turn is reported without being written" in {
-        for
-            held  <- Signal.initRef(0)
-            seen  <- Signal.initRef(-1)
-            start <- Signal.initRef(0.0)
-            ui = strip.page(held.readOnly).onPageChange(seen.set).wired(held.readOnly, "car", start, _ => ())
-            next <- nextButton(ui)
-            _    <- click(next)
-            h    <- held.get
-            s    <- seen.get
-        yield assert(h == 0 && s == 1, s"held $h, reported $s")
-    }
+    // ---- rule A ----
 
-    "a two-way page is written before the carousel reports it" in {
-        for
-            page  <- Signal.initRef(0)
-            seen  <- Signal.initRef((-1, -1))
-            start <- Signal.initRef(0.0)
-            ui = strip.page(page).onPageChange(p => page.get.map(h => seen.set((p, h)))).wired(page, "car", start, _ => ())
-            next <- nextButton(ui)
-            _    <- click(next)
-            s    <- seen.get
-        yield assert(s == (1, 1), s"reported, held: $s")
-    }
+    /** The page the indicators mark active. */
+    private def pageShown(t: UI)(using Frame): Int < Sync =
+        elementsWithClass(t, "p-carousel-indicator").map(is =>
+            is.indexWhere(_.attrs.cssClasses.contains("p-carousel-indicator-active")) match
+                case -1 => throw new AssertionError("no active indicator")
+                case i  => i
+        )
 
-    "a page bound one way with nothing to hear a turn says so" in {
+    // The next-page navigator turns it; a fixed one is a button that turns nothing, so it says so the way a button can.
+    holds(new Slot[uic.Carousel[String], Int](
+        name = "page",
+        bare = Present(strip),
+        bind = strip.page(_),
+        hear = (c, f) => c.onPageChange(f),
+        event = "onPageChange",
+        render = _.render,
+        start = 0,
+        next = 1,
+        control = nextButton(_),
+        shows = pageShown(_)
+    ))
+
+    "a fixed carousel's navigators and indicators turn nothing, and say so where they would" in {
         for
-            held  <- Signal.initRef(0)
-            deaf  <- elementsWithClass(strip.page(held.readOnly).render, "p-uic-key-error")
-            heard <- elementsWithClass(strip.page(1).onPageChange(_ => ()).render, "p-uic-key-error")
+            prev <- elementWithClass(strip.page(1).render, "p-carousel-prev-button")
+            next <- nextButton(strip.page(1).render)
+            dots <- elementsWithClass(strip.page(1).render, "p-carousel-indicator-button")
         yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onPageChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+            assert(
+                List(prev, next).forall(b => !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true")),
+                "a fixed navigator is a tab stop that says it turns nothing"
+            )
+            assert(dots.size == 3 && dots.forall(d => !declaresClick(d)), "no dot turns a fixed carousel")
+            assert(
+                dots.zipWithIndex.forall((d, i) => d.attrs.ariaAttrs.get("disabled").contains("true") == (i != 1)),
+                s"every dot but the current one says it turns nothing: ${dots.map(_.attrs.ariaAttrs.get("disabled"))}"
+            )
     }
 
     "ArrowRight moves to the next dot" in move(0, UI.Keyboard.ArrowRight).map(to => assert(to == Present("car-d1")))
@@ -159,46 +164,6 @@ class CarouselTest extends UicTest:
             assert(active(before) == 2, s"page 2 shows C and D: ${active(before)}")
             assert(active(after) == 2, s"A and B, the page the strip falls back to, are active: ${active(after)}")
         end for
-    }
-
-    "a constant page nobody hears is fixed: no button turns it, and no card" in {
-        for
-            buttons <- elementsWithClass(strip.page(1).render, "p-carousel-next-button")
-            card    <- elementsWithClass(strip.page(1).render, "p-uic-key-error")
-        yield
-            assert(buttons.forall(b => !declaresClick(b)), "a fixed carousel turns nowhere")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound carousel keeps the page the reader turns to" in {
-        def onSecond(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-carousel-indicator").map(is =>
-                is.indexWhere(_.attrs.cssClasses.contains("p-carousel-indicator-active")) == 1
-            )
-        for
-            after <- publishedAfterReady(
-                strip.render,
-                t => elementsWithClass(t, "p-carousel-next-button").map(_.exists(declaresClick)),
-                until = onSecond
-            )(t => nextButton(t).map(click))
-        yield assert(after.nonEmpty, "the carousel never showed the page the reader turned to")
-    }
-
-    "a fixed carousel's navigators and indicators turn nothing, and say so where they would" in {
-        for
-            prev <- elementWithClass(strip.page(1).render, "p-carousel-prev-button")
-            next <- nextButton(strip.page(1).render)
-            dots <- elementsWithClass(strip.page(1).render, "p-carousel-indicator-button")
-        yield
-            assert(
-                List(prev, next).forall(b => !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true")),
-                "a fixed navigator is a tab stop that says it turns nothing"
-            )
-            assert(dots.size == 3 && dots.forall(d => !declaresClick(d)), "no dot turns a fixed carousel")
-            assert(
-                dots.zipWithIndex.forall((d, i) => d.attrs.ariaAttrs.get("disabled").contains("true") == (i != 1)),
-                s"every dot but the current one says it turns nothing: ${dots.map(_.attrs.ariaAttrs.get("disabled"))}"
-            )
     }
 
 end CarouselTest
