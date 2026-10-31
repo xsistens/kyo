@@ -3,8 +3,8 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** What a page change of a paginated `uic.DataView` redraws. */
-class DataViewTest extends UicTest:
+/** What a page change of a paginated `uic.DataView` redraws, and its page held to rule A ([[ReactiveValueContract]]). */
+class DataViewTest extends ReactiveValueContract:
 
     private def control(cls: String)(using Frame): UI =
         UI.mounted(Signal.initRef(0).map(_ => UI.div.cssClass(cls))).placeholder(UI.div.cssClass(cls))
@@ -53,5 +53,29 @@ class DataViewTest extends UicTest:
             assert(rows == 1, s"the rows sit under $rows region(s)")
             assert(before == 10 && after == 10, s"rows on a page: $before, then $after")
     }
+
+    // ---- rule A ----
+
+    private def paged(using Frame) = DataView[Int]().items(1 to 30).itemTemplate(i => UI.div.cssClass("row")(i.toString))
+
+    /** The page the rows shown belong to, ten to a page. */
+    private def pageShown(t: UI)(using Frame): Int < Sync =
+        elementsWithClass(t, "row").map(_.headOption.flatMap(textOf(_).toIntOption) match
+            case Some(first) => (first - 1) / 10
+            case None        => throw new AssertionError("no rows shown"))
+
+    // The page is the paginator's argument, so it has no unbound form; the embedded paginator's next-page button moves it.
+    holds(new Slot[uic.DataView[Int], Int](
+        name = "page",
+        bare = Absent,
+        bind = paged.paginate(10)(_),
+        hear = (v, f) => v.onPageChange(f),
+        event = "onPageChange",
+        render = _.render,
+        start = 0,
+        next = 1,
+        control = elementWithClass(_, "p-paginator-next"),
+        shows = pageShown(_)
+    ))
 
 end DataViewTest
