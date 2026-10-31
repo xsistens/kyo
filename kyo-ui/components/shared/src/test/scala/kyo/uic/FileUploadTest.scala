@@ -3,58 +3,55 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** [[FileUpload]]'s picked files under every way they can be bound: a constant nobody hears is fixed, a signal is shown
-  * and a pick only reported, and a ref is written before the report.
+/** [[FileUpload]]'s picked files under every way they can be bound, held to rule A ([[ReactiveValueContract]]): unbound
+  * the control keeps the pick, a constant nobody hears is fixed, a signal is shown and a pick only reported, and a ref is
+  * written before the report.
   */
-class FileUploadTest extends UicTest:
+class FileUploadTest extends ReactiveValueContract:
 
     private val report = UI.FilePayload("report.pdf", 1024, "application/pdf", "")
 
     private def inputOf(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-hidden-accessible")
 
-    private def pick(t: UI, files: Seq[UI.FilePayload])(using Frame): Any < Async =
-        inputOf(t).map(_.attrs.onFileSelect match
-            case Present(f) => handled(f(files))
-            case Absent     => throw new AssertionError("the input takes no pick"))
+    /** The files the label names, read back as the payloads of this suite: the label is all a render shows of them. */
+    private def filesShown(t: UI)(using Frame): Seq[UI.FilePayload] < Sync =
+        elementWithClass(t, "p-fileupload-filelabel").map(l =>
+            textOf(l) match
+                case "No file chosen" => Seq.empty
+                case "report.pdf"     => Seq(report)
+                case other            => throw new AssertionError(s"the label names $other")
+        )
 
-    "a constant nobody hears is fixed: the control stays reachable, opens no dialog, and says so" in {
-        val fixed = uic.FileUpload().value(Seq(report))
+    /** Whether a pick goes nowhere and the control says so: the choose button in its role's words, and the root by declining
+      * the browser's own dialog. The input the pick arrives on is hidden, so it is the button that speaks.
+      */
+    private def pickFixed(t: UI)(using Frame): Boolean < Sync =
         for
-            in     <- inputOf(fixed.render)
-            root   <- elementWithClass(fixed.render, "p-fileupload")
-            choose <- elementWithClass(fixed.render, "p-fileupload-choose-button")
-            card   <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(in.attrs.onFileSelect.isEmpty, "a pick goes nowhere")
-            assert(root.attrs.dataAttrs.contains("kyo-inert"), "the browser opens no dialog")
-            assert(choose.attrs.ariaAttrs.get("disabled").contains("true"), "and the button says so")
-            assert(card.isEmpty, s"a fixed value is not a mistake: ${card.map(textOf)}")
-        end for
-    }
+            in     <- inputOf(t)
+            root   <- elementWithClass(t, "p-fileupload")
+            choose <- elementWithClass(t, "p-fileupload-choose-button")
+        yield in.attrs.onFileSelect.isEmpty && root.attrs.dataAttrs.contains("kyo-inert") &&
+            choose.attrs.ariaAttrs.get("disabled").contains("true")
 
-    "files bound one way are shown, and a pick is reported without being written" in {
-        for
-            held <- Signal.initRef(Seq.empty[UI.FilePayload])
-            seen <- Signal.initRef(Seq.empty[UI.FilePayload])
-            ui = uic.FileUpload().value(held.readOnly).onChange(seen.set).render
-            _    <- pick(ui, Seq(report))
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(uic.FileUpload().value(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s == Seq(report), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a ref is written before the control reports it" in {
-        for
-            held <- Signal.initRef(Seq.empty[UI.FilePayload])
-            seen <- Signal.initRef((Seq.empty[UI.FilePayload], Seq.empty[UI.FilePayload]))
-            ui = uic.FileUpload().value(held).onChange(fs => held.get.map(h => seen.set((fs, h)))).render
-            _ <- pick(ui, Seq(report))
-            s <- seen.get
-        yield assert(s == (Seq(report), Seq(report)), s"reported, held: $s")
-    }
+    holds(new Slot[uic.FileUpload, Seq[UI.FilePayload]](
+        name = "value",
+        bare = Present(uic.FileUpload()),
+        bind = uic.FileUpload().value(_),
+        hear = (u, f) => u.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Seq.empty,
+        next = Seq(report),
+        control = inputOf(_),
+        shows = filesShown(_),
+        gesture = (c: UI.Ast.Element) =>
+            c.attrs.onFileSelect match
+                case Present(f) => handled(f(Seq(report)))
+                case Absent     => throw new AssertionError("the input takes no pick"),
+        answers = _.attrs.onFileSelect.nonEmpty,
+        isFixed = Present(pickFixed(_)),
+        // Unbound, the label the pick names lives in the mount; the page as first rendered takes no pick.
+        ready = Present(elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty)))
+    ))
 
 end FileUploadTest
