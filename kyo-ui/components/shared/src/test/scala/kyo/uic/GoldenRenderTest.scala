@@ -1349,6 +1349,10 @@ class GoldenRenderTest extends UicTest:
                 uic.TreeTable[Pet]().nodes(uic.TreeTableNode(Pet("a", "Al")), uic.TreeTableNode(Pet("b", "Bo"))).rowKey(_.id)
                     .columns(uic.column("Name")(_.name)).selectionMode(uic.SelectionMode.Single).selection(chosen).render
             )
+            org <- stops(
+                uic.OrganizationChart[String]().node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
+                    .selectionMode(uic.SelectionMode.Single).selection(Set("cto")).onSelectionChange(_ => ()).render
+            )
             stepper <- stops(uic.Stepper().step("One")(p("a")).step("Two")(p("b")).render)
             upright <- stops(uic.Stepper().vertical(true).step("One")(p("a")).step("Two")(p("b")).render)
         yield
@@ -1361,6 +1365,10 @@ class GoldenRenderTest extends UicTest:
             assert(mega.map(_.attrs.cssClasses) == Chunk(Chunk("p-megamenu-root-list")), s"MegaMenu: ${mega.map(_.attrs.cssClasses)}")
             assert(tree.map(_.attrs.role) == Chunk(Present("tree")), s"Tree: ${tree.map(_.attrs.cssClasses)}")
             assert(table.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")), s"TreeTable: the chosen row, ${table.size} stops")
+            assert(
+                org.map(_.attrs.cssClasses.contains("p-organizationchart-node-selected")) == Chunk(true),
+                s"OrganizationChart: the chosen node, ${org.size} stops"
+            )
             assert(
                 stepper.map(_.attrs.ariaAttrs.get("selected")) == Chunk(Some("true")),
                 s"Stepper: the active header, ${stepper.size} stops"
