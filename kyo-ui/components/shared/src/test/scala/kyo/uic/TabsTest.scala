@@ -401,4 +401,16 @@ class TabsTest extends UicTest:
         yield assert(after.nonEmpty, "the strip never showed the tab the reader picked")
     }
 
+    "a fixed strip's inactive headers say they switch nothing, and a url header, which still navigates, says nothing" in {
+        for
+            plain <- elementsWithClass(strip.selected("one").render, "p-tab")
+            nav   <- elementsWithClass(navStrip.selected("one").render, "p-tab")
+        yield
+            def says(h: UI.Ast.Element): Boolean = h.attrs.ariaAttrs.get("disabled").contains("true")
+            assert(!says(plain(0)) && says(plain(2)) && plain.forall(h => !declaresClick(h)), "the active one names the tab shown")
+            // The second url header is disabled, and an anchor says that with aria-disabled too.
+            assert(!says(nav(0)) && !says(nav(2)), "a link that goes somewhere does not say it goes nowhere")
+        end for
+    }
+
 end TabsTest
