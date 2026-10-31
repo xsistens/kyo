@@ -8,9 +8,10 @@ import kyo.UI.*
   * unreachable from the keyboard.
   *
   * The wiring lives in a mount, which a pure render shows only as its placeholder, so these drive
-  * the `wired` seam with a recording focus function instead of a `UI.Commands`.
+  * the `wired` seam with a recording focus function instead of a `UI.Commands`. The selection is held to rule A
+  * ([[ReactiveValueContract]]).
   */
-class TabsTest extends UicTest:
+class TabsTest extends ReactiveValueContract:
 
     // The base the headers derive their ids from: `s"$base-${tab.id}"`, so "t-one", "t-two" and "t-three".
     private val base = "t"
@@ -100,30 +101,6 @@ class TabsTest extends UicTest:
             _      <- src.set(0)
             after  <- activeId(ui)
         yield assert(before == Present(2) && after == Present(0))
-    }
-
-    "clicking a one-way tab fires onSelectedChange and changes nothing" in {
-        for
-            src   <- Signal.initRef("three")
-            fired <- Signal.initRef(Absent: Maybe[String])
-            // `.readOnly` is the documented opt-out from two-way binding, and the
-            // runtime class is what the dispatch reads, so this stays one-way.
-            ui = strip.selected(src.readOnly).onSelectedChange(id => fired.set(Present(id))).render
-            headers <- elementsWithClass(ui, "p-tab")
-            _       <- click(headers(0))
-            held    <- src.get
-            saw     <- fired.get
-        yield assert(held == "three" && saw == Present("one"), "the source of truth is untouched")
-    }
-
-    "a writable ref still binds two way" in {
-        for
-            ref <- Signal.initRef("three")
-            ui = strip.selected(ref).render
-            headers <- elementsWithClass(ui, "p-tab")
-            _       <- click(headers(0))
-            held    <- ref.get
-        yield assert(held == "one")
     }
 
     // ── url headers: a navigational strip, not a panel switcher ──────────────────
@@ -359,21 +336,6 @@ class TabsTest extends UicTest:
         end for
     }
 
-    "a selection nobody hears says so when it is a signal, and is fixed when it is a constant" in {
-        for
-            held  <- Signal.initRef("one")
-            deaf  <- elementsWithClass(strip.selected(held.readOnly).render, "p-uic-key-error")
-            heard <- elementsWithClass(strip.selected(held.readOnly).onSelectedChange(_ => ()).render, "p-uic-key-error")
-            fixed <- elementsWithClass(strip.selected("one").render, "p-tab")
-            quiet <- elementsWithClass(strip.selected("one").render, "p-uic-key-error")
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onSelectedChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, "somebody hears")
-            assert(fixed.nonEmpty && fixed.forall(h => !declaresClick(h)), "a fixed strip switches nothing")
-            assert(quiet.isEmpty, s"a fixed constant: ${quiet.map(textOf)}")
-        end for
-    }
-
     "a strip of url headers bound one way is heard by the navigation, so it carries no card" in {
         for
             route <- Signal.initRef("one")
@@ -391,16 +353,6 @@ class TabsTest extends UicTest:
         end for
     }
 
-    "an unbound strip keeps the tab the reader picks" in {
-        for
-            after <- publishedAfterReady(
-                strip.render,
-                t => elementsWithClass(t, "p-tab").map(_.exists(declaresClick)),
-                until = t => activeId(t).map(_.contains(2))
-            )(t => elementsWithClass(t, "p-tab").map(hs => click(hs(2))))
-        yield assert(after.nonEmpty, "the strip never showed the tab the reader picked")
-    }
-
     "a fixed strip's inactive headers say they switch nothing, and a url header, which still navigates, says nothing" in {
         for
             plain <- elementsWithClass(strip.selected("one").render, "p-tab")
@@ -412,5 +364,28 @@ class TabsTest extends UicTest:
             assert(!says(nav(0)) && !says(nav(2)), "a link that goes somewhere does not say it goes nowhere")
         end for
     }
+
+    // ---- rule A ----
+
+    private val tabIds = List("one", "two", "three")
+
+    /** The header of the third tab, the one a gesture picks: the first is where every case starts, the second is disabled. */
+    private def third(t: UI)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(t, "p-tab").map(hs => hs.lift(2).getOrElse(throw new AssertionError(s"${hs.size} headers")))
+
+    holds(new Slot[uic.Tabs[String], String](
+        name = "selected",
+        bare = Present(strip),
+        bind = strip.selected(_),
+        hear = (s, f) => s.onSelectedChange(f),
+        event = "onSelectedChange",
+        render = _.render,
+        start = "one",
+        next = "three",
+        control = third(_),
+        shows = activeId(_).map(_.fold(throw new AssertionError("no active tab"))(tabIds(_))),
+        // The placeholder's headers take a click too, but only the mount holds the tab an unbound strip keeps.
+        ready = Present(t => elementsWithClass(t, "p-tab").map(_.exists(declaresClick)))
+    ))
 
 end TabsTest
