@@ -9,9 +9,10 @@ import kyo.UI.*
   * The trigger is the combobox and keeps focus for as long as the panel is open, so the hosted
   * [[Tree]]'s keyboard runs from there. Two keys are the trigger's own either way: the one that
   * opens the panel, which has to land ON a row, and the Tab that leaves the widget, which has to
-  * take the panel with it.
+  * take the panel with it. Its selection, the branches open in its panel and its own open state are
+  * held to rule A ([[ReactiveValueContract]]).
   */
-class TreeSelectTest extends UicTest:
+class TreeSelectTest extends ReactiveValueContract:
 
     private val nodes = List(
         TreeNode("src", "src", children = List(TreeNode("main", "main"), TreeNode("test", "test"))),
@@ -218,8 +219,8 @@ class TreeSelectTest extends UicTest:
         end for
     }
 
-    // The chosen nodes live somewhere else: the field shows them and hands a pick in its panel over.
-    "a selection bound one way is shown, and a pick is reported without being written" in {
+    // The contract below picks a root node; this one picks inside an open branch.
+    "a pick inside an open branch is reported to a selection bound one way, without being written" in {
         for
             held <- Signal.initRef(Set.empty[String])
             seen <- Signal.initRef(Set.empty[String])
@@ -231,54 +232,95 @@ class TreeSelectTest extends UicTest:
             _    <- click(main)
             h    <- held.get
             s    <- seen.get
-            deaf <- elementsWithClass(treeSelect.selection(held.readOnly).expanded(exp).wired(open, exp, hi, "ts"), "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s == Set("main"), s"held $h, reported $s")
-            assert(deaf.map(textOf).mkString.contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
+        yield assert(h.isEmpty && s == Set("main"), s"held $h, reported $s")
         end for
     }
 
-    "a constant nobody hears is fixed: no panel to open, and no card" in {
-        val fixed = treeSelect.selection(Set("src"))
-        for
-            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
-            field <- elementWithClass(fixed.render, "p-treeselect")
-        yield
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
-        end for
-    }
+    // ---- rule A ----
 
-    "an unbound tree select keeps the node the reader picks" in {
-        for
-            after <- publishedAfterReady(
-                treeSelect.render,
-                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("ts") && declaresClick(e))),
-                until = t => elementsWithClass(t, "p-treeselect-label").map(_.exists(e => textOf(e) == "build.sbt"))
-            )(
-                t => clickBubbling(t)(_.attrs.identifier.contains("ts")),
-                t => clickBubbling(t)(saying("p-tree-node-label", "build.sbt"))
-            )
-        yield assert(after.nonEmpty, "the field never showed the node the reader picked")
-    }
+    /** The trigger, which opens the panel and carries the tree's keyboard: what a reader reaches, and what says it is fixed. */
+    private def trigger(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-treeselect")
+
+    private def opens(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+
+    private def readOnly(c: UI.Ast.Element): Boolean = c.attrs.ariaAttrs.get("readonly").contains("true")
+
+    private def triggered(t: UI)(using Frame): Boolean < Sync = elementsWithClass(t, "p-treeselect").map(_.exists(declaresClick))
+
+    private val idsByLabel = Map("src" -> "src", "main" -> "main", "test" -> "test", "build.sbt" -> "build")
+
+    /** The ids of the nodes the label names. */
+    private def named(t: UI)(using Frame): Set[String] < Sync =
+        elementWithClass(t, "p-treeselect-label").map(l => textOf(l).split(", ").toSet.flatMap(idsByLabel.get))
+
+    holds(new Slot[uic.TreeSelect[String], Set[String]](
+        name = "selection",
+        bare = Present(treeSelect),
+        bind = treeSelect.selection(_),
+        hear = (s, f) => s.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("build"),
+        control = trigger(_),
+        shows = named(_),
+        answers = opens,
+        saysFixed = readOnly,
+        ready = Present(triggered(_)),
+        after = Seq(t => clickBubbling(t)(saying("p-tree-node-label", "build.sbt")))
+    ))
+
+    holds(new Slot[uic.TreeSelect[String], Boolean](
+        name = "open",
+        bare = Present(treeSelect),
+        bind = treeSelect.open(_),
+        hear = (s, f) => s.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        saysFixed = readOnly,
+        ready = Present(triggered(_)),
+        // A click on the chevron reaches the trigger: the field is the one element listening.
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-treeselect-dropdown")))
+    ))
+
+    /** The expand toggle of the `src` branch, the one branch at the root. */
+    private def srcToggle(t: UI)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(t, "p-tree-node-toggle-button").map(_.headOption.getOrElse(throw new AssertionError("no toggle")))
+
+    /** The branches the panel's tree draws open: `src`, the one branch, where its children show. */
+    private def branchesOpen(t: UI)(using Frame): Set[String] < Sync =
+        elementsWithClass(t, "p-tree-node-label").map(ls => if ls.exists(textOf(_) == "main") then Set("src") else Set.empty)
+
+    // The branches open in the panel, which only the mount draws open: the panel is held open here, so the expansion is the
+    // slot under test. The toggle is what a pointer opens a branch with. A tree has no readonly state for its expansion and
+    // its toggles are hidden from assistive tech, so a fixed expansion says nothing beyond each branch's aria-expanded: it
+    // is fixed because no toggle answers (the tree's keys ignore a fixed expansion too, Tree.toggleNodeLive's guard).
+    holds(new Slot[uic.TreeSelect[String], Set[String]](
+        name = "expanded",
+        bare = Present(treeSelect.open(true)),
+        bind = treeSelect.open(true).expanded(_),
+        hear = (s, f) => s.onExpandedChange(f),
+        event = "onExpandedChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("src"),
+        control = srcToggle(_),
+        shows = branchesOpen(_),
+        isFixed = Present(elementsWithClass(_, "p-tree-node-toggle-button").map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
+        ready = Present(elementsWithClass(_, "p-tree-node-toggle-button").map(_.nonEmpty)),
+        mountDraws = true
+    ))
 
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-treeselect-overlay").map(_.nonEmpty)
 
     /** The field as its mount publishes it, the trigger wired. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => elementsWithClass(t, "p-treeselect-dropdown").map(_.nonEmpty))
-
-    private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-treeselect-dropdown")
-
-    "a panel fixed shut draws the field read-only, and says nothing" in {
-        for
-            field <- elementWithClass(treeSelect.open(false).render, "p-treeselect")
-            card  <- elementsWithClass(treeSelect.open(false).render, "p-uic-key-error")
-        yield
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "nothing may open it")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
 
     "a panel fixed open stays: nothing outside dismisses it" in {
         for
@@ -288,31 +330,6 @@ class TreeSelectTest extends UicTest:
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
-    }
-
-    "a panel bound one way is followed, and a press is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(treeSelect.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(treeSelect.open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
-
-    "a panel ref is written before the field reports it" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            t    <- mounted(treeSelect.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
     }
 
 end TreeSelectTest
