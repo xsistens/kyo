@@ -318,18 +318,40 @@ class TreeSelectTest extends ReactiveValueContract:
 
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-treeselect-overlay").map(_.nonEmpty)
 
-    /** The field as its mount publishes it, the trigger wired. */
-    private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => elementsWithClass(t, "p-treeselect-dropdown").map(_.nonEmpty))
+    // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
+    // owner decides.
+    heardBy(new Slot[uic.TreeSelect[String], Boolean](
+        name = "open, from open",
+        bare = Absent,
+        bind = treeSelect.open(_),
+        hear = (s, f) => s.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        ready = Present(triggered(_)),
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-treeselect-dropdown")))
+    ))
 
-    "a panel fixed open stays: nothing outside dismisses it" in {
+    // The combobox has no readonly state for whether its tree is open, so a panel fixed open says nothing beyond
+    // aria-expanded: it is fixed because nothing on the field pretends to close it, while the nodes stay the reader's.
+    "a panel fixed open stays: nothing outside dismisses it, and the field answers no click that would close it" in {
         for
-            t     <- mounted(treeSelect.open(true).render)
+            t     <- mountedWhen(treeSelect.open(true).render)(opened(_))
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+            tr    <- trigger(t)
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
+            assert(!declaresClick(tr), "a click on the field would close nothing, so the field takes none")
+            assert(tr.attrs.tabIndex.contains(0) && tr.attrs.onKeyDown.nonEmpty, "the field stays the tab stop with the tree's keyboard")
+            assert(tr.attrs.ariaAttrs.get("expanded").contains("true"), "and says the tree is open")
+            assert(!readOnly(tr), "the selection is still the reader's, so the field is not read-only")
+        end for
     }
 
 end TreeSelectTest
