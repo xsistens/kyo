@@ -3,8 +3,10 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** How `uic.Paginator` subscribes the page and the rows per page it is drawn from. */
-class PaginatorTest extends UicTest:
+/** How `uic.Paginator` subscribes the page and the rows per page it is drawn from, and both held to rule A
+  * ([[ReactiveValueContract]]).
+  */
+class PaginatorTest extends ReactiveValueContract:
 
     "what follows the page reads the page and the rows per page in ONE region" in {
         for
@@ -172,57 +174,38 @@ class PaginatorTest extends UicTest:
         end for
     }
 
-    "a one-way binding nobody hears is reported, and a constant rows count only disables its dropdown" in {
+    // ---- rule A ----
+
+    private def next(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-next")
+
+    /** Whether nothing in the paginator goes to another page, and every link and button that would says so. */
+    private def pagesFixed(t: UI)(using Frame): Boolean < Sync =
         for
-            page <- Signal.initRef(0)
-            rows <- Signal.initRef(10)
-            deafPage = uic.Paginator().totalRecords(120).rows(10).page(page.readOnly).render
-            deafRows = uic.Paginator().totalRecords(120).rows(rows.readOnly).page(page).rowsPerPageOptions(Seq(10, 20)).render
-            fixed    = uic.Paginator().totalRecords(120).rows(10).page(page).rowsPerPageOptions(Seq(10, 20)).render
-            pageCard  <- elementsWithClass(deafPage, "p-uic-key-error")
-            rowsCard  <- elementsWithClass(deafRows, "p-uic-key-error")
-            fixedCard <- elementsWithClass(fixed, "p-uic-key-error")
+            links <- elementsWithClass(t, "p-paginator-page")
+            navs  <- Kyo.foreach(List("first", "prev", "next", "last"))(c => elementsWithClass(t, s"p-paginator-$c")).map(_.flatten)
         yield
-            assert(pageCard.size == 1 && textOf(pageCard.head).contains("onPageChange"), s"page: ${pageCard.map(textOf)}")
-            assert(rowsCard.size == 1 && textOf(rowsCard.head).contains("onRowsChange"), s"rows: ${rowsCard.map(textOf)}")
-            assert(fixedCard.isEmpty, s"a constant rows count is one the reader cannot change: ${fixedCard.map(textOf)}")
+            val says =
+                (links.filterNot(_.attrs.cssClasses.contains("p-paginator-page-selected")) ++
+                    navs.filterNot(_.attrs.cssClasses.contains("p-disabled")))
+            links.nonEmpty && (links ++ navs).forall(e => !declaresClick(e)) &&
+            says.nonEmpty && says.forall(_.attrs.ariaAttrs.get("disabled").contains("true"))
         end for
-    }
+    end pagesFixed
 
-    "a constant page nobody hears is fixed: its links say so, go nowhere, and no card" in {
-        val fixed = uic.Paginator().totalRecords(120).rows(10).page(2)
-        for
-            links <- elementsWithClass(fixed.render, "p-paginator-page")
-            next  <- elementWithClass(fixed.render, "p-paginator-next")
-            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(links.forall(l => !declaresClick(l)) && !declaresClick(next), "a fixed paginator goes nowhere")
-            assert(next.attrs.ariaAttrs.get("disabled").contains("true"), "and its buttons say so")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-        end for
-    }
-
-    "an unbound paginator keeps the page the reader goes to" in {
-        for
-            after <- publishedAfterReady(
-                uic.Paginator().totalRecords(120).rows(10).render,
-                t => elementsWithClass(t, "p-paginator-next").map(_.exists(declaresClick)),
-                until = t => selectedPage(t).map(_ == "2")
-            )(t => elementsWithClass(t, "p-paginator-next").map(ns => click(ns.head)))
-        yield assert(after.nonEmpty, "the paginator never showed the page the reader went to")
-    }
-
-    "an unbound rows count is the reader's to pick, so its dropdown is live" in {
-        for
-            after <- publishedAfterReady(
-                uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render,
-                t =>
-                    elementsWithClass(t, "p-paginator-rpp-dropdown").map(ds =>
-                        ds.nonEmpty && ds.forall(d => !d.attrs.cssClasses.contains("p-disabled"))
-                    )
-            )()
-        yield assert(after.nonEmpty, "the dropdown was never live")
-    }
+    // Ten rows over 120 records is twelve pages; the next-page button goes from the first to the second.
+    holds(new Slot[uic.Paginator, Int](
+        name = "page",
+        bare = Present(uic.Paginator().totalRecords(120).rows(10)),
+        bind = uic.Paginator().totalRecords(120).rows(10).page(_),
+        hear = (p, f) => p.onPageChange(f),
+        event = "onPageChange",
+        render = _.render,
+        start = 0,
+        next = 1,
+        control = next(_),
+        shows = selectedPage(_).map(_.toInt - 1),
+        isFixed = Present(pagesFixed(_))
+    ))
 
     /** The rows-per-page dropdown's trigger, which opens its panel: what a reader reaches, and what says it is fixed. */
     private def rowsTrigger(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-rpp-dropdown")
@@ -231,17 +214,37 @@ class PaginatorTest extends UicTest:
 
     private def readOnly(c: UI.Ast.Element): Boolean = c.attrs.ariaAttrs.get("readonly").contains("true")
 
+    /** The rows the dropdown shows. */
+    private def rowsShown(t: UI)(using Frame): Int < Sync =
+        elementsWithClass(t, "p-select-label").map(ls =>
+            ls.map(textOf).flatMap(_.toIntOption).headOption.getOrElse(throw new AssertionError(s"no rows shown: ${ls.map(textOf)}"))
+        )
+
+    // The page count follows the rows, so the page stays where it is: a pick of 20 rows on the first page reports no page.
+    holds(new Slot[uic.Paginator, Int](
+        name = "rows",
+        bare = Present(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20))),
+        bind = uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).rows(_),
+        hear = (p, f) => p.onRowsChange(f),
+        event = "onRowsChange",
+        render = _.render,
+        start = 10,
+        next = 20,
+        control = rowsTrigger(_),
+        shows = rowsShown(_),
+        answers = opens,
+        saysFixed = readOnly,
+        // A lookup that finds no dropdown yet is not ready: the first tree published can be a page-link region alone.
+        ready = Present(elementsWithClass(_, "p-paginator-rpp-dropdown").map(_.exists(declaresClick))),
+        after = Seq(t => clickBubbling(t)(e => e.attrs.cssClasses.contains("p-select-option") && textOf(e) == "20"))
+    ))
+
     "the page as first rendered draws an unbound rows dropdown the reader can use, before any mount runs" in {
         for d <- rowsTrigger(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render)
         yield assert(
             !d.attrs.cssClasses.contains("p-disabled") && !readOnly(d),
             s"an unbound rows count is the reader's: ${d.attrs.cssClasses}, ${d.attrs.ariaAttrs}"
         )
-    }
-
-    "an unbound rows count starts at the first count the dropdown offers" in {
-        for labels <- elementsWithClass(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).render, "p-select-label")
-        yield assert(labels.map(textOf).toList == List("10"), s"the dropdown shows ${labels.map(textOf)}")
     }
 
     "a fixed page draws its jump list read-only: a tab stop that says it goes nowhere, and no card" in {
