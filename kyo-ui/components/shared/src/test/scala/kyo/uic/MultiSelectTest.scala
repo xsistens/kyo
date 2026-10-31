@@ -7,9 +7,10 @@ import kyo.UI.*
   * TRIGGER without a filter header, in the header's INPUT with one.
   *
   * The same [[ListNav]] the rest of the family reads, with the one difference the pattern asks
-  * for: an activation toggles the highlighted option and leaves the panel open.
+  * for: an activation toggles the highlighted option and leaves the panel open. Its selection, its
+  * open state and its filter query are held to rule A ([[ReactiveValueContract]]).
   */
-class MultiSelectTest extends UicTest:
+class MultiSelectTest extends ReactiveValueContract:
 
     final private case class Fruit(id: String, name: String, sold: Boolean) derives CanEqual
 
@@ -214,14 +215,17 @@ class MultiSelectTest extends UicTest:
         yield assert(h == Set(fruit(2)) && s == Set(fruit(0), fruit(2)), s"held $h, reported $s")
     }
 
-    "a selection bound one way with nothing to hear a pick says so, and a constant one with onChange does not" in {
+    "a selection a constant somebody hears, a ref holds, or a disabled field shows draws no card" in {
         for
-            held  <- Signal.initRef(Set.empty[Fruit])
-            deaf  <- oneWay(_.selection(held.readOnly)).map(elementsWithClass(_, "p-uic-key-error"))
-            heard <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(heard.isEmpty, s"somebody hears: ${heard.map(textOf)}")
+            held   <- Signal.initRef(Set.empty[Fruit])
+            heard  <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
+            twoWay <- elementsWithClass(multi.selection(held).render, "p-uic-key-error")
+            off    <- elementsWithClass(multi.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+        yield assert(
+            heard.isEmpty && twoWay.isEmpty && off.isEmpty,
+            s"somebody hears, or nobody can pick: ${(heard ++ twoWay ++ off).map(textOf)}"
+        )
+        end for
     }
 
     "the trigger is the combobox, and announces the highlighted option" in {
@@ -535,33 +539,59 @@ class MultiSelectTest extends UicTest:
         yield assert(opened && kept == "grace", s"the query is not the panel's to clear while the filter is off ($kept)")
     }
 
-    "a constant nobody hears is fixed: no panel to open, and no card" in {
-        val fixed = multi.selection(Set(fruit(0)))
-        for
-            card  <- elementsWithClass(fixed.render, "p-uic-key-error")
-            field <- elementWithClass(fixed.render, "p-multiselect")
-        yield
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-            assert(!declaresClick(field) && field.attrs.onKeyDown.isEmpty, "a fixed field opens nothing")
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "and says it is read-only")
-        end for
-    }
+    // ---- rule A ----
 
-    "an unbound multiselect keeps the options the reader picks" in {
-        for
-            after <- publishedAfterReady(
-                multi.render,
-                t => elements(t).map(_.exists(e => e.attrs.identifier.contains("ms") && declaresClick(e))),
-                until = t => elementsWithClass(t, "p-multiselect-label").map(_.exists(e => textOf(e).contains(fruit(0).name)))
-            )(
-                t => clickBubbling(t)(_.attrs.identifier.contains("ms")),
-                t =>
-                    clickBubbling(t)((e: UI.Ast.Element) =>
-                        e.attrs.cssClasses.contains("p-multiselect-option") && textOf(e).contains(fruit(0).name)
-                    )
+    /** The trigger, which opens the panel and carries its keyboard: what a reader reaches, and what says it is fixed. */
+    private def trigger(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-multiselect")
+
+    private def opens(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+
+    private def readOnly(c: UI.Ast.Element): Boolean = c.attrs.ariaAttrs.get("readonly").contains("true")
+
+    private def triggered(t: UI)(using Frame): Boolean < Sync = elementsWithClass(t, "p-multiselect").map(_.exists(declaresClick))
+
+    /** The options the label names. */
+    private def named(t: UI)(using Frame): Set[Fruit] < Sync =
+        elementWithClass(t, "p-multiselect-label").map(l => fruit.filter(f => textOf(l).contains(f.name)).toSet)
+
+    holds(new Slot[uic.MultiSelect[Fruit], Set[Fruit]](
+        name = "selection",
+        bare = Present(multi),
+        bind = multi.selection(_),
+        hear = (m, f) => m.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(fruit(0)),
+        control = trigger(_),
+        shows = named(_),
+        answers = opens,
+        saysFixed = readOnly,
+        ready = Present(triggered(_)),
+        after = Seq(t =>
+            clickBubbling(t)((e: UI.Ast.Element) =>
+                e.attrs.cssClasses.contains("p-multiselect-option") && textOf(e).contains(fruit(0).name)
             )
-        yield assert(after.nonEmpty, "the field never showed the option the reader picked")
-    }
+        )
+    ))
+
+    holds(new Slot[uic.MultiSelect[Fruit], Boolean](
+        name = "open",
+        bare = Present(multi),
+        bind = multi.open(_),
+        hear = (m, f) => m.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = false,
+        next = true,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        saysFixed = readOnly,
+        ready = Present(triggered(_)),
+        // A click on the chevron reaches the trigger: the field is the one element listening.
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-multiselect-dropdown")))
+    ))
 
     private def opened(t: UI)(using Frame) = elementsWithClass(t, "p-multiselect-overlay").map(_.nonEmpty)
 
@@ -569,79 +599,72 @@ class MultiSelectTest extends UicTest:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => elementsWithClass(t, "p-multiselect-dropdown").map(_.nonEmpty))
 
-    private def onDropdown(e: UI.Ast.Element): Boolean = e.attrs.cssClasses.contains("p-multiselect-dropdown")
+    // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
+    // owner decides.
+    heardBy(new Slot[uic.MultiSelect[Fruit], Boolean](
+        name = "open, from open",
+        bare = Absent,
+        bind = multi.open(_),
+        hear = (m, f) => m.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        ready = Present(triggered(_)),
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-multiselect-dropdown")))
+    ))
 
-    "a panel fixed shut draws the field read-only, and says nothing" in {
+    // The combobox has no readonly state for whether its list is open, so a panel fixed open says nothing beyond
+    // aria-expanded: it is fixed because nothing on the field pretends to close it, while the rows stay the reader's.
+    "a panel fixed open stays: nothing outside dismisses it, and the field answers no click that would close it" in {
         for
-            field <- elementWithClass(multi.open(false).render, "p-multiselect")
-            card  <- elementsWithClass(multi.open(false).render, "p-uic-key-error")
-        yield
-            assert(field.attrs.ariaAttrs.get("readonly").contains("true"), "nothing may open it")
-            assert(card.isEmpty, s"a fixed state is not a mistake: ${card.map(textOf)}")
-    }
-
-    "a panel fixed open stays: nothing outside dismisses it" in {
-        for
-            t     <- mounted(multi.open(true).render)
+            t     <- mountedWhen(multi.open(true).render)(opened(_))
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+            tr    <- trigger(t)
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
-    }
-
-    "a panel bound one way is followed, and a press is reported without being written" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef(Absent: Maybe[Boolean])
-            t    <- mounted(multi.open(held.readOnly).onOpenChange(v => seen.set(Present(v))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(multi.open(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(!h && s == Present(true), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")
+            assert(!declaresClick(tr), "a click on the field would close nothing, so the field takes none")
+            assert(tr.attrs.tabIndex.contains(0) && tr.attrs.onKeyDown.nonEmpty, "the field stays the tab stop with the rows' keyboard")
+            assert(tr.attrs.ariaAttrs.get("expanded").contains("true"), "and says the list is open")
+            assert(!readOnly(tr), "the selection is still the reader's, so the field is not read-only")
         end for
     }
 
-    "a panel ref is written before the field reports it" in {
-        for
-            held <- Signal.initRef(false)
-            seen <- Signal.initRef((false, false))
-            t    <- mounted(multi.open(held).onOpenChange(v => held.get.map(h => seen.set((v, h)))).render)
-            _    <- clickBubbling(t)(onDropdown)
-            s    <- seen.get
-        yield assert(s == (true, true), s"reported, held: $s")
-    }
+    // The query is a text the field keeps itself, unbound and from a constant, since it draws the panel from it. Its input
+    // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
+    holds(new Slot[uic.MultiSelect[Fruit], String](
+        name = "filterQuery",
+        bare = Present(multi.open(true).filterable(true)),
+        bind = multi.open(true).filterQuery(_),
+        hear = (m, f) => m.onFilterQueryChange(f),
+        event = "onFilterQueryChange",
+        render = _.render,
+        start = "",
+        next = "ban",
+        control = textField(_, "p-multiselect-filter"),
+        shows = t => textField(t, "p-multiselect-filter").map(textIn),
+        gesture = (c: UI.Ast.Element) => typed(c, "ban", commit = false),
+        answers = editable,
+        saysFixed = {
+            case t: UI.Ast.TextInput => t.readOnly.contains(true)
+            case _                   => false
+        },
+        ready = Present(elementsWithClass(_, "p-multiselect-filter").map(_.nonEmpty)),
+        startText = Present("ch"),
+        mountDraws = true
+    ))
 
-    private def filterInput(t: UI)(using Frame): UI.Ast.Input < Sync =
-        elementWithClass(t, "p-multiselect-filter").map {
-            case i: UI.Ast.Input => i
-            case other           => throw new AssertionError(s"the filter is not an input: $other")
-        }
-
-    private def typeFilter(i: UI.Ast.Input, text: String)(using Frame): Any < Async =
-        i.onInput match
-            case Present(f) => handled(f(text))
-            case Absent     => throw new AssertionError("the filter hears no typing")
-
-    "a query bound one way filters the panel, and typing is reported without being written" in {
+    "a query bound one way filters the panel by what the signal holds" in {
         for
             held <- Signal.initRef("ap")
-            seen <- Signal.initRef(List.empty[String])
-            t    <- mounted(multi.open(true).filterQuery(held.readOnly).onFilterQueryChange(q => seen.updateAndGet(_ :+ q).unit).render)
+            t    <- mounted(multi.open(true).filterQuery(held.readOnly).onFilterQueryChange(_ => ()).render)
             rows <- elementsWithClass(t, "p-multiselect-option")
-            in   <- filterInput(t)
-            _    <- typeFilter(in, "ban")
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(multi.filterQuery(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(rows.size == 1 && textOf(rows.head).contains("Apple"), s"the panel filters by the signal: ${rows.map(textOf)}")
-            assert(h == "ap" && s.lastOption.contains("ban"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onFilterQueryChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
+        yield assert(rows.size == 1 && textOf(rows.head).contains("Apple"), s"the panel filters by the signal: ${rows.map(textOf)}")
     }
 
     "a constant query is the starting text" in {

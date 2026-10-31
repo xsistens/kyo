@@ -151,9 +151,11 @@ final case class MultiSelect[A] private (
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
       * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
-      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only,
-      * `true` keeps the panel open whatever the reader does. Unbound, the field keeps the state itself, starting
-      * closed. A signal nothing hears is reported in a card.
+      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only;
+      * `true` keeps the panel open with nothing that closes it (no backdrop, no click on the field), while the field stays
+      * the tab stop with the option keyboard and a pick is still the reader's. The combobox has no readonly state for its
+      * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
+      * signal nothing hears is reported in a card.
       */
     def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(openSlot = Present(ReactiveValue(v)))
 
@@ -167,6 +169,10 @@ final case class MultiSelect[A] private (
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean =
         ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+
+    /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
+    private def openFixedOpen: Boolean =
+        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = copy(placeholderV = v)
 
@@ -623,7 +629,8 @@ final case class MultiSelect[A] private (
             // The one click listener: a click anywhere on the field toggles, a chip's body included.
             // The clear button, the chips' remove buttons and the panel (`Overlay.containClicks`)
             // end their own clicks where they land.
-            st.filter(_ => !fixed).foreach(s => el = el.onClick(toggle(s)))
+            // A panel fixed open has no close for a click to ask for, so the field takes none.
+            st.filter(_ => !fixed && !openFixedOpen).foreach(s => el = el.onClick(toggle(s)))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard. A
             // filter header is the exception, taking focus into the panel and the keys with it.

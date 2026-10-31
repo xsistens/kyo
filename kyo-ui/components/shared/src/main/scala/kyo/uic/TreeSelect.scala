@@ -136,9 +136,11 @@ final case class TreeSelect[K] private (
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
       * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
-      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only,
-      * `true` keeps the panel open whatever the reader does. Unbound, the field keeps the state itself, starting
-      * closed. A signal nothing hears is reported in a card.
+      * follows it and the field only reports. A constant nobody hears is fixed: `false` draws the field read-only;
+      * `true` keeps the panel open with nothing that closes it (no backdrop, no click on the field), while the field stays
+      * the tab stop with the tree's keyboard and a pick is still the reader's. The combobox has no readonly state for its
+      * tree, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
+      * signal nothing hears is reported in a card.
       */
     def open(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(openSlot = Present(ReactiveValue(v)))
 
@@ -152,6 +154,10 @@ final case class TreeSelect[K] private (
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
     private def openFixedShut: Boolean =
         ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+
+    /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
+    private def openFixedOpen: Boolean =
+        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
 
     /** Selection semantics (Tree's modes): `Single` (default: pick replaces the
       * selection and closes the panel), `Multiple` (toggle, panel stays open), or
@@ -476,7 +482,8 @@ final case class TreeSelect[K] private (
             el = el.tabIndex(0).preventScrollKeys
             if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the panel.
-            if st.isDefined && !fixed then el = el.onClick(toggle)
+            // A panel fixed open has no close for a click to ask for, so the field takes none.
+            if st.isDefined && !fixed && !openFixedOpen then el = el.onClick(toggle)
             // Focus stays on the trigger while the panel is open, so the tree's own keyboard runs
             // from here: closed, the three opening keys; open, the tree's arrows and Escape. The
             // tree supplies the handler rather than a second copy of it living here.

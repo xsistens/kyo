@@ -522,7 +522,12 @@ final case class Listbox[K] private (
         idV.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
-        if fixedFlag then list = list.aria("readonly", "true")
+        // A fixed list is read-only, not disabled: it stays the one tab stop, so a reader still reaches what it holds, and
+        // answers no key and no click (see "readonly is one thing" in this module's CLAUDE.md).
+        if fixedFlag then
+            list = list.aria("readonly", "true")
+            if !disabledFlag then list = list.tabIndex(0)
+        end if
         // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
         // listbox pattern asks for and what Prime does: a reader tabbing through a form should
         // not have to press Tab once per option to get past a list of forty. That holds in the

@@ -3,9 +3,9 @@ package kyo.uic
 import kyo.*
 
 /** `uic.Listbox`'s header filter: on and off through `filterable`, constant or signal, over a query that is kept
-  * whichever way it is switched.
+  * whichever way it is switched. Its selection and its query are held to rule A ([[ReactiveValueContract]]).
   */
-class ListboxTest extends UicTest:
+class ListboxTest extends ReactiveValueContract:
 
     private def fruit(using Frame) = uic.Listbox[String]().item("Apple", "a").item("Banana", "b").item("Pineapple", "p")
 
@@ -84,59 +84,59 @@ class ListboxTest extends UicTest:
         )
     }
 
-    // The chosen set lives somewhere else (a route, a parent): the list shows it and hands a click over.
-    "a selection bound one way is shown, and a click is reported without being written" in {
+    // ---- rule A ----
+
+    private def multiple(using Frame) = fruit.selectionMode(uic.SelectionMode.Multiple).metaKeySelection(false)
+
+    private def rows(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elementsWithClass(t, "p-listbox-option")
+
+    private def row(text: String)(t: UI)(using Frame): UI.Ast.Element < Sync =
+        rows(t).map(_.find(textOf(_) == text).getOrElse(throw new AssertionError(s"no row $text")))
+
+    private val ids = Map("Apple" -> "a", "Banana" -> "b", "Pineapple" -> "p")
+
+    /** The ids of the rows the list draws selected. */
+    private def chosen(t: UI)(using Frame): Set[String] < Sync =
+        rows(t).map(_.filter(_.attrs.ariaAttrs.get("selected").contains("true")).map(r => ids(textOf(r))).toSet)
+
+    // The row is what a reader clicks; the list is the one tab stop, and it is what says the selection is fixed.
+    holds(new Slot[uic.Listbox[String], Set[String]](
+        name = "selection",
+        bare = Present(multiple),
+        bind = multiple.selection(_),
+        hear = (l, f) => l.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("b"),
+        control = row("Banana")(_),
+        shows = chosen(_),
+        saysFixed = _.attrs.ariaAttrs.get("readonly").contains("true"),
+        ready = Present(rows(_).map(_.exists(declaresClick))),
+        fixedOn = Present(elementWithClass(_, "p-listbox-list"))
+    ))
+
+    "onItemClick hears a selection bound one way, so it draws no card" in {
         for
-            held <- Signal.initRef(Set("b"))
-            seen <- Signal.initRef(Set.empty[String])
-            ui = fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).onChange(seen.set).render
-            rows  <- elementsWithClass(ui, "p-listbox-option")
-            _     <- click(rows(0))
-            h     <- held.get
-            s     <- seen.get
-            deaf  <- elementsWithClass(fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).render, "p-uic-key-error")
-            byOld <- elementsWithClass(
-                fruit.selectionMode(uic.SelectionMode.Multiple).selection(held.readOnly).onItemClick(_ => ()).render,
-                "p-uic-key-error"
-            )
+            held  <- Signal.initRef(Set("b"))
+            byOld <- elementsWithClass(multiple.selection(held.readOnly).onItemClick(_ => ()).render, "p-uic-key-error")
+        yield assert(byOld.isEmpty, s"onItemClick hears: ${byOld.map(textOf)}")
+    }
+
+    "a fixed list holds every row to it, not only the one a gesture reaches" in {
+        for rs <- rows(multiple.selection(Set("a")).render)
+        yield assert(rs.size == 3 && rs.forall(r => !declaresClick(r)), "a fixed list picks nothing")
+    }
+
+    "a fixed list stays reachable: the list keeps its tab stop" in {
+        for
+            static <- elementWithClass(multiple.selection(Set("a")).render, "p-listbox-list")
+            live   <- mountedWhen(multiple.selection(Set("a")).render)(t => elementsWithClass(t, "p-listbox-list").map(_.nonEmpty))
+            list   <- elementWithClass(live, "p-listbox-list")
         yield
-            assert(h == Set("b") && s == Set("a", "b"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            assert(byOld.isEmpty, s"onItemClick hears: ${byOld.map(textOf)}")
+            assert(static.attrs.tabIndex.contains(0), "the page as first rendered offers the list to Tab")
+            assert(list.attrs.tabIndex.contains(0), "and so does the list the mount publishes")
         end for
-    }
-
-    "a two-way selection is written before the list reports it" in {
-        for
-            sel  <- Signal.initRef(Set.empty[String])
-            seen <- Signal.initRef((Set.empty[String], Set.empty[String]))
-            ui = fruit.selectionMode(uic.SelectionMode.Multiple).selection(sel).onChange(n => sel.get.map(h => seen.set((n, h)))).render
-            rows <- elementsWithClass(ui, "p-listbox-option")
-            _    <- click(rows(1))
-            s    <- seen.get
-        yield assert(s == (Set("b"), Set("b")), s"reported, held: $s")
-    }
-
-    "a constant nobody hears is fixed: its options click nothing, and no card" in {
-        val fixed = fruit.selectionMode(uic.SelectionMode.Multiple).selection(Set("a"))
-        for
-            rows <- elementsWithClass(fixed.render, "p-listbox-option")
-            card <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(rows.nonEmpty && rows.forall(r => !declaresClick(r)), "a fixed list picks nothing")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-        end for
-    }
-
-    "an unbound list keeps the options the reader picks" in {
-        val free = fruit.selectionMode(uic.SelectionMode.Multiple).metaKeySelection(false)
-        for
-            after <- publishedAfterReady(
-                free.render,
-                t => elementsWithClass(t, "p-listbox-option").map(_.exists(declaresClick)),
-                until = t => elementsWithClass(t, "p-listbox-option-selected").map(_.exists(e => textOf(e) == "Banana"))
-            )(t => clickBubbling(t)((e: UI.Ast.Element) => e.attrs.cssClasses.contains("p-listbox-option") && textOf(e) == "Banana"))
-        yield assert(after.nonEmpty, "the list never showed the option the reader picked")
     }
 
     "a host's fixed list stays fixed through render, whatever the list's own binding says" in {
@@ -150,28 +150,43 @@ class ListboxTest extends UicTest:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => elementsWithClass(t, "p-listbox-filter").map(_.nonEmpty))
 
-    private def filterInput(t: UI)(using Frame): UI.Ast.Input < Sync =
-        elementWithClass(t, "p-listbox-filter").map {
-            case i: UI.Ast.Input => i
-            case other           => throw new AssertionError(s"the filter is not an input: $other")
-        }
+    /** Whether the filter field in `t` is the one the mount wired: the page as first rendered draws it with no typing. */
+    private def filterWired(t: UI)(using Frame): Boolean < Sync =
+        elementsWithClass(t, "p-listbox-filter").map(_.exists {
+            case f: UI.Ast.TextInput => f.onInput.isDefined
+            case _                   => false
+        })
 
-    "a query bound one way filters the list, and typing is reported without being written" in {
+    // The query is a text the list keeps itself, unbound and from a constant, since it filters the rows by it; the page as
+    // first rendered draws the field with nothing in it, so the cases read what the mount published.
+    holds(new Slot[uic.Listbox[String], String](
+        name = "filterQuery",
+        bare = Present(fruit.filterable(true)),
+        bind = fruit.filterQuery(_),
+        hear = (l, f) => l.onFilterQueryChange(f),
+        event = "onFilterQueryChange",
+        render = _.render,
+        start = "",
+        next = "pine",
+        control = textField(_, "p-listbox-filter"),
+        shows = t => textField(t, "p-listbox-filter").map(textIn),
+        gesture = (c: UI.Ast.Element) => typed(c, "pine", commit = false),
+        answers = editable,
+        saysFixed = {
+            case t: UI.Ast.TextInput => t.readOnly.contains(true)
+            case _                   => false
+        },
+        ready = Present(filterWired(_)),
+        startText = Present("apple"),
+        mountDraws = true
+    ))
+
+    "a query bound one way filters the list by what the signal holds" in {
         for
             held  <- Signal.initRef("an")
-            seen  <- Signal.initRef(List.empty[String])
-            t     <- mounted(fruit.filterQuery(held.readOnly).onFilterQueryChange(q => seen.updateAndGet(_ :+ q).unit).render)
+            t     <- mounted(fruit.filterQuery(held.readOnly).onFilterQueryChange(_ => ()).render)
             shown <- shownTexts(t)
-            in    <- filterInput(t)
-            _     <- in.onInput.fold[Any < Async](throw new AssertionError("the filter hears no typing"))(f => handled(f("pine")))
-            h     <- held.get
-            s     <- seen.get
-            deaf  <- elementsWithClass(fruit.filterQuery(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(shown == Chunk("Banana"), s"the list filters by the signal: $shown")
-            assert(h == "an" && s == List("pine"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onFilterQueryChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
+        yield assert(shown == Chunk("Banana"), s"the list filters by the signal: $shown")
     }
 
     "a constant query is the starting text" in {

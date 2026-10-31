@@ -8,9 +8,10 @@ import kyo.UI.*
   * A choice of ONE out of several is a radio group however it is drawn: one tab stop for the whole
   * group, the arrows moving and selecting inside it, and options that report `aria-checked` rather
   * than a toggle button's `aria-pressed`. A choice of SEVERAL is what it looks like, a row of
-  * independent toggle buttons, each its own tab stop, and it stays that way.
+  * independent toggle buttons, each its own tab stop, and it stays that way. Both selections are held
+  * to rule A ([[ReactiveValueContract]]).
   */
-class SelectButtonTest extends UicTest:
+class SelectButtonTest extends ReactiveValueContract:
 
     private val sizes = Seq("Small", "Medium", "Large")
 
@@ -155,24 +156,25 @@ class SelectButtonTest extends UicTest:
         yield assert(got.isEmpty)
     }
 
-    "several choices bound one way are shown, and a click is reported without being written" in {
-        for
-            held <- Signal.initRef(Set("Small"))
-            seen <- Signal.initRef(Set.empty[String])
-            ui = uic.SelectButton[String]().options(sizes).multiple.selection(held.readOnly).onChange(seen.set).render
-            os   <- options(ui)
-            _    <- click(os(1))
-            h    <- held.get
-            s    <- seen.get
-            deaf <- elementsWithClass(
-                uic.SelectButton[String]().options(sizes).multiple.selection(held.readOnly).render,
-                "p-uic-key-error"
-            )
-        yield
-            assert(h == Set("Small") && s == Set("Small", "Medium"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-        end for
-    }
+    /** The options the buttons draw pressed. */
+    private def pressed(t: UI)(using Frame): Set[String] < Sync =
+        options(t).map(os => os.zip(sizes).collect { case (o, s) if o.attrs.ariaAttrs.get("pressed").contains("true") => s }.toSet)
+
+    // A button is the control, and each one says it presses nothing once the set is fixed.
+    holds(new Slot[uic.MultiSelectButton[String], Set[String]](
+        name = "selection, several",
+        bare = Present(group.multiple),
+        bind = group.multiple.selection(_),
+        hear = (b, f) => b.onChange(f),
+        event = "onChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set("Medium"),
+        control = options(_).map(_(1)),
+        shows = pressed(_),
+        answers = c => declaresClick(c) || c.attrs.onKeyDown.nonEmpty,
+        ready = Present(options(_).map(_.exists(declaresClick)))
+    ))
 
     "several choices stay a group of toggle buttons, each its own tab stop" in {
         for
@@ -265,35 +267,77 @@ class SelectButtonTest extends UicTest:
         yield assert(got == List(Size.M))
     }
 
-    "a one-way selection shows the signal, and a click reports through onPick without writing" in {
-        for
-            route <- Signal.initRef(Size.M)
-            picks <- Signal.initRef(List.empty[Size])
-            os    <- options(typed.selection(route.readOnly).onPick(s => picks.updateAndGet(_ :+ s).unit).wired(ids, _ => ()))
-            _     <- click(os(2))
-            held  <- route.get
-            got   <- picks.get
-        yield
-            assert(os.map(_.attrs.ariaAttrs.getOrElse("checked", "-")) == Chunk("false", "true", "false"))
-            assert(got == List(Size.L))
-            assert(held == Size.M)
-    }
+    /** The option the buttons draw checked. */
+    private def checkedSize(t: UI)(using Frame): Maybe[Size] < Sync =
+        options(t).map(os =>
+            Maybe.fromOption(os.zip(Size.values).collectFirst {
+                case (o, s) if o.attrs.ariaAttrs.get("checked").contains("true") => s
+            })
+        )
 
-    "a single choice bound one way that nothing hears says so; onChange, onPick, a ref or disabled keep it quiet" in {
+    private def presses(c: UI.Ast.Element): Boolean = declaresClick(c) || c.attrs.onKeyDown.nonEmpty
+
+    private def answering(t: UI)(using Frame): Boolean < Sync = options(t).map(_.exists(declaresClick))
+
+    private def maybeSlot(
+        name: String,
+        hear: (uic.SelectButton[Size], Maybe[Size] => UI.Action) => Frame ?=> uic.SelectButton[Size],
+        event: String
+    ) =
+        new Slot[uic.SelectButton[Size], Maybe[Size]](
+            name = name,
+            bare = Present(typed),
+            bind = v => typed.selection(v),
+            hear = hear,
+            event = event,
+            render = _.render,
+            start = Absent,
+            next = Present(Size.L),
+            control = options(_).map(_(2)),
+            shows = checkedSize(_),
+            answers = presses,
+            ready = Present(answering(_))
+        )
+
+    // A pick is reported to onChange, then to onPick: each of them hears it.
+    holds(maybeSlot("selection over Maybe", (b, f) => b.onChange(f), "onChange"))
+    heardBy(maybeSlot("selection over Maybe, heard by onPick", (b, f) => b.onPick(s => f(Present(s))), "onPick"))
+
+    private def sizeSlot(
+        name: String,
+        hear: (uic.SelectButton[Size], Size => UI.Action) => Frame ?=> uic.SelectButton[Size],
+        event: String
+    ) =
+        new Slot[uic.SelectButton[Size], Size](
+            name = name,
+            // A group over the option itself always holds one: unbound, a group holds `Maybe`.
+            bare = Absent,
+            bind = v => typed.selection(v),
+            hear = hear,
+            event = event,
+            render = _.render,
+            start = Size.M,
+            next = Size.L,
+            control = options(_).map(_(2)),
+            shows = t => checkedSize(t).map(_.getOrElse(throw new AssertionError("no option is checked"))),
+            answers = presses,
+            ready = Present(answering(_))
+        )
+
+    holds(sizeSlot("selection", (b, f) => b.onPick(f), "onPick"))
+    heardBy(sizeSlot(
+        "selection, heard by onChange",
+        (b, f) => b.onChange(m => m.fold(throw new AssertionError("a group over the option reported none"))(f)),
+        "onChange"
+    ))
+
+    "a single choice a ref holds, or one a disabled group shows, draws no card" in {
         def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-key-error")
         for
-            held     <- Signal.initRef(Size.M)
-            deaf     <- errors(typed.selection(held.readOnly))
-            constant <- errors(typed.selection(Size.M))
-            change   <- errors(typed.selection(held.readOnly).onChange(_ => ()))
-            pick     <- errors(typed.selection(Size.M).onPick(_ => ()))
-            twoWay   <- errors(typed.selection(held))
-            off      <- errors(typed.selection(Size.M).disabled(true))
-        yield
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onChange"), s"nobody hears: ${deaf.map(textOf)}")
-            // A constant nobody hears is fixed rather than a mistake, so it says nothing (see the fixed test).
-            assert(constant.isEmpty, s"a fixed constant: ${constant.map(textOf)}")
-            assert(change.isEmpty && pick.isEmpty && twoWay.isEmpty && off.isEmpty, "somebody hears, or nobody can pick")
+            held   <- Signal.initRef(Size.M)
+            twoWay <- errors(typed.selection(held))
+            off    <- errors(typed.selection(held.readOnly).disabled(true))
+        yield assert(twoWay.isEmpty && off.isEmpty, s"the ref takes the pick, or nobody can pick: ${(twoWay ++ off).map(textOf)}")
         end for
     }
 
@@ -304,23 +348,13 @@ class SelectButtonTest extends UicTest:
         yield assert(off.isEmpty, s"nobody can pick: ${off.map(textOf)}")
     }
 
-    "a constant nobody hears is fixed: its buttons press nothing, and no card" in {
+    "a fixed group holds every button to it, not only the one a gesture reaches" in {
         for
-            os   <- options(typed.selection(Size.M).render)
-            card <- elementsWithClass(typed.selection(Size.M).render, "p-uic-key-error")
+            one     <- options(typed.selection(Size.M).render)
+            several <- options(group.multiple.selection(Set("Small")).render)
         yield
-            assert(os.forall(o => !declaresClick(o)), "a fixed group presses nothing")
-            assert(card.isEmpty, s"a fixed constant: ${card.map(textOf)}")
-    }
-
-    "an unbound group keeps the option the reader presses" in {
-        for
-            after <- publishedAfterReady(
-                typed.render,
-                t => options(t).map(_.exists(declaresClick)),
-                until = t => options(t).map(os => os.lastOption.exists(_.attrs.ariaAttrs.get("checked").contains("true")))
-            )(t => options(t).map(os => click(os(2))))
-        yield assert(after.nonEmpty, "the group never showed the option the reader pressed")
+            assert(one.size == 3 && one.forall(o => !presses(o)), "a fixed single choice presses nothing")
+            assert(several.size == 3 && several.forall(o => !presses(o)), "a fixed set presses nothing")
     }
 
 end SelectButtonTest
