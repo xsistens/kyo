@@ -7,9 +7,9 @@ import kyo.UI.*
   *
   * A `th` and a `tr` are not controls, so a table that gives them a tab stop owes them the keys
   * too. Without these the reader could reach every sortable header and every selectable row and
-  * operate none of them.
+  * operate none of them. The sort, the expansion and the selection are held to rule A ([[ReactiveValueContract]]).
   */
-class TreeTableTest extends UicTest:
+class TreeTableTest extends ReactiveValueContract:
 
     final private case class Row(id: String, name: String) derives CanEqual
 
@@ -34,22 +34,6 @@ class TreeTableTest extends UicTest:
         yield
             assert(afterEnter.map(_.column) == List("Name"), "Enter sorts by that column")
             assert(afterSpace.head.direction != afterEnter.head.direction, "Space cycles it, as a second click would")
-    }
-
-    "a sort bound one way is reported on a header press and not written, and without onSortChange says so" in {
-        for
-            held <- Signal.initRef(List.empty[uic.SortKey])
-            seen <- Signal.initRef(List.empty[uic.SortKey])
-            ui = table.sort(held.readOnly).onSortChange(seen.set).render
-            header <- elementWithClass(ui, "p-treetable-sortable-column")
-            _      <- press(header, UI.Keyboard.Enter)
-            h      <- held.get
-            s      <- seen.get
-            deaf   <- elementsWithClass(table.sort(held.readOnly).render, "p-uic-key-error")
-        yield
-            assert(h.isEmpty && s.map(_.column) == List("Name"), s"held $h, reported $s")
-            assert(deaf.size == 1 && textOf(deaf.head).contains("onSortChange"), s"a sort nobody hears: ${deaf.map(textOf)}")
-        end for
     }
 
     "with metaKeySelection a plain click replaces and Ctrl or Cmd toggles" in {
@@ -102,17 +86,6 @@ class TreeTableTest extends UicTest:
         end for
     }
 
-    "two-way expansion is written before the table reports it" in {
-        for
-            exp  <- Signal.initRef(Set.empty[Row])
-            seen <- Signal.initRef((Set.empty[Row], Set.empty[Row]))
-            ui = parentTable.expanded(exp).onExpandedChange(next => exp.get.map(h => seen.set((next, h)))).render
-            toggles <- elementsWithClass(ui, "p-treetable-node-toggle-button")
-            _       <- click(toggles(0))
-            s       <- seen.get
-        yield assert(s == (Set(r1), Set(r1)), s"reported, held: $s")
-    }
-
     "a selection bound one way is reported on a row press and not written" in {
         for
             held <- Signal.initRef(Set(r2))
@@ -129,23 +102,22 @@ class TreeTableTest extends UicTest:
         end for
     }
 
-    "one-way expansion and selection that nothing hears say so, and onNodeToggle or onRowClick count as hearing" in {
+    "onNodeToggle and onRowClick hear the slots too: neither a constant they hear nor a signal is a mistake" in {
         for
-            e    <- Signal.initRef(Set.empty[Row])
-            s    <- Signal.initRef(Set.empty[Row])
-            deaf <- elementsWithClass(
-                parentTable.expanded(e.readOnly).selectionMode(uic.SelectionMode.Single).selection(s.readOnly).render,
-                "p-uic-key-error"
-            )
+            e     <- Signal.initRef(Set.empty[Row])
+            s     <- Signal.initRef(Set.empty[Row])
             byOld <- elementsWithClass(
                 parentTable.expanded(e.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                     .selection(s.readOnly).onRowClick(_ => ()).render,
                 "p-uic-key-error"
             )
+            live = parentTable.expanded(Set.empty[Row]).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
+                .selection(Set.empty[Row]).onRowClick(_ => ()).render
+            toggles <- elementsWithClass(live, "p-treetable-node-toggle-button")
+            rows    <- elementsWithClass(live, "p-treetable-selectable-row")
         yield
-            val text = deaf.map(textOf).mkString
-            assert(text.contains("onExpandedChange") && text.contains("onSelectionChange"), s"nobody hears: $text")
             assert(byOld.isEmpty, s"onNodeToggle and onRowClick hear: ${byOld.map(textOf)}")
+            assert(toggles.exists(declaresClick) && rows.nonEmpty && rows.forall(declaresClick), "a constant somebody hears is not fixed")
         end for
     }
 
@@ -349,59 +321,77 @@ class TreeTableTest extends UicTest:
         )
     }
 
-    "constants nobody hears are fixed: no header sorts, no toggle opens, no row picks, and no card" in {
-        val fixed = parentTable.columns(uic.column("Born")(_.name).sortBy(_.name)).sort(List(uic.SortKey.ascending("Born")))
-            .expanded(Set(r1)).selectionMode(uic.SelectionMode.Single).selection(Set(r2))
-        for
-            headers <- elementsWithClass(fixed.render, "p-treetable-sortable-column")
-            toggles <- elementsWithClass(fixed.render, "p-treetable-node-toggle-button")
-            rows    <- elementsWithClass(fixed.render, "p-treetable-selectable-row")
-            card    <- elementsWithClass(fixed.render, "p-uic-key-error")
-        yield
-            assert(headers.isEmpty, "a fixed sort offers no header to press")
-            assert(toggles.forall(t => !declaresClick(t)), "a fixed expansion opens nothing")
-            assert(rows.isEmpty, "a fixed selection picks no row")
-            assert(card.isEmpty, s"fixed constants: ${card.map(textOf)}")
-        end for
-    }
+    // ---- rule A ----
 
-    "an unbound tree table keeps what the reader opens" in {
-        for
-            after <- publishedAfterReady(
-                parentTable.render,
-                t => elementsWithClass(t, "p-treetable-node-toggle-button").map(_.exists(declaresClick)),
-                until = t => names(t).map(_.exists(_.contains("Kay")))
-            )(t => elementsWithClass(t, "p-treetable-node-toggle-button").map(bs => click(bs.find(declaresClick).get)))
-        yield assert(after.nonEmpty, "the table never showed the branch the reader opened")
-    }
+    private def headers(t: UI)(using Frame) = elementsWithClass(t, "p-treetable-header-cell")
 
-    "an unbound tree table sorts by the header the reader presses" in {
-        for
-            after <- publishedAfterReady(
-                table.render,
-                t => elementsWithClass(t, "p-treetable-sortable-column").map(_.exists(declaresClick)),
-                until = t =>
-                    elementsWithClass(t, "p-treetable-sortable-column").map(_.exists(_.attrs.ariaAttrs.get("sort").contains("ascending")))
-            )(t => elementWithClass(t, "p-treetable-sortable-column").map(click))
-        yield assert(after.nonEmpty, "the table never sorted by the header the reader pressed")
-    }
+    private def header(t: UI)(using Frame): UI.Ast.Element < Sync =
+        headers(t).map(_.headOption.getOrElse(throw new AssertionError("no header")))
 
-    "the page as first rendered draws an unbound sort's header as the sortable one it will be" in {
-        for h <- elementWithClass(table.render, "p-treetable-header-cell")
-        yield assert(
-            h.attrs.cssClasses.contains("p-treetable-sortable-column") && h.attrs.tabIndex.contains(0) && declaresClick(h),
-            s"an unbound sort is the reader's: ${h.attrs.cssClasses}"
-        )
-    }
+    // A sort is said by aria-sort, and a column header has no readonly state for it: a fixed sort is one no header changes,
+    // by a press or by a key, on headers that stay the tab stops they are when the sort is live.
+    holds(new Slot[uic.TreeTable[Row], List[uic.SortKey]](
+        name = "sort",
+        bare = Present(table),
+        bind = table.sort(_),
+        hear = (t, f) => t.onSortChange(f),
+        event = "onSortChange",
+        render = _.render,
+        start = Nil,
+        next = List(uic.SortKey.ascending("Name")),
+        control = header(_),
+        shows =
+            header(_).map(h => if h.attrs.ariaAttrs.get("sort").contains("ascending") then List(uic.SortKey.ascending("Name")) else Nil),
+        // Fixed is drawn, not removed: the header stays the tab stop it is when live, and answers nothing.
+        isFixed = Present(headers(_).map(hs =>
+            hs.nonEmpty && hs.forall(h => !declaresClick(h) && h.attrs.onKeyDown.isEmpty) && hs.exists(_.attrs.tabIndex.contains(0))
+        )),
+        ready = Present(headers(_).map(_.exists(declaresClick)))
+    ))
 
-    "a fixed sort header stays a tab stop that says its sort and answers nothing" in {
-        for h <- elementWithClass(table.sort(List(uic.SortKey.ascending("Name"))).render, "p-treetable-header-cell")
-        yield
-            assert(h.attrs.tabIndex.contains(0), "a fixed sort is drawn, not removed")
-            assert(!declaresClick(h) && h.attrs.onKeyDown.isEmpty, "and nothing changes it")
-            assert(!h.attrs.cssClasses.contains("p-treetable-sortable-column"), "nor offers a press")
-            assert(h.attrs.ariaAttrs.get("sort").contains("ascending"), "and it says which way it sorts")
-        end for
-    }
+    private def toggles(t: UI)(using Frame) = elementsWithClass(t, "p-treetable-node-toggle-button")
+
+    // The toggler is hidden from the tab order and a treegrid has no readonly state for its expansion, so a fixed expansion
+    // says nothing beyond each row's aria-expanded: it is fixed because no toggler answers.
+    holds(new Slot[uic.TreeTable[Row], Set[Row]](
+        name = "expanded",
+        bare = Present(parentTable),
+        bind = parentTable.expanded(_),
+        hear = (t, f) => t.onExpandedChange(f),
+        event = "onExpandedChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(r1),
+        control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+        shows = names(_).map(ns => if ns.exists(_.contains("Kay")) then Set(r1) else Set.empty),
+        isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
+        ready = Present(toggles(_).map(_.exists(declaresClick)))
+    ))
+
+    /** The body rows, found by their level: a fixed selection takes the selectable class away. */
+    private def bodyRows(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elements(t).map(_.filter(_.attrs.ariaAttrs.contains("level")))
+
+    private val byName = Map("Ada" -> r1, "Grace" -> r2)
+
+    private def single(using Frame) = table.selectionMode(uic.SelectionMode.Single)
+
+    // A row's aria-selected says the selection, and a treegrid's readonly state is about its cells: a fixed selection is
+    // one no row takes as a pick, the selectable class and the press gone with it.
+    holds(new Slot[uic.TreeTable[Row], Set[Row]](
+        name = "selection",
+        bare = Present(single),
+        bind = single.selection(_),
+        hear = (t, f) => t.onSelectionChange(f),
+        event = "onSelectionChange",
+        render = _.render,
+        start = Set.empty,
+        next = Set(r1),
+        control = bodyRows(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
+        shows = elementsWithClass(_, "p-treetable-row-selected").map(_.map(r => byName(textOf(r))).toSet),
+        isFixed = Present(bodyRows(_).map(rs =>
+            rs.nonEmpty && rs.forall(r => !declaresClick(r) && !r.attrs.cssClasses.contains("p-treetable-selectable-row"))
+        )),
+        ready = Present(elementsWithClass(_, "p-treetable-selectable-row").map(_.exists(declaresClick)))
+    ))
 
 end TreeTableTest
