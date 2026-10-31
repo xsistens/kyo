@@ -396,13 +396,18 @@ final case class DatePicker[A] private (
 
         // The dropdown button toggles the calendar, firing onOpen/onClose on actual transitions. Inline without an open ref
         // keeps it disabled (the always-on panel has nothing to toggle); the floating static projection renders it
-        // enabled-looking but inert until the mount wires it.
+        // enabled-looking but inert until the mount wires it. A read-only picker (readonly, or fixed by a constant nobody
+        // hears) keeps it a tab stop that says `aria-disabled` and takes no click: readonly is not disabled, which stays
+        // native.
         var dd = button
             .cssClass("p-datepicker-dropdown")
             .jsProp("type", "button")
             .aria("label", "Choose date")
-        if !interactive || (!floating && oref.isEmpty) then dd = dd.disabled(true)
+        if disabledFlag then dd = dd.disabled(true)
+        else if readonlyFlag then dd = dd.aria("disabled", "true")
+        else if !floating && oref.isEmpty then dd = dd.disabled(true)
         else oref.foreach(r => dd = dd.onClick(seedGrid(nav).andThen(togglePanel(r))))
+        end if
         val dropdown: UI = dd(toChild(GlyphSvg(Icons.calendar, "p-icon")))
 
         var el = div.cssClass("p-datepicker").cssClass("p-component")

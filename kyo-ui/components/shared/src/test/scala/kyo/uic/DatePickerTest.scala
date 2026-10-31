@@ -1031,6 +1031,14 @@ class DatePickerTest extends ReactiveValueContract:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => dropdowns(t).map(_.exists(declaresClick)))
 
+    /** Whether a button says it changes nothing the way a button does: a tab stop with `aria-disabled`, and no click. */
+    private def inertButton(b: UI.Ast.Element): Boolean =
+        val native = b match
+            case d: UI.Ast.HasDisabled => d.disabled.contains(true)
+            case _                     => false
+        !native && !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true")
+    end inertButton
+
     "a calendar fixed open stays: nothing outside dismisses it" in {
         for
             t     <- mounted(picker.open(true).render)
@@ -1039,6 +1047,32 @@ class DatePickerTest extends ReactiveValueContract:
         yield
             assert(panel.nonEmpty, "the calendar shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
+    }
+
+    // Fixed is readonly, and readonly keeps the tab stop: native `disabled` would take the dropdown off the keyboard and make
+    // it say disabled rather than read-only.
+    "a fixed picker keeps its dropdown a tab stop that says it opens nothing, whatever fixed it" in {
+        val fixed: List[(String, UI)] = List(
+            "a value"           -> picker.value(Present(day(july))).render,
+            "the calendar shut" -> picker.open(false).render,
+            "readonly"          -> picker.readonly(true).render,
+            "a set"             -> picker.values(Set(day(july))).render,
+            "a range"           -> picker.range(Present(day(july)), Maybe.empty[LocalDate]).render
+        )
+        Kyo.foreach(fixed)((name, ui) => dropdowns(ui).map(ds => (name, ds.size == 1 && inertButton(ds.head)))).map(rs =>
+            assert(rs.forall(_._2), s"natively disabled or still clickable: ${rs.filterNot(_._2).map(_._1)}")
+        )
+    }
+
+    "a disabled picker keeps its dropdown natively disabled" in {
+        for ds <- dropdowns(picker.disabled(true).render)
+        yield assert(
+            ds.exists {
+                case d: UI.Ast.HasDisabled => d.disabled.contains(true)
+                case _                     => false
+            },
+            "disabled is the other thing, and stays native"
+        )
     }
 
     private def calendar(using Frame) = picker.open(true)
