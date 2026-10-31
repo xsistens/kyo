@@ -4407,4 +4407,84 @@ class DataTableTest extends UicTest:
         end for
     }
 
+    private def filterable(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name).filterBy)
+
+    "the page as first rendered draws an unbound filter's row as the one the reader will type in" in {
+        for
+            fields <- inputs(filterable.render)
+            funnel <- elementsWithClass(filterable.render, "p-datatable-column-filter-button")
+        yield
+            assert(fields.size == 1, s"an unbound filter is the reader's: ${fields.size} fields")
+            assert(!fields.head.readOnly.contains(true) && fields.head.onInput.isDefined, "and it takes what they type")
+            assert(funnel.size == 1 && !funnel.head.attrs.ariaAttrs.contains("disabled"), "with its mode funnel, which is no fixed one")
+        end for
+    }
+
+    /** The tree a fixed filter's funnel opens: the panel it is drawn in, once the mount has wired the funnel. */
+    private def openedBy(fixed: UI)(using Frame, kyo.test.AssertScope): UI < Async =
+        publishedAfterReady(
+            fixed,
+            t => elementsWithClass(t, "p-datatable-column-filter-button").map(_.exists(declaresClick)),
+            until = t =>
+                for
+                    modes <- elementsWithClass(t, "p-datatable-filter-constraint-list")
+                    rules <- elementsWithClass(t, "p-datatable-filter-rule-list")
+                yield modes.nonEmpty || rules.nonEmpty
+        )(t => elementsWithClass(t, "p-datatable-column-filter-button").map(fs => click(fs.head)))
+            .map(_.getOrElse(throw new AssertionError("the funnel never opened what it holds")))
+
+    "a fixed filter row is drawn read-only: it shows the query and nothing in it changes the filter" in {
+        val fixed = filterable.columnFilters(nameFilter("A")).render
+        for
+            fields <- inputs(fixed)
+            funnel <- elementsWithClass(fixed, "p-datatable-column-filter-button")
+            shown  <- bodyNames(fixed)
+            query  <- if fields.isEmpty then Kyo.lift("") else shownQuery(fixed)
+        yield
+            assert(fields.size == 1, s"a fixed filter is drawn, not removed: ${fields.size} fields")
+            assert(query == "A", s"it shows the query: $query")
+            assert(fields.head.readOnly.contains(true) && fields.head.onInput.isEmpty, "and the reader cannot change it")
+            assert(funnel.size == 1 && !funnel.head.attrs.ariaAttrs.contains("disabled"), "its mode funnel is there to open")
+            assert(shown == Chunk("A"), s"the rows follow the fixed filter: $shown")
+        end for
+    }
+
+    // The field shows the query and nothing else says the mode: only the list the funnel opens names it.
+    "a fixed filter row's mode funnel opens the modes read-only: the one running is marked, and none is picked" in {
+        for
+            opened <- openedBy(filterable.columnFilters(nameFilter("A")).render)
+            modes  <- elementsWithClass(opened, "p-datatable-filter-constraint")
+            marked <- elementsWithClass(opened, "p-datatable-filter-constraint-selected")
+        yield
+            assert(modes.size > 1, s"the funnel opens the modes: ${modes.size}")
+            assert(marked.map(textOf) == Chunk("Contains"), s"the running mode is marked: ${marked.map(textOf)}")
+            assert(modes.forall(m => !declaresClick(m) && m.attrs.onKeyDown.isEmpty), "and no mode is picked")
+        end for
+    }
+
+    "a fixed filter menu's funnel opens the conditions read-only: readable, and nothing to apply, clear or add" in {
+        val fixed = filterable.filterDisplay(FilterDisplay.Menu).columnFilters(nameFilter("A")).render
+        for
+            funnel  <- elementsWithClass(fixed, "p-datatable-column-filter-button")
+            opened  <- openedBy(fixed)
+            fields  <- inputs(opened)
+            query   <- shownQuery(opened)
+            buttons <- elementsWithClass(opened, "p-button")
+            modes   <- elementsWithClass(opened, "p-select")
+        yield
+            assert(funnel.size == 1, s"a fixed filter is drawn, not removed: ${funnel.size} funnels")
+            assert(funnel.head.attrs.cssClasses.contains("p-datatable-column-filter-button-active"), "the funnel shows a filter is on")
+            assert(fields.size == 1 && query == "A", s"the panel shows the condition: ${fields.size}, $query")
+            assert(fields.forall(f => f.readOnly.contains(true) && f.onInput.isEmpty), "which the reader cannot change")
+            assert(
+                modes.nonEmpty && modes.forall(_.attrs.ariaAttrs.get("readonly").contains("true")),
+                s"nor its mode: ${modes.map(_.attrs.ariaAttrs)}"
+            )
+            assert(
+                buttons.forall(_.attrs.cssClasses.contains("p-datatable-column-filter-button")),
+                s"and there is nothing to apply, clear, add or remove: ${buttons.map(textOf)}"
+            )
+        end for
+    }
+
 end DataTableTest
