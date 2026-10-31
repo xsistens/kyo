@@ -1027,9 +1027,13 @@ class DatePickerTest extends ReactiveValueContract:
 
     private def dropdowns(t: UI)(using Frame) = elementsWithClass(t, "p-datepicker-dropdown")
 
-    /** The picker as its mount publishes it, the dropdown wired. */
+    /** The picker as its mount publishes it: the dropdown wired, or the calendar shown where nothing may close it. */
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
-        mountedWhen(ui)(t => dropdowns(t).map(_.exists(declaresClick)))
+        mountedWhen(ui)(t =>
+            dropdowns(t).map(_.exists(declaresClick)).map(wired =>
+                if wired then Kyo.lift(true) else elementsWithClass(t, "p-datepicker-panel").map(_.nonEmpty)
+            )
+        )
 
     /** Whether a button says it changes nothing the way a button does: a tab stop with `aria-disabled`, and no click. */
     private def inertButton(b: UI.Ast.Element): Boolean =
@@ -1039,14 +1043,21 @@ class DatePickerTest extends ReactiveValueContract:
         !native && !declaresClick(b) && b.attrs.ariaAttrs.get("disabled").contains("true")
     end inertButton
 
-    "a calendar fixed open stays: nothing outside dismisses it" in {
+    // The dropdown is a button whose one job is to open and close the calendar, so a calendar fixed open says so there the
+    // way a button does, while the field and the grid stay the reader's.
+    "a calendar fixed open stays: nothing outside dismisses it, and the dropdown says it closes nothing" in {
         for
             t     <- mounted(picker.open(true).render)
             panel <- elementsWithClass(t, "p-datepicker-panel")
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+            dd    <- dropdowns(t).map(_.head)
+            field <- elementWithClass(t, "p-datepicker-input")
         yield
             assert(panel.nonEmpty, "the calendar shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
+            assert(inertButton(dd), s"the dropdown is a tab stop that says it changes nothing: ${dd.attrs}")
+            assert(!readOnlyField(field), "the value is still the reader's")
+        end for
     }
 
     // Fixed is readonly, and readonly keeps the tab stop: native `disabled` would take the dropdown off the keyboard and make
@@ -1159,6 +1170,22 @@ class DatePickerTest extends ReactiveValueContract:
         saysFixed = readOnlyField,
         ready = Present(dropdownWired(_)),
         fixedOn = Present(input(_))
+    ))
+
+    // A calendar open by a constant somebody hears, bound one way or to a ref still closes on the dropdown: the reader asks,
+    // and the owner decides.
+    heardBy(new Slot[uic.DatePicker[LocalDate], Boolean](
+        name = "open, from open",
+        bare = Absent,
+        bind = picker.open(_),
+        hear = (p, f) => p.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = dropdown(_),
+        shows = elementsWithClass(_, "p-datepicker-panel").map(_.nonEmpty),
+        ready = Present(dropdownWired(_))
     ))
 
     /** The page the calendar shows, read off its title. */

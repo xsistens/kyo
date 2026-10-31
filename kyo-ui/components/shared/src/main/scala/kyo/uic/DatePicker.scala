@@ -197,10 +197,15 @@ final case class DatePicker[A] private (
     /** Binds the calendar's visibility. A `SignalRef` binds two way: the field, the dropdown button, a completing pick,
       * the button bar, Escape and an outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal`
       * binds one way: the calendar follows it and the picker only reports. A constant nobody hears is fixed: `false`
-      * draws the picker read-only, `true` keeps the calendar open whatever the reader does. Unbound, the picker keeps the
-      * state itself, closed (an [[inline]] calendar open). A signal nothing hears is reported in a card.
+      * draws the picker read-only; `true` keeps the calendar open with nothing that closes it (no backdrop), and the
+      * dropdown button, whose one job is to open and close it, stays a tab stop that says `aria-disabled` and takes no
+      * click, while the field and the grid are still the reader's. Unbound, the picker keeps the state itself, closed (an
+      * [[inline]] calendar open). A signal nothing hears is reported in a card.
       */
     def open(v: Boolean | Signal[Boolean]): DatePicker[A] = copy(openSlot = Present(ReactiveValue(v)))
+
+    /** A calendar held open by a constant nobody hears: nothing the reader does may close it. */
+    private def openFixedOpen: Boolean = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
 
     /** The page to show while neither a `month` ref nor a held value says which. Keeps the render pure. */
     def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = copy(referenceDateV = Present(v))
@@ -397,14 +402,14 @@ final case class DatePicker[A] private (
         // The dropdown button toggles the calendar, firing onOpen/onClose on actual transitions. Inline without an open ref
         // keeps it disabled (the always-on panel has nothing to toggle); the floating static projection renders it
         // enabled-looking but inert until the mount wires it. A read-only picker (readonly, or fixed by a constant nobody
-        // hears) keeps it a tab stop that says `aria-disabled` and takes no click: readonly is not disabled, which stays
-        // native.
+        // hears) and a calendar fixed open keep it a tab stop that says `aria-disabled` and takes no click: readonly is not
+        // disabled, which stays native.
         var dd = button
             .cssClass("p-datepicker-dropdown")
             .jsProp("type", "button")
             .aria("label", "Choose date")
         if disabledFlag then dd = dd.disabled(true)
-        else if readonlyFlag then dd = dd.aria("disabled", "true")
+        else if readonlyFlag || (floating && openFixedOpen) then dd = dd.aria("disabled", "true")
         else if !floating && oref.isEmpty then dd = dd.disabled(true)
         else oref.foreach(r => dd = dd.onClick(seedGrid(nav).andThen(togglePanel(r))))
         end if
