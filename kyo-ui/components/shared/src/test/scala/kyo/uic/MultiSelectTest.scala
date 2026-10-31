@@ -599,14 +599,40 @@ class MultiSelectTest extends ReactiveValueContract:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => elementsWithClass(t, "p-multiselect-dropdown").map(_.nonEmpty))
 
-    "a panel fixed open stays: nothing outside dismisses it" in {
+    // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
+    // owner decides.
+    heardBy(new Slot[uic.MultiSelect[Fruit], Boolean](
+        name = "open, from open",
+        bare = Absent,
+        bind = multi.open(_),
+        hear = (m, f) => m.onOpenChange(f),
+        event = "onOpenChange",
+        render = _.render,
+        start = true,
+        next = false,
+        control = trigger(_),
+        shows = opened(_),
+        answers = opens,
+        ready = Present(triggered(_)),
+        act = Present(clickBubbling(_)(_.attrs.cssClasses.contains("p-multiselect-dropdown")))
+    ))
+
+    // The combobox has no readonly state for whether its list is open, so a panel fixed open says nothing beyond
+    // aria-expanded: it is fixed because nothing on the field pretends to close it, while the rows stay the reader's.
+    "a panel fixed open stays: nothing outside dismisses it, and the field answers no click that would close it" in {
         for
-            t     <- mounted(multi.open(true).render)
+            t     <- mountedWhen(multi.open(true).render)(opened(_))
             shown <- opened(t)
             out   <- elementsWithClass(t, "p-uic-overlay-backdrop")
+            tr    <- trigger(t)
         yield
             assert(shown, "the panel shows")
             assert(out.isEmpty, "no backdrop takes an outside click")
+            assert(!declaresClick(tr), "a click on the field would close nothing, so the field takes none")
+            assert(tr.attrs.tabIndex.contains(0) && tr.attrs.onKeyDown.nonEmpty, "the field stays the tab stop with the rows' keyboard")
+            assert(tr.attrs.ariaAttrs.get("expanded").contains("true"), "and says the list is open")
+            assert(!readOnly(tr), "the selection is still the reader's, so the field is not read-only")
+        end for
     }
 
     // The query is a text the field keeps itself, unbound and from a constant, since it draws the panel from it. Its input
