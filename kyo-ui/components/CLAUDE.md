@@ -858,7 +858,10 @@ unreachable in every picker that bound no `currentView`.
   (`DatePicker.render`: the open, month, view and cursor refs, and the held value itself when no
   `value` is bound), and hands them to the `wired`
   seam. The static projection is the only place a control renders disabled for want of a ref, and
-  that projection is inert throughout.
+  that projection is inert throughout. A slot the component keeps itself is the exception: there the
+  page as first rendered draws the control the reader will use, never the fixed one, since nothing
+  about it is fixed (Paginator's rows dropdown, TreeTable's sortable headers; the contract's "does not
+  call an unbound slot fixed" holds them).
 - **The seam must mint the way the mount does**, from the component's own fields
   (`dp.currentViewRefV` else `Signal.initRef(dp.kind.view)`), or the golden documents a control the
   reader never meets and a caller's own binding stops working through the seam.
@@ -907,6 +910,18 @@ ToggleButton all answer this way; `ReadonlyTest` holds them to it.
   outside dismisses, and the keys change nothing. Their tests judge what answers, never what is
   said (the contract's `isFixed`, not `saysFixed`). A control that IS only the opener (DatePicker's dropdown button) keeps the button
   vocabulary: a tab stop with `aria-disabled` and no click.
+- **The same split holds for the structural components.** A control that only changes the state says so the way its
+  role can: Carousel's navigators and Galleria's, Paginator's page links, OrderList's and PickList's move buttons and
+  OrganizationChart's toggle are buttons with `aria-disabled`; a `role="tab"` header (Tabs, a horizontal Stepper) has no
+  readonly state either, so an inactive one says `aria-disabled` the way a radio does (a Tabs url header still navigates,
+  so it says nothing); a fixed dropdown (Paginator's rows and jump list) is a readonly Select. A state that shares its
+  element with another the reader keeps says nothing and is judged by `isFixed`: a tree's or a treegrid's selection
+  (Tree, TreeTable; a treegrid's readonly state is about its cells), an OrganizationChart node (no role at all), a
+  TreeTable expansion, a TreeTable sort (`aria-sort` carries it).
+- **A fixed sort header stays a tab stop with no handlers** (decided 2026-10-31). It keeps `tabIndex(0)`, `aria-sort`
+  and its direction icon, answers no press or key, and says nothing more; it drops the sortable class, whose pointer
+  cursor and hover highlight say a press would change something. Removing the stop was removing the control
+  (`TreeTableTest`'s sort slot holds it). DataTable's headers still drop it and owe the same change.
 - **Do not implement readonly by disabling the native input.** It drops the tab stop, so a
   keyboard reader cannot reach the value at all, and it makes readonly and disabled the same
   thing to a screen reader (which reports the disabled state and ignores `aria-readonly`
