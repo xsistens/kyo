@@ -128,6 +128,17 @@ class ListboxTest extends ReactiveValueContract:
         yield assert(rs.size == 3 && rs.forall(r => !declaresClick(r)), "a fixed list picks nothing")
     }
 
+    "a fixed list stays reachable: the list keeps its tab stop" in {
+        for
+            static <- elementWithClass(multiple.selection(Set("a")).render, "p-listbox-list")
+            live   <- mountedWhen(multiple.selection(Set("a")).render)(t => elementsWithClass(t, "p-listbox-list").map(_.nonEmpty))
+            list   <- elementWithClass(live, "p-listbox-list")
+        yield
+            assert(static.attrs.tabIndex.contains(0), "the page as first rendered offers the list to Tab")
+            assert(list.attrs.tabIndex.contains(0), "and so does the list the mount publishes")
+        end for
+    }
+
     "a host's fixed list stays fixed through render, whatever the list's own binding says" in {
         for
             ref  <- Signal.initRef(Set("a"))
