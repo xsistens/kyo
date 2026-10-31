@@ -894,6 +894,19 @@ readonly state), and inert to every key and click that would change it. `disable
 different thing, and stays native. Select, CheckBox, ToggleSwitch, RadioButton, Rating and
 ToggleButton all answer this way; `ReadonlyTest` holds them to it.
 
+- **A fixed state is readonly too, and keeps the tab stop the live control has.** A Listbox whose
+  selection is a constant nobody hears hung its `tabIndex` on the same branch as its click and key
+  handlers, so the fixed list said `aria-readonly` on an element no reader could Tab to. Give the
+  tab stop on its own condition (not disabled), and the handlers on theirs (`ListboxTest`).
+- **A state the role has no readonly vocabulary for says nothing; `aria-expanded` carries it.** A
+  tree has no readonly state for which branches are open, and a combobox none for whether its list
+  is open. So a fixed expansion (TreeSelect's `expanded`, and Tree's) and a combobox panel fixed
+  open (Select, MultiSelect, CascadeSelect, TreeSelect) add no `aria-readonly` or `aria-disabled`:
+  either would misstate the selection, which is still the reader's. They are fixed because nothing
+  pretends to change them: no toggle answers, no click on the field asks for a close, nothing
+  outside dismisses, and the keys change nothing. Their tests judge what answers, never what is
+  said (the contract's `isFixed`, not `saysFixed`). A control that IS only the opener (DatePicker's dropdown button) keeps the button
+  vocabulary: a tab stop with `aria-disabled` and no click.
 - **Do not implement readonly by disabling the native input.** It drops the tab stop, so a
   keyboard reader cannot reach the value at all, and it makes readonly and disabled the same
   thing to a screen reader (which reports the disabled state and ignores `aria-readonly`
