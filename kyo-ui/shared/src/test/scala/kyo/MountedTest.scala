@@ -644,7 +644,14 @@ class MountedTest extends kyo.test.Test[Any]:
                     _     <- inner.claim(node, identity, spec, pass)
                     _     <- inner.endWalk
                     // The region started a pass that has not recorded its walk, so the cut the next pass asks for is not reached.
-                    _ <- Sync.defer(watch.started(() => true))
+                    source  <- Signal.initRef(0)
+                    started <- Latch.init(1)
+                    _       <- Fiber.init(
+                        source.observeStamped(watch.stamp)(_ =>
+                            started.release
+                        )
+                    )
+                    _ <- started.await
                     _ <- inner.beginWalk(Seq.empty)
                     _ <- table.evictAll
                 yield ()

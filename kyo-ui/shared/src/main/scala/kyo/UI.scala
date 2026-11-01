@@ -2265,9 +2265,13 @@ object UI:
                 def signal: Signal[A]
                 def render: A => UI
 
-                /** Observes the source in value space: an emission equal to the last one never reaches the projection. */
-                private[kyo] def observe[S](paint: UI => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
-                    signal.observe(v => paint(render(v)))
+                /** Observes the source in value space: an emission equal to the last one never reaches the projection. The passes and
+                  * rests go to `stamp` (see `Signal.observeStamped`).
+                  */
+                private[kyo] def observe[S](stamp: Signal.ReadStamp)(paint: UI => Unit < (S & Async & Scope))(using
+                    Frame
+                ): Unit < (S & Async) =
+                    signal.observeStamped(stamp)(v => paint(render(v)))
             end Source
 
             object Source:
