@@ -13,6 +13,9 @@ import java.util.concurrent.atomic.AtomicReference
   */
 class SignalCallbackStressTest extends kyo.test.Test[Any]:
 
+    /** The report of a subscriber that must not fail: a failure surfaces in the writer's `set`, and so in the test. */
+    private val rethrow: Throwable => Unit = ex => throw ex
+
     private val rounds = 400
     private val writes = 2000
     private val churns = 500
@@ -34,13 +37,13 @@ class SignalCallbackStressTest extends kyo.test.Test[Any]:
         val failures = (1 to rounds).flatMap { round =>
             val r    = Signal.SignalRef.Unsafe.init(0)
             val last = new AtomicReference[Int](-1)
-            discard(r.safe.unsafeObserveProjected[Int](identity, Absent, v => last.set(v)))
+            discard(r.safe.unsafeObserveProjected[Int](identity, Absent, v => last.set(v), rethrow))
             runAll(
                 () => for i <- 1 to writes do r.set(i * 2),
                 () => for i <- 1 to writes do r.set(i * 2 + 1),
                 () =>
                     for _ <- 1 to churns do
-                        r.safe.unsafeObserveProjected[Int](identity, Absent, _ => ()).foreach(_())
+                        r.safe.unsafeObserveProjected[Int](identity, Absent, _ => (), rethrow).foreach(_())
             )
             val settled = last.get() == r.get()
             r.set(-2)
@@ -66,6 +69,7 @@ class SignalCallbackStressTest extends kyo.test.Test[Any]:
                     gate.await()
                 discard(seen.add(v))
             ,
+            rethrow,
             Absent
         )
         val slow = new Thread(() => sub.deliver())
@@ -89,7 +93,7 @@ class SignalCallbackStressTest extends kyo.test.Test[Any]:
             val r    = Signal.SignalRef.Unsafe.init(0)
             val last = new AtomicReference[Int](-1)
             runAll(
-                () => discard(r.safe.unsafeObserveProjected[Int](identity, Absent, v => last.set(v))),
+                () => discard(r.safe.unsafeObserveProjected[Int](identity, Absent, v => last.set(v), rethrow)),
                 () => for i <- 1 to 3 do r.set(i)
             )
             if last.get() == r.get() then None else Some(s"round $round: saw ${last.get()}, holds ${r.get()}")
@@ -108,12 +112,14 @@ class SignalCallbackStressTest extends kyo.test.Test[Any]:
                 v =>
                     val p = prev.getAndSet(v)
                     if v < p then discard(regress.compareAndSet(Absent, Present((p, v))))
+                ,
+                rethrow
             ))
             runAll(
                 () => for i <- 1 to writes do r.set(i),
                 () =>
                     for _ <- 1 to churns do
-                        r.safe.unsafeObserveProjected[Int](identity, Absent, _ => ()).foreach(_())
+                        r.safe.unsafeObserveProjected[Int](identity, Absent, _ => (), rethrow).foreach(_())
             )
             regress.get().map((p, v) => s"round $round: $v after $p").toOption
         }

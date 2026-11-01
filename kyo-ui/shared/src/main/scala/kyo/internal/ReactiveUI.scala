@@ -2147,10 +2147,15 @@ private[kyo] object ReactiveUI:
                             v =>
                                 patch(rui.path, v)
                                 report(cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text))
-                    Sync.Unsafe.defer {
-                        sig.unsafeObserveProjected[String](identity, rendered, write) match
-                            case Absent           => Kyo.lift(false)
-                            case Present(release) => registerRelease(release, releases).andThen(true)
+                    Log.use { log =>
+                        Sync.Unsafe.defer {
+                            // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
+                            val report: Throwable => Unit =
+                                ex => log.unsafe.error(s"kyo-ui: text binding failed at path=${rui.path.mkString(".")}", ex)
+                            sig.unsafeObserveProjected[String](identity, rendered, write, report) match
+                                case Absent           => Kyo.lift(false)
+                                case Present(release) => registerRelease(release, releases).andThen(true)
+                        }
                     }
                 }
             case _ => false
@@ -2308,10 +2313,14 @@ private[kyo] object ReactiveUI:
         CanEqual[A, A],
         Frame
     ): Unit < (Sync & Scope) =
-        Sync.Unsafe.defer {
-            sig.unsafeObserveProjected[A](identity, rendered, write) match
-                case Present(release) => registerRelease(release, releases)
-                case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                // A failing write is logged to the Log bound here, as `onChange` logs one: the write runs inside the writer's `set`.
+                val report: Throwable => Unit = ex => log.unsafe.error("kyo-ui: channel binding failed", ex)
+                sig.unsafeObserveProjected[A](identity, rendered, write, report) match
+                    case Present(release) => registerRelease(release, releases)
+                    case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+            }
         }
 
     /** Where a callback binding's release goes: into the row's scope when one is collecting, else onto the Scope. */
@@ -2390,22 +2399,22 @@ private[kyo] object ReactiveUI:
         // value equals the last delivered one, so a record that ticks once a second stops reaching the regions drawing the
         // slices of it that did not move. Without a source (a lifted `Signal[UI]`, where no value exists before the UI) it
         // stays the projected signal and the only available comparison is the UI itself.
-        def observed(paint: UI => Unit < (Async & Scope)): Unit < Async =
+        def observed(stamp: Signal.ReadStamp)(paint: UI => Unit < (Async & Scope)): Unit < Async =
             rui.source match
-                case Present(src) => src.observe(paint)
-                case Absent       => rui.signal.observe(paint)
+                case Present(src) => src.observe(stamp)(paint)
+                case Absent       => rui.signal.observeStamped(stamp)(paint)
 
         def start(step: (UI, Boolean) => Unit < (Async & Scope)): Unit < (Async & Scope) =
             regionMounts.register.map { watch =>
                 startOwnedFiber {
                     Abort.run[Throwable] {
                         var first = true
-                        Signal.passWatch.let(Present(watch))(observed { current =>
+                        observed(watch.stamp) { current =>
                             val isFirst = first
                             first = false
                             // Each value is a group of its own, released before anything it subscribed is.
                             ReleaseGroup.owning(_ => step(current, isFirst))
-                        })
+                        }
                     }.map { result =>
                         result.fold(
                             _ => (),
@@ -2986,12 +2995,13 @@ private[kyo] object ReactiveUI:
 
                         Abort.run[Throwable] {
                             var first = true
-                            Signal.passWatch.let(Present(watch))(itemSignal.observe { items =>
-                                val isFirst = first
-                                first = false
-                                if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
-                                else handle(items)
-                            })
+                            itemSignal.observeStamped(watch.stamp) {
+                                items =>
+                                    val isFirst = first
+                                    first = false
+                                    if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
+                                    else handle(items)
+                            }
                         }.map { result =>
                             result.fold(
                                 _ => (),
@@ -3737,46 +3747,39 @@ private[kyo] object ReactiveUI:
         val audited: Local[Boolean] = Local.init(false)
     end MountSession
 
-    /** The passes of one region subscription as its observation reports them (see `Signal.PassWatch`): how many started, which of them
-      * last recorded its walk in the table, and whether a write landed since the latest read. A cut waits for a region until it has seen
-      * every write of the change: it was current when the change ended, or a pass that started after that has recorded its walk.
+    /** The passes of one region subscription as its observation records them in [[stamp]] (see `Signal.ReadStamp`): how many started,
+      * which of them last recorded its walk in the table, and whether a write landed since the latest read. A cut waits for a region
+      * until it has seen every write of the change: it was current when the change ended, or a pass that started after that has recorded
+      * its walk.
       */
-    final private[kyo] class RegionWatch(scope: MountScope) extends Signal.PassWatch:
-        private val starts                         = new java.util.concurrent.atomic.AtomicLong()
-        private val planned                        = new java.util.concurrent.atomic.AtomicLong()
-        private val rests                          = new java.util.concurrent.atomic.AtomicLong()
-        private val ended                          = new java.util.concurrent.atomic.AtomicBoolean()
-        @volatile private var probe: () => Boolean = () => false
+    final private[kyo] class RegionWatch(scope: MountScope):
+        /** What the region's observation records, through `Signal.observeStamped`; each rest rechecks the table. */
+        val stamp: Signal.ReadStamp = new Signal.ReadStamp(() => scope.table.recheck())
 
-        def started(behind: () => Boolean): Unit =
-            probe = behind
-            discard(starts.incrementAndGet())
-
-        def rested(): Unit =
-            discard(rests.incrementAndGet())
-            scope.table.recheck()
+        private val planned = new java.util.concurrent.atomic.AtomicLong()
+        private val ended   = new java.util.concurrent.atomic.AtomicBoolean()
 
         /** The pass that started last has recorded its walk. */
         def recorded(): Unit =
-            planned.set(starts.get())
+            planned.set(stamp.passes)
             scope.table.recheck()
 
         def end(): Unit =
             ended.set(true)
             scope.table.recheck()
 
-        def started: Long = starts.get()
+        def started: Long = stamp.passes
 
-        def restedSoFar: Long = rests.get()
+        def restedSoFar: Long = stamp.rests
 
         /** Whether the region has seen every write up to a cut taken when it had started `at` passes and rested `restsAt` times: a pass
-          * started since has recorded its walk, or its latest pass has, and its probe says nothing landed since, or it re-read and found
-          * its value unchanged since. The last is what catches up a region whose probe cannot tell (a signal without an exact read).
+          * started since has recorded its walk, or its latest pass has, and its stamp says nothing landed since, or it re-read and found
+          * its value unchanged since. The last is what catches up a region whose stamp cannot tell (a signal without an exact read).
           */
-        def caughtUp(at: Long, restsAt: Long): Boolean =
+        def caughtUp(at: Long, restsAt: Long)(using AllowUnsafe): Boolean =
             ended.get() || !scope.followed || {
                 val p = planned.get()
-                p > at || (p == starts.get() && (!probe() || rests.get() > restsAt))
+                p > at || (p == stamp.passes && (!stamp.behind() || stamp.rests > restsAt))
             }
     end RegionWatch
 
@@ -4742,9 +4745,9 @@ private[kyo] object ReactiveUI:
                     end for
             _ <- startOwnedFiber(
                 // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
-                Abort.run[Throwable](Signal.passWatch.let(Present(watch))(instance.cell.observe(state =>
+                Abort.run[Throwable](instance.cell.observeStamped(watch.stamp)(state =>
                     ReleaseGroup.owning(_ => observed(state))
-                ))).map { result =>
+                )).map { result =>
                     result.fold(
                         _ => (),
                         err => Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", err),

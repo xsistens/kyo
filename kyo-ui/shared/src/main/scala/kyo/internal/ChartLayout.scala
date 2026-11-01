@@ -81,15 +81,13 @@ private[kyo] object ChartLayout:
       * Returns the configured margin unchanged when it is already wide enough, so a chart with narrow
       * labels keeps its configured margin.
       */
-    private[kyo] def leftAxisMargin[A](spec: Chart[A], configuredLeft: Double)(using Frame, AllowUnsafe): Double =
+    private[kyo] def leftAxisMargin[A](spec: Chart[A], configuredLeft: Double)(using Frame, AllowUnsafe, SignalNow.Locals): Double =
         val rowsMaybe: Maybe[Chunk[A]] = spec.data match
             case DataSource.Static(rs)   => Present(rs)
             case DataSource.Live(signal) =>
-                // Unsafe: a point-in-time sample of the live signal's current rows, used only to size the
-                // left margin to the labels currently on screen. Pure synchronous read, no suspension.
-                // Cannot throw: signal.current returns A < Sync (no Abort in scope), so Abort.run yields
-                // Result.Ok and getOrThrow never executes the throw branch.
-                Present(Sync.Unsafe.evalOrThrow(signal.current))
+                // Unsafe: a point-in-time sample of the live signal's current rows, used only to size the left margin to the
+                // labels currently on screen, read as the fiber lowering the chart reads it (Locals included, see SignalNow).
+                Present(SignalNow[Chunk[A]](signal))
         rowsMaybe match
             case Absent        => configuredLeft
             case Present(rows) =>
@@ -141,7 +139,7 @@ private[kyo] object ChartLayout:
       * will actually render (not hidden AND at least one mark carries a `color` encoding) so legend rows sit in
       * reserved space above the plot without overlapping the bars.
       */
-    private[kyo] def buildLayout(spec: Chart[?])(using Frame, AllowUnsafe): Layout =
+    private[kyo] def buildLayout(spec: Chart[?])(using Frame, AllowUnsafe, SignalNow.Locals): Layout =
         val (w, h) = spec.chartSize
         val m      = spec.marginsCfg
         // The right-axis layout still needs the extra fixed reserve for dual-axis charts; otherwise use the

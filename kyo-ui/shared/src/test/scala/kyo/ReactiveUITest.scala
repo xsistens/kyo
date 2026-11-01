@@ -261,4 +261,16 @@ class ReactiveUITest extends UITest:
         activations(anchor, "ArrowDown").map(n => assert(n == 0))
     }
 
+    "the walk that subscribes a page keeps, as what it painted, the value a Local-chosen signal has where the page mounts" in {
+        val label: Local[String]                  = Local.init("unset")
+        def all(rui: ReactiveUI): Seq[ReactiveUI] = rui +: rui.children.flatMap(all)
+        val labelled                              = Signal.withLocal(label)(l => Signal.initConst(s"label:$l"))
+        label
+            .let("set")(ReactiveUI.normalize(UI.div(UI.span(labelled).id("l")), Seq.empty))
+            .map { rui =>
+                val painted = all(rui).flatMap(_.renderedValue.toList).collect { case t: UI.Ast.Text => t.value }
+                assert(painted == Seq("label:set"))
+            }
+    }
+
 end ReactiveUITest

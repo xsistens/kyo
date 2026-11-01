@@ -173,4 +173,32 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a failing sink is logged to the Log bound where the channel subscribed, and the writer's set completes" in {
+        val exchange = new UIExchange:
+            private def boom = throw new RuntimeException("boom")
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async                                                   = Kyo.unit
+            override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Present((_, _, _) => boom)
+            override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present((_, _, _) => boom)
+            override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present((_, _, _) => boom)
+        Scope.run {
+            channels.map(Kyo.foreachDiscard(_) { ch =>
+                val logged = new UIScreen.Warnings
+                for
+                    root <- ReactiveUI.normalize(ch.ui, Seq.empty)
+                    _    <- Log.let(logged.safe)(ReactiveUI.subscribe(root, exchange))
+                    // Outside the binding: the writer's stack cannot name the Log, only the subscription could.
+                    _ <- ch.move
+                yield assert(logged.errors.exists(_.contains("channel binding failed")), s"${ch.name}: the bound Log got: ${logged.errors}")
+                end for
+            })
+        }
+    }
+
 end ReactiveChannelBindingTest
