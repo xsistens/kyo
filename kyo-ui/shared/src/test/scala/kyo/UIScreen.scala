@@ -142,7 +142,10 @@ private[kyo] object UIScreen:
     final class Warnings extends Log.Unsafe:
         private val seen = new java.util.concurrent.ConcurrentLinkedQueue[String]
 
-        def lines: Chunk[String] = Chunk.from(seen.toArray(Array.empty[String]))
+        private val failures = new java.util.concurrent.ConcurrentLinkedQueue[String]
+
+        def lines: Chunk[String]  = Chunk.from(seen.toArray(Array.empty[String]))
+        def errors: Chunk[String] = Chunk.from(failures.toArray(Array.empty[String]))
 
         def level: Log.Level                   = Log.Level.warn
         def name: String                       = "warnings"
@@ -156,8 +159,8 @@ private[kyo] object UIScreen:
         def info(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = ()
         def warn(msg: => String)(using Frame, AllowUnsafe): Unit                   = discard(seen.add(msg))
         def warn(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = discard(seen.add(msg))
-        def error(msg: => String)(using Frame, AllowUnsafe): Unit                  = ()
-        def error(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = ()
+        def error(msg: => String)(using Frame, AllowUnsafe): Unit                  = discard(failures.add(msg))
+        def error(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = discard(failures.add(msg))
     end Warnings
 
 end UIScreen

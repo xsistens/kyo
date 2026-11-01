@@ -139,4 +139,32 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a failing sink is logged to the Log bound where the region subscribed, and the writer's set completes" in {
+        val logged   = new UIScreen.Warnings
+        val exchange = new UIExchange:
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async                                      = Kyo.unit
+            override val textPatcherNow: Maybe[(Seq[String], String) => Unit] =
+                Present((_, v) => throw new RuntimeException(s"boom $v"))
+        Scope.run {
+            for
+                ref  <- Signal.initRef("before")
+                root <- ReactiveUI.normalize(UI.div(ref: Signal[String]), Seq.empty)
+                _    <- Log.let(logged.safe)(ReactiveUI.subscribe(root, exchange))
+                // Outside the binding: the writer's stack cannot name the Log, only the subscription could.
+                _    <- ref.set("after")
+                held <- ref.get
+            yield
+                assert(held == "after")
+                assert(logged.errors.exists(_.contains("text binding failed")), s"the bound Log got: ${logged.errors}")
+            end for
+        }
+    }
+
 end ReactiveTextBindingTest

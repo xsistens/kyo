@@ -2147,10 +2147,15 @@ private[kyo] object ReactiveUI:
                             v =>
                                 patch(rui.path, v)
                                 report(cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text))
-                    Sync.Unsafe.defer {
-                        sig.unsafeObserveProjected[String](identity, rendered, write) match
-                            case Absent           => Kyo.lift(false)
-                            case Present(release) => registerRelease(release, releases).andThen(true)
+                    Log.use { log =>
+                        Sync.Unsafe.defer {
+                            // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
+                            val report: Throwable => Unit =
+                                ex => log.unsafe.error(s"kyo-ui: text binding failed at path=${rui.path.mkString(".")}", ex)
+                            sig.unsafeObserveProjected[String](identity, rendered, write, report) match
+                                case Absent           => Kyo.lift(false)
+                                case Present(release) => registerRelease(release, releases).andThen(true)
+                        }
                     }
                 }
             case _ => false
@@ -2308,10 +2313,14 @@ private[kyo] object ReactiveUI:
         CanEqual[A, A],
         Frame
     ): Unit < (Sync & Scope) =
-        Sync.Unsafe.defer {
-            sig.unsafeObserveProjected[A](identity, rendered, write) match
-                case Present(release) => registerRelease(release, releases)
-                case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                // A failing write is logged to the Log bound here, as `onChange` logs one: the write runs inside the writer's `set`.
+                val report: Throwable => Unit = ex => log.unsafe.error("kyo-ui: channel binding failed", ex)
+                sig.unsafeObserveProjected[A](identity, rendered, write, report) match
+                    case Present(release) => registerRelease(release, releases)
+                    case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+            }
         }
 
     /** Where a callback binding's release goes: into the row's scope when one is collecting, else onto the Scope. */
