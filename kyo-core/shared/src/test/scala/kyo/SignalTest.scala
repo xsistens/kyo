@@ -1944,145 +1944,185 @@ class SignalTest extends kyo.test.Test[Any]:
         }
     }
 
-    "pass watch" - {
-        final class Watch extends Signal.PassWatch:
-            val starts                               = new java.util.concurrent.atomic.AtomicInteger(0)
-            val rests                                = new java.util.concurrent.atomic.AtomicInteger(0)
-            @volatile var probe: () => Boolean       = () => false
-            def started(behind: () => Boolean): Unit =
-                probe = behind
-                discard(starts.incrementAndGet())
-            def rested(): Unit = discard(rests.incrementAndGet())
-        end Watch
+    "read stamp" - {
+        val ri = Signal.defaultRepairInterval
+
+        def behindOf(stamp: Signal.ReadStamp)(using Frame): Boolean < Sync = Sync.Unsafe.defer(stamp.behind())
+
+        /** A stamp whose rests release `rested`, the barrier a test waits on instead of polling. */
+        def restingStamp(rested: Latch)(using Frame): Signal.ReadStamp =
+            new Signal.ReadStamp(() => rested.unsafe.release()(using AllowUnsafe.embrace.danger))
 
         def reportsPasses(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
             for
-                ref   <- Signal.initRef(0)
-                gate  <- Promise.init[Unit, Any]
-                inner <- AtomicInt.init(0)
-                watch = new Watch
-                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe { v =>
-                    // An observation a pass starts must not report to the watch of the one that started it.
-                    Fiber.init(ref.map(_ + 1).observe(_ => inner.incrementAndGet.unit)).andThen(if v == 1 then gate.get else Kyo.unit)
-                }))
-                _          <- assertEventually(Sync.defer(watch.starts.get == 1))
-                idle       <- Sync.defer(watch.probe())
+                ref    <- Signal.initRef(0)
+                gate   <- Promise.init[Unit, Any]
+                passes <- Channel.init[Int](4)
+                rested <- Latch.init(1)
+                inner  <- AtomicInt.init(0)
+                stamp = restingStamp(rested)
+                fiber <- Fiber.init(observed(ref).observeStamped(stamp) { v =>
+                    // An observation a pass starts must not touch the stamp of the one that started it.
+                    Fiber.init(ref.map(_ + 1).observe(_ => inner.incrementAndGet.unit))
+                        .andThen(passes.put(v))
+                        .andThen(if v == 1 then gate.get else Kyo.unit)
+                })
+                _          <- passes.take
+                idle       <- behindOf(stamp)
                 _          <- ref.set(1)
-                _          <- assertEventually(Sync.defer(watch.starts.get == 2))
-                inPass     <- Sync.defer(watch.probe())
+                _          <- passes.take
+                inPass     <- behindOf(stamp)
                 _          <- ref.set(2)
-                behind     <- Sync.defer(watch.probe())
+                behind     <- behindOf(stamp)
                 _          <- ref.set(1)
                 _          <- gate.completeUnitDiscard
-                _          <- assertEventually(Sync.defer(watch.rests.get >= 1))
-                caughtUp   <- Sync.defer(watch.probe())
-                startsThen <- Sync.defer(watch.starts.get)
+                _          <- rested.await
+                caughtUp   <- behindOf(stamp)
+                passesThen <- Sync.defer(stamp.passes)
                 _          <- fiber.interrupt
             yield
                 assert(!idle && !inPass, "a pass that read the latest value reported itself behind")
                 assert(behind, "a write during a pass did not make it behind")
                 assert(!caughtUp, "a re-read with an unchanged image left the observer behind")
-                assert(startsThen == 2, s"a nested observation or an unchanged re-read reported a pass: ${startsThen} starts")
+                assert(passesThen == 2, s"a nested observation or an unchanged re-read counted a pass: $passesThen passes")
 
-        "a SignalRef observation reports its passes and whether a write landed since its read" in {
+        "a SignalRef observation counts its passes and tells whether a write landed since its read" in {
             reportsPasses(ref => ref)
         }
 
-        "an exact combinator observation reports its passes and whether a write landed since its read" in {
+        "an exact combinator observation counts its passes and tells whether a write landed since its read" in {
             Signal.initRef(0).map(other => reportsPasses(ref => ref.combineLatest(other).map(_._1)))
         }
 
         // A write that lands after the hold saw a new value, while the pass's scope closes, can take the value back to the one the
-        // pass delivered: the loop then reads that value again and runs no pass. The probe must answer for that read, or the
+        // pass delivered: the loop then reads that value again and runs no pass. The stamp must answer for that read, or the
         // observation looks behind for good.
         def revertsWhileClosing(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
             for
                 ref      <- Signal.initRef(0)
                 armed    <- AtomicBoolean.init(false)
+                first    <- Latch.init(1)
                 reverted <- Latch.init(1)
-                watch = new Watch
-                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe { v =>
-                    Scope.ensure(armed.compareAndSet(true, false).map(go =>
+                rested   <- Latch.init(1)
+                stamp = restingStamp(rested)
+                fiber <- Fiber.init(observed(ref).observeStamped(stamp) { v =>
+                    first.release.andThen(Scope.ensure(armed.compareAndSet(true, false).map(go =>
                         if go && v == 0 then ref.set(0).andThen(reverted.release) else Kyo.unit
-                    ))
-                }))
-                _      <- assertEventually(Sync.defer(watch.starts.get == 1))
+                    )))
+                })
+                _      <- first.await
                 _      <- armed.set(true)
                 _      <- ref.set(1)
                 _      <- reverted.await
-                _      <- assertEventually(Sync.defer(!watch.probe()))
-                starts <- Sync.defer(watch.starts.get)
+                _      <- rested.await
+                behind <- behindOf(stamp)
+                passes <- Sync.defer(stamp.passes)
                 _      <- fiber.interrupt
-            yield assert(starts == 1, s"a value that came back to the delivered one ran a pass: $starts starts")
+            yield
+                assert(!behind, "a value that came back to the delivered one left the observer behind")
+                assert(passes == 1, s"a value that came back to the delivered one ran a pass: $passes passes")
 
         "a SignalRef observation whose value comes back while its pass closes is current again" in {
             revertsWhileClosing(ref => ref)
-        }
-
-        // An observation through the repairing loop of a signal without a suspension-free read cannot tell whether a write landed: it
-        // counts as behind, and its re-reads (each pass, each rest after the repair timer) are what the watch hears.
-        "an observation that cannot tell whether a write landed counts as behind and reports its re-reads" in {
-            val ri = Signal.defaultRepairInterval
-            Clock.withTimeControl { control =>
-                Scope.run {
-                    for
-                        _   <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
-                        ref <- Signal.initRef(0)
-                        raw = Signal.initRaw[Int](
-                            [B, S] => (f: Int => B < S) => ref.currentWith(f),
-                            [B, S] => (f: Int => B < S) => ref.nextWith(f)
-                        )
-                        watch = new Watch
-                        fiber  <- Fiber.init(Signal.passWatch.let(Present(watch))(raw.observe(_ => Kyo.unit)))
-                        _      <- assertEventually(Sync.defer(watch.starts.get == 1))
-                        behind <- Sync.defer(watch.probe())
-                        rests  <- Sync.defer(watch.rests.get)
-                        _      <- assertEventually(Sync.defer(watch.rests.get > rests))
-                        _      <- fiber.interrupt
-                    yield assert(behind, "an observation that cannot tell said it was current")
-                }
-            }
         }
 
         "an exact combinator observation whose value comes back while its pass closes is current again" in {
             Signal.initRef(0).map(other => revertsWhileClosing(ref => ref.combineLatest(other).map(_._1)))
         }
 
-        // The engine reads the pass count and the probe from other threads. Until a new pass is reported, the probe must still answer
-        // for the read of the pass before it: answering for the new read first makes the observer look current for a pass that has
-        // not been counted, let alone run.
-        def reportsBeforeReading(observed: SignalRef[Int] => Signal[Int])(using Frame, kyo.test.AssertScope) =
-            final class AtStart extends Signal.PassWatch:
-                val starts                               = new java.util.concurrent.atomic.AtomicInteger(0)
-                val seen                                 = new java.util.concurrent.atomic.AtomicReference(Chunk.empty[Boolean])
-                @volatile var probe: () => Boolean       = () => false
-                def started(behind: () => Boolean): Unit =
-                    // What the probe of the pass before answers while this one is not counted yet.
-                    discard(seen.getAndUpdate(_.append(probe())))
-                    probe = behind
-                    discard(starts.incrementAndGet())
-                end started
-                def rested(): Unit = ()
-            end AtStart
-            for
-                ref <- Signal.initRef(0)
-                watch = new AtStart
-                fiber <- Fiber.init(Signal.passWatch.let(Present(watch))(observed(ref).observe(_ => Kyo.unit)))
-                _     <- assertEventually(Sync.defer(watch.starts.get == 1))
-                _     <- ref.set(1)
-                _     <- assertEventually(Sync.defer(watch.starts.get == 2))
-                seen  <- Sync.defer(watch.seen.get)
-                _     <- fiber.interrupt
-            yield assert(seen.drop(1) == Chunk(true), s"the observer looked current before its new pass was reported: $seen")
-            end for
-        end reportsBeforeReading
-
-        "a SignalRef observation reports a new pass before its probe answers for the new read" in {
-            reportsBeforeReading(ref => ref)
+        // An observation through the repairing loop of a signal without a suspension-free read cannot tell whether a write landed: it
+        // counts as behind, and its re-reads (each pass, each rest after the repair timer) are what the stamp hears.
+        "an observation that cannot tell whether a write landed counts as behind and reports its re-reads" in {
+            Clock.withTimeControl { control =>
+                Scope.run {
+                    for
+                        _      <- Fiber.init(Loop.forever(control.advance(ri, 1.millis)))
+                        ref    <- Signal.initRef(0)
+                        ran    <- Latch.init(1)
+                        rested <- Latch.init(1)
+                        raw = Signal.initRaw[Int](
+                            [B, S] => (f: Int => B < S) => ref.currentWith(f),
+                            [B, S] => (f: Int => B < S) => ref.nextWith(f)
+                        )
+                        stamp = restingStamp(rested)
+                        fiber  <- Fiber.init(raw.observeStamped(stamp)(_ => ran.release))
+                        _      <- ran.await
+                        behind <- behindOf(stamp)
+                        passes <- Sync.defer(stamp.passes)
+                        _      <- rested.await
+                        _      <- fiber.interrupt
+                    yield assert(
+                        behind && passes == 1,
+                        s"an observation that cannot tell said it was current: behind=$behind, $passes passes"
+                    )
+                }
+            }
         }
 
-        "an exact combinator observation reports a new pass before its probe answers for the new read" in {
-            Signal.initRef(0).map(other => reportsBeforeReading(ref => ref.combineLatest(other).map(_._1)))
+        // Every kind of signal forwards the stamp to the observation it delegates to. The first pass runs, a write lands while its setup
+        // waits on `gate`, and the second pass is the one the write causes.
+        def stampedThrough(
+            observed: SignalRef[Int] => Signal[Int],
+            around: (SignalRef[Int], Unit < (Async & Abort[Closed])) => Unit < (Async & Abort[Closed]) = (_, body) => body
+        )(using Frame, kyo.test.AssertScope) =
+            for
+                ref        <- Signal.initRef(0)
+                gate       <- Promise.init[Unit, Any]
+                deliveries <- AtomicInt.init(0)
+                passes     <- Channel.init[Int](4)
+                stamp = new Signal.ReadStamp(() => ())
+                fiber <- Fiber.init(around(
+                    ref,
+                    observed(ref).observeStamped(stamp)(_ =>
+                        deliveries.incrementAndGet.map(n => passes.put(n).andThen(if n == 1 then gate.get else Kyo.unit))
+                    )
+                ))
+                _          <- passes.take
+                firstCount <- Sync.defer(stamp.passes)
+                idle       <- behindOf(stamp)
+                _          <- ref.set(1)
+                during     <- behindOf(stamp)
+                _          <- gate.completeUnitDiscard
+                _          <- passes.take
+                count      <- Sync.defer(stamp.passes)
+                caughtUp   <- behindOf(stamp)
+                _          <- fiber.interrupt
+            yield
+                assert(firstCount == 1 && count == 2, s"the passes did not reach the stamp: $firstCount, then $count")
+                assert(!idle && !caughtUp, "a pass that read the latest value reported itself behind")
+                assert(during, "a write during a pass did not make it behind")
+
+        "a map forwards the stamp to its source" in {
+            stampedThrough(_.map(_ + 1))
+        }
+
+        "a read-only view forwards the stamp to its reference" in {
+            stampedThrough(_.readOnly)
+        }
+
+        "changesTo forwards the stamp to its source" in {
+            stampedThrough(_.changesTo(0))
+        }
+
+        "a signal chosen from a Local records its passes in the stamp" in {
+            val pinned = Local.initNoninheritable[Signal[Int]](Signal.initConst(-1))
+            stampedThrough(_ => Signal.withLocal(pinned)(identity), (ref, body) => pinned.let(ref)(body))
+        }
+
+        "a constant leaves the stamp uncounted and current" in {
+            for
+                ran <- Latch.init(1)
+                stamp = new Signal.ReadStamp(() => ())
+                fiber  <- Fiber.init(Signal.initConst(1).observeStamped(stamp)(_ => ran.release))
+                _      <- ran.await
+                passes <- Sync.defer(stamp.passes)
+                rests  <- Sync.defer(stamp.rests)
+                behind <- behindOf(stamp)
+                _      <- fiber.interrupt
+            yield assert(
+                passes == 0 && rests == 0 && !behind,
+                s"a constant touched the stamp: $passes passes, $rests rests, behind=$behind"
+            )
         }
     }
 
