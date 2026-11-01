@@ -1507,19 +1507,27 @@ object Signal:
             def waiters()(using AllowUnsafe): Int = nextPromise.get().waiters()
 
             // Callback subscribers live in a hub created by the first `subscribe`, so a reference nobody subscribes to pays nothing for
-            // them. Subscribing is rare, so the creation takes the lock; reading the hub afterwards does not.
+            // them. The field is installed by compare-and-set through `SignalPlatformSpecific.hubSlot`, so it keeps its name.
             @volatile private var hub: Hub = null
 
             private def hubForSubscribe(): Hub =
                 val h = hub
                 if h ne null then h
                 else
-                    synchronized {
-                        if hub eq null then hub = new Hub
-                        hub
-                    }
+                    val fresh = new Hub
+                    // Two first subscribers can race here. The loser's hub was never published: it holds no subscriber and has
+                    // armed no registration, so dropping it loses nothing, and the loser subscribes to the winner's.
+                    if installHub(fresh) then fresh else hub
                 end if
             end hubForSubscribe
+
+            private def installHub(fresh: Hub): Boolean =
+                SignalPlatformSpecific.hubSlot match
+                    case Present(slot) => slot.install(this, fresh)
+                    case Absent        =>
+                        // Single-threaded platforms: nothing can run between the read in `hubForSubscribe` and this write.
+                        hub = fresh
+                        true
 
             /** Register `sub`, deliver the current value to it, and make sure a waiter is armed. */
             private[kyo] def subscribe(sub: Sub[A, ?])(using AllowUnsafe): Unit = hubForSubscribe().subscribe(sub)
@@ -1663,6 +1671,16 @@ object Signal:
         end Unsafe
 
         object Unsafe:
+
+            /** Installs the callback hub of a [[SignalRef.Unsafe]] by compare-and-set on its field, without a lock or an extra object
+              * per reference (see `SignalPlatformSpecific`).
+              */
+            abstract private[kyo] class HubSlot:
+                /** Sets `ref`'s hub to `hub` if it has none yet; `true` for the call that set it. `hub` is the reference's own `Hub`,
+                  * typed `AnyRef` because that class is private to the reference.
+                  */
+                def install(ref: Unsafe[?], hub: AnyRef): Boolean
+            end HubSlot
 
             /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details.
               */
