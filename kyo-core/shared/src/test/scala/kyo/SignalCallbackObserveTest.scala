@@ -20,6 +20,9 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
 
     import AllowUnsafe.embrace.danger
 
+    /** The report of a subscriber that must not fail: a failure surfaces in the writer's `set`, and so in the test. */
+    private val rethrow: Throwable => Unit = ex => throw ex
+
     private def ref[A](initial: A)(using CanEqual[A, A]): Signal.SignalRef[A] =
         Signal.SignalRef.Unsafe.init(initial).safe
 
@@ -29,7 +32,7 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
         Frame
     ): (scala.collection.mutable.ListBuffer[B], () => Unit) =
         val seen    = scala.collection.mutable.ListBuffer.empty[B]
-        val release = sig.unsafeObserveProjected(proj, baseline, b => discard(seen += b))
+        val release = sig.unsafeObserveProjected(proj, baseline, b => discard(seen += b), rethrow)
         (seen, release.getOrElse(sys.error("expected a fast path for this signal")))
     end observeFrom
 
@@ -110,18 +113,25 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
             val a = ref(0)
             val b = ref(0)
             // Not rooted in a single SignalRef: the caller must keep its fiber path for these.
-            assert(a.combineLatest(b).unsafeObserveProjected[(Int, Int)](identity, Absent, _ => ()).isEmpty)
+            assert(a.combineLatest(b).unsafeObserveProjected[(Int, Int)](identity, Absent, _ => (), rethrow).isEmpty)
         }
 
         "one failing subscriber does not silence the others" in {
-            val r    = ref(0)
-            val seen = scala.collection.mutable.ListBuffer.empty[Int]
-            discard(r.unsafeObserveProjected[Int](identity, Absent, _ => throw new RuntimeException("boom")))
-            discard(r.unsafeObserveProjected[Int](identity, Absent, v => discard(seen += v)))
+            val r        = ref(0)
+            val seen     = scala.collection.mutable.ListBuffer.empty[Int]
+            val failures = scala.collection.mutable.ListBuffer.empty[String]
+            discard(r.unsafeObserveProjected[Int](
+                identity,
+                Absent,
+                v => throw new RuntimeException(s"boom $v"),
+                ex => discard(failures += ex.getMessage)
+            ))
+            discard(r.unsafeObserveProjected[Int](identity, Absent, v => discard(seen += v), rethrow))
             r.unsafe.set(1)
             // On the fiber path every observer had its own fiber, so a throwing sink could not take the
-            // others down. The shared dispatch walk has to isolate per subscriber to keep that.
-            assert(seen.toList == List(0, 1))
+            // others down. The shared dispatch walk has to isolate per subscriber to keep that, and hands each
+            // failure to the failing subscriber's own report.
+            assert(seen.toList == List(0, 1) && failures.toList == List("boom 0", "boom 1"))
         }
     }
 
@@ -202,6 +212,8 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
                     // Re-entering the writer from inside the flush: the walk runs over an immutable
                     // snapshot, and the nested change must still reach this same subscriber.
                     if v == 1 then r.unsafe.set(2)
+                ,
+                rethrow
             ))
             r.unsafe.set(1)
             assert(seen.toList == List(0, 1, 2))
@@ -218,6 +230,8 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
                 v =>
                     discard(seen += v)
                     if v == 0 then r.unsafe.set(1)
+                ,
+                rethrow
             ))
             assert(seen.toList == List(0, 1))
         }
@@ -231,7 +245,8 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
                 v =>
                     if v == 1 && late.isEmpty then
                         val (s, _) = observe(r)(identity)
-                        late = Present(s)
+                        late = Present(s),
+                rethrow
             ))
             r.unsafe.set(1)
             r.unsafe.set(2)

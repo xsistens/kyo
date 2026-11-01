@@ -191,14 +191,18 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       *   The side effect for each distinct value
       */
     final def onChange(baseline: Maybe[A])(f: A => Unit < Sync)(using frame: Frame): Unit < (Sync & Scope) =
-        Sync.Unsafe.defer {
-            val run: A => Unit = a =>
-                try Sync.Unsafe.evalOrThrow(f(a))
-                catch case ex if NonFatal(ex) => Log.live.unsafe.error("Signal.onChange callback failed", ex)
-            unsafeObserveProjected[A](Signal.identityProjection, baseline, run) match
-                case Present(release) => Scope.ensure(Sync.Unsafe.defer(release()))
-                case Absent           => Fiber.init(observe(baseline, Signal.defaultRepairInterval)(a => Sync.Unsafe.defer(run(a)))).unit
-            end match
+        // The Log is read here, where the subscription is made: a delivery runs inside somebody else's `set`, where none can be read.
+        Log.use { log =>
+            Sync.Unsafe.defer {
+                val report: Throwable => Unit = ex => log.unsafe.error("Signal.onChange callback failed", ex)
+                val run: A => Unit            = a =>
+                    try Sync.Unsafe.evalOrThrow(f(a))
+                    catch case ex if NonFatal(ex) => report(ex)
+                unsafeObserveProjected[A](Signal.identityProjection, baseline, run, report) match
+                    case Present(release) => Scope.ensure(Sync.Unsafe.defer(release()))
+                    case Absent => Fiber.init(observe(baseline, Signal.defaultRepairInterval)(a => Sync.Unsafe.defer(run(a)))).unit
+                end match
+            }
         }
 
     /** The observation primitive: observes `proj` of this signal and deduplicates on its result, the image.
@@ -361,8 +365,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       *
       * `cb` must not suspend and must stay trivial: it runs inside somebody else's `set`. [[onChange]] is the public form, which releases
       * on the enclosing `Scope` and falls back to a fiber where this answers `Absent`.
+      *
+      * A failure of `proj` or `cb` neither aborts the writer's `set` nor silences the other subscribers: it is handed to `report`, on the
+      * writer's stack. The caller picks it where it subscribes, typically from the `Log` bound there, since none can be read inside the
+      * writer's `set`.
       */
-    private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit)(
+    private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
         using
         CanEqual[B, B],
         AllowUnsafe,
@@ -398,9 +406,9 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             // The same composition for the callback path, made per subscription. Its dispatch walks can overlap, so the
             // memo of this stage is the atomic `sharedLastProjection`.
             [C] =>
-                (proj, baseline, cb, canEqualC, allow) =>
+                (proj, baseline, cb, report, canEqualC, allow) =>
                     val p = Signal.sharedLastProjection(proj)
-                    self.unsafeObserveProjected[C](a => p(f(a)), baseline, cb)(using canEqualC, allow, frame)
+                    self.unsafeObserveProjected[C](a => p(f(a)), baseline, cb, report)(using canEqualC, allow, frame)
         )
 
     /** This signal's changes, carrying `b` in place of its own values.
@@ -431,7 +439,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     else source(Absent)
             ,
             (read, wakesOnAnyInput) => self.readExact(read, wakesOnAnyInput).map(_ => b),
-            [C] => (_, _, _, _, _) => Absent
+            [C] => (_, _, _, _, _, _) => Absent
         )
     end changesTo
 
@@ -867,12 +875,15 @@ object Signal:
             ,
             (_, _) => Present(value),
             // A constant delivers once and can never fire again, so the release is a no-op and there is
-            // nothing to register on.
+            // nothing to register on. A failure is reported as a ref's subscription reports it, without aborting the subscriber.
             [C] =>
-                (proj, baseline, cb, canEqualC, _) =>
+                (proj, baseline, cb, report, canEqualC, _) =>
                     given CanEqual[C, C] = canEqualC
-                    val image            = proj(value)
-                    if !baseline.exists(_ == image) then cb(image)
+                    try
+                        val image = proj(value)
+                        if !baseline.exists(_ == image) then cb(image)
+                    catch case ex if NonFatal(ex) => report(ex)
+                    end try
                     Present(() => ())
         )
 
@@ -1063,6 +1074,7 @@ object Signal:
             A => C,
             Maybe[C],
             C => Unit,
+            Throwable => Unit,
             CanEqual[C, C],
             AllowUnsafe
         ) => Maybe[() => Unit]
@@ -1089,13 +1101,13 @@ object Signal:
                 _observeProjected(proj, baseline, repairInterval, stamp, g, canEqualC)
             override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
                 _readExact(read, wakesOnAnyInput)
-            override private[kyo] def unsafeObserveProjected[C](proj: A => C, baseline: Maybe[C], cb: C => Unit)(
+            override private[kyo] def unsafeObserveProjected[C](proj: A => C, baseline: Maybe[C], cb: C => Unit, report: Throwable => Unit)(
                 using
                 canEqualC: CanEqual[C, C],
                 allow: AllowUnsafe,
                 frame: Frame
             ): Maybe[() => Unit] =
-                _unsafeObserveProjected(proj, baseline, cb, canEqualC, allow)
+                _unsafeObserveProjected(proj, baseline, cb, report, canEqualC, allow)
         end new
     end _initRawF
 
@@ -1107,8 +1119,17 @@ object Signal:
       * deliver and returns, and the caller already delivering reads the source again before it lets go. One thread reading in turn never
       * sees the value go back, so `cb` never sees an older image after a newer one, and the re-arm loop's repeat is never mistaken for a
       * duplicate. Nothing waits on a lock, so a callback that writes another signal cannot deadlock against one that writes back.
+      *
+      * A failure of `proj` or `cb` goes to `report`, which the subscriber chose where it subscribed: the dispatch walk runs on whatever
+      * thread wrote, where no `Log` binding of the subscriber can be read.
       */
-    final private[kyo] class Sub[A, B](source: SignalRef.Unsafe[A], proj: A => B, cb: B => Unit, initial: Maybe[B])(using
+    final private[kyo] class Sub[A, B](
+        source: SignalRef.Unsafe[A],
+        proj: A => B,
+        cb: B => Unit,
+        val report: Throwable => Unit,
+        initial: Maybe[B]
+    )(using
         CanEqual[B, B]
     ):
         private val alive = new java.util.concurrent.atomic.AtomicBoolean(true)
@@ -1171,13 +1192,13 @@ object Signal:
         override private[kyo] def readExact(read: ExactRead, wakesOnAnyInput: Boolean)(using AllowUnsafe): Maybe[A] =
             source.readExact(read, wakesOnAnyInput)
 
-        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit)(
+        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
             using
             CanEqual[B, B],
             AllowUnsafe,
             Frame
         ): Maybe[() => Unit] =
-            source.unsafeObserveProjected(proj, baseline, cb)
+            source.unsafeObserveProjected(proj, baseline, cb, report)
     end ReadOnly
 
     /** The [[SignalRef]]s an exact read went through, each with the version it had before its value was read (see
@@ -1301,13 +1322,13 @@ object Signal:
           * All subscribers of one ref share a single registration on the next-change promise (see `Unsafe.subscribe`), so a write fires one
           * waiter and walks an array rather than completing one waiter per subscriber on the writing thread.
           */
-        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit)(
+        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit, report: Throwable => Unit)(
             using
             CanEqual[B, B],
             AllowUnsafe,
             Frame
         ): Maybe[() => Unit] =
-            val sub = new Signal.Sub[A, B](_unsafe, proj, cb, baseline)
+            val sub = new Signal.Sub[A, B](_unsafe, proj, cb, report, baseline)
             _unsafe.subscribe(sub)
             Present(() => _unsafe.unsubscribe(sub))
         end unsafeObserveProjected
@@ -1588,10 +1609,6 @@ object Signal:
               */
             final private class Hub:
 
-                // The dispatch walk runs on whatever thread completed the promise, with no user Frame in reach;
-                // it is only used to attribute the log line of a failing subscriber.
-                private given dispatchFrame: Frame = Frame.internal
-
                 // Never a real version (they count up from zero): a pump handed it dispatches before anything else.
                 private inline val Stale = -1L
 
@@ -1656,10 +1673,10 @@ object Signal:
                 end sweepIfCluttered
 
                 // A failing sink must not silence the others sharing the dispatch walk, nor abort whoever is setting up a
-                // subscription when it throws on the initial delivery.
+                // subscription when it throws on the initial delivery. The failure goes to the subscriber's own report (see Sub).
                 private def deliverTo(sub: Sub[A, ?])(using AllowUnsafe): Unit =
                     try sub.deliver()
-                    catch case ex if NonFatal(ex) => Log.live.unsafe.error("signal subscriber failed", ex)
+                    catch case ex if NonFatal(ex) => sub.report(ex)
 
                 private def dispatch()(using AllowUnsafe): Unit =
                     subs.get().foreach(sub => if sub.isAlive then deliverTo(sub))

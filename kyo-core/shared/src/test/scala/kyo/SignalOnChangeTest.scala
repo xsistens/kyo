@@ -8,6 +8,86 @@ class SignalOnChangeTest extends kyo.test.Test[Any]:
     private def recorder[A](using Frame): (AtomicRef[Chunk[A]], A => Unit < Sync) < Sync =
         AtomicRef.init(Chunk.empty[A]).map(seen => (seen, (a: A) => seen.updateAndGet(_.append(a)).unit))
 
+    /** A sink that records every line logged to it, to bind with `Log.let`. */
+    private def captureSink(captured: AtomicRef[Chunk[String]]): Log.Unsafe =
+        new Log.Unsafe:
+            val level: Log.Level                                                     = Log.Level.trace
+            val name: String                                                         = "signal.capture"
+            def withName(n: String): Log.Unsafe                                      = this
+            private def record(pfx: String, msg: => String)(using AllowUnsafe): Unit =
+                discard(captured.unsafe.getAndUpdate(_.append(s"$pfx:$msg")))
+            def trace(msg: => String)(using Frame, AllowUnsafe): Unit                  = record("trace", msg)
+            def trace(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = record("trace", s"$msg: ${t.getMessage}")
+            def debug(msg: => String)(using Frame, AllowUnsafe): Unit                  = record("debug", msg)
+            def debug(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = record("debug", s"$msg: ${t.getMessage}")
+            def info(msg: => String)(using Frame, AllowUnsafe): Unit                   = record("info", msg)
+            def info(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = record("info", s"$msg: ${t.getMessage}")
+            def warn(msg: => String)(using Frame, AllowUnsafe): Unit                   = record("warn", msg)
+            def warn(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit  = record("warn", s"$msg: ${t.getMessage}")
+            def error(msg: => String)(using Frame, AllowUnsafe): Unit                  = record("error", msg)
+            def error(msg: => String, t: => Throwable)(using Frame, AllowUnsafe): Unit = record("error", s"$msg: ${t.getMessage}")
+
+    "a failure is reported to the Log bound where the subscription was made" - {
+
+        "a failing callback on the callback path" in {
+            for
+                captured <- AtomicRef.init(Chunk.empty[String])
+                _        <- Log.let(Log(captureSink(captured))) {
+                    Scope.run {
+                        for
+                            ref <- Signal.initRef(0)
+                            _   <- ref.onChange(v => if v == 1 then throw new RuntimeException("boom") else Kyo.unit)
+                            _   <- ref.set(1)
+                        yield ()
+                    }
+                }
+                lines <- captured.get
+            yield assert(lines.exists(l => l.startsWith("error:") && l.endsWith("boom")), s"the bound Log got $lines")
+        }
+
+        "a failing projection of a map chain" in {
+            for
+                captured <- AtomicRef.init(Chunk.empty[String])
+                _        <- Log.let(Log(captureSink(captured))) {
+                    Scope.run {
+                        for
+                            ref <- Signal.initRef(0)
+                            _   <- ref.map(v => if v == 1 then throw new RuntimeException("boom") else v).onChange(_ => Kyo.unit)
+                            _   <- ref.set(1)
+                        yield ()
+                    }
+                }
+                lines <- captured.get
+            yield assert(lines.exists(l => l.startsWith("error:") && l.endsWith("boom")), s"the bound Log got $lines")
+        }
+
+        "a failing callback on the fiber path" in {
+            for
+                captured <- AtomicRef.init(Chunk.empty[String])
+                failed   <- Latch.init(1)
+                later    <- Latch.init(1)
+                _        <- Log.let(Log(captureSink(captured))) {
+                    Scope.run {
+                        for
+                            ref   <- Signal.initRef(0)
+                            other <- Signal.initRef(0)
+                            // A combinator has no callback path, so its deliveries run on a fiber of the Scope.
+                            _ <- ref.combineLatest(other).onChange(Present((0, 0))) { (v, _) =>
+                                if v == 1 then failed.release.map(_ => throw new RuntimeException("boom")) else later.release
+                            }
+                            _ <- ref.set(1)
+                            _ <- failed.await
+                            // The fiber reports a failure before it delivers the next value.
+                            _ <- ref.set(2)
+                            _ <- later.await
+                        yield ()
+                    }
+                }
+                lines <- captured.get
+            yield assert(lines.exists(l => l.startsWith("error:") && l.endsWith("boom")), s"the bound Log got $lines")
+        }
+    }
+
     "on the callback path" - {
 
         "a ref delivers inside the writer's set" in {
