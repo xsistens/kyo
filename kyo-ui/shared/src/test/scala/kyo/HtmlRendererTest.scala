@@ -954,4 +954,22 @@ class HtmlRendererTest extends UITest:
         assert(kyo.internal.HtmlRenderer.clientJs("/other").contains("var base=\"/other\";"))
     }
 
+    "a signal over a Local" - {
+        val label: Local[String]                  = Local.init("unset")
+        def labelled(using Frame): Signal[String] = Signal.withLocal(label)(l => Signal.initConst(s"label:$l"))
+
+        "a text leaf renders the value the mount sees, not the Local's default" in {
+            label
+                .let("set")(kyo.internal.HtmlRenderer.render(UI.div(UI.span(labelled).id("l")), Seq.empty))
+                .map(html => assert(html.contains("label:set") && !html.contains("label:unset"), html))
+        }
+
+        "a keyed list whose items follow it renders its rows and keys by the value the mount sees" in {
+            val rows = Signal.withLocal(label)(l => Signal.initConst(Chunk(s"$l-a", s"$l-b")))
+            label
+                .let("set")(kyo.internal.HtmlRenderer.render(UI.ul(rows.foreachKeyed(identity)(v => UI.li(UI.span(v)))), Seq.empty))
+                .map(html => assert(html.contains("set-a") && html.contains("set-b") && !html.contains("unset"), html))
+        }
+    }
+
 end HtmlRendererTest

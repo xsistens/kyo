@@ -229,7 +229,12 @@ private[kyo] object ChartLower:
       * pure render function. The ref is private to this chart instance and writes occur only on genuine row
       * changes, so the bypass is sound.
       */
-    private[kyo] def lowerLive[A](spec: Chart[A], signal: Signal[Chunk[A]], gradPrefix: String)(using Frame, AllowUnsafe): Svg.Root =
+    private[kyo] def lowerLive[A](spec: Chart[A], signal: Signal[Chunk[A]], gradPrefix: String)(
+        using
+        Frame,
+        AllowUnsafe,
+        SignalNow.Locals
+    ): Svg.Root =
         val layout = ChartLayout.buildLayout(spec)
         // Use a fixed initial row set for the layout/x-scale/ysR-presence check.
         // The x-scale is computed from the signal's current value via initConst or the first emission.
@@ -330,7 +335,7 @@ private[kyo] object ChartLower:
       * another lowering of the same spec. Within one chart the gradient def id and its `url(#id)` reference
       * always match (the def carries the prefix-derived `defId`, the swatch fill references the same id).
       */
-    private[kyo] def lower[A](spec: Chart[A])(using Frame, AllowUnsafe): Svg.Root =
+    private[kyo] def lower[A](spec: Chart[A])(using Frame, AllowUnsafe, SignalNow.Locals): Svg.Root =
         val gradPrefix = ChartFoundations.chartInstancePrefix()
         spec.data match
             case DataSource.Static(rows) => lowerStatic(rows, spec, gradPrefix)
@@ -344,16 +349,14 @@ private[kyo] object ChartLower:
       * plot rectangle, so callers can compute exact chart pixel coordinates. For a live chart the scales are
       * resolved from the signal's current value at call time.
       */
-    private[kyo] def lowerWithScales[A](spec: Chart[A])(using Frame, AllowUnsafe): (Svg.Root, Chart.Scales) =
+    private[kyo] def lowerWithScales[A](spec: Chart[A])(using Frame, AllowUnsafe, SignalNow.Locals): (Svg.Root, Chart.Scales) =
         val rows: Chunk[A] = spec.data match
             case DataSource.Static(rs)   => rs
             case DataSource.Live(signal) =>
                 // For a live chart, sample the current emission so the scales match what is on screen now.
-                // Unsafe: evalOrThrow runs the pure synchronous current-value read; the escape hatch is a
-                // point-in-time projection, documented to reflect the signal value at call time.
-                // Cannot throw: signal.current returns A < Sync (no Abort in scope), so Abort.run yields
-                // Result.Ok and getOrThrow never executes the throw branch.
-                Sync.Unsafe.evalOrThrow(signal.current)
+                // Unsafe: a point-in-time read of the current rows, as the fiber lowering the chart reads them (Locals
+                // included, see SignalNow).
+                SignalNow[Chunk[A]](signal)
         val layout   = ChartLayout.buildLayout(spec)
         val hasRight = spec.marks.exists:
             case m: Mark.Bar[A, ?, ?]      => m.axis == Axis.Right
@@ -407,7 +410,7 @@ private[kyo] object ChartLower:
         spec.a11y.ariaLabel.fold(withRole)(lbl => withRole.aria("label", lbl))
     end buildBaseSvg
 
-    private def lowerStatic[A](rows: Chunk[A], spec: Chart[A], gradPrefix: String)(using Frame, AllowUnsafe): Svg.Root =
+    private def lowerStatic[A](rows: Chunk[A], spec: Chart[A], gradPrefix: String)(using Frame, AllowUnsafe, SignalNow.Locals): Svg.Root =
         val layout   = ChartLayout.buildLayout(spec)
         val hasRight = spec.marks.exists:
             case m: Mark.Bar[A, ?, ?]      => m.axis == Axis.Right
