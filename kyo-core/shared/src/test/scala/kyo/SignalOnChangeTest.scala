@@ -119,6 +119,25 @@ class SignalOnChangeTest extends kyo.test.Test[Any]:
             }
         }
 
+        "a write from inside f is delivered once f returns, and before the delivering writer's set returns" in {
+            Scope.run {
+                for
+                    ref    <- Signal.initRef(0)
+                    events <- AtomicRef.init(Chunk.empty[String])
+                    note = (e: String) => events.updateAndGet(_.append(e)).unit
+                    _ <- ref.onChange { v =>
+                        if v == 1 then
+                            note("f(1) starts").andThen(ref.set(2)).andThen(note("inner set returned")).andThen(note("f(1) ends"))
+                        else if v == 2 then note("f(2)")
+                        else Kyo.unit
+                    }
+                    _      <- ref.set(1)
+                    _      <- note("outer set returned")
+                    result <- events.get
+                yield assert(result == Chunk("f(1) starts", "inner set returned", "f(1) ends", "f(2)", "outer set returned"), s"$result")
+            }
+        }
+
         "a write that does not change the value delivers nothing" in {
             Scope.run {
                 for

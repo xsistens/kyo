@@ -164,14 +164,20 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     /** Runs `f` for the current value and then for every distinct value, until the enclosing `Scope` closes.
       *
       * Where the signal allows it, `f` runs without a fiber of its own: for a [[SignalRef]], a `map` or `readOnly` chain over one, and a
-      * constant, `f` runs inside the `set` that changed the value, on the writer's stack, before that `set` returns. All `onChange`
-      * subscribers of one ref share a single registration on it. Every other signal (`combineLatest`, `zip`, `switchMap`, [[Signal.initRaw]]
-      * and the like) is observed by a fiber forked into the enclosing `Scope`, so `f` then runs shortly after the change instead.
+      * constant, `f` runs inside a `set` that changed the value, on that writer's stack. All `onChange` subscribers of one ref share a
+      * single registration on it. Every other signal (`combineLatest`, `zip`, `switchMap`, [[Signal.initRaw]] and the like) is observed by
+      * a fiber forked into the enclosing `Scope`, so `f` then runs shortly after the change instead.
       *
-      * Because `f` runs inside somebody else's `set`, it must not block and should be cheap. The signal's `map` functions run there too. A
-      * write issued from inside `f` is allowed and is delivered after the current delivery returns, so an `f` that writes a new value on
-      * every delivery loops inside the writer. A failure thrown by `f` is logged and the subscription stays active: it neither aborts the
-      * writer's `set` nor silences the signal's other subscribers, and on the fiber path the fiber keeps observing.
+      * On the writer's stack the deliveries to one subscriber never overlap, and the writer that is delivering also delivers what other
+      * writes changed in the meantime. With a single writer, every change is delivered before its `set` returns. A write that lands
+      * while a delivery runs, from another thread or from inside `f`, is delivered by the thread already delivering, once the current
+      * delivery returns: the `set` that made it may return before `f` has seen its value, and the delivering writer's `set` returns only
+      * after it. So an `f` that writes a new value on every delivery loops inside the writer.
+      *
+      * Because `f` runs inside somebody else's `set`, it must not block and should be cheap. The signal's `map` functions run there too.
+      * A failure thrown by `f`, or by a `map` function of the chain, is logged to the [[Log]] bound where `onChange` was called, and the
+      * subscription stays active: it neither aborts the writer's `set` nor silences the signal's other subscribers, and on the fiber path
+      * the fiber keeps observing.
       *
       * Prefer [[observe]] for asynchronous or expensive work, or when each value needs a `Scope` of its own. Prefer `onChange` for cheap
       * synchronous side effects, in particular when many observers watch one signal: they cost one shared registration instead of a fiber
