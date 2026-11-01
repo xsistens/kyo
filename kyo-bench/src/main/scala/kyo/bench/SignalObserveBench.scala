@@ -116,18 +116,13 @@ class SignalObserveBench extends BaseBench:
         val off     = Sync.Unsafe.evalOrThrow(Signal.initRef(2))
         val chosen  = Signal.withLocal(local)(l => if l then on else off)
         val program =
-            Local.snapshotWith { locals =>
+            kyo.internal.SignalNow.Locals.take {
                 Sync.Unsafe.defer {
-                    // The read a synchronous UI pass makes: the field read where the signal offers one, the effectful read
-                    // evaluated in place with the pass's locals bound otherwise.
+                    // The read a synchronous UI pass makes.
                     @annotation.tailrec
                     def loop(i: Int, acc: Int): Int =
                         if i == size then acc
-                        else
-                            val v = chosen.unsafeCurrent() match
-                                case Present(v) => v
-                                case Absent     => Sync.Unsafe.evalOrThrow(Local.restore(locals)(chosen.current))
-                            loop(i + 1, acc + v)
+                        else loop(i + 1, acc + kyo.internal.SignalNow[Int](chosen))
                     loop(0, 0)
                 }
             }
