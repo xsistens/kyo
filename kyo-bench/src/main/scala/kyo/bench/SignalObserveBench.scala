@@ -68,17 +68,6 @@ class SignalObserveBench extends BaseBench:
         value
     end fanOut
 
-    /** What kyo-ui's region watch keeps of the passes it hears. */
-    final private class Watch extends Signal.PassWatch:
-        private val starts                         = new java.util.concurrent.atomic.AtomicLong()
-        private val rests                          = new java.util.concurrent.atomic.AtomicLong()
-        @volatile private var probe: () => Boolean = () => false
-        def started(behind: () => Boolean): Unit   =
-            probe = behind
-            discard(starts.incrementAndGet())
-        def rested(): Unit = discard(rests.incrementAndGet())
-    end Watch
-
     // Each benchmark runs in a fork of its own, so a fan-out case starts its observers in its first warmup invocation and keeps
     // them for the trial.
     @TearDown(Level.Trial)
@@ -100,8 +89,8 @@ class SignalObserveBench extends BaseBench:
         if observers.isEmpty then
             start(_ =>
                 body =>
-                    val watch = new Watch
-                    Signal.passWatch.let(Present(watch))(ref.map(_ + 1).observe(_ => body))
+                    val stamp = new Signal.ReadStamp(() => ())
+                    ref.map(_ + 1).observeStamped(stamp)(_ => body)
             )
         end if
         fanOut()
