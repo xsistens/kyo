@@ -1729,6 +1729,8 @@ object Signal:
                   */
                 final private class Arm(val promise: IOPromise[Any, Any]) extends (Result[Any, Any] => Any):
                     def apply(r: Result[Any, Any]): Any =
+                        // Unsafe: a promise callback, run by whatever completed the promise (the writer's `set`, inside its own
+                        // suspension) with no proof in reach; the pump it runs is the hub's own unsafe-tier work.
                         import AllowUnsafe.embrace.danger
                         // A failed CAS means the last subscriber released this registration while it was firing.
                         if armed.compareAndSet(this, null) && r.isSuccess then pump(Stale)
