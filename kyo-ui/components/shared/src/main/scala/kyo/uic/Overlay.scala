@@ -606,7 +606,7 @@ final case class Overlay private (
             panel = panel.enterTransition("p-uic-enter-fade").leaveTransition("p-anchored-overlay-leave-active")
         panelClassesV.foreach(c => panel = panel.cssClass(c))
         maxHeightV.foreach { h =>
-            panel = panel.style(Style.maxHeight(CssValue.length(h)).overflowY(_.auto))
+            panel = panel.style(Style.maxHeight(Length.parse(h)).overflowY(_.auto))
         }
         if seedFocusV then
             panel = panel.focusAuto(true).focusRestore(true).tabIndex(-1).focusTrap(true)

@@ -57,9 +57,9 @@ final case class Skeleton private (
         val (w, h) = sizeV match
             case Present(s) => (s, s)
             case Absent     => (widthV, heightV)
-        var st = Style.width(CssValue.length(w)).height(CssValue.length(h))
+        var st = Style.width(Length.parse(w)).height(Length.parse(h))
         borderRadiusV.foreach { r =>
-            CssValue.length(r) match
+            Length.parse(r) match
                 case l: (Length.Px | Length.Pct) => st = st.rounded(l)
                 case _                           => () // non-px/% radii keep the token radius (typed Style limit)
         }

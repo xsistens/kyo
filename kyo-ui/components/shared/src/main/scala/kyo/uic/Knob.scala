@@ -198,7 +198,7 @@ final case class Knob private (
       */
     private def dialSvg(value: Double, live: Maybe[Signal[Double]])(using Frame): UI =
         val paint = (spec: Maybe[String], token: String) =>
-            spec.flatMap(CssValue.color).getOrElse(Style.Color.variable(token))
+            spec.flatMap(Style.Color.parse).getOrElse(Style.Color.variable(token))
 
         val rangeArc = Svg.path
             .cssClass("p-knob-range")
