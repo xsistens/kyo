@@ -148,6 +148,8 @@ Constant, `Signal`, and `SignalRef` are three different intents behind one sette
 
 The distinction is drawn on what you actually hand over, not on how it is typed at the call site. A `SignalRef` is a `Signal`, so ascribing one as `Signal[A]` still binds two way; `ref.readOnly` is how you hand a control the values of a ref while keeping the writes to yourself.
 
+`ref.zoom(get)(set)` hands a control one part of a ref's value as a ref of its own, so a query kept as one value can bind its sort, its page and its filters to the slots that change them, and a write to one part can reset another in its `set`.
+
 Event handlers are typed `UI.Action`, `Any < (Async & Abort[Any])`, the same shape kyo-ui uses. The return value is discarded, so any effectful expression goes in directly, and a handler can suspend, call kyo-http, write another ref, or fail. A failure the handler leaves unhandled goes to the `onFailure` rules around it, which pick a toast, the enclosing mount's error view, or an action of your own (see kyo-ui's README, "Failures").
 
 ```scala
