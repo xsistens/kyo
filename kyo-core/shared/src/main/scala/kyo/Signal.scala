@@ -730,26 +730,44 @@ object Signal:
     /** The next value of `source` whose image under `f` differs from the image it has now, for `map`: a change that leaves the image as it is
       * is no change of the mapped signal.
       *
-      * A wakeup that brought the same image reads the source again before it waits again, so a write that landed behind the wakeup is not
-      * waited past. A write landing between a read of the source and the wait behind it is missed, though this `next` was asked for before
-      * it: the `next` completes only with a later change that moves the image, and never if none comes. No timer repairs that, and `f` runs
-      * inside the window.
+      * While `source` answers [[Signal.readExact]], as a map chain rooted in a [[SignalRef]] does, no write that moves the image is missed. Each
+      * read records the version of every ref before it reads their values, and the wait checks those versions before it parks, so a write
+      * landing after a read, also while `f` runs, ends the wait behind that read at once.
+      *
+      * A source that does not answer has no such check: a signal over [[initRaw]], a `zip` or a `zipAll`, whose `next` waits for every
+      * input. There a write landing between a read and the wait behind it is missed, though this `next` was asked for before it: the `next`
+      * completes only with a later change that moves the image, and never if none comes. No timer repairs that, and `f` runs inside the
+      * window.
       */
     private[kyo] def nextImage[A, B, C, S](source: Signal[A], f: A => B)(g: B => C < S)(using CanEqual[B, B], Frame): C < (S & Async) =
-        source.currentWith { a0 =>
-            val before                 = f(a0)
-            def await: C < (S & Async) =
+        Local.snapshotWith { locals =>
+            def exactly(read: ExactRead, before: B): C < (S & Async) =
+                read.awaitChange.andThen(Sync.Unsafe.defer {
+                    val again = new ExactRead(locals)
+                    source.readExact(again, wakesOnAnyInput = false) match
+                        case Present(a) =>
+                            val image = f(a)
+                            if image != before then g(image) else exactly(again, before)
+                        case Absent =>
+                            recheck(before)
+                    end match
+                })
+            def await(before: B): C < (S & Async) =
                 source.nextWith { a =>
                     val image = f(a)
-                    if image != before then g(image)
-                    else
-                        source.currentWith { now =>
-                            val current = f(now)
-                            if current != before then g(current) else await
-                        }
-                    end if
+                    if image != before then g(image) else recheck(before)
                 }
-            await
+            def recheck(before: B): C < (S & Async) =
+                source.currentWith { now =>
+                    val current = f(now)
+                    if current != before then g(current) else await(before)
+                }
+            Sync.Unsafe.defer {
+                val read = new ExactRead(locals)
+                source.readExact(read, wakesOnAnyInput = false) match
+                    case Present(a) => exactly(read, f(a))
+                    case Absent     => source.currentWith(a0 => await(f(a0)))
+            }
         }
     end nextImage
 
