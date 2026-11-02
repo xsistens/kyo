@@ -69,4 +69,17 @@ class CheckBoxTest extends ReactiveValueContract:
             assert(s == List(true), s"reported $s")
     }
 
+    "an unbound box starts over when a region around it re-renders: its state ends with its mount instance" in {
+        for
+            parent <- Signal.initRef(0)
+            after  <- publishedAfterEach(UI.render(parent)(_ => uic.CheckBox("Free").render), parent)(
+                t => box(t).map(toggle(_, true)),
+                // The tick the toggle draws has to be through, or the next gesture would count it as what the re-render drew.
+                t => elementsWithClass(t, "p-checkbox-checked").map(c => if c.isEmpty then throw new AssertionError("not ticked yet")),
+                _ => parent.set(1)
+            )
+            ticked <- after.fold(Kyo.lift(true))(t => elementsWithClass(t, "p-checkbox-checked").map(_.nonEmpty))
+        yield assert(!ticked, "the box kept its tick through the re-render")
+    }
+
 end CheckBoxTest

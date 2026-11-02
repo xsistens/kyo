@@ -134,13 +134,14 @@ private[uic] object ReactiveValue:
     def deaf[A, R](slot: Maybe[ReactiveValue[A]], report: Maybe[R]): Boolean =
         slot.exists(s => s.dyn.isDefined && s.writable.isEmpty) && !heard(slot, report)
 
-    /** Draws a slot nobody bound over state the component keeps itself, for as long as it is shown: the reader's change is
-      * written there and the field follows, the way an HTML control nobody binds keeps what the reader did. `initial` is
-      * where it starts, `draw` draws the component with that state bound two-way, and `placeholder` is what a static
-      * projection shows before the mount runs.
+    /** Draws a slot nobody bound over state the component keeps itself, for as long as its mount instance lives: the reader's
+      * change is written there and the field follows, the way an HTML control nobody binds keeps what the reader did. A region
+      * around it that re-renders ends the instance, and the state starts over at `initial`; the mount has no key ([[kyo.UI.owned]]).
+      * `initial` is where it starts, `draw` draws the component with that state bound two-way, and `placeholder` is what a
+      * static projection shows before the mount runs.
       */
     def owned[A](initial: A)(draw: ReactiveValue[A] => UI)(placeholder: UI)(using CanEqual[A, A], Frame): UI =
-        UI.mounted(Signal.initRef(initial).map(own => draw(ReactiveVariable(own)))).placeholder(placeholder)
+        UI.owned(initial)(own => draw(ReactiveVariable(own))).placeholder(placeholder)
 
     /** Draws a field the reader edits over a ONE-WAY signal, so that an edit its owner does not take is painted away.
       *

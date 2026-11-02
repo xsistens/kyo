@@ -89,9 +89,10 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
 - **Every slot the reader changes: a CONSTANT nothing hears is fixed, and an UNBOUND slot is the component's own**
   (decided 2026-10-28, for every component). A constant nobody hears (`ReactiveValue.fixed`) is not a mistake but a value meant to stay: the
   component draws it read-only, reachable and readable with nothing to change, the way `readonly` does, and says
-  nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as it is shown
-  (`ReactiveValue.owned`, or a ref the component's existing mount allocates), the way an HTML control nobody binds keeps
-  its tick. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
+  nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as its mount instance
+  lives (`ReactiveValue.owned`, or a ref the component's existing mount allocates), the way an HTML control nobody binds
+  keeps its tick. A region around it that re-renders ends the instance and starts the state over, which a native control
+  under a morph would not do; a parent that repaints and has to keep it binds the slot or gives the component a key. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
   and keeps nothing of its own, and so does a paginator a table or a view embeds. In a DataTable, binding
   `columnWidths`, `columnOrder` or `expandedGroups` is still what turns the drag or the collapsible group ON; unbound,
   those stay off rather than becoming the table's own. Each has a setter with no argument (`columnWidths()`) that turns
