@@ -23,39 +23,19 @@ import kyo.*
   */
 class ReactiveUITeardownTest extends kyo.test.Test[Any]:
 
-    // A no-op exchange: the teardown/cascade proof does not depend on rendered output, only on subscription liveness.
-    private val stubExchange: UIExchange =
-        new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                context: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                ui: UI
-            )(using
-                Frame
-            ): Unit < Async = ()
-
     "bound element replacement does not recursively subscribe to itself" in {
         for
             ref           <- Signal.initRef("")
             renders       <- AtomicInt.init(0)
             secondEntered <- Promise.init[Unit, Any]
             releaseSecond <- Promise.init[Unit, Any]
-            exchange = new UIExchange:
-                def onChange(
-                    region: ReactiveRegion,
-                    path: Seq[String],
-                    context: ReactiveRegion.RegionIdentity,
-                    parentContext: ReactiveRegion.ParentContext,
-                    previous: Maybe[UI],
-                    ui: UI
-                )(using Frame): Unit < Async =
+            exchange = new RecordingExchange(beforePaint =
+                (path, ui) =>
                     renders.incrementAndGet.map { count =>
                         if count == 2 then secondEntered.completeUnitDiscard.andThen(releaseSecond.get)
                         else ()
                     }
+            )
             // Freeze the subscription's repair timer so only the signal update can rearm this observer.
             // The driver keeps its live clock for assertEventually retries.
             fiber <- Clock.withTimeControl { _ =>
@@ -94,21 +74,15 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             rendered <- AtomicRef.init(Chunk.empty[String])
             entered  <- Promise.init[Unit, Any]
             release  <- Promise.init[Unit, Any]
-            exchange = new UIExchange:
-                def onChange(
-                    region: ReactiveRegion,
-                    path: Seq[String],
-                    context: ReactiveRegion.RegionIdentity,
-                    parentContext: ReactiveRegion.ParentContext,
-                    previous: Maybe[UI],
-                    ui: UI
-                )(using Frame): Unit < Async =
+            exchange = new RecordingExchange(beforePaint =
+                (path, ui) =>
                     HtmlRenderer.render(ui, path).map { html =>
                         rendered.updateAndGet(_.append(html)).andThen {
                             if html.contains(">b<") then entered.completeUnitDiscard.andThen(release.get)
                             else ()
                         }
                     }
+            )
             // Freeze the repair timer: only the write itself can bring the region to "c".
             fiber <- Clock.withTimeControl { _ =>
                 Fiber.init(Scope.run {
@@ -141,7 +115,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- Async.never
                 yield ()
             })
@@ -173,20 +147,14 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             finalizerStarted <- Promise.init[Unit, Any]
             releaseFinalizer <- Promise.init[Unit, Any]
             rootFinalized    <- Promise.init[Unit, Any]
-            exchange = new UIExchange:
-                def onChange(
-                    region: ReactiveRegion,
-                    path: Seq[String],
-                    context: ReactiveRegion.RegionIdentity,
-                    parentContext: ReactiveRegion.ParentContext,
-                    previous: Maybe[UI],
-                    ui: UI
-                )(using Frame): Unit < Async =
+            exchange = new RecordingExchange(beforePaint =
+                (path, ui) =>
                     Scope.run {
                         Scope.ensure(finalizerStarted.completeUnitDiscard.andThen(releaseFinalizer.get))
                             .andThen(exchangeEntered.completeUnitDiscard)
                             .andThen(releaseExchange.get)
                     }
+            )
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
                     _    <- Scope.ensure(rootFinalized.completeUnitDiscard)
@@ -215,7 +183,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 Scope.run {
                     for
                         root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty)
-                        _    <- ReactiveUI.subscribe(root, stubExchange)
+                        _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     yield ()
                 }.andThen(closed.set(true)),
                 Async.sleep(1.second)
@@ -231,15 +199,10 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             entered <- Promise.init[Unit, Any]
             release <- Promise.init[Unit, Any]
             closed  <- Promise.init[Unit, Any]
-            exchange = new UIExchange:
-                def onChange(
-                    region: ReactiveRegion,
-                    path: Seq[String],
-                    context: ReactiveRegion.RegionIdentity,
-                    parentContext: ReactiveRegion.ParentContext,
-                    previous: Maybe[UI],
-                    ui: UI
-                )(using Frame): Unit < Async = entered.completeUnitDiscard.andThen(release.get)
+            exchange = new RecordingExchange(beforePaint =
+                (path, ui) =>
+                    entered.completeUnitDiscard.andThen(release.get)
+            )
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
                     _ <- Scope.ensure(closed.completeUnitDiscard)
@@ -271,17 +234,10 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
             ref      <- Signal.initRef("")
             rendered <- AtomicRef.init(Chunk.empty[String])
             // Exchange that renders each emitted input region to HTML and records it (the real onChange wire behavior).
-            recordingExchange =
-                new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        ui: UI
-                    )(using Frame): Unit < Async =
-                        HtmlRenderer.render(ui, path).map(html => rendered.updateAndGet(_.append(html)).unit)
+            recordingExchange = new RecordingExchange(beforePaint =
+                (path, ui) =>
+                    HtmlRenderer.render(ui, path).map(html => rendered.updateAndGet(_.append(html)).unit)
+            )
             tree = UI.input.id("i").value(ref)
             live  <- AtomicInt.init(0)
             fiber <- Fiber.initUnscoped(Scope.run {
@@ -331,7 +287,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(ref1.waiters.map(_ == 1))
                     _    <- assertEventually(ref2.waiters.map(_ == 1))
                     _    <- assertEventually(ref3.waiters.map(_ == 1))
@@ -370,7 +326,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(childRef.waiters.map(_ == 1))
                     _    <- Async.never
                 yield ()
@@ -413,7 +369,7 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 for
                     _    <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                     root <- ReactiveUI.normalize(tree, Seq.empty)
-                    _    <- ReactiveUI.subscribe(root, stubExchange)
+                    _    <- ReactiveUI.subscribe(root, UIExchange.noop)
                     _    <- assertEventually(grandRef.waiters.map(_ == 1))
                     _    <- Async.never
                 yield ()

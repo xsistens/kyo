@@ -4,8 +4,8 @@ import kyo.internal.DragCommands
 import kyo.internal.DragProtocol
 import kyo.internal.HtmlRenderer
 import kyo.internal.MouseEventData
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -34,12 +34,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
       * exercise event routing only, so the subscription runs under a local Scope.run that discharges its Scope row.
       */
     private def makeDispatch(ui: UI)(using Frame): ((Seq[String], UIEvent) => Boolean < Async) < Async =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
-            yield subscription.handle
-        }
+        ReactiveUI.subscribed(ui)(_.handle)
 
     private def withDispatch[A](ui: UI)(f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
         Frame
@@ -54,13 +49,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     private def withSubscription[A](ui: UI, limits: ReactiveUI.DragSessionLimits)(
         f: ReactiveUI.Subscription => A < (Async & Scope & Abort[Closed])
     )(using Frame): A < (Async & Abort[Closed]) =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
-                result       <- f(subscription)
-            yield result
-        }
+        ReactiveUI.subscribed(ui, dragLimits = limits)(f)
 
     private def htmlUnescape(value: String): String =
         value
@@ -925,11 +914,9 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             DragProtocol.EndData("churn", Drag.Operation.Copy, cancelled = true)
         )
         for
-            subscription <- Scope.run {
+            subscription <- ReactiveUI.subscribed(UI.div, dragLimits = limits) { subscription =>
                 for
-                    root         <- ReactiveUI.normalize(UI.div, Seq.empty)
-                    subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
-                    _            <- Kyo.foreach(0 until 1000) { _ =>
+                    _ <- Kyo.foreach(0 until 1000) { _ =>
                         subscription.handle(Seq.empty, start).andThen(subscription.handle(Seq.empty, end))
                     }
                     sessions <- subscription.dragSessionCount
@@ -1425,15 +1412,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             for
                 html    <- HtmlRenderer.render(ui, Seq.empty)
                 painted <- Channel.init[Unit](8)
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
+                exchange = new RecordingExchange(beforePaint = (_, _) => Abort.run[Closed](painted.put(())).unit)
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 sub    <- ReactiveUI.subscribe(root, exchange)
                 _      <- change

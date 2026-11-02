@@ -3,8 +3,8 @@ package kyo
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
-import kyo.internal.UIExchange
 
 /** A page that takes every paint the way the client does, replacing the content between a range's markers, and reads the visible
   * text of the result: text inside an element with the `hidden` attribute or inside a `template` is not visible. Tests wait for a
@@ -12,15 +12,14 @@ import kyo.internal.UIExchange
   */
 abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
 
-    final class Screen(initial: String) extends UIExchange:
+    final class Screen(initial: String) extends RecordingExchange:
         import AllowUnsafe.embrace.danger
 
         private val page    = AtomicRef.Unsafe.init(initial)
         private val history = AtomicRef.Unsafe.init(Chunk(Screen.visible(initial)))
-        private val painted = AtomicRef.Unsafe.init(Chunk.empty[Seq[String]])
         private val waiters = AtomicRef.Unsafe.init(Chunk.empty[(String => Boolean, Promise[Unit, Any])])
 
-        def onChange(
+        override def onChange(
             region: ReactiveRegion,
             path: Seq[String],
             context: ReactiveRegion.RegionIdentity,
@@ -38,15 +37,18 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
                         case _                            => ()
                     val shown = Screen.visible(page.get())
                     discard(history.getAndUpdate(_.append(shown)))
-                    discard(painted.getAndUpdate(_.append(path)))
-                    var ready = Chunk.empty[Promise[Unit, Any]]
-                    discard(waiters.getAndUpdate { all =>
-                        val (met, rest) = all.partition(_._1(shown))
-                        ready = met.map(_._2)
-                        rest
-                    })
-                    ready
-                }.map(ready => Kyo.foreachDiscard(ready)(_.completeUnitDiscard))
+                    shown
+                }.map { shown =>
+                    super.onChange(region, path, context, parentContext, previous, ui).andThen(Sync.Unsafe.defer {
+                        var ready = Chunk.empty[Promise[Unit, Any]]
+                        discard(waiters.getAndUpdate { all =>
+                            val (met, rest) = all.partition(_._1(shown))
+                            ready = met.map(_._2)
+                            rest
+                        })
+                        ready
+                    }).map(ready => Kyo.foreachDiscard(ready)(_.completeUnitDiscard))
+                }
             }
         end onChange
 
@@ -57,7 +59,7 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
         def states(using Frame): Chunk[String] < Sync = Sync.Unsafe.defer(history.get())
 
         /** How many paints replaced the range at exactly `path`, which replaces every node inside it. */
-        def paintsAt(path: Seq[String])(using Frame): Int < Sync = Sync.Unsafe.defer(painted.get().count(_ == path))
+        def paintsAt(path: Seq[String])(using Frame): Int < Sync = paints.map(_.count(_.path == path))
 
         /** Waits until the visible text satisfies `pred`. */
         def await(label: String)(pred: String => Boolean)(using Frame, kyo.test.AssertScope): Unit < Async =

@@ -6,6 +6,7 @@ import kyo.internal.MountedSpec
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -24,15 +25,9 @@ class MountedTest extends kyo.test.Test[Any]:
       *   runs before a paint is recorded, with its path and markup, and may suspend it there, as a slow transport would
       */
     private class Recorder(keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())
-        extends UIExchange:
-        private val paints  = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
-        private val holdLog = AtomicRef.Unsafe.init(Chunk.empty[(ReactiveRegion, Boolean)])(using AllowUnsafe.embrace.danger)
-
-        override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
-            Sync.Unsafe.defer(discard(holdLog.getAndUpdate(_.append((region, held)))))
-
-        /** Every hold and release so far, oldest first. */
-        def holds(using Frame): Chunk[(ReactiveRegion, Boolean)] < Sync = Sync.Unsafe.defer(holdLog.get())
+        extends RecordingExchange:
+        // What the page shows by path: this renders each paint, where the log it extends keeps the UI.
+        private val pages = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
 
         override def onListPatch(
             region: ReactiveRegion,
@@ -46,11 +41,11 @@ class MountedTest extends kyo.test.Test[Any]:
             else
                 Kyo.foreachDiscard(rows.filter(_.changed)) { row =>
                     HtmlRenderer.render(row.ui, path :+ row.key).map(html =>
-                        Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path :+ row.key, html)))))
+                        Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path :+ row.key, html)))))
                     )
                 }.andThen(true)
 
-        def onChange(
+        override def onChange(
             region: ReactiveRegion,
             path: Seq[String],
             context: ReactiveRegion.RegionIdentity,
@@ -59,28 +54,28 @@ class MountedTest extends kyo.test.Test[Any]:
             ui: UI
         )(using Frame): Unit < Async =
             HtmlRenderer.render(ui, path).map(html =>
-                beforePaint(path, html).andThen(Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path, html))))))
+                beforePaint(path, html).andThen(Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path, html))))))
             )
 
         /** The initial page, which a transport renders itself before subscribing. */
         def initial(ui: UI)(using Frame): Unit < Sync =
-            HtmlRenderer.render(ui, Seq.empty).map(html => Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((Seq.empty, html))))))
+            HtmlRenderer.render(ui, Seq.empty).map(html => Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((Seq.empty, html))))))
 
         def shown(path: Seq[String])(using Frame): String < Sync =
-            Sync.Unsafe.defer(paints.get()).map { all =>
+            Sync.Unsafe.defer(pages.get()).map { all =>
                 all.reverseIterator.find((p, _) => path.startsWith(p)).map(_._2).getOrElse("")
             }
 
         def paintsAt(path: Seq[String])(using Frame): Int < Sync =
-            Sync.Unsafe.defer(paints.get()).map(_.count((p, _) => p == path))
+            Sync.Unsafe.defer(pages.get()).map(_.count((p, _) => p == path))
 
-        def paintCount(using Frame): Int < Sync = Sync.Unsafe.defer(paints.get().size)
+        def paintCount(using Frame): Int < Sync = Sync.Unsafe.defer(pages.get().size)
 
         /** Every paint after the first `n`, oldest first. */
-        def paintsAfter(n: Int)(using Frame): Chunk[(Seq[String], String)] < Sync = Sync.Unsafe.defer(paints.get().drop(n))
+        def paintsAfter(n: Int)(using Frame): Chunk[(Seq[String], String)] < Sync = Sync.Unsafe.defer(pages.get().drop(n))
 
         def paintsEndingWith(suffix: Seq[String])(using Frame): Int < Sync =
-            Sync.Unsafe.defer(paints.get()).map(_.count((p, _) => p.endsWith(suffix)))
+            Sync.Unsafe.defer(pages.get()).map(_.count((p, _) => p.endsWith(suffix)))
     end Recorder
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
@@ -1104,13 +1099,13 @@ class MountedTest extends kyo.test.Test[Any]:
                 for
                     _       <- showsEventually(recorder, Seq("0", "0"), "note")
                     _       <- key.set("b")
-                    _       <- assertEventually(recorder.holds.map(_.map(_._2) == Chunk(true)))
+                    _       <- assertEventually(recorder.holds.map(_.map(_.held) == Chunk(true)))
                     whileIn <- recorder.holds
                     _       <- gate.completeUnitDiscard
                     _       <- showsEventually(recorder, Seq("0", "0"), "new")
-                    _       <- assertEventually(recorder.holds.map(_.map(_._2) == Chunk(true, false)))
+                    _       <- assertEventually(recorder.holds.map(_.map(_.held) == Chunk(true, false)))
                     all     <- recorder.holds
-                yield assert(all.map(_._1).distinct == Chunk(whileIn.head._1), s"held and released different ranges: $all")
+                yield assert(all.map(_.region).distinct == Chunk(whileIn.head.region), s"held and released different ranges: $all")
             }
         yield succeed
     }

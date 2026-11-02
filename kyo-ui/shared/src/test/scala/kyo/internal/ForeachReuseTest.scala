@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
 import kyo.UI.foreachKeyed
 import kyo.UI.render
+import kyo.internal.RecordingExchange.Op
 
 /** Direct-engine tests for the reusable keyed Foreach path (RowRegistry): rows whose key and item persist
   * across list emissions are neither re-rendered nor re-subscribed, their observers stay live across reorders,
@@ -12,34 +13,11 @@ import kyo.UI.render
 class ForeachReuseTest extends kyo.test.Test[Any]:
 
     final private class Recording:
-        val changes      = new AtomicInteger(0)
-        val classPatches = new AtomicInteger(0)
-        val trueClassOns = new AtomicInteger(0)
-        val exchange     = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async =
-                Sync.defer(discard(changes.incrementAndGet()))
-            // A transport that addresses rows, so the rows it is not told to repaint keep their subscriptions.
-            override def onListPatch(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                rows: Seq[ListRow]
-            )(using Frame): Boolean < Async =
-                Sync.defer(discard(changes.incrementAndGet())).andThen(true)
-            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-                Sync.defer {
-                    discard(classPatches.incrementAndGet())
-                    if on then discard(trueClassOns.incrementAndGet())
-                }
+        // A transport that addresses rows, so the rows it is not told to repaint keep their subscriptions.
+        val exchange          = new RecordingExchange(keepsRows = true)
+        def changes: Int      = exchange.recorded.count { case _: Op.Paint | _: Op.List => true; case _ => false }
+        def classPatches: Int = exchange.recorded.count(_.isInstanceOf[Op.Class])
+        def trueClassOns: Int = exchange.recorded.count { case op: Op.Class => op.on; case _ => false }
     end Recording
 
     /** Waits until `n` observers wait on `ref`. An observer parks on its signal again only once it has handled the value before,
@@ -63,7 +41,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(_.append("d"))
-                _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
+                _ <- assertEventually(Sync.defer(rec.changes >= 1))
                 delta = renders.get - base
             yield assert(delta == 1, s"expected exactly 1 render for the added row, got $delta")
         }
@@ -85,11 +63,11 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(c => Chunk.from(c.toSeq.reverse))
-                _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
+                _ <- assertEventually(Sync.defer(rec.changes >= 1))
                 reorderDelta = renders.get - base
                 // The retained rows' channel observers must still be live after the reorder.
                 _ <- selected.set("b")
-                _ <- assertEventually(Sync.defer(rec.classPatches.get >= 1))
+                _ <- assertEventually(Sync.defer(rec.classPatches >= 1))
             yield assert(reorderDelta == 0, s"expected no row re-renders on reorder, got $reorderDelta")
         }
     }
@@ -108,7 +86,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- parked(rows, 1)
                 _    <- parked(selected, 3)
                 _    <- rows.getAndUpdate(_.filter(_ != "b"))
-                _    <- assertEventually(Sync.defer(rec.changes.get >= 1))
+                _    <- assertEventually(Sync.defer(rec.changes >= 1))
                 // b's observer is gone: only a's and c's still wait on `selected`. A live one would keep waiting there.
                 _ <- parked(selected, 2)
                 // The surviving rows' mapped signals re-emit their unchanged `false` on the source change (mapped observe
@@ -116,10 +94,10 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 // b observer could patch `on = true` for selected == "b". Both survivors have handled it once they wait again.
                 _ <- selected.set("b")
                 _ <- parked(selected, 2)
-                deadTrueOns = rec.trueClassOns.get
+                deadTrueOns = rec.trueClassOns
                 // A surviving row still patches true in place.
                 _ <- selected.set("a")
-                _ <- assertEventually(Sync.defer(rec.trueClassOns.get >= deadTrueOns + 1))
+                _ <- assertEventually(Sync.defer(rec.trueClassOns >= deadTrueOns + 1))
             yield assert(deadTrueOns == 0, s"expected no on=true patch from the removed row's observer, got $deadTrueOns")
         }
     }
@@ -139,9 +117,9 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- parked(rows, 1)
                 _    <- rows.getAndUpdate(_.append("c"))
-                _    <- assertEventually(Sync.defer(rec.changes.get >= 1))
+                _    <- assertEventually(Sync.defer(rec.changes >= 1))
                 _    <- selected.set("c")
-                _    <- assertEventually(Sync.defer(rec.trueClassOns.get >= 1))
+                _    <- assertEventually(Sync.defer(rec.trueClassOns >= 1))
             yield assert(true)
         }
     }
@@ -188,19 +166,13 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 rows  <- Signal.initRef(Chunk("a", "b", "c"))
                 aHits <- Sync.defer(new AtomicInteger(0))
                 bHits <- Sync.defer(new AtomicInteger(0))
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        contentContext: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async =
+                exchange = new RecordingExchange(beforePaint =
+                    (path, _) =>
                         Sync.defer {
                             if path.contains("a") then discard(aHits.incrementAndGet())
                             if path.contains("b") then discard(bHits.incrementAndGet())
                         }
+                )
                 ui = UI.ul(rows.foreachKeyed(identity) { item =>
                     UI.li(inner.map(v => UI.span(s"$item-$v")))
                 })
@@ -237,7 +209,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _    <- parked(rows, 1)
                 base = renders.get
                 _ <- rows.getAndUpdate(c => Chunk.from(c.toSeq.map(s => if s.startsWith("b") then "b:2" else s)))
-                _ <- assertEventually(Sync.defer(rec.changes.get >= 1))
+                _ <- assertEventually(Sync.defer(rec.changes >= 1))
                 delta = renders.get - base
             yield assert(delta == 1, s"expected exactly 1 render for the changed row, got $delta")
         }

@@ -6,16 +6,6 @@ import kyo.UI.foreachKeyed
 
 class ClickTargetResolutionTest extends kyo.test.Test[Any]:
 
-    private val exchange = new UIExchange:
-        def onChange(
-            region: ReactiveRegion,
-            path: Seq[String],
-            contentContext: ReactiveRegion.RegionIdentity,
-            parentContext: ReactiveRegion.ParentContext,
-            previous: Maybe[UI],
-            changed: UI
-        )(using Frame): Unit < Async = Kyo.unit
-
     "each ancestor of a list row resolves the clicked row once, whatever it asks about it" in {
         Scope.run {
             for
@@ -27,7 +17,7 @@ class ClickTargetResolutionTest extends kyo.test.Test[Any]:
                     UI.li(item).onClick(Sync.defer(discard(clicks.incrementAndGet())))
                 })))
                 root     <- ReactiveUI.normalize(ui, Seq.empty)
-                dispatch <- ReactiveUI.subscribe(root, exchange)
+                dispatch <- ReactiveUI.subscribe(root, UIExchange.noop)
                 // The list region takes its first emission as the painted rows and then parks on the signal
                 // again; measuring before that would count its row renders as the click's.
                 _ <- assertEventually(rows.waiters.map(_ == 1))

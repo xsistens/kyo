@@ -21,12 +21,7 @@ class TypedEventTest extends kyo.test.Test[Any]:
       * exercise event routing only, so the subscription runs under a local Scope.run that discharges its Scope row.
       */
     private def makeDispatch(ui: UI)(using Frame): ((Seq[String], UIEvent) => Boolean < Async) < Async =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
-            yield subscription.handle
-        }
+        ReactiveUI.subscribed(ui)(_.handle)
 
     // ---- typed onClick fires with Modifiers.none ----
 
