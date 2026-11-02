@@ -169,4 +169,186 @@ class UIBoundFollowTest extends kyo.test.Test[Any]:
         }
     }
 
+    "an edit its owner did not take" - {
+        def inputEvent(v: String)  = UIEvent.Input(at, v)
+        def changeEvent(v: String) = UIEvent.Change(at, v)
+
+        "a keystroke is put back when onInput is set" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly).onInput(_ => ())), rec) { sub =>
+                    sub.handle(at, inputEvent("typed")).andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(op => (op.path, op.name, op.value)) == Chunk((at, "value", "held")))
+            end for
+        }
+
+        "a keystroke the owner took sends the emission's patch and no assert" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly).onInput(ref.set(_))), rec) { sub =>
+                    parked(ref).andThen(sub.handle(at, inputEvent("typed"))).andThen(rec.awaitOp(_ => true)).andThen(parked(ref))
+                        .andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk("typed"))
+            end for
+        }
+
+        "an onChange-only field keeps what is typed until the commit, which is put back" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                r   <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly).onChange(_ => ())), rec) { sub =>
+                    for
+                        _     <- sub.handle(at, inputEvent("typed"))
+                        typed <- rec.attrPatches
+                        _     <- sub.handle(at, changeEvent("typed"))
+                        done  <- rec.attrPatches
+                    yield (typed, done)
+                }
+            yield
+                assert(r._1.isEmpty)
+                assert(r._2.map(_.value) == Chunk("held"))
+            end for
+        }
+
+        "a field with no handler at all is put back at the commit" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly)), rec) { sub =>
+                    sub.handle(at, changeEvent("typed")).andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk("held"))
+            end for
+        }
+
+        "a handler that fails does not keep the edit" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly).onInput(_ => Abort.fail("declined"))), rec) { sub =>
+                    sub.handle(at, inputEvent("typed")).andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk("held"))
+            end for
+        }
+
+        "a mask is compared as the field shows it" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("1234")
+                r   <- ReactiveUI.subscribed(UI.div(UI.input.inputMask("99-99").value(ref.readOnly).onInput(_ => ())), rec) { sub =>
+                    for
+                        _     <- sub.handle(at, inputEvent("12-34"))
+                        same  <- rec.attrPatches
+                        _     <- sub.handle(at, inputEvent("12-3"))
+                        other <- rec.attrPatches
+                    yield (same, other)
+                }
+            yield
+                assert(r._1.isEmpty, s"what the field shows is what the owner holds: ${r._1}")
+                assert(r._2.map(_.value) == Chunk("12-34"))
+            end for
+        }
+
+        "a range is put back with the number the render writes" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef(1.5)
+                ops <- ReactiveUI.subscribed(UI.div(UI.rangeInput.value(ref.readOnly).onChange(_ => ())), rec) { sub =>
+                    sub.handle(at, UIEvent.ChangeNumeric(at, 3.0)).andThen(rec.attrPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk("1.5"))
+            end for
+        }
+
+        "a box and a radio are put back through the checked channel" in {
+            def declined(el: Signal[Boolean] => UI)(using Frame, kyo.test.AssertScope): Unit < (Async & Abort[Closed]) =
+                val rec = new RecordingExchange
+                Signal.initRef(false).map(ref =>
+                    ReactiveUI.subscribed(UI.div(el(ref.readOnly)), rec) { sub =>
+                        sub.handle(at, UIEvent.ChangeChecked(at, true)).andThen(rec.boolPatches)
+                    }.map(ops => assert(ops.map(op => (op.path, op.name, op.value)) == Chunk((at, "checked", false))))
+                )
+            end declined
+            declined(UI.checkbox.checked(_).onChange(_ => ()))
+                .andThen(declined(UI.radio.checked(_).onChange(_ => ())))
+                // No handler at all: a radio drawn for its keyboard alone relies on this.
+                .andThen(declined(UI.checkbox.checked(_)))
+                .andThen(declined(UI.radio.checked(_)))
+        }
+
+        "a toggle its owner took sends the emission's patch and no assert" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef(false)
+                ops <- ReactiveUI.subscribed(UI.div(UI.checkbox.checked(ref.readOnly).onChange(ref.set(_))), rec) { sub =>
+                    parked(ref).andThen(sub.handle(
+                        at,
+                        UIEvent.ChangeChecked(at, true)
+                    )).andThen(rec.awaitOp(_ => true)).andThen(parked(ref))
+                        .andThen(rec.boolPatches)
+                }
+            yield assert(ops.map(_.value) == Chunk(true))
+            end for
+        }
+
+        "an element that does not follow is left alone" in {
+            val rec = new RecordingExchange
+            for
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.value("start").onInput(_ => ())), rec) { sub =>
+                    sub.handle(at, inputEvent("typed")).andThen(rec.ops)
+                }
+            yield assert(ops.isEmpty)
+            end for
+        }
+
+        "a read-only field takes no edit, and nothing is sent" in {
+            val rec = new RecordingExchange
+            for
+                ref <- Signal.initRef("held")
+                ops <- ReactiveUI.subscribed(UI.div(UI.input.readOnly(true).value(ref.readOnly).onInput(_ => ())), rec) { sub =>
+                    sub.handle(at, inputEvent("typed")).andThen(rec.ops)
+                }
+            yield assert(ops.isEmpty)
+            end for
+        }
+    }
+
+    "reads" - {
+        "a blur with no text reports what the signal holds" in {
+            for
+                ref  <- Signal.initRef("held")
+                seen <- AtomicRef.init("")
+                _    <- ReactiveUI.subscribed(UI.div(UI.input.value(ref.readOnly).onBlur((_, v) => seen.set(v))), new RecordingExchange) {
+                    sub =>
+                        sub.handle(at, UIEvent.Blur(at, kyo.internal.MouseEventData(UI.Modifiers.none, Absent), Absent))
+                }
+                got <- seen.get
+            yield assert(got == "held")
+            end for
+        }
+
+        "Enter on a followed box toggles from what the signal holds and reports it" in {
+            for
+                ref  <- Signal.initRef(true)
+                seen <- AtomicRef.init(Maybe.empty[Boolean])
+                _    <- ReactiveUI.subscribed(
+                    UI.div(UI.checkbox.checked(ref.readOnly).onChange(v => seen.set(Present(v)))),
+                    new RecordingExchange
+                ) { sub =>
+                    sub.handle(at, UIEvent.KeyDown(at, kyo.internal.KeyboardEventData("Enter", UI.Modifiers.none, Absent)))
+                }
+                got  <- seen.get
+                held <- ref.get
+            yield
+                assert(got == Present(false))
+                assert(held, "the signal is its owner's, and stays")
+            end for
+        }
+    }
+
 end UIBoundFollowTest

@@ -41,6 +41,30 @@ private[kyo] object Channels:
         Channels(text, bools, attrs.reactiveClasses, attrs.reactiveStyle)
     end of
 
+    /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what
+      * the signal holds with what the event carried, and sends the patch when they differ; when they are the same the owner took it. A commit
+      * always counts. A keystroke counts only where `onInput` is set, so a field with no such handler keeps what is typed until its commit.
+      */
+    def putBack(el: Element, event: UIEvent, path: Seq[String])(using Frame): Maybe[UIExchange => Unit < Async] =
+        def text(carried: String): Maybe[UIExchange => Unit < Async] =
+            followedValue(el).map(held =>
+                exchange => held.current.map(v => if v == carried then Kyo.unit else exchange.onAttrPatch(path, "value", v))
+            )
+        event match
+            case e: UIEvent.Input =>
+                el match
+                    case ti: TextInput if ti.onInput.nonEmpty => text(e.value)
+                    case _                                    => Absent
+            case e: UIEvent.Change        => text(e.value)
+            case e: UIEvent.ChangeNumeric => text(NumberFormat.double(e.value))
+            case e: UIEvent.ChangeChecked =>
+                followedChecked(el).map(held =>
+                    exchange => held.current.map(v => if v == e.checked then Kyo.unit else exchange.onBoolAttrPatch(path, "checked", v))
+                )
+            case _ => Absent
+        end match
+    end putBack
+
     /** Whether `el` shows a signal through a `Bound.Follow`. A check on every element of a render, so it allocates nothing. */
     def follows(el: Element): Boolean =
         def isFollow(b: Maybe[UI.Bound[?]]): Boolean = b match

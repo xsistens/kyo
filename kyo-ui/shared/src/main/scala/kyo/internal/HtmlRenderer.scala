@@ -2284,7 +2284,7 @@ private[kyo] object HtmlRenderer:
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
            |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
-           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}if(op.SetBoolAttrByPath.name==="checked"&&sbpel.tagName==="INPUT")__kyoSyncChecked(sbpel,op.SetBoolAttrByPath.value);}
            |  }else if(op.SetClassByPath){
            |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
            |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
@@ -2370,6 +2370,15 @@ private[kyo] object HtmlRenderer:
            |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
            |function __kyoSyncField(el,name,value){
            |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value){el.value=value;__kyoFilled(el);}
+           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;
+           |}
+           |// A patch of checked: a control shows its property once the reader has toggled it. The browser took the group's selection from
+           |// the other radios when the reader clicked this one, so each bound radio of the group shows what its attribute says again; a free
+           |// radio's tick stays. Twin of syncChecked in DomBackend.
+           |function __kyoSyncChecked(el,on){
+           |  el.checked=on;
+           |  if(el.type==="radio"&&el.name){var rs=document.querySelectorAll("input[type=radio][data-kyo-bound]");
+           |    for(var i=0;i<rs.length;i++){var r=rs[i];if(r.name===el.name&&r.form===el.form)r.checked=r.hasAttribute("checked");}}
            |}
            |// filledClass: a text field's class follows whether it holds text (kyo.internal.FilledClass, shared with DomBackend).
            |${FilledClass.js}

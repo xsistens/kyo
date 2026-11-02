@@ -901,7 +901,32 @@ private[kyo] object DomBackend:
                 dyn.value = value
                 applyFilled(el)
             end if
+        else if name == "value" && el.tagName == "SELECT" then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+        end if
     end syncFieldProperty
+
+    /** A patch of `checked`: a control shows its PROPERTY once the reader has toggled it, so the attribute alone would not move it. The browser
+      * took the group's selection from the other radios when the reader clicked this one, and the one that held it has no patch of its own
+      * coming, so each bound radio of the group shows what its attribute says again. A free radio's tick stays. Twin of `__kyoSyncChecked`.
+      */
+    private def syncChecked(el: dom.Element, on: Boolean): Unit =
+        val dyn = el.asInstanceOf[js.Dynamic]
+        dyn.checked = on
+        val name = dyn.name.asInstanceOf[String]
+        if dyn.selectDynamic("type").asInstanceOf[String] == "radio" && name.nonEmpty then
+            val radios = document.querySelectorAll("input[type=radio][data-kyo-bound]")
+            var i      = 0
+            while i < radios.length do
+                val radio = radios(i).asInstanceOf[dom.Element]
+                val other = radio.asInstanceOf[js.Dynamic]
+                if other.name.asInstanceOf[String] == name && js.special.strictEquals(other.form, dyn.form) then
+                    other.checked = radio.hasAttribute("checked")
+                i += 1
+            end while
+        end if
+    end syncChecked
 
     /** `filledClass`: toggles the classes `field` marks (on itself, and on the closest ancestor its selector names) from
       * whether it holds text. Twin of `__kyoFilled` in HtmlRenderer.clientJs; both read `FilledClass`.
@@ -1445,6 +1470,7 @@ private[kyo] object DomBackend:
             val el = queryByPath(path)
             if el != null then
                 if value then el.setAttribute(name, "") else el.removeAttribute(name)
+                if name == "checked" && el.tagName == "INPUT" then syncChecked(el, value)
         end boolAttrPatchNow
 
         // Toggle in place (so CSS transitions fire) rather than re-render.
