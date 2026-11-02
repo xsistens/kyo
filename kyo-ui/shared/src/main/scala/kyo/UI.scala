@@ -383,6 +383,13 @@ object UI:
     def mounted(effect: UI < (Abort[Any] & Async & Scope))(using Frame): Mounted =
         Mounted(effect, key = Absent, placeholderUI = Absent, errorRender = Absent, pendingPolicy = PendingPolicy.KeepLatest)
 
+    /** A node that keeps a `SignalRef` for as long as its instance lives, starting at `initial`, read when the node attaches. An instance ends
+      * when an enclosing region re-renders, unless the node is [[kyo.UI.MountedOps.keyed]]: then the state survives what `keyed` says. The
+      * placeholder is what a static page shows.
+      */
+    def owned[A](initial: A < Sync)(draw: SignalRef[A] => UI)(using CanEqual[A, A], Frame): Mounted =
+        mounted(initial.map(a => Signal.initRef(a).map(draw)))
+
     /** Where a [[kyo.UI.MountedOps.keyed]] call is written, which is part of a keyed instance's identity.
       *
       * It is fixed at compile time from the source position of the `.keyed` call, so a `Frame` passed down through the methods that
