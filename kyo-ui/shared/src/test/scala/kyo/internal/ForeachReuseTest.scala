@@ -336,10 +336,10 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 entered  <- Latch.init(1)
                 gate     <- Latch.init(1)
                 done     <- AtomicBoolean.init(false)
-                registry <- Sync.Unsafe.defer(ReactiveUI.RowRegistry.initNow())
-                scope    <- Sync.Unsafe.defer(new ReactiveUI.RowScope(Scope.Finalizer.Unsafe.initInline(), ReactiveUI.ReleaseGroup.root()))
+                registry <- Sync.Unsafe.defer(RowRegistry.initNow())
+                scope    <- Sync.Unsafe.defer(new RowScope(Scope.Finalizer.Unsafe.initInline(), ReactiveUI.ReleaseGroup.root()))
                 _        <- scope.finalizer.ensure(_ => entered.release.andThen(gate.await).andThen(done.set(true)))
-                row = new ReactiveUI.RowInstance("a", "a", UI.empty, Seq.empty, Absent, scope, holdsMount = false)
+                row = new RowInstance("a", "a", UI.empty, Seq.empty, Absent, scope, holdsMount = false)
                 _       <- registry.replaceAll(Seq(row), Seq(row))
                 evicter <- Fiber.initUnscoped(registry.evictExcept(_ => false))
                 _       <- entered.await
