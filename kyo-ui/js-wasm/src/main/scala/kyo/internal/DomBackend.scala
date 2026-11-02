@@ -46,6 +46,21 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
+    /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
+    private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node)(using
+        Frame
+    ): Unit =
+        morphNodeRun(parent, fromStart, fromEnd, toStart, toEnd)
+
+    /** The list patch, for the same table. */
+    private[kyo] def listPatch(
+        target: DomReactiveRegions.MorphTarget,
+        scope: DomReactiveRegions.PatchScope,
+        path: Seq[String],
+        rows: Seq[ListRow]
+    )(using Frame): Boolean =
+        applyListPatch(target, scope, path, rows)
+
     // ---- Range morph ---------------------------------------------------------------------------------------
     //
     // Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node identity
