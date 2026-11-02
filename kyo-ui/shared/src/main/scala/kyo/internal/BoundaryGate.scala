@@ -55,7 +55,7 @@ private[kyo] object Boundaries:
                             case Absent        => m
                             case Present(cell) =>
                                 cell.current.map {
-                                    case ReactiveUI.MountState.Pending(Present(snapshot)) =>
+                                    case MountState.Pending(Present(snapshot)) =>
                                         m.copy(placeholderUI = Present(snapshot))(using m.frame)
                                     case state =>
                                         resolveLive(state.content(MountedSpec(m, path, Nil)), path, at.transparent, dispatch)

@@ -419,7 +419,7 @@ object UI:
       * `batch` is `v`.
       */
     def batch[A, S](v: => A < S)(using Frame): A < (S & Sync) =
-        kyo.internal.ReactiveUI.MountSession.current.use {
+        kyo.internal.MountSession.current.use {
             case Present(session) => session.within(v)
             case Absent           => v
         }
@@ -449,7 +449,7 @@ object UI:
         reduce: Reducible[Abort[E]],
         frame: Frame
     ): Fiber[A, reduce.SReduced & S2] < (Sync & S & Scope) =
-        ReactiveUI.MountSupervision.local.use {
+        kyo.internal.MountSupervision.local.use {
             case Absent               => Fiber.init[E, A, S, S2](v)
             case Present(supervision) =>
                 Fiber.init[E, A, S, S2](v).map { fiber =>
@@ -945,7 +945,7 @@ object UI:
             ))
 
         private def sendWhenShown(command: internal.HeldCommand)(using Frame): Unit < Async =
-            internal.ReactiveUI.MountSupervision.local.use {
+            internal.MountSupervision.local.use {
                 case Present(supervision) => supervision.afterShown.send(command)
                 case Absent               => command.send
             }

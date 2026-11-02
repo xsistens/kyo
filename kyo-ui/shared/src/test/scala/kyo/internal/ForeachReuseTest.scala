@@ -337,7 +337,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 gate     <- Latch.init(1)
                 done     <- AtomicBoolean.init(false)
                 registry <- Sync.Unsafe.defer(RowRegistry.initNow())
-                scope    <- Sync.Unsafe.defer(new RowScope(Scope.Finalizer.Unsafe.initInline(), ReactiveUI.ReleaseGroup.root()))
+                scope    <- Sync.Unsafe.defer(new RowScope(Scope.Finalizer.Unsafe.initInline(), ReleaseGroup.root()))
                 _        <- scope.finalizer.ensure(_ => entered.release.andThen(gate.await).andThen(done.set(true)))
                 row = new RowInstance("a", "a", UI.empty, Seq.empty, Absent, scope, holdsMount = false)
                 _       <- registry.replaceAll(Seq(row), Seq(row))
