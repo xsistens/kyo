@@ -845,15 +845,7 @@ class SelectTest extends ReactiveValueContract:
                 cmds  <- UI.Commands.init(_ => Kyo.unit)
                 ui = select.selection(value).render
                 // The first paint is the field's mount publishing the live field, the one a click can open.
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async = live.completeUnitDiscard
+                exchange = new RecordingExchange(beforePaint = (_, _) => live.completeUnitDiscard)
                 v <- Scope.run(UICommands.commands.let(Present(cmds)) {
                     for
                         root <- ReactiveUI.normalize(ui, Seq.empty)
