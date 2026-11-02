@@ -494,7 +494,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
 
     /** Clicks the first element `target` matches the way the dispatcher delivers a click: the target's own handlers
       * first, then each enclosing element's, innermost first, until an element that declared a click handler also set
-      * `stopPropagation(true)` (`ReactiveUI.keepBubbling`). `onClickSelf` counts on the target alone, and a disabled
+      * `stopPropagation(true)` (`kyo.internal.EventDispatch.keepBubbling`). `onClickSelf` counts on the target alone, and a disabled
       * target skips its own handlers but still lets the click bubble, as the dispatcher does.
       *
       * [[click]] runs one element's handler in isolation, which cannot show what a click on a row inside a panel does
