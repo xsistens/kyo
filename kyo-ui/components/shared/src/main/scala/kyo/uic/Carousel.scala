@@ -364,7 +364,7 @@ final case class Carousel[A] private (
 
         var viewport = div.cssClass("p-carousel-viewport")
         if verticalFlag then
-            viewport = viewport.style(_.height(CssValue.length(verticalHeightV.getOrElse("300px"))))
+            viewport = viewport.style(_.height(Length.parse(verticalHeightV.getOrElse("300px"))))
         val viewportEl: UI = viewport(stripEl)
 
         val content: UI = div.cssClass("p-carousel-content")(UI.children(prev ++ (viewportEl :: next))*)
@@ -421,7 +421,7 @@ final case class Carousel[A] private (
 
         var viewport = div.cssClass("p-carousel-viewport")
         if verticalFlag then
-            viewport = viewport.style(_.height(CssValue.length(verticalHeightV.getOrElse("300px"))))
+            viewport = viewport.style(_.height(Length.parse(verticalHeightV.getOrElse("300px"))))
         val viewportEl: UI = viewport(track)
 
         val content: UI = div.cssClass("p-carousel-content")(UI.children(prev ++ (viewportEl :: next))*)
