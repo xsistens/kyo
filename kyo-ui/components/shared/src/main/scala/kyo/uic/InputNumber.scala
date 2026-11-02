@@ -196,14 +196,12 @@ final case class InputNumber private (
         val constant = valueBinding.exists { case InputNumber.Value.Const(_) => true; case _ => false }
         if constant && onChangeF.isEmpty && !readonlyFlag then copy(readonlyFlag = true).render
         else if valueBinding.isEmpty then
-            UI.mounted(Signal.initRef("").map(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive))
-                .placeholder(renderLive)
+            UI.owned("")(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive).placeholder(renderLive)
         else
             valueBinding match
                 // A constant text is the starting text: the field keeps what the reader types from it.
                 case Present(InputNumber.Value.TextConst(start)) =>
-                    UI.mounted(Signal.initRef(start).map(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive))
-                        .placeholder(renderLive)
+                    UI.owned(start)(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive).placeholder(renderLive)
                 case _ => renderLive
         end if
     end render
