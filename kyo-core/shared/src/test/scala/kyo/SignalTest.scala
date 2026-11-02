@@ -218,6 +218,33 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(v1 == 2 && v2 == 4)
         }
 
+        "map's next ignores a change that leaves the image as it is" in {
+            for
+                ref <- Signal.initRef(0)
+                f   <- Fiber.initUnscoped(ref.map(_ % 2).next)
+                _   <- assertEventually(ref.waiters.map(_ == 1))
+                _   <- ref.set(2)
+                // The waiter either parked again on the next change, or finished with an image that did not change.
+                _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                done <- f.done
+                _    <- ref.set(3)
+                v    <- f.get
+            yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+        }
+
+        "a chain of maps' next waits for the last image to change" in {
+            for
+                ref  <- Signal.initRef(0)
+                f    <- Fiber.initUnscoped(ref.map(_ + 1).map(_ / 10).next)
+                _    <- assertEventually(ref.waiters.map(_ == 1))
+                _    <- ref.set(3)
+                _    <- assertEventually(Kyo.zip(ref.waiters, f.done).map((parked, done) => parked == 1 || done))
+                done <- f.done
+                _    <- ref.set(9)
+                v    <- f.get
+            yield assert(!done && v == 1, s"finished on the unchanged image: $done, then $v")
+        }
+
         "streamCurrent" in {
             for
                 ref <- Signal.initRef(1)
