@@ -68,6 +68,31 @@ object Length:
     final case class Calc(expr: String) extends Length
     case object Auto                    extends Length
 
+    /** A CSS length: `px`, `%`, `em`, `vh`, a bare number as px, `auto`. Anything else (a `rem`, an expression) is carried as [[Calc]], which
+      * renders inside `calc(...)` unvalidated, so a typo reaches the browser and is dropped there. An empty string gives `Calc("")`. Never
+      * fails.
+      */
+    def parse(value: String): Length =
+        val t                                     = value.trim
+        def number(digits: String): Maybe[Double] =
+            // Only what CSS calls a number: `toDouble` also takes "NaN", "Infinity" and a trailing `d` or `f`.
+            if digits.nonEmpty && digits.forall(c => c.isDigit || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E') then
+                Maybe.fromOption(digits.toDoubleOption)
+            else Absent
+        def suffixed(suffix: String): Maybe[Double] =
+            if t.endsWith(suffix) then number(t.dropRight(suffix.length).trim) else Absent
+        if t.equalsIgnoreCase("auto") then Auto
+        else if t.endsWith("rem") then Calc(t)
+        else
+            suffixed("px").map(Px(_): Length)
+                .orElse(suffixed("%").map(Pct(_)))
+                .orElse(suffixed("em").map(Em(_)))
+                .orElse(suffixed("vh").map(Vh(_)))
+                .orElse(number(t).map(Px(_)))
+                .getOrElse(Calc(t))
+        end if
+    end parse
+
     /** Zero pixels (`Px(0)`). */
     val zero: Px = Px(0)
 

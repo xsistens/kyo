@@ -81,6 +81,29 @@ class StyleTest extends kyo.test.Test[Any]:
     }
 
     "Color" - {
+        "parse" - {
+            "a variable, with or without its dashes" in {
+                assert(Color.parse("var(--x)") == Present(Color.variable("x")))
+                assert(Color.parse("var(x)") == Present(Color.variable("x")))
+                assert(Color.parse(" var( --x ) ") == Present(Color.variable("x")))
+            }
+            "a variable with no name is nothing" in {
+                assert(Color.parse("var()") == Absent)
+                assert(Color.parse("var(--)") == Absent)
+            }
+            "every hex form" in {
+                assert(Color.parse("#fff") == Color.hex("#fff"))
+                assert(Color.parse("ffff") == Color.hex("#ffff"))
+                assert(Color.parse("#a1b2c3") == Color.hex("#a1b2c3"))
+                assert(Color.parse("a1b2c3d4") == Color.hex("#a1b2c3d4"))
+                assert(Color.parse("#a1b2c3").nonEmpty)
+            }
+            "a named color and anything else is nothing" in {
+                assert(Color.parse("red") == Absent)
+                assert(Color.parse("") == Absent)
+                assert(Color.parse("#12") == Absent)
+            }
+        }
         "hex" in {
             assert(Style.Color.hex("#abc") == Present(Style.Color.Hex("#abc")))
             assert(Style.Color.hex("abc") == Present(Style.Color.Hex("#abc")))
