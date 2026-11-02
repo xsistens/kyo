@@ -4,8 +4,8 @@ import kyo.internal.DragCommands
 import kyo.internal.DragProtocol
 import kyo.internal.HtmlRenderer
 import kyo.internal.MouseEventData
-import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -34,33 +34,22 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
       * exercise event routing only, so the subscription runs under a local Scope.run that discharges its Scope row.
       */
     private def makeDispatch(ui: UI)(using Frame): ((Seq[String], UIEvent) => Boolean < Async) < Async =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
-            yield subscription.handle
-        }
+        ReactiveUI.subscribed(ui)(_.handle)
 
     private def withDispatch[A](ui: UI)(f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
         Frame
     ): A < (Async & Abort[Closed]) =
-        withDispatch(ui, ReactiveUI.DragSessionLimits())(f)
+        withDispatch(ui, kyo.internal.DragSessions.DragSessionLimits())(f)
 
-    private def withDispatch[A](ui: UI, limits: ReactiveUI.DragSessionLimits)(
+    private def withDispatch[A](ui: UI, limits: kyo.internal.DragSessions.DragSessionLimits)(
         f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
     )(using Frame): A < (Async & Abort[Closed]) =
         withSubscription(ui, limits)(subscription => f(subscription.handle))
 
-    private def withSubscription[A](ui: UI, limits: ReactiveUI.DragSessionLimits)(
+    private def withSubscription[A](ui: UI, limits: kyo.internal.DragSessions.DragSessionLimits)(
         f: ReactiveUI.Subscription => A < (Async & Scope & Abort[Closed])
     )(using Frame): A < (Async & Abort[Closed]) =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
-                result       <- f(subscription)
-            yield result
-        }
+        ReactiveUI.subscribed(ui, dragLimits = limits)(f)
 
     private def htmlUnescape(value: String): String =
         value
@@ -675,7 +664,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "drag session capacity and expiry are bounded and generation safe" in {
-        val limits            = ReactiveUI.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
+        val limits            = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
         def start(id: String) = UIEvent.DragStart(
             Seq.empty,
             DragProtocol.StartData(id, Chunk.empty, Drag.Operation.Copy, Absent, Drag.Point(0, 0), UI.Modifiers.none)
@@ -717,7 +706,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "drag session expiry runs on monotonic time when the wall clock steps back" in {
-        val limits  = ReactiveUI.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
+        val limits  = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
         val expired = Drag.Decision.Reject(Drag.Rejection.Application("The drag session expired."))
         val start   = UIEvent.DragStart(
             Seq.empty,
@@ -820,7 +809,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "terminal expiry is silent and a stale timer cannot remove a reused identifier" in {
-        val limits            = ReactiveUI.DragSessionLimits(maxSessions = 4, lifetime = 2.seconds)
+        val limits            = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 4, lifetime = 2.seconds)
         def start(id: String) = UIEvent.DragStart(
             Seq.empty,
             DragProtocol.StartData(id, Chunk.empty, Drag.Operation.Copy, Absent, Drag.Point(0, 0), UI.Modifiers.none)
@@ -891,13 +880,13 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "drag session limits reject nonpositive values" in {
-        intercept[IllegalArgumentException](ReactiveUI.DragSessionLimits(maxSessions = 0))
-        intercept[IllegalArgumentException](ReactiveUI.DragSessionLimits(lifetime = Duration.Zero))
+        intercept[IllegalArgumentException](kyo.internal.DragSessions.DragSessionLimits(maxSessions = 0))
+        intercept[IllegalArgumentException](kyo.internal.DragSessions.DragSessionLimits(lifetime = Duration.Zero))
         succeed
     }
 
     "closing the subscription scope cancels active expiry work" in {
-        val limits = ReactiveUI.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
+        val limits = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 1, lifetime = 1.second)
         val event  = UIEvent.DragStart(
             Seq.empty,
             DragProtocol.StartData("closing", Chunk.empty, Drag.Operation.Copy, Absent, Drag.Point(0, 0), UI.Modifiers.none)
@@ -915,7 +904,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "drag Start and End churn keeps one bounded expiry worker" in {
-        val limits = ReactiveUI.DragSessionLimits(maxSessions = 1, lifetime = 1.hour)
+        val limits = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 1, lifetime = 1.hour)
         val start  = UIEvent.DragStart(
             Seq.empty,
             DragProtocol.StartData("churn", Chunk.empty, Drag.Operation.Copy, Absent, Drag.Point(0, 0), UI.Modifiers.none)
@@ -925,11 +914,9 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             DragProtocol.EndData("churn", Drag.Operation.Copy, cancelled = true)
         )
         for
-            subscription <- Scope.run {
+            subscription <- ReactiveUI.subscribed(UI.div, dragLimits = limits) { subscription =>
                 for
-                    root         <- ReactiveUI.normalize(UI.div, Seq.empty)
-                    subscription <- ReactiveUI.subscribe(root, UIExchange.noop, limits)
-                    _            <- Kyo.foreach(0 until 1000) { _ =>
+                    _ <- Kyo.foreach(0 until 1000) { _ =>
                         subscription.handle(Seq.empty, start).andThen(subscription.handle(Seq.empty, end))
                     }
                     sessions <- subscription.dragSessionCount
@@ -948,7 +935,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
     }
 
     "an earlier drag deadline wakes the expiry scheduler" in {
-        val limits            = ReactiveUI.DragSessionLimits(maxSessions = 2, lifetime = 1.hour)
+        val limits            = kyo.internal.DragSessions.DragSessionLimits(maxSessions = 2, lifetime = 1.hour)
         def start(id: String) = UIEvent.DragStart(
             Seq.empty,
             DragProtocol.StartData(id, Chunk.empty, Drag.Operation.Copy, Absent, Drag.Point(0, 0), UI.Modifiers.none)
@@ -1425,15 +1412,7 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             for
                 html    <- HtmlRenderer.render(ui, Seq.empty)
                 painted <- Channel.init[Unit](8)
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
+                exchange = new RecordingExchange(beforePaint = (_, _) => Abort.run[Closed](painted.put(())).unit)
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 sub    <- ReactiveUI.subscribe(root, exchange)
                 _      <- change

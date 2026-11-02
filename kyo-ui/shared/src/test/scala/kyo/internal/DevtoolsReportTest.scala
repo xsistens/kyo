@@ -44,20 +44,13 @@ class DevtoolsReportTest extends kyo.test.Test[Any]:
 
         def signalled: Vector[UI.RenderEvent] = all.filter(_.cause == UI.RenderCause.Signal)
 
-        val exchange = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async =
+        val exchange = new RecordingExchange(
+            synchronous = textSink,
+            beforePaint = (_, _) =>
                 paint match
                     case Present((bytes, wasted)) => Devtools.notePaint(bytes, wasted)
                     case Absent                   => Kyo.unit
-            override val textPatcherNow: Maybe[(Seq[String], String) => Unit] =
-                if textSink then Present((_, _) => ()) else Absent
+        )
     end Recording
 
     /** Mount `ui` under a devtools sink and run `body` inside it, once `ready` holds.

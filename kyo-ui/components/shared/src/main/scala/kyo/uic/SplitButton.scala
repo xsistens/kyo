@@ -186,7 +186,7 @@ final case class SplitButton private (
         if roundedFlag then el = el.cssClass("p-splitbutton-rounded")
         if raisedFlag then el = el.cssClass("p-splitbutton-raised")
         if fluidFlag then el = el.cssClass("p-splitbutton-fluid")
-        el(((primary: UI) :: (dropdown: UI) :: panel).map(toChild)*)
+        el(UI.children((primary: UI) :: (dropdown: UI) :: panel)*)
     end body
 end SplitButton
 

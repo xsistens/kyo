@@ -247,7 +247,7 @@ final case class ContextMenu private (
         // and the panel's derived id hangs off it.
         idV.foreach(b => target = target.id(b))
         onOpen.foreach(h => target = target.onContextMenu(h))
-        target((kids ++ content).map(toChild)*)
+        target(UI.children(kids ++ content)*)
     end targetShell
 
     /** The right-click that opens the menu. Reads only refs, so it is built once. */
@@ -334,7 +334,7 @@ final case class ContextMenu private (
                         .focusRestore(true)
                         .preventScrollKeys
                         .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
-                    val listUI: UI = listEl(rows.map(toChild)*)
+                    val listUI: UI = listEl(UI.children(rows)*)
                     // Host-gated (renderOpen): this component already subscribes to
                     // openRef in `wired`, and the single-subscription form avoids the
                     // duplicated-panel race. Escape/outside-click write false back;

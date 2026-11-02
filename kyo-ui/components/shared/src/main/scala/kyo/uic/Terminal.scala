@@ -175,13 +175,13 @@ final case class Terminal private (
                 else Nil
             if i == lastIdx then lastId.foreach(id => row = row.id(id))
             row(
-                (span.cssClass("p-terminal-prompt-label")(promptV) ::
+                UI.children(span.cssClass("p-terminal-prompt-label")(promptV) ::
                     span.cssClass("p-terminal-command-value")(c.command) ::
                     div.cssClass("p-terminal-command-response").aria("live", "polite")(c.response) ::
-                    scrollMount).map(toChild)*
+                    scrollMount)*
             )
         }
-        val list: UI = div.cssClass("p-terminal-command-list")(rows.map(toChild)*)
+        val list: UI = div.cssClass("p-terminal-command-list")(UI.children(rows)*)
 
         // The input value is fixed at "": committing a line appends to the bound
         // history ref, and the resulting re-render recreates the input empty.
@@ -193,7 +193,7 @@ final case class Terminal private (
         else if handlerF.isDefined && commandsSlot.isDefined then field = field.onChange(line => execute(line, repaint))
         val promptRow: UI = div.cssClass("p-terminal-prompt")(
             span.cssClass("p-terminal-prompt-label")(promptV),
-            toChild(field)
+            field
         )
 
         var root = div.cssClass("p-terminal").cssClass("p-component")
@@ -202,7 +202,7 @@ final case class Terminal private (
             case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
             case Absent                      => ()
         end match
-        root(((welcome :+ list :+ promptRow)).map(toChild)*)
+        root(UI.children((welcome :+ list :+ promptRow))*)
     end body
 
     /** Runs the handler effect on the committed line and appends the executed

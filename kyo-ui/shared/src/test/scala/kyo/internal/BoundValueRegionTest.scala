@@ -1,7 +1,7 @@
 package kyo.internal
 
-import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
+import kyo.internal.RecordingExchange.Op
 
 /** The element region of a two-way-bound field (`input.value(ref)`, `checkbox.checked(ref)`).
   *
@@ -15,17 +15,8 @@ import kyo.*
 class BoundValueRegionTest extends kyo.test.Test[Any]:
 
     final private class Recording:
-        val changes  = new AtomicInteger(0)
-        val exchange = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async =
-                Sync.defer(discard(changes.incrementAndGet()))
+        val exchange     = new RecordingExchange
+        def changes: Int = exchange.recorded.count(_.isInstanceOf[Op.Paint])
     end Recording
 
     "a value-bound input re-renders on every ref change, not just the first" in {
@@ -36,15 +27,15 @@ class BoundValueRegionTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(UI.div(UI.input.id("i").value(ref)), Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- assertEventually(ref.waiters.map(_ == 1))
-                base = rec.changes.get
+                base = rec.changes
                 _ <- ref.set("first")
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 1))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 1))
                 // The second edit is the one that matters: the first arrives even when change detection has collapsed onto the emitted
                 // value, because there is no previous emission to compare against.
                 _ <- ref.set("second")
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 2))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 2))
                 _ <- ref.set("third")
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 3))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 3))
             yield succeed
         }
     }
@@ -57,15 +48,15 @@ class BoundValueRegionTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(UI.div(UI.checkbox.id("c").checked(ref)), Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- assertEventually(ref.waiters.map(_ == 1))
-                base = rec.changes.get
+                base = rec.changes
                 _ <- ref.set(true)
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 1))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 1))
                 // Two values make the trap sharpest: a collapsed observation looks like it works until the ref returns to a value it
                 // has already held.
                 _ <- ref.set(false)
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 2))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 2))
                 _ <- ref.set(true)
-                _ <- assertEventually(Sync.defer(rec.changes.get == base + 3))
+                _ <- assertEventually(Sync.defer(rec.changes == base + 3))
             yield succeed
         }
     }
@@ -77,7 +68,7 @@ class BoundValueRegionTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(UI.div(UI.input.id("i").value("static")), Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
             // A const node has no region of its own, so nothing observes it.
-            yield assert(rec.changes.get == 0)
+            yield assert(rec.changes == 0)
         }
     }
 

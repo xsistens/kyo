@@ -152,7 +152,7 @@ final case class Rating private (
                 UI.mounted {
                     UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
                 }.placeholder(renderNamed)
-        // A value bound one way that nothing hears: every star the reader picks is painted away again. The form layer's
+        // A value bound one way that nothing hears: every star the reader picks is put back. The form layer's
         // `Double` binding wins where both are set, as it does for what the stars show.
         val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
         val unheard = shown.exists(b => b.dyn.isDefined && b.writable.isEmpty) && onChangeF.isEmpty && !readonlyFlag &&
@@ -180,26 +180,27 @@ final case class Rating private (
             // bound to a field has no second source of truth. ReactiveVariable before Dyn,
             // since a two-way binding IS a Dyn.
             case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent, validity))
+            // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
+            // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
             case Present(ReactiveValue.Dyn(sig)) =>
-                ReactiveValue.repainting(sig)((d, repaint) => body(math.rint(d).toInt, Absent, validity, repaint))
-            // A constant somebody hears is painted again after each report too, so a star its owner does not take is put
-            // back on the native radios; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+                val stars = sig.map(d => math.rint(d).toInt)
+                stars.render(v => body(v, Absent, validity, Present(stars)))
             case Present(ReactiveValue.Const(d)) if onChangeF.isDefined =>
-                ReactiveValue.repainting(Signal.initConst(d))((d, repaint) => body(math.rint(d).toInt, Absent, validity, repaint))
+                val v = math.rint(d).toInt
+                body(v, Absent, validity, Present(Signal.initConst(v)))
             case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent, validity)
             case Absent                          =>
                 valueBinding match
-                    case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity))
-                    // Bound one way, the stars are painted again after each report, so a pick the owner does not
-                    // take is put back on the native radios as well.
-                    case Present(ReactiveValue.Dyn(sig)) =>
-                        ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
+                    case Present(ReactiveVariable(ref))                         => ref.render(v => body(v, Present(ref), validity))
+                    case Present(ReactiveValue.Dyn(sig))                        => sig.render(v => body(v, Absent, validity, Present(sig)))
                     case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
-                        ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(v, Absent, validity, repaint))
+                        body(v, Absent, validity, Present(Signal.initConst(v)))
                     case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
                     case Absent                          => body(0, Absent, validity)
 
-    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity, repaint: UI.Action = ())(using Frame): UI =
+    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity, native: Maybe[Signal[Int]] = Absent)(using
+        Frame
+    ): UI =
         // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
         // focus, and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
         // that does. A radio group's tab stop is its checked radio, else its first.
@@ -208,7 +209,7 @@ final case class Rating private (
             val active = i <= value
             var opt    = div.cssClass("p-rating-option")
             if active then opt = opt.cssClass("p-rating-option-active")
-            if interactive then opt = opt.onClick(activate(i, value, ref).andThen(repaint))
+            if interactive then opt = opt.onClick(activate(i, value, ref))
 
             // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
             // keyboard semantics: the arrows move within the name group and select as they go,
@@ -223,7 +224,7 @@ final case class Rating private (
             // press on the visible star reaches only the option, since the radio is clipped away),
             // so it is the one that acts.
             var hidden = radio
-                .checked(i == value)
+                .checked(native.fold[Boolean | Signal[Boolean]](i == value)(_.map(_ == i)))
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
             // Unnamed (the page as first rendered, before the mount mints a name), the browser does not
@@ -243,16 +244,16 @@ final case class Rating private (
             // that star alone, which is exactly the star no click can come from.
             if interactive && i == value then
                 hidden = hidden.onKeyDown { e =>
-                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref).andThen(repaint) else ()
+                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref) else ()
                     eff
                 }
             end if
-            val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(toChild(hidden: UI))
+            val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(hidden: UI)
 
             val icon: UI =
                 if active then GlyphSvg(onIconV.getOrElse(Icons.starFill), "p-rating-icon", "p-rating-on-icon")
                 else GlyphSvg(offIconV.getOrElse(Icons.star), "p-rating-icon", "p-rating-off-icon")
-            opt(toChild(hiddenSlot), toChild(icon))
+            opt(hiddenSlot, icon)
         }
 
         // The radios inside form one group, so the box around them says so: an `aria-label` on a
@@ -271,7 +272,7 @@ final case class Rating private (
                 case Present(r) => r.use(d => f(math.rint(d)))
                 case Absent     => f(value.toDouble))
         }
-        el(options.map(toChild)*)
+        el(UI.children(options)*)
     end body
 
     /** Prime's select semantics: picking the current value clears to 0. */

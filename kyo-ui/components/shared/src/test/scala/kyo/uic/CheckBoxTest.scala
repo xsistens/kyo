@@ -36,16 +36,25 @@ class CheckBoxTest extends ReactiveValueContract:
         end for
     }
 
-    "a toggle its owner does not take is painted away again" in {
+    "a toggle its owner does not take is put back" in {
         for
-            held  <- Signal.initRef(false)
-            again <- repaintsAfter(uic.CheckBox().checked(held.readOnly).onChange(_ => ()).render, held)(t => box(t).map(toggle(_, true)))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held <- Signal.initRef(false)
+            ui = uic.CheckBox().checked(held.readOnly).onChange(_ => ()).render
+            native  <- box(ui)
+            patches <- assertsAfter(ui)("p-checkbox-input")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield
+            assert(follows(native.checked), s"the native box follows the signal: ${native.checked}")
+            assert(patches == Chunk(("checked", "false")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
-        for again <- repaintsAfter(uic.CheckBox().checked(false).onChange(_ => ()).render)(t => box(t).map(toggle(_, true)))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    "a constant with a listener puts back a toggle the owner does not take" in {
+        for patches <-
+                assertsAfter(uic.CheckBox().checked(false).onChange(_ => ()).render)("p-checkbox-input")(kyo.internal.UIEvent.ChangeChecked(
+                    _,
+                    true
+                ))
+        yield assert(patches == Chunk(("checked", "false")), s"patches: $patches")
     }
 
     "a fixed constant of true is drawn ticked" in {
@@ -67,6 +76,19 @@ class CheckBoxTest extends ReactiveValueContract:
         yield
             assert(ticked, "the drawn box stayed empty after the reader ticked it")
             assert(s == List(true), s"reported $s")
+    }
+
+    "an unbound box starts over when a region around it re-renders: its state ends with its mount instance" in {
+        for
+            parent <- Signal.initRef(0)
+            after  <- publishedAfterEach(UI.render(parent)(_ => uic.CheckBox("Free").render), parent)(
+                t => box(t).map(toggle(_, true)),
+                // The tick the toggle draws has to be through, or the next gesture would count it as what the re-render drew.
+                t => elementsWithClass(t, "p-checkbox-checked").map(c => if c.isEmpty then throw new AssertionError("not ticked yet")),
+                _ => parent.set(1)
+            )
+            ticked <- after.fold(Kyo.lift(true))(t => elementsWithClass(t, "p-checkbox-checked").map(_.nonEmpty))
+        yield assert(!ticked, "the box kept its tick through the re-render")
     }
 
 end CheckBoxTest

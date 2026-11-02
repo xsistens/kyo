@@ -1,8 +1,8 @@
 package kyo.internal
 
-import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
 import kyo.UI.foreachKeyed
+import kyo.internal.RecordingExchange.Op
 
 /** What the callback binding of the reactive channels costs, asserted by counting rather than by timing.
   *
@@ -23,35 +23,18 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
     private val fanOut = 1000
 
     final private class Recording:
-        val patches  = new AtomicInteger(0)
-        val paints   = new AtomicInteger(0)
-        val exchange = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async = Sync.defer(discard(paints.incrementAndGet()))
-            // Leaves kept rows in place, as the DOM backend whose sinks this stands in for does. Answering `false` would have the region
-            // bind them again after the paint, so a write right after it could land between the two bindings.
-            override def onListPatch(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                rows: Seq[ListRow]
-            )(using Frame): Boolean < Async = Sync.defer(paints.incrementAndGet()).andThen(true)
-            private def bump(): Unit        = discard(patches.incrementAndGet())
-            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                Sync.defer(bump())
-            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-                Sync.defer(bump())
-            override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]   = Present((_, _, _) => bump())
-            override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present((_, _, _) => bump())
+        // Leaves kept rows in place, as the DOM backend whose sinks this stands in for does. Answering `false` would have the region
+        // bind them again after the paint, so a write right after it could land between the two bindings.
+        val exchange     = new RecordingExchange(synchronous = true, keepsRows = true)
+        def patches: Int = exchange.recorded.count { case _: Op.Attr | _: Op.Class => true; case _ => false }
+        def paints: Int  = exchange.recorded.count { case _: Op.Paint | _: Op.List => true; case _ => false }
     end Recording
+
+    "with no devtools sink a write comes back as it is, so the off path costs no wrapper" in {
+        val write: Int => Unit = _ => ()
+        val wrapped            = ReactiveUI.reporting[Int](Absent, throw new AssertionError("no sink, so no event is built"))(write)
+        assert(wrapped eq write)
+    }
 
     "a thousand class channels on one signal share one registration" in {
         Scope.run {
@@ -75,10 +58,10 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 ui  = UI.div(List.fill(fanOut)(UI.span("x").cssClass("hot", sel: Signal[Boolean]))*)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
-                before = rec.patches.get
+                before = rec.patches
                 _ <- sel.set(true)
                 // Every patch has already run when the write returns; on the fiber path this still reads `before`.
-                after = rec.patches.get
+                after = rec.patches
             yield assert(before == 0 && after == fanOut, s"before=$before after=$after (expected 0 -> $fanOut)")
         }
     }
@@ -92,9 +75,9 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 root   <- ReactiveUI.normalize(ui, Seq.empty)
                 _      <- ReactiveUI.subscribe(root, rec.exchange)
                 parked <- text.waiters
-                before = rec.patches.get
+                before = rec.patches
                 _ <- text.set("b")
-                after = rec.patches.get
+                after = rec.patches
             yield assert(
                 parked == 1 && before == 0 && after == fanOut,
                 s"parked=$parked before=$before after=$after"
@@ -113,7 +96,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 _    <- sel.set(false)
             // The ref ignores a write equal to its current value, so the fan-out never wakes. A dispatcher that
             // re-delivered on every write would paint nothing wrong and still pay the whole fan-out.
-            yield assert(rec.patches.get == 0, s"unchanged write delivered ${rec.patches.get} patches")
+            yield assert(rec.patches == 0, s"unchanged write delivered ${rec.patches} patches")
         }
     }
 
@@ -126,9 +109,9 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- selected.set(3)
-                after3 = rec.patches.get
+                after3 = rec.patches
                 _ <- selected.set(8)
-                after8 = rec.patches.get
+                after8 = rec.patches
             // The row losing the selection and the row gaining it. The signal starts at 0, so the first move
             // deselects row 0. Comparing source values instead of each channel's image would deliver to all
             // thousand rows on every move and produce the same output.
@@ -148,9 +131,9 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 _    <- assertEventually(sel.waiters.map(_ == 1))
                 _    <- rows.set(Chunk.from(0 until fanOut / 2))
                 // The rows leave before the list paints, so a paint means the eviction is done.
-                _ <- assertEventually(Sync.defer(rec.paints.get == 1))
+                _ <- assertEventually(Sync.defer(rec.paints == 1))
                 _ <- sel.set(true)
-                after = rec.patches.get
+                after = rec.patches
             // The half that left must not be written to, and the half that stayed must, before `set` returns.
             yield assert(after == fanOut / 2, s"expected ${fanOut / 2} patches after evicting half the rows, got $after")
         }
@@ -166,7 +149,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             _      <- sel.set(true)
         // The registration sits on a masked promise that nothing interrupts, so a released channel that left it
         // armed would keep its subscriber reachable for the page's lifetime.
-        yield assert(parked == 0 && rec.patches.get == 0, s"parked=$parked patches=${rec.patches.get}")
+        yield assert(parked == 0 && rec.patches == 0, s"parked=$parked patches=${rec.patches}")
     }
 
 end ReactiveChannelCostTest

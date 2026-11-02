@@ -215,16 +215,17 @@ abstract class ReactiveValueContract extends UicTest:
             }.getOrElse(throw new AssertionError(s"no input with class $input")))
         def shows(t: UI)(using Frame): Boolean < Sync =
             for
-                in    <- control(t)
-                box   <- elementWithClass(t, root)
-                drawn <- carriesClass(box, checkedClass)
-            yield
-                val native = in match
+                in     <- control(t)
+                box    <- elementWithClass(t, root)
+                drawn  <- carriesClass(box, checkedClass)
+                native <- in match
                     case b: UI.Ast.BooleanInput =>
                         b.checked match
-                            case Present(UI.Bound.Const(v)) => v
-                            case other                      => throw new AssertionError(s"the input is bound as $other")
+                            case Present(UI.Bound.Const(v))    => Kyo.lift(v)
+                            case Present(UI.Bound.Follow(sig)) => sig.current
+                            case other                         => throw new AssertionError(s"the input is bound as $other")
                     case other => throw new AssertionError(s"not a boolean input: $other")
+            yield
                 if drawn != native then throw new AssertionError(s"drawn checked $drawn over a native state $native")
                 native
         new Slot[C, Boolean](
@@ -262,10 +263,11 @@ abstract class ReactiveValueContract extends UicTest:
         c match
             case t: UI.Ast.TextInput =>
                 t.value match
-                    case Present(UI.Bound.Const(v)) => Kyo.lift(v)
-                    case Present(UI.Bound.Ref(r))   => r.get
-                    case Absent                     => Kyo.lift("")
-                    case other                      => throw new AssertionError(s"the field is bound as $other")
+                    case Present(UI.Bound.Const(v))    => Kyo.lift(v)
+                    case Present(UI.Bound.Ref(r))      => r.get
+                    case Present(UI.Bound.Follow(sig)) => sig.current
+                    case Absent                        => Kyo.lift("")
+                    case other                         => throw new AssertionError(s"the field is bound as $other")
             case other => throw new AssertionError(s"not a text field: $other")
 
     /** The native text field with class `cls` in `t`. */

@@ -47,7 +47,7 @@ final private[kyo] class DomReactiveRegions private (
         }
 
     /** Makes every mount slot inside the range `regionId` one no instance has adopted, for a new instance about to paint it: the slots
-      * belong to the instances that showed there before, and a repaint leaves an adopted slot as it is (see `DomBackend.patchLogical`).
+      * belong to the instances that showed there before, and a repaint leaves an adopted slot as it is (see `__kyoPatchLogical` in [[MorphScript]]).
       */
     def releaseSlots(regionId: String)(using Frame): Unit < Sync =
         Sync.defer {
@@ -305,7 +305,7 @@ final private[kyo] class DomReactiveRegions private (
       * and gets none; one that is gone takes its entry with it.
       *
       * Only where the range now holds that markup. A reconciliation leaves a keyed slot its instance owns as it is (see
-      * `DomBackend.patchLogical`), so such a range can still show its placeholder while the payload brought the instance's
+      * `__kyoPatchLogical` in [[MorphScript]]), so such a range can still show its placeholder while the payload brought the instance's
       * content. Recorded anyway, that content would be what the instance's own paint of the same content is compared
       * against, and the paint that has to bring it would be taken for one that changes nothing. Such a range gets no entry,
       * so its next value is applied.
@@ -838,9 +838,12 @@ private[kyo] object DomReactiveRegions:
 
     /** Runs `change` over `subtree` and keeps the registry of the mount holding `owner` true to what it leaves (see
       * [[DomReactiveRegions.rewrite]]). Without an open registry holding `owner` it only runs `change`.
+      *
+      * The newest registry that holds it: a mount writes its container's whole content, so what stands there is the last one's. An older
+      * registry over the same container can still be open, since a mount's result comes before the last finalizers of its scope.
       */
     private[kyo] def rewriting[N <: dom.Node](owner: dom.Node, subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
-        opened.find(registry => registry.root.contains(owner)) match
+        opened.findLast(registry => registry.root.contains(owner)) match
             case Some(registry) => registry.rewrite(subtree)(change)
             case None           => change
 

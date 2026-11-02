@@ -105,7 +105,7 @@ object FloatLabel:
         def labelled(field: UI): UI =
             var lbl = label
             forIdV.foreach(id => lbl = lbl.forId(id))
-            base(toChild(field), toChild(lbl(labelText)))
+            base(field, lbl(labelText))
         end labelled
 
         host match

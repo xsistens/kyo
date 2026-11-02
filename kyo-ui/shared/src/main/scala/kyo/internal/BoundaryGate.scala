@@ -55,7 +55,7 @@ private[kyo] object Boundaries:
                             case Absent        => m
                             case Present(cell) =>
                                 cell.current.map {
-                                    case ReactiveUI.MountState.Pending(Present(snapshot)) =>
+                                    case MountState.Pending(Present(snapshot)) =>
                                         m.copy(placeholderUI = Present(snapshot))(using m.frame)
                                     case state =>
                                         resolveLive(state.content(MountedSpec(m, path, Nil)), path, at.transparent, dispatch)
@@ -138,8 +138,8 @@ end Boundaries
   * will.
   */
 final private[kyo] class BoundaryPass(hold: BoundaryHold):
-    import AllowUnsafe.embrace.danger
-    private val ended = AtomicBoolean.Unsafe.init(false)
+    // Unsafe: a pass is made with `new` inside `Sync.Unsafe.defer`, and a proof on the constructor would reach every method.
+    private val ended = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
 
     def end(using Frame): Unit < Async =
         Sync.Unsafe.defer(ended.compareAndSet(false, true)).map(first => if first then hold.passEnded else Kyo.unit)
@@ -162,12 +162,12 @@ final private[kyo] case class BoundaryRange(
   * and caught mounts that have not loaded. Paints from below wait in it until it knows whether they may show.
   */
 sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange:
-    import AllowUnsafe.embrace.danger
 
     // A hold's own first pass is due from the start, until what it was made for has been subscribed.
-    protected val passes  = AtomicInt.Unsafe.init(1)
-    protected val loading = AtomicInt.Unsafe.init(0)
-    protected val closed  = AtomicBoolean.Unsafe.init(false)
+    // Unsafe: a hold is made with `new`, by a subscription with no proof to pass on; a proof on the constructor would reach every method.
+    protected val passes  = AtomicInt.Unsafe.init(1)(using AllowUnsafe.embrace.danger)
+    protected val loading = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
+    protected val closed  = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
 
     def root: BoundaryGate
 
@@ -219,14 +219,15 @@ sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange
     private[internal] def passEnded(using Frame): Unit < Async =
         Sync.Unsafe.defer(passes.decrementAndGet()).andThen(advance)
 
-    private[internal] def passAbandoned(): Unit = discard(passes.decrementAndGet())
+    private[internal] def passAbandoned()(using AllowUnsafe): Unit = discard(passes.decrementAndGet())
 
     protected def advance(using Frame): Unit < Async
 
     // Reentrant, since a hold passes paints and ends passes on the hold above it in the same fiber, under the mutex they share.
-    protected def locked(v: => Unit < Async)(using Frame): Unit < Async = Abort.run[Closed](mutex.run(v)).unit
+    protected def locked(v: AllowUnsafe ?=> Unit < Async)(using Frame): Unit < Async =
+        Abort.run[Closed](mutex.run(Sync.Unsafe.defer(v))).unit
 
-    protected def due: Boolean = passes.get() > 0 || loading.get() > 0
+    protected def due(using AllowUnsafe): Boolean = passes.get() > 0 || loading.get() > 0
 end BoundaryHold
 
 /** The hold of one pass of a region or a mount inside a waiting boundary.
@@ -237,18 +238,19 @@ end BoundaryHold
   * range is painted once from the live state. Then the group passes everything on.
   */
 final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex: Meter) extends BoundaryHold(mutex):
-    import AllowUnsafe.embrace.danger
 
     def root: BoundaryGate = parent.root
 
     @volatile private var range: Maybe[BoundaryRange] = Absent
     @volatile private var done                        = false
     @volatile private var waited                      = false
-    private val waitEnded                             = AtomicBoolean.Unsafe.init(false)
-    private var held                                  = Chunk.empty[UIExchange => Unit < Async]
-    private var commands                              = Chunk.empty[HeldCommand]
+    // Unsafe: as for the hold's counters above.
+    private val waitEnded = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
+    private var held      = Chunk.empty[UIExchange => Unit < Async]
+    private var commands  = Chunk.empty[HeldCommand]
 
-    private val holding = AtomicBoolean.Unsafe.init(false)
+    // Unsafe: as for the hold's counters above.
+    private val holding = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
 
     /** What the pass paints, set once it knows. Until the group is through, the range shows what it showed before while dispatch
       * already resolves the new content, so the range takes no event.
@@ -312,9 +314,10 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
 
     /** Ends a wait this group began: the range is no longer marked on the page, and the boundary no longer counts it. */
     private def endWait(using Frame): Unit < Async =
-        if waited && waitEnded.compareAndSet(false, true) then
-            range.fold(Kyo.unit)(r => parent.onHold(r.region, false)).andThen(root.rewaitEnded)
-        else Kyo.unit
+        Sync.Unsafe.defer(waited && waitEnded.compareAndSet(false, true)).map { ended =>
+            if ended then range.fold(Kyo.unit)(r => parent.onHold(r.region, false)).andThen(root.rewaitEnded)
+            else Kyo.unit
+        }
 
     protected def advance(using Frame): Unit < Async =
         locked {
@@ -373,17 +376,18 @@ final private[kyo] class BoundaryGate(
     seed: Maybe[UI],
     initiallyRevealed: Boolean
 ) extends BoundaryHold(mutex):
-    import AllowUnsafe.embrace.danger
 
     def root: BoundaryGate = this
 
     /** The waiting boundaries directly below this one, whose reveal paints this one drops while it waits (see the class doc). */
-    private val nested = AtomicRef.Unsafe.init(Set.empty[BoundaryGate])
+    // Unsafe: as for the hold's counters above.
+    private val nested = AtomicRef.Unsafe.init(Set.empty[BoundaryGate])(using AllowUnsafe.embrace.danger)
 
     /** The gate above this one, the one whose waiting drops this one's paints, if there is one. */
     private val above: Maybe[BoundaryGate] = outer.gate.map(_.root)
 
-    private val rewaits                    = AtomicInt.Unsafe.init(0)
+    // Unsafe: as for the hold's counters above.
+    private val rewaits                    = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
     @volatile private var revealed         = initiallyRevealed
     @volatile private var shown: Maybe[UI] = if initiallyRevealed then Absent else Present(placeholder)
     @volatile private var seedPainted      = false
@@ -492,7 +496,9 @@ final private[kyo] class BoundaryGate(
     private def repaintNested(using Frame): Unit < Async = repaintNestedThrough(outer)
 
     private def repaintNestedThrough(through: UIExchange)(using Frame): Unit < Async =
-        Kyo.foreachDiscard(nested.get().toSeq)(g => if g.isRevealed && !g.closed.get() then g.repaintThrough(through) else Kyo.unit)
+        Sync.Unsafe.defer {
+            Kyo.foreachDiscard(nested.get().toSeq)(g => if g.isRevealed && !g.closed.get() then g.repaintThrough(through) else Kyo.unit)
+        }
 
     private def repaintThrough(through: UIExchange)(using Frame): Unit < Async =
         displayedContent.map(paintRangeThrough(_, through)).andThen(repaintNestedThrough(through))
@@ -532,5 +538,6 @@ final private[kyo] class BoundaryGate(
         }
 
     // Last in the body, once every field is set: from here on the gate above may reveal and repaint this one at any moment.
-    above.foreach(g => discard(g.nested.getAndUpdate(_ + this)))
+    // Unsafe: the constructor's last statement, where a gate with a proof on its constructor would hand it to every method.
+    above.foreach(g => discard(g.nested.getAndUpdate(_ + this)(using AllowUnsafe.embrace.danger)))
 end BoundaryGate

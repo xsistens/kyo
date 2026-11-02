@@ -1,7 +1,8 @@
 package kyo.internal
 
-import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
+import kyo.internal.RecordingExchange.Op
+import kyo.internal.RecordingExchange.Sink
 
 /** The callback binding of the reactive channels (`ReactiveUI.bindChannel`) for attribute, boolean attribute and
   * class channels.
@@ -22,30 +23,15 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
       * without a synchronous sink.
       */
     final private class Recording(fast: Boolean):
-        val sync                                       = new AtomicInteger(0)
-        val async                                      = new AtomicInteger(0)
-        private def bump(counter: AtomicInteger): Unit = discard(counter.incrementAndGet())
-        val exchange                                   = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async                                                                        = Kyo.unit
-            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                Sync.defer(bump(async))
-            override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
-                Sync.defer(bump(async))
-            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-                Sync.defer(bump(async))
-            override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit] =
-                if fast then Present((_, _, _) => bump(sync)) else Absent
-            override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
-                if fast then Present((_, _, _) => bump(sync)) else Absent
-            override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
-                if fast then Present((_, _, _) => bump(sync)) else Absent
+        val exchange                    = new RecordingExchange(synchronous = fast)
+        private def by(sink: Sink): Int = exchange.recorded.count {
+            case op: Op.Attr     => op.sink == sink
+            case op: Op.BoolAttr => op.sink == sink
+            case op: Op.Class    => op.sink == sink
+            case _               => false
+        }
+        def sync: Int  = by(Sink.Now)
+        def async: Int = by(Sink.Fiber)
     end Recording
 
     /** One channel under test, built outside any scope the test opens so that `move` and `waiters` outlive it: a
@@ -86,11 +72,11 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                 for
                     root <- ReactiveUI.normalize(ch.ui, Seq.empty)
                     _    <- ReactiveUI.subscribe(root, rec.exchange)
-                    before = rec.sync.get
+                    before = rec.sync
                     _ <- ch.move
                     // On the fiber path the patch would still be queued here.
-                    after = rec.sync.get
-                yield assert(before == 0 && after == 1 && rec.async.get == 0, s"${ch.name}: before=$before after=$after")
+                    after = rec.sync
+                yield assert(before == 0 && after == 1 && rec.async == 0, s"${ch.name}: before=$before after=$after")
                 end for
             })
         }
@@ -105,7 +91,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                 // The signal moves after the scope closed: a binding that forgot to release would still patch
                 // a subtree that is gone.
                 _ <- ch.move
-            yield assert(parked == 0 && rec.sync.get == 0, s"${ch.name}: parked=$parked patches=${rec.sync.get}")
+            yield assert(parked == 0 && rec.sync == 0, s"${ch.name}: parked=$parked patches=${rec.sync}")
             end for
         })
     }
@@ -118,8 +104,8 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                     root <- ReactiveUI.normalize(ch.ui, Seq.empty)
                     _    <- ReactiveUI.subscribe(root, rec.exchange)
                     _    <- ch.move
-                    _    <- assertEventually(Sync.defer(rec.async.get == 1))
-                yield assert(rec.sync.get == 0, s"${ch.name} took the fast path with no sink offered")
+                    _    <- assertEventually(Sync.defer(rec.async == 1))
+                yield assert(rec.sync == 0, s"${ch.name} took the fast path with no sink offered")
                 end for
             })
         }
@@ -127,19 +113,12 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
 
     /** Records the last value each attribute channel patched, by path and name. */
     final private class LastValues:
-        val values   = new java.util.concurrent.ConcurrentHashMap[(Seq[String], String), String]()
-        val exchange = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async                                                                        = Kyo.unit
-            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                Sync.defer(discard(values.put((path, name), value)))
-        def at(path: Seq[String], name: String): Maybe[String] = Maybe(values.get((path, name)))
+        val exchange                                           = new RecordingExchange
+        def at(path: Seq[String], name: String): Maybe[String] =
+            exchange.recorded.foldLeft(Maybe.empty[String]) {
+                case (_, op: Op.Attr) if op.path == path && op.name == name => Present(op.value)
+                case (last, _)                                              => last
+            }
     end LastValues
 
     "a channel on the root a region painted first still patches" in {

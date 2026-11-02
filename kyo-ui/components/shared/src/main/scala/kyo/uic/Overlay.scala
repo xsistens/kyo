@@ -306,7 +306,7 @@ final case class Overlay private (
         val drawn = triggerV match
             case Present(t) =>
                 val announced = PopupTrigger.announced(t, "dialog", PopupTrigger.expanded(openSlot))
-                div.cssClass("p-uic-overlay-anchor")(toChild(announced), toChild(gated))
+                div.cssClass("p-uic-overlay-anchor")(announced, gated)
             case _ => gated
         // A signal nobody hears: every dismissal the reader asks for is painted away again.
         if quietFlag || !ReactiveValue.deaf(openSlot, onOpenF) then drawn
@@ -530,7 +530,7 @@ final case class Overlay private (
         triggerV match
             case Present(t) =>
                 val announced = PopupTrigger.announced(t, "dialog", open.toString)
-                div.cssClass("p-uic-overlay-anchor")((announced :: content).map(toChild)*)
+                div.cssClass("p-uic-overlay-anchor")(UI.children(announced :: content)*)
             case _ => content.headOption.getOrElse(UI.empty)
         end match
     end renderGated
@@ -606,7 +606,7 @@ final case class Overlay private (
             panel = panel.enterTransition("p-uic-enter-fade").leaveTransition("p-anchored-overlay-leave-active")
         panelClassesV.foreach(c => panel = panel.cssClass(c))
         maxHeightV.foreach { h =>
-            panel = panel.style(Style.maxHeight(CssValue.length(h)).overflowY(_.auto))
+            panel = panel.style(Style.maxHeight(Length.parse(h)).overflowY(_.auto))
         }
         if seedFocusV then
             panel = panel.focusAuto(true).focusRestore(true).tabIndex(-1).focusTrap(true)
@@ -631,7 +631,7 @@ final case class Overlay private (
                             case Absent     => ()
             }
         end if
-        val panelUI: UI = panel(kids.map(toChild)*)
+        val panelUI: UI = panel(UI.children(kids)*)
 
         fragment((backdrop ++ (panelUI :: after))*)
     end renderOpenAt

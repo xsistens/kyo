@@ -4,6 +4,46 @@ import kyo.Length.*
 
 class LengthTest extends kyo.test.Test[Any]:
 
+    "parse" - {
+        "reads each unit" in {
+            assert(Length.parse("10px") == Px(10))
+            assert(Length.parse("50%") == Pct(50))
+            assert(Length.parse("1.5em") == Em(1.5))
+            assert(Length.parse("50vh") == Vh(50))
+        }
+
+        "a bare number is px" in {
+            assert(Length.parse("12") == Px(12))
+        }
+
+        "auto, in any case" in {
+            assert(Length.parse("auto") == Auto)
+            assert(Length.parse("AUTO") == Auto)
+        }
+
+        "surrounding space and a sign" in {
+            assert(Length.parse(" 10px ") == Px(10))
+            assert(Length.parse("-5px") == Px(-5))
+        }
+
+        "a rem is no em, and stays an expression" in {
+            assert(Length.parse("1.5rem") == Calc("1.5rem"))
+        }
+
+        "what it cannot read is carried as an expression" in {
+            assert(Length.parse("calc(100% - 2rem)") == Calc("calc(100% - 2rem)"))
+            assert(Length.parse("foo") == Calc("foo"))
+            assert(Length.parse("") == Calc(""))
+        }
+
+        "what only a JVM double takes is no number" in {
+            assert(Length.parse("NaN") == Calc("NaN"))
+            assert(Length.parse("Infinity") == Calc("Infinity"))
+            assert(Length.parse("12f") == Calc("12f"))
+            assert(Length.parse("1dpx") == Calc("1dpx"))
+        }
+    }
+
     "Px resolves to its integer value" in {
         assert(Length.resolve(Px(42), 100) == 42)
     }

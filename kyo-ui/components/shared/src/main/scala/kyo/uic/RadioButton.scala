@@ -101,29 +101,35 @@ final case class RadioButton private (
     end render
 
     /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
-      * one way, or to a constant somebody hears, it paints the box again after the report, so a toggle the owner does not
-      * take is taken back (ReactiveValue.repainting). A constant nobody hears is fixed: drawn read-only, reachable and
+      * one way, or to a constant somebody hears, the native box follows it, so kyo-ui takes back a toggle the owner does not
+      * take (`UI.Bound.Follow`). A constant nobody hears is fixed: drawn read-only, reachable and
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        def toggle(repaint: UI.Action): Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then
-                Present(b => ReactiveValue.change(checkedBinding, b, onChangeF).andThen(repaint))
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
             else Absent
         checkedBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
-                ReactiveValue.repainting(Signal.initConst(v))((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, Absent, validity)
-            case Absent                          => body(false, toggle(()), validity)
+            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, b, toggle, validity))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, sig, toggle, validity))
+            case Present(slot @ ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
+                body(v, slot.native, toggle, validity)
+            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, v, Absent, validity)
+            case Absent                          => body(false, false, toggle, validity)
         end match
     end drawn
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
+    private def body(
+        isChecked: Boolean,
+        native: Boolean | Signal[Boolean],
+        onChg: Maybe[Boolean => UI.Action],
+        validity: FieldValidity
+    )(using
+        Frame
+    ): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
 
-        var box = radio.cssClass("p-radiobutton-input").checked(isChecked)
+        var box = radio.cssClass("p-radiobutton-input").checked(native)
         box = idV.map(v => box.id(v)).getOrElse(box)
         box = groupName.map(box.name(_)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
@@ -150,7 +156,7 @@ final case class RadioButton private (
         end if
 
         // The dot icon is always present; Prime's CSS scales it 0.1 → 1 on checked.
-        val boxDiv = div.cssClass("p-radiobutton-box")(toChild(div.cssClass("p-radiobutton-icon"): UI))
+        val boxDiv = div.cssClass("p-radiobutton-box")(div.cssClass("p-radiobutton-icon"): UI)
 
         var root = div.cssClass("p-radiobutton").cssClass("p-component")
         if isChecked then root = root.cssClass("p-radiobutton-checked")
@@ -163,9 +169,9 @@ final case class RadioButton private (
         root = validity.markClass(root)
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
 
-        val control: UI = root(List[UI](box, boxDiv).map(toChild)*)
+        val control: UI = root(UI.children(List[UI](box, boxDiv))*)
         labelText match
-            case Present(t) => label.cssClass("p-uic-control-label")(List[UI](control, span(t)).map(toChild)*)
+            case Present(t) => label.cssClass("p-uic-control-label")(UI.children(List[UI](control, span(t)))*)
             case Absent     => control
     end body
 end RadioButton

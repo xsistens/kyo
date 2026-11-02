@@ -336,9 +336,7 @@ final case class MultiSelect[A] private (
         /** The id the highlight is announced through, as [[Select]] and [[Listbox]] carry it: a
           * caller's own `id` wins, and a minted one stands in where there is none.
           */
-        idBase: Maybe[String],
-        /** Draws the panel again from what the query's owner holds, after a one-way report the owner may not take. */
-        repaint: UI.Action = ()
+        idBase: Maybe[String]
     )
 
     private[uic] def render(using Frame): UI =
@@ -380,14 +378,12 @@ final case class MultiSelect[A] private (
                     case Present(slot) if slot.const.isEmpty => Kyo.lift(slot)
                     case Present(slot)                       => Signal.initRef(slot.const.getOrElse("")).map(r => ReactiveValue[String](r))
                     case Absent                              => Signal.initRef("").map(r => ReactiveValue[String](r))
-                // Counts the repaints a one-way query asks for, read with the panel (see [[Select]]).
-                paints <- Signal.initRef(0)
                 // Unbound, the field keeps the options the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
                 self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base), Present(paints))
+            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -401,7 +397,7 @@ final case class MultiSelect[A] private (
         using Frame
     ): UI =
         val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base, Absent)
+        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
@@ -409,17 +405,13 @@ final case class MultiSelect[A] private (
         open: ReactiveValue[Boolean],
         hi: SignalRef[Int],
         q: ReactiveValue[String],
-        base: Maybe[String],
-        paints: Maybe[SignalRef[Int]]
+        base: Maybe[String]
     )(using Frame): UI =
-        val validity           = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
-        val panel              = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q).and(painted))
-        val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
-        // The paint count is read and dropped: it is there so a repaint changes what the region reads.
-        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), (qq, _)), (held, ld, ph)), opts) =>
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q))
+        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base, repaint)), ph, ld, validity)
+            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -503,15 +495,13 @@ final case class MultiSelect[A] private (
                 case MultiSelectDisplay.Chip if selected.nonEmpty && !overMax =>
                     selected.map { a =>
                         span.cssClass("p-multiselect-chip-item")(
-                            toChild(
-                                Chip(labelF(a))
-                                    .extraClass("p-multiselect-chip")
-                                    // A disabled field changes nothing, so its chips offer no removal.
-                                    .removable(!disabledFlag && !fixed)
-                                    .isolateRemove(true)
-                                    .onRemove(write(current - key(a)))
-                                    .render
-                            )
+                            Chip(labelF(a))
+                                .extraClass("p-multiselect-chip")
+                                // A disabled field changes nothing, so its chips offer no removal.
+                                .removable(!disabledFlag && !fixed)
+                                .isolateRemove(true)
+                                .onRemove(write(current - key(a)))
+                                .render
                         )
                     }
                 case _ if overMax && selected.nonEmpty =>
@@ -537,9 +527,9 @@ final case class MultiSelect[A] private (
         var lbl = div.cssClass("p-multiselect-label")
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if selected.isEmpty && placeholder.isEmpty then lbl = lbl.cssClass("p-multiselect-label-empty")
-        val labelUI: UI = lbl(labelChildren.map(toChild)*)
+        val labelUI: UI = lbl(UI.children(labelChildren)*)
 
-        val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(toChild(labelUI))
+        val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(labelUI)
 
         // Explicitly typed effect (the untyped-match Any-inference trap).
         val clearEffect: UI.Action =
@@ -556,14 +546,14 @@ final case class MultiSelect[A] private (
                         .aria("label", "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
-                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
                 )
             else Nil
 
         val dd             = div.cssClass("p-multiselect-dropdown")
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon"))
 
         // Hidden form carrier: comma-joined selected keys in options order.
         val hiddenCarrier: List[UI] =
@@ -653,7 +643,7 @@ final case class MultiSelect[A] private (
             }
         end if
 
-        val field = validity.follow(el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
         // A selection bound one way that nothing hears: every toggle is painted away again.
         val unheard: List[UI] =
             if disabledFlag || !choice.exists(_.deaf(onChangeF)) then Nil
@@ -720,7 +710,7 @@ final case class MultiSelect[A] private (
             var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
             if isSel then cb = cb.cssClass("p-checkbox-checked")
             val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
-            cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))
+            cb(div.cssClass("p-checkbox-box")(UI.children(icon)*))
         end rowCheckbox
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-multiselect-option-group") { (a, i) =>
@@ -734,7 +724,7 @@ final case class MultiSelect[A] private (
             if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(toggleOption(a))
-            row(List[UI](rowCheckbox(isSel), span(labelF(a))).map(toChild)*)
+            row(UI.children(List[UI](rowCheckbox(isSel), span(labelF(a))))*)
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
@@ -745,15 +735,13 @@ final case class MultiSelect[A] private (
 
         val listUI: UI =
             div.cssClass("p-multiselect-list-container")(
-                toChild(
-                    {
-                        // Named by `aria-controls` and holding the option ids; the announcement
-                        // itself rides the focused element, which is never this list.
-                        var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
-                        s.idBase.foreach(b => list = list.id(listId(b)))
-                        list((rows ++ emptyRow).map(toChild)*)
-                    }
-                )
+                {
+                    // Named by `aria-controls` and holding the option ids; the announcement
+                    // itself rides the focused element, which is never this list.
+                    var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
+                    s.idBase.foreach(b => list = list.id(listId(b)))
+                    list(UI.children(rows ++ emptyRow)*)
+                }
             )
 
         // Header: the REAL uic.CheckBox (interactive select-all, const-checked so
@@ -782,12 +770,11 @@ final case class MultiSelect[A] private (
                          .aria("label", "Filter")
                          .aria("haspopup", "listbox")
                          .aria("expanded", "true")
-                         // Typing re-filters and highlights the first match; one way it is only reported, and the
-                         // field is painted back to the owner's query.
+                         // Typing re-filters and highlights the first match; one way it is only reported, and kyo-ui puts
+                         // the field back to the owner's query.
                          .onInput(text =>
                              s.hi.set(0)
                                  .andThen(ReactiveValue.change(Present(s.q), text, onFilterQueryF))
-                                 .andThen(if s.q.writable.isEmpty then s.repaint else (): UI.Action)
                          )
                          // The header is where focus goes and therefore where the option keyboard
                          // lives: the arrows move the highlight, the caret keeps Space and the
@@ -804,18 +791,16 @@ final case class MultiSelect[A] private (
                      }
                      List(
                          div.cssClass("p-iconfield").cssClass("p-multiselect-filter-container")(
-                             toChild(filterEl),
-                             toChild(
-                                 span.cssClass("p-inputicon")(
-                                     toChild(GlyphSvg(Icons.search, "p-icon"))
-                                 )
+                             filterEl,
+                             span.cssClass("p-inputicon")(
+                                 GlyphSvg(Icons.search, "p-icon")
                              )
                          )
                      )
                  else Nil)
 
         val header: List[UI] =
-            if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(headerKids.map(toChild)*))
+            if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(UI.children(headerKids)*))
             else Nil
 
         Overlay.hosted(s.open, onOpenF)

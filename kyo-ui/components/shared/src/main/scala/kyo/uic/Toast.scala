@@ -133,13 +133,13 @@ final case class Toast private (
                             case TextValue.Dyn(s)   => div.cssClass("p-toast-detail")(s)
                         } ++
                         kids
-                val text: UI           = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
+                val text: UI           = div.cssClass("p-toast-message-text")(UI.children(textParts)*)
                 val closeBtn: List[UI] =
                     if !closableFlag then Nil
                     else
                         val shell     = button.cssClass("p-toast-close-button").jsProp("type", "button").aria("label", "Close")
                         val pressable = if fixed then shell.aria("disabled", "true") else shell.onClick(close)
-                        List(pressable(toChild(GlyphSvg(Icons.times, "p-toast-close-icon"))))
+                        List(pressable(GlyphSvg(Icons.times, "p-toast-close-icon")))
 
                 shown(
                     div
@@ -149,22 +149,18 @@ final case class Toast private (
                         .data("uic-duration", durationMs.toString)
                         .role("alert")
                         .aria("live", "polite")(
-                            toChild(
-                                div
-                                    .cssClass("p-toast-message")
-                                    .cssClass(s"p-toast-message-$token")
-                                    // Enter slides the message in from its screen edge and fades;
-                                    // close plays Prime's own `p-toast-message-leave-active` keyframe
-                                    // (ending in translateY(-100%) scale(.6)) on the leave ghost.
-                                    .enterTransition(Toast.enterClass(positionV))
-                                    .leaveTransition("p-toast-message-leave-active")(
-                                        toChild(
-                                            div.cssClass("p-toast-message-content")(
-                                                ((icon :: text :: closeBtn)).map(toChild)*
-                                            )
-                                        )
+                            div
+                                .cssClass("p-toast-message")
+                                .cssClass(s"p-toast-message-$token")
+                                // Enter slides the message in from its screen edge and fades;
+                                // close plays Prime's own `p-toast-message-leave-active` keyframe
+                                // (ending in translateY(-100%) scale(.6)) on the leave ghost.
+                                .enterTransition(Toast.enterClass(positionV))
+                                .leaveTransition("p-toast-message-leave-active")(
+                                    div.cssClass("p-toast-message-content")(
+                                        UI.children((icon :: text :: closeBtn))*
                                     )
-                            )
+                                )
                         )
                 )
         end match

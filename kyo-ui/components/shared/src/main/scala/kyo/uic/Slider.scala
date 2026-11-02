@@ -124,7 +124,7 @@ final case class Slider private (
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
-        // A signal nobody hears: every change the reader makes is painted away again.
+        // A signal nobody hears: every change the reader makes is put back.
         if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue then
             fragment(field, KeyDiagnostics.unheard("Slider", "value", "onChange"))
         else field
@@ -132,17 +132,18 @@ final case class Slider private (
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity))
-            // Bound one way, the thumb is painted again after each report, so a drag the owner does not take is put back.
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => body(v, Absent, validity, repaint))
-            // A constant somebody hears is painted again after each report too, so a drag its owner does not take is put
-            // back; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+            case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity, clamp(v)))
+            // Bound one way the native thumb follows the signal, so kyo-ui puts back a drag the owner does not take; the visual layer
+            // is drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
+            case Present(ReactiveValue.Dyn(sig))                        => sig.render(v => body(v, Absent, validity, sig.map(clamp)))
             case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
-                ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(v, Absent, validity, repaint))
-            case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
-            case Absent                          => body(minV, Absent, validity)
+                body(v, Absent, validity, Signal.initConst(clamp(v)))
+            case Present(ReactiveValue.Const(v)) => body(v, Absent, validity, clamp(v))
+            case Absent                          => body(minV, Absent, validity, clamp(minV))
 
-    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity, repaint: UI.Action = ())(using Frame): UI =
+    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity, native: Double | Signal[Double])(using
+        Frame
+    ): UI =
         val value = clamp(raw)
         val pct   =
             if maxV <= minV then 0.0
@@ -163,7 +164,7 @@ final case class Slider private (
             .min(minV)
             .max(maxV)
             .step(if integerFlag then math.max(1.0, math.rint(stepV)) else stepV)
-            .value(value)
+            .value(native)
         idV.foreach(v => in = in.id(v))
         accNameV match
             case Present(TextValue.Const(v)) => in = in.aria("label", v)
@@ -184,7 +185,6 @@ final case class Slider private (
                 for
                     _ <- write
                     r <- fire
-                    _ <- repaint
                 yield r
                 end for
             }
@@ -202,7 +202,7 @@ final case class Slider private (
             .cssClass("p-component")
             .cssClass(if horizontal then "p-slider-horizontal" else "p-slider-vertical")
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
-        validity.mark(el)(toChild(range), toChild(handle), toChild(in: UI))
+        validity.mark(el)(range, handle, in: UI)
     end body
 end Slider
 

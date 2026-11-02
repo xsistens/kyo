@@ -104,7 +104,7 @@ object OptionItem:
     private def groupRow(label: String, headerClass: String, options: List[UI])(using Frame): UI =
         val header: UI = li.cssClass(headerClass).role("presentation").aria("hidden", "true")(label)
         li.cssClass("p-uic-option-group").role("group").aria("label", label)(
-            toChild(ul.cssClass("p-uic-option-group-list").role("none")((header :: options).map(toChild)*))
+            ul.cssClass("p-uic-option-group-list").role("none")(UI.children(header :: options)*)
         )
     end groupRow
 

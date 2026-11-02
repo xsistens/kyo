@@ -1,8 +1,7 @@
 package kyo.internal
 
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kyo.*
+import kyo.internal.RecordingExchange.Op
 
 /** The callback binding of a lone-text region (`ReactiveUI.bindTextRegion`).
   *
@@ -25,27 +24,13 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
       * with no synchronous text sink (the server transport).
       */
     final private class Recording(fast: Boolean):
-        val patches                        = new AtomicInteger(0)
-        val repaints                       = new AtomicInteger(0)
-        val lastPatch                      = new AtomicReference[String]("")
-        val lastRepaint                    = new AtomicReference[UI](null)
-        private def bump(c: AtomicInteger) = discard(c.incrementAndGet())
-        val exchange                       = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async =
-                Sync.defer { bump(repaints); lastRepaint.set(changed) }
-            override val textPatcherNow: Maybe[(Seq[String], String) => Unit] =
-                if fast then
-                    Present((_, v) =>
-                        bump(patches); lastPatch.set(v)
-                    )
-                else Absent
+        val exchange          = new RecordingExchange(synchronous = fast)
+        private def texts     = exchange.recorded.collect { case op: Op.Text => op.value }
+        private def painted   = exchange.recorded.collect { case op: Op.Paint => op.ui }
+        def patches: Int      = texts.size
+        def repaints: Int     = painted.size
+        def lastPatch: String = texts.last
+        def lastRepaint: UI   = painted.last
     end Recording
 
     private def subscribed(ui: UI, rec: Recording)(using Frame): Unit < (Async & Scope) =
@@ -57,15 +42,15 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
             for
                 ref <- Signal.initRef("before")
                 _   <- subscribed(UI.div(ref: Signal[String]), rec)
-                before = rec.patches.get
+                before = rec.patches
                 _ <- ref.set("after")
                 // Read with NO sleep and NO assertEventually: on the region path the repaint would still be
                 // queued here and this would read the same value as `before`.
-                after = rec.patches.get
+                after = rec.patches
             yield
                 assert(before == 0 && after == 1, s"before=$before after=$after")
-                assert(rec.lastPatch.get == "after")
-                assert(rec.repaints.get == 0, "the region path ran alongside the binding")
+                assert(rec.lastPatch == "after")
+                assert(rec.repaints == 0, "the region path ran alongside the binding")
             end for
         }
     }
@@ -77,7 +62,7 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
                 ref <- Signal.initRef("plain")
                 _   <- subscribed(UI.div(ref: Signal[String]), rec)
                 _   <- ref.set("a & b < c")
-            yield assert(rec.lastPatch.get == "a & b < c")
+            yield assert(rec.lastPatch == "a & b < c")
             end for
         }
     }
@@ -91,7 +76,7 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
                 ref <- Signal.initRef("same")
                 _   <- subscribed(UI.div(ref: Signal[String]), rec)
                 _   <- ref.set("same")
-            yield assert(rec.patches.get == 0, s"patches=${rec.patches.get}")
+            yield assert(rec.patches == 0, s"patches=${rec.patches}")
             end for
         }
     }
@@ -105,7 +90,7 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
             // Moving the signal after the scope closed is the whole leaf: the next-promise is masked and
             // nothing interrupts it, so a binding that forgets to release keeps patching a subtree that is gone.
             _ <- ref.set("after")
-        yield assert(parked == 0 && rec.patches.get == 0, s"parked=$parked patches=${rec.patches.get}")
+        yield assert(parked == 0 && rec.patches == 0, s"parked=$parked patches=${rec.patches}")
         end for
     }
 
@@ -116,10 +101,10 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
                 ref <- Signal.initRef("before")
                 _   <- subscribed(UI.div(ref: Signal[String]), rec)
                 _   <- ref.set("after")
-                _   <- assertEventually(Sync.defer(rec.repaints.get == 1))
+                _   <- assertEventually(Sync.defer(rec.repaints == 1))
             yield
-                assert(rec.patches.get == 0, "took the fast path with no sink offered")
-                assert(rec.lastRepaint.get == UI.Ast.Text("after"), s"repainted with ${rec.lastRepaint.get}")
+                assert(rec.patches == 0, "took the fast path with no sink offered")
+                assert(rec.lastRepaint == UI.Ast.Text("after"), s"repainted with ${rec.lastRepaint}")
             end for
         }
     }
@@ -133,8 +118,8 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
                 ref <- Signal.initRef("before")
                 _   <- subscribed(UI.div(ref.map(v => UI.span(v))), rec)
                 _   <- ref.set("after")
-                _   <- assertEventually(Sync.defer(rec.repaints.get == 1))
-            yield assert(rec.patches.get == 0, "a UI-valued region took the text binding")
+                _   <- assertEventually(Sync.defer(rec.repaints == 1))
+            yield assert(rec.patches == 0, "a UI-valued region took the text binding")
             end for
         }
     }

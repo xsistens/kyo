@@ -111,20 +111,14 @@ final case class TextArea private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        // A two-way ref is kyo-ui's own binding. A one-way signal draws the field from what its owner holds and paints it
-        // again after each report (ReactiveValue.repainting), so an edit the owner did not take is put back.
-        val built = valueBinding match
-            case Present(ReactiveVariable(_))    => body(Absent, (), validity)
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => body(Present(v), repaint, validity))
-            case Present(ReactiveValue.Const(v)) => body(Present(v), (), validity)
-            case Absent                          => body(Absent, (), validity)
-        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
+        val built    = body(validity)
+        val unheard  = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
         if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard("TextArea", "value", "onInput or onChange"))
         else validity.follow(built)
     end render
 
-    private def body(shown: Maybe[String], repaint: UI.Action, validity: FieldValidity)(using Frame): UI =
+    private def body(validity: FieldValidity)(using Frame): UI =
         var b = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
@@ -139,10 +133,9 @@ final case class TextArea private (
         if autoResizeFlag then b = b.cssClass("p-textarea-resizable").cssClass("p-uic-autoresize")
         // Prime's `p-filled` follows the text the field holds, which kyo-ui toggles in the client (see Input).
         b = b.filledClass("p-filled")
-        valueBinding match
-            case Present(ReactiveVariable(r)) => b = b.value(r)
-            case _                            => shown.foreach(v => b = b.value(v))
-        end match
+        // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
+        // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
+        valueBinding.foreach(slot => b = b.value(slot.bound))
         b = placeholderText match
             case Present(TextValue.Const(v)) => b.placeholder(v)
             case Present(TextValue.Dyn(sig)) => b.placeholder(sig)
@@ -161,8 +154,8 @@ final case class TextArea private (
             case Present(TextValue.Dyn(s))   => b.aria("label", s)
             case Absent                      => b
         b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
-        b = onInputF.map(f => b.onInput(v => f(v).andThen(repaint))).getOrElse(b)
-        b = onChangeF.map(f => b.onChange(v => f(v).andThen(repaint))).getOrElse(b)
+        b = onInputF.map(f => b.onInput(f)).getOrElse(b)
+        b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
         b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
         b

@@ -5,6 +5,7 @@ import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
+import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
@@ -304,16 +305,9 @@ class BoundaryTest extends UIScreen:
                 )
                 // Holds the engine right after it painted the opened region, before it goes on to subscribe what the paint holds:
                 // the reader already sees the placeholder, and clicks it.
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        context: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async =
-                        painted.done.map(first => if first then Kyo.unit else painted.completeUnitDiscard.andThen(release.get))
+                exchange = new RecordingExchange(beforePaint =
+                    (_, _) => painted.done.map(first => if first then Kyo.unit else painted.completeUnitDiscard.andThen(release.get))
+                )
                 // The region and the placeholder it paints are each the root of the node's range at path 0.
                 target = Seq("0")
                 result <- Scope.run {

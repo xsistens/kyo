@@ -114,22 +114,20 @@ final case class InputOtp private (
                 // them ONCE in a mounted effect, then the reactive body reads the same
                 // ids across re-renders. Golden/SSG projection = the un-advancing
                 // placeholder (no ids); the wired seam exercises the advancing form. Bound one way,
-                // the mount also owns the count that paints the cells again after each report, so
-                // a character the owner does not take is put back (see ReactiveValue.repainting).
+                // each cell follows its position of the signal, so kyo-ui puts back a character the owner does not take.
                 UI.mounted {
                     for
-                        cmds   <- UI.commands
-                        ids    <- Kyo.foreach(0 until lengthV)(_ => cmds.freshId)
-                        paints <- if valueBinding.exists(_.writable.isEmpty) then Signal.initRef(0).map(Present(_)) else Kyo.lift(Absent)
-                    yield wired(sig, ids.toList, id => cmds.focusId(id), paints)
-                }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), (), validity))))
-            case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), (), validity)))
+                        cmds <- UI.commands
+                        ids  <- Kyo.foreach(0 until lengthV)(_ => cmds.freshId)
+                    yield wired(sig, ids.toList, id => cmds.focusId(id))
+                }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), validity))))
+            case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
             // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code
             // the reader asks for is the one they hold, which a ref the field keeps for as long as it is shown remembers.
             case Present(ReactiveValue.Const(v)) if interactive => owned(v, validity)
             case Absent if interactive                          => owned("", validity)
-            case Present(ReactiveValue.Const(v))                => validity.follow(body(v, Absent, _ => (), (), validity))
-            case Absent                                         => validity.follow(body("", Absent, _ => (), (), validity))
+            case Present(ReactiveValue.Const(v))                => validity.follow(body(v, Absent, _ => (), validity))
+            case Absent                                         => validity.follow(body("", Absent, _ => (), validity))
         val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
         if unheard then fragment(field, KeyDiagnostics.unheard("InputOtp", "value", "onChange")) else field
     end renderResolved
@@ -137,24 +135,15 @@ final case class InputOtp private (
     /** The field over a code it keeps itself, starting at `initial`, drawn as a two-way binding of it. */
     private def owned(initial: String, validity: FieldValidity)(using Frame): UI =
         ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).renderResolved)(
-            validity.follow(body(initial, Absent, _ => (), (), validity))
+            validity.follow(body(initial, Absent, _ => (), validity))
         )
 
     /** The advancing subscription the mount publishes: the golden seam. `focus`
-      * moves DOM focus to the given cell id (production: `Commands.focusId`). `paints`, where
-      * the code is bound one way, is read beside it and bumped after each report.
+      * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
-    private[uic] def wired(
-        code: Signal[String],
-        cellIds: List[String],
-        focus: String => UI.Action,
-        paints: Maybe[SignalRef[Int]] = Absent
-    )(using Frame): UI =
-        val validity            = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        def draw(v: String): UI = body(v, Present(cellIds), focus, paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit), validity)
-        validity.follow(paints match
-            case Present(p) => Reading.Live(code).and(Reading.Live(p)).render((v, _) => draw(v))
-            case Absent     => code.render(draw))
+    private[uic] def wired(code: Signal[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        validity.follow(code.render(v => body(v, Present(cellIds), focus, validity)))
     end wired
 
     /** Writes cell i's new content into the bound code (or, one-way, reports the code it asks for): the LAST accepted
@@ -175,11 +164,14 @@ final case class InputOtp private (
         current: String,
         cellIds: Maybe[List[String]],
         focus: String => UI.Action,
-        repaint: UI.Action,
         validity: FieldValidity
     )(using Frame): UI =
         val cells: List[UI] = (0 until lengthV).toList.map { i =>
-            val ch   = current.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
+            def at(code: String): String = code.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
+            // Bound one way the cell follows its position of the code, in place; otherwise it shows what this render read.
+            val ch: String | Signal[String] = valueBinding match
+                case Present(ReactiveValue.Dyn(sig)) if valueBinding.exists(_.writable.isEmpty) => sig.map(at)
+                case _                                                                          => at(current)
             var cell = Input()
                 .extraClass("p-inputotp-input")
                 .inputType(if maskFlag then InputType.Password else InputType.Text)
@@ -202,7 +194,7 @@ final case class InputOtp private (
                     val advance: UI.Action = cellIds match
                         case Present(ids) if accepted.nonEmpty && i + 1 < lengthV => focus(ids(i + 1))
                         case _                                                    => ()
-                    writeCell(i, s, current).andThen(repaint).andThen(advance)
+                    writeCell(i, s, current).andThen(advance)
                 }
                 onBlurF.foreach { f =>
                     // A cell's native blur carries only its OWN character, so the full
@@ -220,7 +212,7 @@ final case class InputOtp private (
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        el(cells.map(toChild)*)
+        el(UI.children(cells)*)
     end body
 end InputOtp
 

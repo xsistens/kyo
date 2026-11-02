@@ -74,12 +74,12 @@ final case class Card private (
 
     private[uic] def render(using Frame): UI =
         val headerUI: List[UI] =
-            customHeaderV.toList.map(h => div.cssClass("p-card-header")(toChild(h)))
-        val contentUI: UI      = div.cssClass("p-card-content")(kids.map(toChild)*)
+            customHeaderV.toList.map(h => div.cssClass("p-card-header")(h))
+        val contentUI: UI      = div.cssClass("p-card-content")(UI.children(kids)*)
         val footerUI: List[UI] =
-            footerV.toList.map(f => div.cssClass("p-card-footer")(toChild(f)))
+            footerV.toList.map(f => div.cssClass("p-card-footer")(f))
         val body: UI =
-            div.cssClass("p-card-body")((captionArea ++ (contentUI :: footerUI)).map(toChild)*)
+            div.cssClass("p-card-body")(UI.children(captionArea ++ (contentUI :: footerUI))*)
 
         var el = div.cssClass("p-card").cssClass("p-component")
         if accessibleNameV.isDefined || accessibleNameRefV.isDefined then el = el.role("region")
@@ -89,7 +89,7 @@ final case class Card private (
             case Absent                      => ()
         end match
         accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
-        el((headerUI :+ body).map(toChild)*)
+        el(UI.children(headerUI :+ body)*)
     end render
 
     /** The caption area: Prime's `p-card-caption` (title + subtitle), wrapped in
@@ -109,21 +109,21 @@ final case class Card private (
                 case TextValue.Const(t) => div.cssClass("p-card-subtitle")(t): UI
                 case TextValue.Dyn(s)   => div.cssClass("p-card-subtitle")(s)
             }
-            val caption: UI = div.cssClass("p-card-caption")((titleUI ++ subtitleUI).map(toChild)*)
+            val caption: UI = div.cssClass("p-card-caption")(UI.children(titleUI ++ subtitleUI)*)
             if !hasExtras && !headerInteractiveFlag then List(caption)
-            else if !hasExtras then List(interactivize(div.cssClass("p-uic-card-caption-row"))(toChild(caption)))
+            else if !hasExtras then List(interactivize(div.cssClass("p-uic-card-caption-row"))(caption))
             else
                 val avatarUI: List[UI] =
-                    headerAvatarV.toList.map(av => div.cssClass("p-uic-card-avatar")(toChild(av)))
+                    headerAvatarV.toList.map(av => div.cssClass("p-uic-card-avatar")(av))
                 val additionalUI: List[UI] =
                     additionalTextV.toList.map {
                         case TextValue.Const(t) => div.cssClass("p-uic-card-additional")(t): UI
                         case TextValue.Dyn(s)   => div.cssClass("p-uic-card-additional")(s)
                     }
                 val actionUI: List[UI] =
-                    headerActionV.toList.map(ac => div.cssClass("p-uic-card-action")(toChild(ac)))
+                    headerActionV.toList.map(ac => div.cssClass("p-uic-card-action")(ac))
                 val row = interactivize(div.cssClass("p-uic-card-caption-row"))
-                List(row((avatarUI ++ (caption :: additionalUI) ++ actionUI).map(toChild)*))
+                List(row(UI.children(avatarUI ++ (caption :: additionalUI) ++ actionUI)*))
             end if
         end if
     end captionArea

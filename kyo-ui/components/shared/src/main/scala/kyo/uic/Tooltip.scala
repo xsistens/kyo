@@ -62,10 +62,10 @@ final case class Tooltip private (
                 .cssClass("p-component")
                 .cssClass(s"p-tooltip-${positionV.token}")
                 .role("tooltip")(
-                    toChild(div.cssClass("p-tooltip-arrow")),
-                    toChild(div.cssClass("p-tooltip-text")(toChild(textUI)))
+                    div.cssClass("p-tooltip-arrow"),
+                    div.cssClass("p-tooltip-text")(textUI)
                 )
-        span.cssClass("p-uic-tooltip")((kids :+ box).map(toChild)*)
+        span.cssClass("p-uic-tooltip")(UI.children(kids :+ box)*)
     end render
 end Tooltip
 

@@ -20,7 +20,7 @@ import kyo.UI.*
   * floated panel adds focus/dismiss machinery for zero information gain on a
   * server-driven page. Strength is computed on the server from the bound value
   * with Prime's OWN default rules: medium = two of [lowercase, uppercase,
-  * digit] and ≥ 6 chars; strong = all three and ≥ 8 chars; anything else weak;
+  * digit] and â¥ 6 chars; strong = all three and â¥ 8 chars; anything else weak;
   * empty shows `promptLabel`.
   */
 final case class Password private (
@@ -135,16 +135,13 @@ final case class Password private (
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        val field = valueBinding match
+        valueBinding match
             // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the
             // reader types is the field's to keep: from a constant (which a reveal would otherwise give back), and with
             // the meter unbound too. Unbound without the meter, the field draws no value and the text stays the browser's.
             case Present(ReactiveValue.Const(v)) if keepsText => owned(v)
             case Absent if keepsText && feedbackFlag          => owned("")
             case _                                            => drawn
-        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputSF.orElse(onChangeSF)) &&
-            !readonlyFlag.constTrue && !disabledFlag
-        if unheard then fragment(field, KeyDiagnostics.unheard("Password", "value", "onInput or onChange")) else field
     end render
 
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
@@ -181,22 +178,17 @@ final case class Password private (
 
     /** Resolves the bound value: the meter needs the CURRENT text, so with
       * `feedback(true)` the body renders under the signal; without feedback a
-      * two-way ref binds directly (no re-render per keystroke), and a one-way
-      * signal draws the field from what it shows and paints it again after each
-      * report, so an edit its owner did not take is put back.
+      * two-way ref binds directly and a one-way signal is shown in place (no
+      * re-render per keystroke), and kyo-ui puts back an edit its owner did not take.
       */
     private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         valueBinding match
-            case Present(ReactiveVariable(_)) if !feedbackFlag => body("", rev, (), validity)
-            case Present(ReactiveVariable(ref))                => ref.render(v => body(v, rev, (), validity))
-            case Present(ReactiveValue.Dyn(sig))               =>
-                ReactiveValue.repainting(sig)((v, repaint) => body(v, rev, repaint, validity))
-            case Present(ReactiveValue.Const(v)) => body(v, rev, (), validity)
-            case Absent                          => body("", rev, (), validity)
+            case Present(ReactiveValue.Dyn(_)) if !feedbackFlag => body("", rev, validity)
+            case Present(ReactiveValue.Dyn(sig))                => sig.render(v => body(v, rev, validity))
+            case Present(ReactiveValue.Const(v))                => body(v, rev, validity)
+            case Absent                                         => body("", rev, validity)
 
-    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], repaint: UI.Action, validity: FieldValidity)(using
-        Frame
-    ): UI =
+    private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         val revealed = rev.exists(_._2)
 
         // === the field (Input carries the shared text-field contract) ===========
@@ -210,9 +202,11 @@ final case class Password private (
             .variant(variantV)
             .fluid(fluidFlag)
             .invalid(validity.red)
+            .unheardAs("Password", "onInput or onChange")
         valueBinding match
             case Present(ReactiveVariable(r)) if !feedbackFlag => in = in.value(r)
-            case Present(_)                                    => in = in.value(current)
+            case Present(ReactiveVariable(_))                  => in = in.value(current)
+            case Present(slot)                                 => in = in.value(slot.bound)
             case Absent                                        => ()
         end match
         // Under feedback the field re-renders per keystroke (the meter observes the
@@ -230,9 +224,9 @@ final case class Password private (
                     end for
                 }
             case _ =>
-                onInputSF.foreach(f => in = in.onInput(v => f(v).andThen(repaint)))
+                onInputSF.foreach(f => in = in.onInput(f))
         end match
-        onChangeSF.foreach(f => in = in.onChange(v => f(v).andThen(repaint)))
+        onChangeSF.foreach(f => in = in.onChange(f))
         onBlurSF.foreach(f => in = in.onBlur(f))
         placeholderText match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
@@ -267,7 +261,7 @@ final case class Password private (
                         case _                               => ()
                 }
             end if
-            t(toChild(GlyphSvg(if isRevealed then Icons.eyeSlash else Icons.eye, "p-icon")))
+            t(GlyphSvg(if isRevealed then Icons.eyeSlash else Icons.eye, "p-icon"))
         }
 
         // === wrapper root =======================================================
@@ -278,10 +272,10 @@ final case class Password private (
         // Without the meter a ref binds the field directly and nothing draws again per keystroke, so the wrapper
         // follows the ref through a class channel; every other path draws from the text it renders.
         el = valueBinding match
-            case Present(ReactiveVariable(r)) if !feedbackFlag => el.cssClass("p-inputwrapper-filled", r.map(_.nonEmpty))
-            case _                                             => el.cssClass("p-inputwrapper-filled", current.nonEmpty)
+            case Present(ReactiveValue.Dyn(sig)) if !feedbackFlag => el.cssClass("p-inputwrapper-filled", sig.map(_.nonEmpty))
+            case _                                                => el.cssClass("p-inputwrapper-filled", current.nonEmpty)
         if fluidFlag then el = el.cssClass("p-password-fluid")
-        val root = el(((in: UI) :: toggle).map(toChild)*)
+        val root = el(UI.children((in: UI) :: toggle)*)
 
         // === inline strength meter (see the class doc for the deviation) ========
         val meter: List[UI] =
@@ -312,8 +306,8 @@ object Password:
     def apply(): Password = new Password()
 
     /** Prime's default strength rules as pure predicates: 0 = empty (prompt),
-      * 1 = weak, 2 = medium (two of [a-z, A-Z, 0-9] and length ≥ 6),
-      * 3 = strong (all three and length ≥ 8).
+      * 1 = weak, 2 = medium (two of [a-z, A-Z, 0-9] and length â¥ 6),
+      * 3 = strong (all three and length â¥ 8).
       */
     private[uic] def strength(v: String): Int =
         if v.isEmpty then 0

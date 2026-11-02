@@ -11,7 +11,7 @@ private[kyo] enum FailureFrame:
     case Boundary(settings: UI.Boundary)
 
     /** A mount, which an `Escalate` fails. */
-    case Mount(supervision: ReactiveUI.MountSupervision)
+    case Mount(supervision: MountSupervision)
 end FailureFrame
 
 /** What becomes of a failure nothing handled: an event handler's, a [[kyo.UI.fork]] fiber's, a [[kyo.UI.report]].

@@ -1,9 +1,9 @@
 package kyo.internal
 
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.UI.foreachKeyed
+import kyo.internal.RecordingExchange.Op
 
 /** The structural list command a keyed Foreach region emits in place of a whole-list fragment.
   *
@@ -18,30 +18,12 @@ import kyo.UI.foreachKeyed
 class ListPatchProtocolTest extends kyo.test.Test[Any]:
 
     final private class Recording:
-        val patches   = new AtomicReference(Vector.empty[Seq[ListRow]])
-        val fragments = new AtomicInteger(0)
-        val exchange  = new UIExchange:
-            def onChange(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                changed: UI
-            )(using Frame): Unit < Async =
-                Sync.defer(discard(fragments.incrementAndGet()))
-            override def onListPatch(
-                region: ReactiveRegion,
-                path: Seq[String],
-                contentContext: ReactiveRegion.RegionIdentity,
-                parentContext: ReactiveRegion.ParentContext,
-                previous: Maybe[UI],
-                rows: Seq[ListRow]
-            )(using Frame): Boolean < Async =
-                Sync.defer(discard(patches.getAndUpdate(_ :+ rows))).andThen(true)
-        def count: Int               = patches.get.size
-        def keys: Seq[String]        = patches.get.last.map(_.key)
-        def changedKeys: Seq[String] = patches.get.last.filter(_.changed).map(_.key)
+        val exchange                 = new RecordingExchange(keepsRows = true)
+        private def patches          = exchange.recorded.collect { case op: Op.List => op.rows }
+        def fragments: Int           = exchange.recorded.count(_.isInstanceOf[Op.Paint])
+        def count: Int               = patches.size
+        def keys: Seq[String]        = patches.last.map(_.key)
+        def changedKeys: Seq[String] = patches.last.filter(_.changed).map(_.key)
     end Recording
 
     /** Waits until the list region waits on `rows` again, which it does only once it has handled the value before: the first
@@ -139,7 +121,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
                 _    <- ReactiveUI.subscribe(root, rec.exchange)
                 _    <- parked(rows)
                 _    <- rows.set(Chunk("a", "a"))
-                _    <- assertEventually(Sync.defer(rec.fragments.get >= 1))
+                _    <- assertEventually(Sync.defer(rec.fragments >= 1))
             // A key names a slot, so two rows sharing one key cannot be addressed structurally at all. The
             // fragment path degrades positionally instead of aliasing two rows onto one node.
             yield assert(rec.count == 0)
@@ -152,17 +134,8 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
                 seen <- Sync.defer(new AtomicReference(Maybe.empty[UI]))
                 rows <- Signal.initRef(Chunk("a", "b"))
                 // No onListPatch override: this is the server transport's shape, and it must lose nothing.
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        contentContext: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async =
-                        Sync.defer(seen.set(Present(changed)))
-                ui = UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))
+                exchange = new RecordingExchange(beforePaint = (_, changed) => Sync.defer(seen.set(Present(changed))))
+                ui       = UI.ul(rows.foreachKeyed(identity)(item => UI.li(item)))
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, exchange)
                 _    <- parked(rows)

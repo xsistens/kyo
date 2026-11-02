@@ -51,7 +51,7 @@ final case class InputGroup private (
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-inputgroup").cssClass("p-component")
         el = idV.map(v => el.id(v)).getOrElse(el)
-        el(kids.map(toChild)*)
+        el(UI.children(kids)*)
     end render
 end InputGroup
 
@@ -62,5 +62,5 @@ object InputGroup:
       * (the CSS strips the padding around a nested `.p-button`).
       */
     def addon(cs: UI*)(using Frame): UI =
-        span.cssClass("p-inputgroupaddon")(cs.map(toChild)*)
+        span.cssClass("p-inputgroupaddon")(UI.children(cs)*)
 end InputGroup

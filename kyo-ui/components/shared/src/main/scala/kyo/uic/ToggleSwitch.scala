@@ -99,32 +99,38 @@ final case class ToggleSwitch private (
     end render
 
     /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
-      * one way, or to a constant somebody hears, it paints the box again after the report, so a toggle the owner does not
-      * take is taken back (ReactiveValue.repainting). A constant nobody hears is fixed: drawn read-only, reachable and
+      * one way, or to a constant somebody hears, the native box follows it, so kyo-ui takes back a toggle the owner does not
+      * take (`UI.Bound.Follow`). A constant nobody hears is fixed: drawn read-only, reachable and
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        def toggle(repaint: UI.Action): Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then
-                Present(b => ReactiveValue.change(checkedBinding, b, onChangeF).andThen(repaint))
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
             else Absent
         checkedBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
-                ReactiveValue.repainting(Signal.initConst(v))((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, Absent, validity)
-            case Absent                          => body(false, toggle(()), validity)
+            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, b, toggle, validity))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, sig, toggle, validity))
+            case Present(slot @ ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
+                body(v, slot.native, toggle, validity)
+            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, v, Absent, validity)
+            case Absent                          => body(false, false, toggle, validity)
         end match
     end drawn
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
+    private def body(
+        isChecked: Boolean,
+        native: Boolean | Signal[Boolean],
+        onChg: Maybe[Boolean => UI.Action],
+        validity: FieldValidity
+    )(using
+        Frame
+    ): UI =
         val isReadonly = readonlyFlag.getOrElse(false)
 
         var box = checkbox
             .cssClass("p-toggleswitch-input")
             .role("switch")
-            .checked(isChecked)
+            .checked(native)
             .aria("checked", isChecked.toString)
         box = idV.map(v => box.id(v)).getOrElse(box)
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
@@ -156,7 +162,7 @@ final case class ToggleSwitch private (
             GlyphSvg(if isChecked then on else off, "p-uic-toggleswitch-handle-icon")
         }
         val slider = div.cssClass("p-toggleswitch-slider")(
-            toChild(div.cssClass("p-toggleswitch-handle")(handleContent.map(toChild)*): UI)
+            div.cssClass("p-toggleswitch-handle")(UI.children(handleContent)*): UI
         )
 
         var root = div.cssClass("p-toggleswitch").cssClass("p-component")
@@ -168,7 +174,7 @@ final case class ToggleSwitch private (
             case Present(TextValue.Dyn(s))   => root.title(s)
             case Absent                      => root
 
-        root(List[UI](box, slider).map(toChild)*)
+        root(UI.children(List[UI](box, slider))*)
     end body
 end ToggleSwitch
 

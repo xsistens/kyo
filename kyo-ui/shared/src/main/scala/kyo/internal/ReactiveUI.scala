@@ -1,9 +1,12 @@
 package kyo.internal
 
+import DragSessions.*
+import EventDispatch.*
+import MountRegions.*
+import RowRegions.*
 import kyo.*
 import kyo.Svg
 import kyo.UI.*
-import kyo.kernel.ContextEffect
 
 /** Normalized reactive UI node. */
 private[kyo] case class ReactiveUI(
@@ -25,18 +28,11 @@ private[kyo] case class ReactiveUI(
     deepRows: List[Int] = Nil,
     // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
     // (empty for non-element / attribute-less nodes).
-    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
-    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveStyle: Maybe[Signal[Style]] = Absent,
-    // Render-time snapshots: the values the enclosing paint already put into the DOM. Subscribe skips an observer's first
+    channels: Channels = Channels.empty,
+    // Render-time snapshot: the value the enclosing paint already put into the DOM. Subscribe skips an observer's first
     // emission while it still equals its snapshot, so a fresh paint is not patched again.
     renderedValue: Maybe[UI] = Absent,
-    renderedAttrValues: Map[String, String] = Map.empty,
-    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
-    renderedClassValues: Map[String, Boolean] = Map.empty,
-    // The inline-style channel's declarations at render (see UI.Element.inlineStyle): what the first patch diffs against.
-    renderedStyleValue: Maybe[Seq[(String, String)]] = Absent,
+    renderedChannels: RenderedChannels = RenderedChannels.empty,
     // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
     // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
     foreachSpec: Maybe[ForeachSpec] = Absent,
@@ -62,134 +58,10 @@ end ReactiveUI
 final private[kyo] case class ForeachSpec(
     node: UI.Ast.Foreach[?, ?],
     renderedItems: Maybe[Chunk[?]],
-    rows: ReactiveUI.RowRegistry
+    rows: RowRegistry
 ):
     def reusable: Boolean = node.key.nonEmpty && !node.indexed
 end ForeachSpec
-
-/** Where event dispatch finds a mounted node's live content.
-  *
-  * Dispatch re-derives handler chains from the current UI on every event, so the `Mounted` node it meets is a fresh value that cannot
-  * carry the instance. The instance registers its content cell here while it is subscribed, and the dispatch-time handler of whatever
-  * node occupies that place reads it. One table per normalized root.
-  *
-  * A path alone does not name one node: a mount's content sits at the mount's own path, so a mount whose content is directly another
-  * mount, or a boundary around one, puts two of them there. Nor does the call site, since a helper that takes a `Frame` makes every
-  * node in it under the caller's. An entry is therefore filed under the identity of the content it owns, the path plus how many
-  * mounts, boundaries and regions enclose it there, which is the identity its range has on the page. By path alone, the inner
-  * mount's boundary found the outer one before the inner instance had registered, the outer showed its content, which held the inner
-  * boundary again, and resolution recursed without end.
-  */
-final private[kyo] class MountDispatch(
-    cells: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[ReactiveUI.MountInstance]]],
-    gates: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]],
-    holds: AtomicRef[Chunk[Seq[String]]]
-):
-    /** A range a boundary keeps showing old content in while its new content loads: no event may reach the new content through it. */
-    def hold(path: Seq[String])(using Frame): Unit < Sync = holds.getAndUpdate(_.append(path)).unit
-
-    def release(path: Seq[String])(using Frame): Unit < Sync =
-        holds.getAndUpdate { all =>
-            val at = all.indexOf(path)
-            if at < 0 then all else all.take(at).concat(all.drop(at + 1))
-        }.unit
-
-    /** Whether `target` lies in a range that is held. */
-    def held(target: Seq[String])(using Frame): Boolean < Sync = holds.get.map(_.exists(target.startsWith(_)))
-
-    /** Registers `gate` of the boundary whose content has identity `at`. */
-    def registerBoundary(at: ReactiveRegion.RegionIdentity, gate: BoundaryGate)(using Frame): Unit < Sync =
-        gates.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(gate))).unit
-
-    def unregisterBoundary(at: ReactiveRegion.RegionIdentity, gate: BoundaryGate)(using Frame): Unit < Sync =
-        gates.getAndUpdate { m =>
-            m.get(at) match
-                case Absent        => m
-                case Present(held) =>
-                    val left = held.filterNot(_ eq gate)
-                    if left.isEmpty then m.remove(at) else m.update(at, left)
-        }.unit
-
-    /** The gate registered last for the boundary whose content has identity `at`. */
-    def boundary(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[BoundaryGate] < Sync =
-        gates.get.map(_.get(at).flatMap(_.lastMaybe))
-
-    /** Registers `instance` of the mount whose content has identity `at`. */
-    def register(at: ReactiveRegion.RegionIdentity, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
-        cells.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(instance))).unit
-
-    /** Removes this registration only. Two subscriptions can hold one path for a moment, an old one still ending and its successor,
-      * in either order; the other keeps its entry.
-      */
-    def unregister(at: ReactiveRegion.RegionIdentity, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
-        cells.getAndUpdate { m =>
-            m.get(at) match
-                case Absent        => m
-                case Present(held) =>
-                    val i    = held.lastIndexWhere(_ eq instance)
-                    val left = if i < 0 then held else held.take(i).concat(held.drop(i + 1))
-                    if left.isEmpty then m.remove(at) else m.update(at, left)
-        }.unit
-
-    /** The cell of the instance registered last for the mount whose content has identity `at`. */
-    def lookup(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[Signal[ReactiveUI.MountState]] < Sync =
-        instance(at).map(_.map(_.cell))
-
-    /** The instance registered last for the mount whose content has identity `at`. */
-    def instance(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
-        cells.get.map(_.get(at).flatMap(_.lastMaybe))
-
-    /** How many instances are registered over every mount: none once everything that showed one has been released. */
-    def registered(using Frame): Int < Sync = cells.get.map(_.foldLeft(0)((n, _, held) => n + held.size))
-
-    /** How many boundary gates are registered and ranges held: none once every boundary that waited has been released. */
-    def gated(using Frame): Int < Sync =
-        gates.get.map(_.foldLeft(0)((n, _, held) => n + held.size)).map(n => holds.get.map(n + _.size))
-end MountDispatch
-
-private[kyo] object MountDispatch:
-    def init(using Frame): MountDispatch < Sync = Sync.Unsafe.defer(initNow())
-
-    /** The table for a pass that already holds the thread (see [[SignalNow]]). */
-    def initNow()(using AllowUnsafe): MountDispatch =
-        new MountDispatch(
-            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[ReactiveUI.MountInstance]]).safe,
-            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]).safe,
-            AtomicRef.Unsafe.init(Chunk.empty[Seq[String]]).safe
-        )
-end MountDispatch
-
-/** A `Mounted` node as normalization found it: the node, its render path, and the keys of the list rows between it and the owner of
-  * its mount table, innermost first.
-  */
-final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String], rows: List[String]):
-    def placeholder: UI = node.placeholderUI.getOrElse(UI.empty(using node.frame))
-
-    /** The node's own error view, else the first view of the boundaries around it, innermost first, that matches, else a built-in one. */
-    def errorUI(error: UI.MountError, views: List[PartialFunction[UI.MountError, UI]] = Nil): UI =
-        node.errorRender match
-            case Present(render) => render(error)
-            case Absent          =>
-                views.find(_.isDefinedAt(error)) match
-                    case Some(view) => view(error)
-                    case None       =>
-                        given Frame = node.frame
-                        UI.span(UI.Ast.Text(error.message)).cssClass("kyo-mount-error")
-
-    def mountError(failure: Any, source: UI.MountErrorSource): UI.MountError =
-        val t = failure match
-            case t: Throwable => t
-            case other        => UI.FailureException(other)(using node.frame)
-        UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key)
-    end mountError
-
-    /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. `rows` are the keys of
-      * the list rows between the node and the owner of its table, the session root or the mount instance whose content it is in, across
-      * every region in between.
-      */
-    def identity: Maybe[ReactiveUI.MountIdentity] =
-        node.key.map(ReactiveUI.MountIdentity(rows, node.site, _))
-end MountedSpec
 
 private[kyo] object ReactiveUI:
 
@@ -263,10 +135,7 @@ private[kyo] object ReactiveUI:
             children = rui.children.map(unpainted),
             foreachSpec = rui.foreachSpec.map(_.copy(renderedItems = Absent)),
             renderedValue = Absent,
-            renderedAttrValues = Map.empty,
-            renderedBoolAttrValues = Map.empty,
-            renderedClassValues = Map.empty,
-            renderedStyleValue = Absent
+            renderedChannels = RenderedChannels.empty
         )
 
     /* Normalization and the tree walk carry, for the mounted nodes and regions they meet, the session's dispatch table and which
@@ -415,10 +284,8 @@ private[kyo] object ReactiveUI:
                     deepRows,
                     discoverRootBound = false
                 )
-                val attrSnap  = currentValues(ui.attrs.reactiveAttrs)
-                val boolSnap  = currentValues(ui.attrs.reactiveBoolAttrs)
-                val classSnap = currentValues(ui.attrs.reactiveClasses)
-                val styleSnap = ui.attrs.reactiveStyle.map(s => CssStyleRenderer.declarations(SignalNow(s)))
+                val channels = Channels.of(ui)
+                val snapshot = channels.rendered
                 ReactiveUI(
                     path,
                     elementSignal,
@@ -432,14 +299,8 @@ private[kyo] object ReactiveUI:
                     at = regionIdentity,
                     rows = rows,
                     deepRows = deepRows,
-                    reactiveAttrs = ui.attrs.reactiveAttrs,
-                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
-                    reactiveClasses = ui.attrs.reactiveClasses,
-                    reactiveStyle = ui.attrs.reactiveStyle,
-                    renderedAttrValues = attrSnap,
-                    renderedBoolAttrValues = boolSnap,
-                    renderedClassValues = classSnap,
-                    renderedStyleValue = styleSnap,
+                    channels = channels,
+                    renderedChannels = snapshot,
                     frame = ui.frame
                 )
 
@@ -576,7 +437,7 @@ private[kyo] object ReactiveUI:
         end match
     end collectSignalRef
 
-    private def nestedParentContext(parentContext: ReactiveRegion.ParentContext, current: UI): ReactiveRegion.ParentContext =
+    private[internal] def nestedParentContext(parentContext: ReactiveRegion.ParentContext, current: UI): ReactiveRegion.ParentContext =
         (parentContext, ReactiveRegion.tableContent(current)) match
             case (ReactiveRegion.ParentContext.HtmlTable, ReactiveRegion.TableContent.Rows) => ReactiveRegion.ParentContext.Other
             case _                                                                          => parentContext
@@ -589,8 +450,7 @@ private[kyo] object ReactiveUI:
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Bounded => true
         case el: Element                                                 =>
-            collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
-            || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveStyle.nonEmpty
+            collectSignalRef(el).nonEmpty || el.attrs.hasChannels || Channels.follows(el)
         case _ => false
 
     /** The Fragment a Foreach paints for `items`: one KeyedChild per element, keyed by the key function (or
@@ -609,7 +469,7 @@ private[kyo] object ReactiveUI:
       * being itself reactive) is promoted to its own ReactiveUI node, exactly like a fragment child in walkStatic. Returns the walked
       * reactive kids plus the row's dispatch handler (cached on the RowInstance for registry-first dispatch).
       */
-    private def walkRow(
+    private[internal] def walkRow(
         rowUI: UI,
         rowPath: Seq[String],
         svg: Boolean,
@@ -629,40 +489,8 @@ private[kyo] object ReactiveUI:
         end if
     end walkRow
 
-    private type Handler = (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
-
-    private type ValidatedHandler = (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async
-
-    private type DragResolver = Maybe[(String, Drag.Decision) => Unit < Async]
-
-    final private case class DragSession(
-        event: Drag.Event,
-        terminalResolved: Boolean,
-        /** A reading of [[Clock.nowMonotonic]]. */
-        expiresAt: Duration,
-        resolver: DragResolver
-    )
-
-    final private[kyo] case class DragSessionLimits(
-        maxSessions: Int = 128,
-        lifetime: Duration = 5.minutes
-    ):
-        require(maxSessions > 0, s"DragSessionLimits.maxSessions must be positive: $maxSessions")
-        require(lifetime > Duration.Zero, s"DragSessionLimits.lifetime must be positive: $lifetime")
-    end DragSessionLimits
-
-    /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
-      * map answers without a loop.
-      */
-    private def currentValues[A](channels: Map[String, Signal[A]])(using AllowUnsafe, Frame, SignalNow.Locals): Map[String, A] =
-        if channels.isEmpty then Map.empty[String, A]
-        else
-            val b = Map.newBuilder[String, A]
-            channels.foreach((n, s) => b += n -> SignalNow(s))
-            b.result()
-
     /** Walk a static UI tree. Collect reactive children, build handle. */
-    private def walkStatic(
+    private[internal] def walkStatic(
         ui: UI,
         basePath: Seq[String],
         svg: Boolean = false,
@@ -786,819 +614,6 @@ private[kyo] object ReactiveUI:
                 val noHandle: Handler = (_, _) => true
                 (Seq.empty[ReactiveUI], noHandle)
 
-    /** Dispatch an event through an element. */
-    private def dispatch(
-        elem: Element,
-        myPath: Seq[String],
-        at: ReactiveRegion.RegionIdentity,
-        targetPath: Seq[String],
-        event: UIEvent,
-        reactiveChildren: Seq[ReactiveUI],
-        staticHandlers: Seq[(Int, Handler)],
-        mounts: MountDispatch
-    )(using Frame): Boolean < (Async & Abort[Any]) =
-        elem.attrs.onFailure match
-            case Present(rules) => Failures.within(FailureFrame.Rules(rules))(dispatchThrough(
-                    elem,
-                    myPath,
-                    at,
-                    targetPath,
-                    event,
-                    reactiveChildren,
-                    staticHandlers,
-                    mounts
-                ))
-            case Absent => dispatchThrough(elem, myPath, at, targetPath, event, reactiveChildren, staticHandlers, mounts)
-
-    /** [[dispatch]] with the element's `onFailure` rules in effect. A handler's failure goes to the rules and the dispatch goes on. */
-    private def dispatchThrough(
-        elem: Element,
-        myPath: Seq[String],
-        at: ReactiveRegion.RegionIdentity,
-        targetPath: Seq[String],
-        event: UIEvent,
-        reactiveChildren: Seq[ReactiveUI],
-        staticHandlers: Seq[(Int, Handler)],
-        mounts: MountDispatch
-    )(using Frame): Boolean < (Async & Abort[Any]) =
-        if targetPath == myPath then
-            Failures.recover(true)(dispatchToElement(elem, event, isTarget = true, selfPath = myPath))
-        else if targetPath.startsWith(myPath) && targetPath.size > myPath.size then
-            val childSegment = targetPath(myPath.size)
-            val childIdx     = childSegment.toIntOption
-
-            // Find the reactive child whose path is a prefix of (or equals) targetPath. Matching by
-            // `lastOption.contains(childSegment)` is incorrect when reactive children are nested
-            // multiple levels deep; their last segment may collide with a sibling's index at the
-            // current level. Using prefix-match correctly routes only when the target lies inside.
-            val reactiveChild = reactiveChildren.find(rc => targetPath.startsWith(rc.path))
-            // `reactiveChildren` also holds reactive descendants of static children. A target inside a static child goes
-            // through that child's handler chain, so an element between this one and the region (a button around a
-            // reactive label) still sees the event; only a reactive DIRECT child, which has no static handler, is entered
-            // directly.
-            val staticChild = Maybe.fromOption(childIdx).flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
-
-            val isClick   = event.isInstanceOf[UIEvent.Click]
-            val isKeyDown = event.isInstanceOf[UIEvent.KeyDown]
-            for
-                // Disabled-target (Form submit suppression), Button-target (only Button clicks submit
-                // forms), Select-target (Enter on Select must not submit) and control-below all resolve
-                // through any Reactive/Foreach boundary wrapping the target, so signal-typed setters do
-                // not hide it. All four come out of one resolution: they are four questions about one
-                // element, not four searches for it.
-                facts <-
-                    if isClick || isKeyDown then targetFacts(elem, myPath, at, targetPath, mounts)
-                    else Kyo.lift(TargetFacts.none)
-                // "Is it disabled" is a question about the current value behind a channel, not about a
-                // field (see boolAttrNow), so it is read from the resolved element rather than carried.
-                targetDisabled <-
-                    if isClick then facts.target.fold(Kyo.lift(false))(isDisabled) else Kyo.lift(false)
-                // A button's type decides whether activating it submits, not its element kind:
-                // `type="button"` submits nothing in a browser (see ButtonActivation). `Absent` here
-                // means the target is no button at all, which is not the same as "a button that does
-                // not submit".
-                targetButtonSubmits = facts.target match
-                    case Present(b: Button) => Present(ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")))
-                    case _                  => Absent
-                // Enter submits a form implicitly from a single-line field or a button, as a browser does; from a textarea it is a
-                // line break, from a select a dropdown interaction, and from anything else nothing at all.
-                targetEnterSubmits = isKeyDown && facts.target.exists { t =>
-                    val tag = HtmlRenderer.tagName(t)
-                    tag == "input" || tag == "button"
-                }
-                // Whether a control of the reader's own stands between this element and the target,
-                // reported to the handler rather than acted on here: only the handler knows whether
-                // its click means something the control already means (see UI.MouseEvent.onControl).
-                targetOnControl = isClick && facts.controlBelow
-                bubble          = Failures.recover(true)(dispatchToElement(
-                    elem,
-                    event,
-                    isTarget = false,
-                    selfPath = myPath,
-                    disabledTarget = targetDisabled,
-                    submitOrigin = isClick && targetButtonSubmits.getOrElse(false),
-                    enterSubmits = targetEnterSubmits,
-                    controlTarget = targetOnControl
-                ))
-                result <- staticChild match
-                    case Present(childHandle) =>
-                        safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
-                    case Absent =>
-                        reactiveChild match
-                            case Some(child) =>
-                                safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
-                            // Every child this element holds has a static handler or is a reactive child at its own path, so a
-                            // target naming neither is one that has left the page since the reader acted on it (a second click
-                            // on an option its own pick just closed away). Its handlers went with it, and this element's are no
-                            // stand-in: a field would read the option's click as its own and open the panel again.
-                            case None => Kyo.lift(false)
-            yield result
-            end for
-        else
-            true
-        end if
-    end dispatchThrough
-
-    /** Where a keydown records the element whose click it stands for, read by [[subscribe]]'s wrapper once
-      * the keydown has finished bubbling.
-      *
-      * HTML has exactly one route to a form submit: an activation behaviour, which runs as part of a
-      * click. Keyboard activation of a button is a click the browser fires, and Enter in a field is
-      * implicit submission, which the specification also defines as firing a click, at the form's
-      * default button. Neither is "submit on a key". Recording a path here and dispatching a real click
-      * at it afterwards keeps activation on that one path: an ancestor sees a keyboard activation
-      * exactly as it sees a mouse click, and a form submits from that click.
-      */
-    private val activationTarget: Local[Maybe[AtomicRef[Maybe[Seq[String]]]]] = Local.init(Absent)
-
-    /** Record that this keydown's activation is a click at `path`, unless one is already recorded.
-      *
-      * First writer wins, and the order is the bubble order: the target runs before its ancestors, so a
-      * button's own activation is what a form sees rather than the form's implicit submission.
-      */
-    private def recordActivation(path: Seq[String])(using Frame): Unit < Async =
-        activationTarget.use {
-            case Present(ref) => ref.updateAndGet(existing => if existing.isDefined then existing else Present(path)).unit
-            case Absent       => Kyo.lift(())
-        }
-
-    /** The form's default button: the first button in tree order whose `type` submits, as HTML defines it.
-      *
-      * Only the statically known children are walked. A button behind a signal is not found, and the
-      * caller falls back to submitting the form directly, the answer HTML gives a form with no submit
-      * button at all.
-      */
-    private def defaultSubmitButton(elem: Element, basePath: Seq[String]): Maybe[Seq[String]] =
-        val start: Maybe[Seq[String]] = Absent
-        elem.children.toSeq.zipWithIndex.foldLeft(start) { case (found, (child, i)) =>
-            if found.isDefined then found
-            else
-                val childPath = basePath :+ i.toString
-                child match
-                    case b: Button if ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")) =>
-                        Present(childPath)
-                    case c: Element => defaultSubmitButton(c, childPath)
-                    case _          => Absent
-                end match
-        }
-    end defaultSubmitButton
-
-    /** Submit the form itself, HTML's fallback when implicit submission finds no default button to click.
-      *
-      * Skipped when the keydown already recorded an activation: that click reaches this form on its own
-      * and submitting here as well would be the double all over again.
-      */
-    private def submitDirectly(f: Form)(using Frame): Unit < (Async & Abort[Any]) =
-        activationTarget.use {
-            case Present(ref) => ref.get.map(recorded => if recorded.isDefined then Kyo.lift(()) else invoke(f.onSubmit))
-            case Absent       => invoke(f.onSubmit)
-        }
-
-    /** Invoke a Maybe[UI.Action] handler, discarding the result. */
-    private def invoke(handler: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Any]) =
-        if handler.isEmpty then () else handler.get.unit
-
-    /** Invoke a Maybe[A => UI.Action] handler with a value, discarding the result. */
-    private def invokeWith[A](handler: Maybe[A => UI.Action], value: A)(using Frame): Unit < (Async & Abort[Any]) =
-        if handler.isEmpty then () else handler.get(value).unit
-
-    /** Dispatch an event safely, logging and recovering from handler errors without stopping the bubble chain. */
-    private def safeDispatch(handle: Handler, path: Seq[String], event: UIEvent)(using
-        Frame
-    ): Boolean < Async =
-        DragCommands.current.use { context =>
-            val decisions = context.flatMap(_.decisions)
-            Abort.recover[Any](
-                onFail = err =>
-                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: $err")
-                        .andThen(markDecisionFailure(event, decisions))
-                        .andThen(true), // continue bubbling
-                onPanic = thr =>
-                    Log.error(s"Handler panic during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${thr.getMessage}")
-                        .andThen(markDecisionFailure(event, decisions))
-                        .andThen(true) // continue bubbling
-            )(handle(path, event))
-        }
-
-    private def markDecisionFailure(event: UIEvent, decisions: Maybe[AtomicRef[DragCommands.DecisionState]])(using
-        Frame
-    ): Unit < Async =
-        event match
-            case _: UIEvent.Drop     => failDecision(decisions, "The drop handler failed.")
-            case _: UIEvent.SortMove => failDecision(decisions, "The sort handler failed.")
-            case _                   => ()
-
-    /** Read current checked value from Maybe[Bound[Boolean]]. */
-    private def readChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
-        checked match
-            case Present(Bound.Const(b)) => b
-            case Present(Bound.Ref(ref)) => ref.get
-            case _                       => false
-
-    /** Toggle checked and auto-set SignalRef if bound. Returns the new value. */
-    private def toggleChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
-        checked match
-            case Present(Bound.Ref(ref)) =>
-                ref.getAndUpdate(!_).map(!_)
-            case Present(Bound.Const(b)) => !b
-            case _                       => true
-
-    /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
-    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
-        val options = sel.children.toSeq.collect { case opt: Opt => opt }
-        val values  = options.flatMap(_.value.toList)
-        if values.isEmpty then Kyo.lift(())
-        else
-            for
-                current <- sel.value match
-                    case Present(Bound.Ref(ref)) => ref.get
-                    case Present(Bound.Const(s)) => Kyo.lift(s)
-                    case _                       => Kyo.lift("")
-                currentIdx = values.indexOf(current).max(0)
-                nextIdx    =
-                    if forward then (currentIdx + 1)    % values.size
-                    else (currentIdx - 1 + values.size) % values.size
-                newValue = values(nextIdx)
-                _ <- sel.value match
-                    case Present(Bound.Ref(ref)) => ref.set(newValue)
-                    case _                       => Kyo.lift(())
-                _ <- invokeWith(sel.onChange, newValue)
-            yield ()
-        end if
-    end cycleSelectOption
-
-    private def formatDouble(v: Double): String = NumberFormat.double(v)
-
-    /** Is the boolean attribute `name` set on `elem` RIGHT NOW, statically or through the reactive channel a
-      * `Signal`-typed setter installs.
-      *
-      * `.disabled(Signal)` and `.readOnly(Signal)` do not wrap their element and do not fill the static field:
-      * they register a boolean-attribute channel (`Attrs.reactiveBoolAttrs`) that patches the live attribute
-      * in place. A guard reading only the static field therefore counts every signal-disabled element as
-      * enabled, and silently, because a browser suppresses the click on a rendered `disabled` button, so it shows
-      * only where dispatch decides for itself: the server transport, and any forged event.
-      *
-      * WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE: the static field is not consulted at all. Same rule
-      * the renderer follows (`renderElementAttrs`), and the only one consistent with the client, whose channel
-      * patch sets and REMOVES the attribute on every emission whatever the initial HTML said.
-      */
-    private def boolAttrNow(elem: Element, name: String, static: => Boolean)(using Frame): Boolean < Sync =
-        elem.attrs.reactiveBoolAttrs.get(name) match
-            case Some(sig) => sig.current
-            case None      => static
-
-    /** Check if element is disabled. */
-    private def isDisabled(elem: Element)(using Frame): Boolean < Sync =
-        boolAttrNow(
-            elem,
-            "disabled",
-            elem match
-                case hd: HasDisabled => hd.disabled.getOrElse(false)
-                case _               => false
-        )
-
-    /** Check if element is readOnly. The channel name is the ATTRIBUTE spelling (`readonly`), not the setter's. */
-    private def isReadOnly(elem: Element)(using Frame): Boolean < Sync =
-        boolAttrNow(
-            elem,
-            "readonly",
-            elem match
-                case ti: TextInput => ti.readOnly.getOrElse(false)
-                case _             => false
-        )
-
-    /** A TARGET that is inert (disabled, hidden, read-only) ignores its own handler but still lets the event
-      * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
-      * ancestor on the bubble path is not inert just because the target was.
-      */
-    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < (Async & Abort[Any]))(using
-        Frame
-    ): Boolean < (Async & Abort[Any]) =
-        if !isTarget then body
-        else inert.map(i => if i then true else body)
-
-    /** Check if element is hidden. Reads the channel too: `.hidden(Signal)` installs a boolean-attribute
-      * channel exactly like `.disabled(Signal)`, so the static field is empty whenever the signal form was used.
-      */
-    private def isHidden(elem: Element)(using Frame): Boolean < Sync =
-        boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
-
-    /** What a bubbling dispatch needs to know about the event's target, resolved once.
-      *
-      * @param target
-      *   the concrete element the path ends at, `Absent` when it does not resolve
-      * @param controlBelow
-      *   whether any element strictly below the dispatching one, the target included, is a control of
-      *   the reader's own
-      */
-    final private case class TargetFacts(target: Maybe[Element], controlBelow: Boolean)
-
-    private object TargetFacts:
-        /** Nothing was asked, so nothing was found: the answer for an event that resolves no target. */
-        val none: TargetFacts = TargetFacts(Absent, false)
-
-    /** Resolve the (possibly reactive) node at `targetPath` to the concrete element there, noting on the way
-      * whether the path passed through a control.
-      *
-      * Mirrors the renderer's path scheme: element children are index-addressed, a `Reactive`'s rendered content occupies the same path as
-      * the boundary, `Foreach` items live at `path :+ key` (or `:+ index`), and `Fragment` children at `path :+ index`. Resolving through
-      * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.hidden(Signal)`, which wraps it in a `Reactive`)
-      * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
-      *
-      * One walk answers every question a click asks. A walk is not free: resolving through a `Foreach`
-      * renders the target row to reach it, so a walk per question would render the same row once per
-      * question on every click.
-      *
-      * `controlBelow` is accumulated rather than tested at the leaf because it is a question about the
-      * whole chain: a click on the icon inside a button targets the icon, and the icon alone cannot say
-      * that a control was involved. `rootDepth` is what makes it strictly below: the dispatching element
-      * never answers for itself, or a button would decline its own click.
-      */
-    private def resolveTarget(
-        node: UI,
-        nodePath: Seq[String],
-        at: ReactiveRegion.RegionIdentity,
-        targetPath: Seq[String],
-        rootDepth: Int,
-        controlBelow: Boolean,
-        mounts: MountDispatch
-    )(using
-        Frame
-    ): TargetFacts < Sync =
-        // A path that stops short still answers the control question: a control above a boundary the
-        // resolver cannot see through (a mount, a text leaf) counts, so the flag is carried out.
-        def unresolved(seen: Boolean): TargetFacts = TargetFacts(Absent, seen)
-        node match
-            case kc: KeyedChild[?] =>
-                resolveTarget(kc.child, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
-            case r: Reactive[?] =>
-                // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
-                r.signal.current(using r.frame).map(cur =>
-                    resolveTarget(cur, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
-                )
-            case Fragment(children) =>
-                if targetPath.size <= nodePath.size then unresolved(controlBelow)
-                else
-                    val seg = targetPath(nodePath.size)
-                    Maybe.fromOption(seg.toIntOption) match
-                        case Present(i) if i >= 0 && i < children.size =>
-                            resolveTarget(children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, controlBelow, mounts)
-                        case _ => unresolved(controlBelow)
-                    end match
-            case fe: Foreach[?, ?] @unchecked =>
-                if targetPath.size <= nodePath.size then unresolved(controlBelow)
-                else
-                    val seg = targetPath(nodePath.size)
-                    fe.applyTyped {
-                        [T] => (signal, keyFn, renderFn) =>
-                            signal.current(using fe.frame).map { items =>
-                                val idx = keyFn match
-                                    case Present(f) => items.indexWhere(it => f(it) == seg)
-                                    case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
-                                if idx >= 0 && idx < items.size then
-                                    resolveTarget(
-                                        renderFn(idx, items(idx)),
-                                        nodePath :+ seg,
-                                        at.child(seg),
-                                        targetPath,
-                                        rootDepth,
-                                        controlBelow,
-                                        mounts
-                                    )
-                                else unresolved(controlBelow)
-                                end if
-                            }
-                    }
-            case e: Element =>
-                val seen = controlBelow || (nodePath.size > rootDepth && isOwnControl(e))
-                if targetPath.size <= nodePath.size then TargetFacts(Present(e), seen)
-                else
-                    val seg = targetPath(nodePath.size)
-                    Maybe.fromOption(seg.toIntOption) match
-                        case Present(i) if i >= 0 && i < e.children.size =>
-                            resolveTarget(e.children(i), nodePath :+ seg, at.child(seg), targetPath, rootDepth, seen, mounts)
-                        case _ => unresolved(seen)
-                    end match
-                end if
-            // Text and RawHtml are leaf content with no kyo-addressable Element children, so no event
-            // target can resolve through them.
-            case _: Text | _: RawHtml => unresolved(controlBelow)
-            // A mount's content lives with its instance, found through the dispatch table like the node's handler finds it, and
-            // occupies the node's path. An inert snapshot resolves to nothing, since no event reaches it.
-            case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
-                resolveTarget(Boundaries.implicitOf(m).get, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
-            case m: Mounted =>
-                mounts.lookup(at.transparent).map {
-                    case Absent        => unresolved(controlBelow)
-                    case Present(cell) =>
-                        cell.current.map {
-                            case MountState.Pending(Present(_)) => unresolved(controlBelow)
-                            case state                          =>
-                                val content = state.content(MountedSpec(m, nodePath, Nil))
-                                resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
-                        }
-                }
-            // Held-back content is not on the page; once revealed it occupies the boundary's path.
-            case b: Bounded =>
-                mounts.boundary(at.transparent).map {
-                    case Present(gate) if !gate.isRevealed =>
-                        gate.livePlaceholder.fold(Kyo.lift(unresolved(controlBelow)))(ph =>
-                            resolveTarget(ph, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
-                        )
-                    case _ =>
-                        mounts.held(targetPath).map(held =>
-                            if held then unresolved(controlBelow)
-                            else resolveTarget(b.child, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
-                        )
-                }
-        end match
-    end resolveTarget
-
-    /** The facts a bubbling dispatch reads about its target, in a single resolution. */
-    private def targetFacts(
-        elem: Element,
-        myPath: Seq[String],
-        at: ReactiveRegion.RegionIdentity,
-        targetPath: Seq[String],
-        mounts: MountDispatch
-    )(using
-        Frame
-    ): TargetFacts < Sync =
-        resolveTarget(elem, myPath, at, targetPath, myPath.size, false, mounts)
-
-    /** Whether an element is a control in its own right, something the reader operates directly, as
-      * opposed to markup an ancestor made clickable.
-      *
-      * `Focusable` is the set: every input flavour, `Textarea`, `Select`, the checkbox/radio pair,
-      * `Button` and `Anchor`. An anchor qualifies only when it actually goes somewhere or does
-      * something, since `a` with neither an href nor a handler is inert markup that happens to be in
-      * the hierarchy.
-      */
-    private def isOwnControl(e: Element): Boolean = e match
-        case a: Anchor    => a.href.isDefined || a.attrs.onClick.nonEmpty || a.attrs.onClickEvt.nonEmpty
-        case _: Focusable => true
-        case _            => false
-
-    /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
-      * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the
-      * dispatch recursion, so a `false` makes every element ABOVE this one skip its own handler.
-      */
-    private def keepBubbling(elem: Element, declared: Boolean): Boolean =
-        !(declared && elem.attrs.stopPropagation.getOrElse(false))
-
-    /** Dispatch event to element. isTarget=true when element is the click target, false on bubble. disabledTarget=true when the original
-      * click target was disabled (prevents Form onSubmit on bubble).
-      *
-      * `submitOrigin` is the only question left about whether the button under the event submits, and
-      * it is asked on the click path alone. Keyboard activation reaches that same path as a synthesized
-      * click (see [[activationTarget]]), so there is nothing for the keydown path to decide.
-      *
-      * `selfPath` is this element's own path, needed because a keydown records where its activation
-      * click belongs rather than acting on it here.
-      */
-    private def dispatchToElement(
-        elem: Element,
-        event: UIEvent,
-        isTarget: Boolean,
-        selfPath: Seq[String] = Seq.empty,
-        disabledTarget: Boolean = false,
-        submitOrigin: Boolean = false,
-        enterSubmits: Boolean = false,
-        controlTarget: Boolean = false
-    )(
-        using Frame
-    ): Boolean < (Async & Abort[Any]) =
-        val attrs = elem.attrs
-        event match
-            case ev: UIEvent.Click =>
-                // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position, controlTarget)
-                    // The target element is the nearest one that carries a path, so `isTarget` alone would also hold
-                    // for a click on a plain descendant; `self` is the client's word that it was this element.
-                    val onSelf = isTarget && ev.mouse.self
-                    val self   = if onSelf then
-                        invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
-                    else Kyo.lift(())
-                    // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
-                    // ChangeChecked after Click. Don't toggle here to avoid double-toggle.
-                    val activateToggle = Kyo.lift(())
-                    // When a Click on a submitting Button bubbles to a Form, trigger onSubmit (browser
-                    // behavior). Not every Button: `type="button"` and `type="reset"` activate without
-                    // submitting (see ButtonActivation).
-                    val formSubmit = if !isTarget && !disabledTarget && submitOrigin then
-                        elem match
-                            case f: Form =>
-                                invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse))
-                            case _ => Kyo.lift(())
-                    else Kyo.lift(())
-                    // Self handlers only count as "declared" when they actually fired.
-                    val declared = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
-                        (onSelf && (attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty))
-                    self
-                        .andThen(invokeWith(attrs.onClickEvt, mouse))
-                        .andThen(invoke(attrs.onClick))
-                        .andThen(activateToggle)
-                        .andThen(formSubmit)
-                        .andThen(keepBubbling(elem, declared))
-                }
-            case ev: UIEvent.ContextMenu =>
-                // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                    invoke(attrs.onContextMenu)
-                        .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
-                        .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
-                }
-            case _: UIEvent.Attach =>
-                if isTarget && attrs.onAttached.nonEmpty then AttachSite.start(attrs.onAttached.get).andThen(true)
-                else true
-            case ev: UIEvent.Focus =>
-                val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
-                if isTarget && isFocusable then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                    invoke(attrs.onFocus).andThen(invokeWith(attrs.onFocusEvt, mouse)).andThen(true)
-                else if isTarget then Kyo.lift(false) // not focusable; reject
-                else true
-                end if
-            case ev: UIEvent.Blur =>
-                if isTarget then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                    // A text field's blur carries the text the client read off it; one that carries none (a transport
-                    // with no element to read) reports what the field holds instead.
-                    val text: Unit < (Async & Abort[Any]) = elem match
-                        case ti: TextInput if ti.onBlurText.nonEmpty =>
-                            val held: String < Sync = ev.value match
-                                case Present(v) => v
-                                case Absent     =>
-                                    ti.value match
-                                        case Present(Bound.Ref(ref)) => ref.get
-                                        case Present(Bound.Const(v)) => v
-                                        case _                       => ""
-                            held.map(v => ti.onBlurText.get(mouse, v).unit)
-                        case _ => ()
-                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(text).andThen(true)
-                else true
-            case e: UIEvent.KeyDown =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    val kbEvent = UI.KeyboardEvent(
-                        key = Keyboard.fromString(e.keyboard.key),
-                        modifiers = e.keyboard.modifiers,
-                        targetId = e.keyboard.targetId
-                    )
-                    // The self handler runs first, as onClickSelf does, and only for a key on this element itself.
-                    val onSelf     = isTarget && e.keyboard.self
-                    val selfKey    = if onSelf then invokeWith(attrs.onKeyDownSelf, kbEvent) else Kyo.lift(())
-                    val keyHandler = selfKey.andThen(invokeWith(attrs.onKeyDown, kbEvent))
-                    // Keyboard activation, emulated here so a component behaves the same where no browser
-                    // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
-                    // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
-                    //
-                    // A button takes Enter and Space; an anchor takes Enter alone. That is not a
-                    // simplification of the browser but the browser: Space with a link focused scrolls
-                    // the page, it does not follow the link, and the ARIA link pattern says the same.
-                    val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
-                        elem match
-                            case _: Button                                            => recordActivation(selfPath)
-                            case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => recordActivation(selfPath)
-                            case _                                                    => Kyo.lift(())
-                    else Kyo.lift(())
-                    // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
-                    // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where
-                    // Enter is the one activation key a terminal reliably delivers. The client shim
-                    // synthesizes the same Enter click for browser parity (see HtmlRenderer's keydown
-                    // branch), so both transports agree.
-                    val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
-                        elem match
-                            case cb: Checkbox =>
-                                toggleChecked(cb.checked).map(newVal => invokeWith(cb.onChange, newVal))
-                            case rb: Radio =>
-                                val autoSet = rb.checked match
-                                    case Present(Bound.Ref(ref)) => ref.set(true)
-                                    case _                       => Kyo.lift(())
-                                autoSet.andThen(invokeWith(rb.onChange, true))
-                            case _ => Kyo.lift(())
-                    else Kyo.lift(())
-                    // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
-                    val selectCycle =
-                        if isTarget &&
-                            (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " ||
-                                e.keyboard.key == "Enter")
-                        then
-                            elem match
-                                case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
-                                case _           => Kyo.lift(())
-                        else Kyo.lift(())
-                    // Implicit submission: HTML's rule for Enter in a field, and the only thing a keydown
-                    // does about submitting. The specification fires a click at the form's default
-                    // button, so that is what gets recorded; the form's own onSubmit runs from that
-                    // click, through the same `submitOrigin` a mouse click uses. A form with no
-                    // reachable submit button has no click to fire, and HTML submits it directly.
-                    //
-                    // Nothing is recorded when the target already recorded its own activation (a
-                    // button's Enter is that button's click, not the form's implicit submission), and
-                    // only a target that submits on Enter submits at all (see `enterSubmits` at the dispatch site).
-                    val formSubmit =
-                        if !isTarget && KeyPolicy.submitsImplicitly(e.keyboard.key) && enterSubmits then
-                            elem match
-                                case f: Form =>
-                                    defaultSubmitButton(f, selfPath) match
-                                        case Present(buttonPath) => recordActivation(buttonPath)
-                                        case Absent              => submitDirectly(f)
-                                case _ => Kyo.lift(())
-                        else Kyo.lift(())
-                    keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
-                        .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty || (onSelf && attrs.onKeyDownSelf.nonEmpty)))
-                }
-            case e: UIEvent.KeyUp =>
-                val kbEvent = UI.KeyboardEvent(
-                    key = Keyboard.fromString(e.keyboard.key),
-                    modifiers = e.keyboard.modifiers,
-                    targetId = e.keyboard.targetId
-                )
-                invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
-            case e: UIEvent.Input =>
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
-                    elem match
-                        case ti: TextInput =>
-                            val autoSet = ti.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
-                        case _ => true
-                }
-            case e: UIEvent.Change =>
-                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
-                    elem match
-                        case ti: TextInput =>
-                            val autoSet = ti.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ti.onChange, e.value)).andThen(true)
-                        case dd: Dropdown =>
-                            val autoSet = dd.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(dd.onChange, e.value)).andThen(true)
-                        case pi: PickerInput =>
-                            val autoSet = pi.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
-                        case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
-                        case _             => true
-                }
-            case e: UIEvent.FileSelect =>
-                // Bubbles like Change: the files ride the payload, nothing is read from the element here.
-                unlessInert(isTarget, isDisabled(elem)) {
-                    invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
-                }
-            case e: UIEvent.ChangeChecked =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    elem match
-                        case bi: BooleanInput =>
-                            val autoSet = bi.checked match
-                                case Present(Bound.Ref(ref)) => ref.set(e.checked)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
-                        case _ => true
-                }
-            case e: UIEvent.ChangeNumeric =>
-                unlessInert(isTarget, isDisabled(elem)) {
-                    elem match
-                        case ni: NumberInput =>
-                            val autoSet = ni.value match
-                                case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ni.onChangeNumeric, e.value)).andThen(true)
-                        case ri: RangeInput =>
-                            val autoSet = ri.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
-                        case _ => true
-                }
-            case ev: UIEvent.Submit =>
-                elem match
-                    case f: Form =>
-                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                        invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse)).andThen(true)
-                    case _ => true
-            case ev: UIEvent.Hover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                invoke(attrs.onHover).andThen(invokeWith(attrs.onHoverEvt, mouse))
-                    .andThen(keepBubbling(elem, attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty))
-            case ev: UIEvent.Unhover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
-                invoke(attrs.onUnhover).andThen(invokeWith(attrs.onUnhoverEvt, mouse))
-                    .andThen(keepBubbling(elem, attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty))
-            case ev: UIEvent.Scroll =>
-                val wheel = UI.WheelEvent(ev.deltaX, ev.deltaY, ev.targetId, ev.modifiers)
-                invoke(attrs.onScroll).andThen(invokeWith(attrs.onScrollEvt, wheel))
-                    .andThen(keepBubbling(elem, attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty))
-            case _: UIEvent.DragStart =>
-                if !isTarget then true
-                else
-                    DragCommands.current.use {
-                        case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                            invokeDrag(attrs.onDragStart, attrs.onDragStartEvt.map(_(value)))
-                                .andThen(keepBubbling(elem, attrs.onDragStart.nonEmpty || attrs.onDragStartEvt.nonEmpty))
-                        case _ => true
-                    }
-            case _: UIEvent.DragEnd =>
-                if !isTarget then true
-                else
-                    DragCommands.current.use {
-                        case Present(DragCommands.Dispatch(DragCommands.Payload.End(value), _)) =>
-                            invokeDrag(attrs.onDragEnd, attrs.onDragEndEvt.map(_(value)))
-                                .andThen(keepBubbling(elem, attrs.onDragEnd.nonEmpty || attrs.onDragEndEvt.nonEmpty))
-                        case _ => true
-                    }
-            case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt)
-            case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt)
-            case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt)
-            case _: UIEvent.Drop      =>
-                DragCommands.current.use {
-                    case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), decisions)) =>
-                        invokeDecision(attrs.onDrop, decisions, "The drop handler failed.")
-                            .andThen(invokeDecision(attrs.onDropEvt.map(_(value)), decisions, "The drop handler failed."))
-                            .andThen(keepBubbling(elem, attrs.onDrop.nonEmpty || attrs.onDropEvt.nonEmpty))
-                    case _ => true
-                }
-            case _: UIEvent.SortMove =>
-                DragCommands.current.use {
-                    case Present(DragCommands.Dispatch(DragCommands.Payload.Move(value), decisions)) =>
-                        invokeDecision(attrs.onSortMove, decisions, "The sort handler failed.")
-                            .andThen(invokeDecision(attrs.onSortMoveEvt.map(_(value)), decisions, "The sort handler failed."))
-                            .andThen(keepBubbling(elem, attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty))
-                    case _ => true
-                }
-            // Payload (UI.PointerEvent) rides the wire directly like FileSelect, so nothing is read from the element.
-            case ev: UIEvent.PointerDown =>
-                invokeWith(attrs.onPointerDown, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerDown.nonEmpty))
-            case ev: UIEvent.PointerMove =>
-                invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
-            case ev: UIEvent.PointerUp =>
-                invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
-            case ev: UIEvent.ScrollPosition =>
-                val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
-                invokeWith(attrs.onScrollPos, sp)
-                    .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
-            case _ => true
-        end match
-    end dispatchToElement
-
-    private def invokeDrag(action: Maybe[UI.Action], typed: Maybe[UI.Action])(using Frame): Unit < Async =
-        def safe(handler: Maybe[UI.Action]): Unit < Async =
-            handler.fold((): Unit < Async)(effect => Failures.recover(())(effect.unit))
-        safe(action).andThen(safe(typed))
-    end invokeDrag
-
-    private def dispatchDragEvent(
-        elem: Element,
-        action: Maybe[UI.Action],
-        typed: Maybe[Drag.Event => UI.Action]
-    )(using Frame): Boolean < Async =
-        DragCommands.current.use {
-            case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                invokeDrag(action, typed.map(_(value)))
-                    .andThen(keepBubbling(elem, action.nonEmpty || typed.nonEmpty))
-            case _ => true
-        }
-
-    private def invokeDecision(
-        handler: Maybe[Drag.Decision < (Async & Abort[Any])],
-        decisions: Maybe[AtomicRef[DragCommands.DecisionState]],
-        failure: String
-    )(using Frame): Unit < Async =
-        handler.fold((): Unit < Async) { effect =>
-            for
-                result <- Abort.run[Any](effect)
-                _      <- result match
-                    case Result.Success(decision)     => recordDecision(decisions, decision)
-                    case Result.Panic(_: Interrupted) => failDecision(decisions, failure)
-                    case Result.Failure(err)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.fail(err)))
-                    case Result.Panic(panic)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.panic(panic)))
-            yield ()
-        }
-
-    private def recordDecision(ref: Maybe[AtomicRef[DragCommands.DecisionState]], decision: Drag.Decision)(using
-        Frame
-    ): Unit < Sync =
-        ref.fold((): Unit < Sync)(_.getAndUpdate {
-            case failed: DragCommands.DecisionState.Failed     => failed
-            case rejected: DragCommands.DecisionState.Rejected => rejected
-            case _                                             =>
-                decision match
-                    case Drag.Decision.Accept         => DragCommands.DecisionState.Accepted
-                    case reject: Drag.Decision.Reject => DragCommands.DecisionState.Rejected(reject)
-        }.unit)
-
-    private def failDecision(ref: Maybe[AtomicRef[DragCommands.DecisionState]], reason: String)(using Frame): Unit < Sync =
-        ref.fold((): Unit < Sync)(_.getAndUpdate(_ =>
-            DragCommands.DecisionState.Failed(Drag.Decision.Reject(Drag.Rejection.Application(reason)))
-        ).unit)
-
     // ---- Subscribe ----
 
     /** Result of subscribe: dispatch handler + signal change tracking. The enclosing Scope owns every
@@ -1624,47 +639,23 @@ private[kyo] object ReactiveUI:
         private[kyo] def withDragLock[A](v: => A < Async)(using Frame): A < (Async & Abort[Closed]) = dragLock.run(v)
     end Subscription
 
-    private enum OwnedFiberState derives CanEqual:
-        case Waiting
-        case Running(fiber: Fiber[Unit, Any])
-        case Closed
-    end OwnedFiberState
-
-    private def startOwnedFiber(task: => Unit < Async)(using Frame): Unit < (Async & Scope) =
-        for
-            state <- AtomicRef.init[OwnedFiberState](OwnedFiberState.Waiting)
-            start <- Promise.init[Unit, Any]
-            _     <- Scope.ensure(closeOwnedFiber(state))
-            fiber <- Fiber.initUnscoped(start.get.andThen(task))
-            _     <- installOwnedFiber(state, start, fiber)
-        yield ()
-    end startOwnedFiber
-
-    private def installOwnedFiber(
-        state: AtomicRef[OwnedFiberState],
-        start: Promise[Unit, Any],
-        fiber: Fiber[Unit, Any]
-    )(using Frame): Unit < Async =
-        state.get.flatMap {
-            case OwnedFiberState.Waiting =>
-                state.compareAndSet(OwnedFiberState.Waiting, OwnedFiberState.Running(fiber)).flatMap { installed =>
-                    if installed then start.completeUnitDiscard
-                    else installOwnedFiber(state, start, fiber)
-                }
-            case _: OwnedFiberState.Running =>
-                Abort.panic(IllegalStateException("Reactive observer fiber was installed twice"))
-            case OwnedFiberState.Closed =>
-                fiber.interrupt.andThen(fiber.getResult.unit)
-        }
-    end installOwnedFiber
-
-    private def closeOwnedFiber(state: AtomicRef[OwnedFiberState])(using Frame): Unit < Async =
-        state.getAndSet(OwnedFiberState.Closed).flatMap {
-            case OwnedFiberState.Running(fiber) => fiber.interrupt.andThen(fiber.getResult.unit)
-            case OwnedFiberState.Waiting        => ()
-            case OwnedFiberState.Closed         => ()
-        }
-    end closeOwnedFiber
+    /** Starts a region's fiber in the current scope, which interrupts it and awaits its unwind when it closes. What ends it other than
+      * that interrupt is logged as `what` at `path`.
+      */
+    private[internal] def regionFiber(path: Seq[String], what: String)(observe: => Unit < (Async & Abort[Throwable]))(using
+        Frame
+    ): Unit < (Async & Scope) =
+        Fiber.init {
+            Abort.run[Throwable](observe).map { result =>
+                result.fold(
+                    _ => (),
+                    err => Log.error(s"$what failed at path=${path.mkString(".")}", err),
+                    panic =>
+                        if panic.isInstanceOf[Interrupted] then ()
+                        else Log.error(s"$what failed at path=${path.mkString(".")}", panic)
+                )
+            }
+        }.unit
 
     /** Subscribe all reactive boundaries under the caller's Scope. Returns the dispatch handle + change
       * time; lifecycle is owned by the enclosing Scope (closing it interrupts every region fiber and awaits its unwind).
@@ -1688,7 +679,7 @@ private[kyo] object ReactiveUI:
             // after the worker's own teardown and makes "closed scope implies no worker" hold on every exit.
             _ <- Scope.ensure(expiryWorkers.set(0))
             _ <- expiryWorkers.set(1)
-            _ <- startOwnedFiber(
+            _ <- Fiber.init(
                 Abort.run[Any] {
                     Sync.ensure(expiryWorkers.set(0))(expiryScheduler(dragSessions, dragMutex, expiryWake))
                 }.unit
@@ -1715,7 +706,7 @@ private[kyo] object ReactiveUI:
             // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
             // suppresses the browser's activation on both while replacing it on only one, which is a
             // button that stops working rather than one that works twice.
-            activating = activatingHandle(rui.handle)
+            activating = activatingHandle(assertingHandle(rui.handle, exchange))
             dragging   = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
             // A handler runs in the session, so a UI.batch inside it finds it; the handler itself is no change of its own (see MountTable).
             validatedHandle: ValidatedHandler = (path, event) => MountSession.current.let(Present(session))(dragging(path, event))
@@ -1731,6 +722,41 @@ private[kyo] object ReactiveUI:
             dragMutex,
             session
         )
+
+    /** Runs `ui` under `exchange` in a scope of its own, with a session's command channel installed the way a runner installs it, and hands
+      * over the subscription. What runs a tree for its effects, and what a test drives one with. The channel takes every command and does
+      * nothing, unless `commands` names one.
+      */
+    private[kyo] def subscribed[A, S](
+        ui: UI,
+        exchange: UIExchange = UIExchange.noop,
+        dragLimits: DragSessionLimits = DragSessionLimits(),
+        commands: Maybe[UI.Commands] = Absent
+    )(f: Subscription => A < (Async & Scope & S))(using Frame): A < (Async & S) =
+        Scope.run {
+            commands.fold(UI.Commands.init(_ => Kyo.unit))(Kyo.lift(_)).map { channel =>
+                UICommands.commands.let(Present(channel)) {
+                    normalize(ui, Seq.empty).map(root => subscribe(root, exchange, dragLimits).map(f))
+                }
+            }
+        }
+
+    /** Puts back an edit its owner did not take on an element that follows a signal. The browser changed the control before the event got here,
+      * and an owner that declines leaves the signal as it was, so no emission would ever reach the control. Compares once the event has
+      * finished bubbling, and sends through the session's own exchange: content a boundary holds back takes no event, so there is nothing to
+      * wait for. Only an edit records, so every other event goes straight through.
+      */
+    private def assertingHandle(handle: Handler, exchange: UIExchange)(using Frame): Handler =
+        (path, event) =>
+            event match
+                case _: (UIEvent.Input | UIEvent.Change | UIEvent.ChangeChecked | UIEvent.ChangeNumeric) =>
+                    for
+                        recorded <- AtomicRef.init(Maybe.empty[UIExchange => Unit < Async])
+                        keep     <- followEdit.let(Present(recorded))(handle(path, event))
+                        send     <- recorded.get
+                        _        <- send.fold(Kyo.unit)(_(exchange))
+                    yield keep
+                case _ => handle(path, event)
 
     /** Turns a keydown's recorded activation into the click it stands for.
       *
@@ -1766,267 +792,12 @@ private[kyo] object ReactiveUI:
                     yield keep
                 case _ => handle(path, event)
 
-    private def dragHandle(
-        handle: Handler,
-        sessions: AtomicRef[Map[String, DragSession]],
-        mutex: Meter,
-        expiryWake: Channel[Unit],
-        limits: DragSessionLimits
-    )(using Frame): ValidatedHandler =
-        (path, event) =>
-            event match
-                case event: DragProtocol.ValidatedEvent.Click          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ClickSelf      => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ContextMenu    => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Input          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Change         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeChecked  => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeNumeric  => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Submit         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyDown        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyUp          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Focus          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Blur           => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Scroll         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ScrollPosition => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.FileSelect     => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerDown    => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerMove    => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerUp      => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Hover          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Unhover        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Attach         => safeDispatch(handle, path, event.wire)
-                // A measure reply is the client's answer to a `requestMeasureById`, not an element event: the session
-                // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
-                // tree. Bubbling is the right answer for an event no element declared.
-                case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
-                case _: DragProtocol.ValidatedEvent.Start | _: DragProtocol.ValidatedEvent.End |
-                    _: DragProtocol.ValidatedEvent.Enter | _: DragProtocol.ValidatedEvent.Leave |
-                    _: DragProtocol.ValidatedEvent.Over | _: DragProtocol.ValidatedEvent.Drop |
-                    _: DragProtocol.ValidatedEvent.SortMove =>
-                    Abort.runPartial[Closed](
-                        mutex.run(dragDispatch(handle, sessions, expiryWake, limits, path, event))
-                    ).map {
-                        case Result.Success(value) => value
-                        case Result.Failure(_)     => true
-                    }
-
-    private def dragDispatch(
-        handle: Handler,
-        sessions: AtomicRef[Map[String, DragSession]],
-        expiryWake: Channel[Unit],
-        limits: DragSessionLimits,
-        path: Seq[String],
-        event: DragProtocol.ValidatedEvent
-    )(using Frame): Boolean < Async =
-        event match
-            case DragProtocol.ValidatedEvent.Start(wire @ UIEvent.DragStart(_, data), domainItems) =>
-                DragCommands.resolveSink.use { resolver =>
-                    sessions.get.map { current =>
-                        if current.contains(data.sessionId) then
-                            DragCommands.resolve(
-                                data.sessionId,
-                                Drag.Decision.Reject(
-                                    Drag.Rejection.Application("A drag session with this identifier is already active.")
-                                )
-                            ).andThen(true)
-                        else if current.size >= limits.maxSessions then
-                            DragCommands.resolve(
-                                data.sessionId,
-                                Drag.Decision.Reject(Drag.Rejection.Application("Too many active drag sessions."))
-                            ).andThen(true)
-                        else
-                            val domain = Drag.Event(
-                                data.sessionId,
-                                domainItems,
-                                data.operation,
-                                data.sourceKey,
-                                Absent,
-                                Present(data.point),
-                                data.modifiers,
-                                Absent
-                            )
-                            Clock.nowMonotonic.map { now =>
-                                sessions.set(current +
-                                    (data.sessionId -> DragSession(
-                                        domain,
-                                        terminalResolved = false,
-                                        now + limits.lifetime,
-                                        resolver
-                                    )))
-                                    .andThen(wakeExpiryScheduler(expiryWake))
-                                    .andThen(DragCommands.current.let(Present(DragCommands.Dispatch(
-                                        DragCommands.Payload.Event(domain),
-                                        Absent
-                                    ))) {
-                                        safeDispatch(handle, path, event.wire)
-                                    })
-                            }
-                    }
-                }
-            case DragProtocol.ValidatedEvent.End(wire @ UIEvent.DragEnd(_, data)) =>
-                sessions.get.map(_.get(data.sessionId)).map {
-                    case Some(session) =>
-                        val finalEvent = session.event.copy(operation = data.operation)
-                        sessions.getAndUpdate(_ - data.sessionId).unit
-                            .andThen(DragCommands.current.let(Present(DragCommands.Dispatch(
-                                DragCommands.Payload.End(Drag.End(finalEvent, canceled = data.cancelled)),
-                                Absent
-                            ))) {
-                                safeDispatch(handle, path, wire)
-                            })
-                    case None => true
-                }
-            case DragProtocol.ValidatedEvent.Enter(wire) =>
-                dispatchTarget(handle, path, wire, wire.event, sessions, terminal = false)
-            case DragProtocol.ValidatedEvent.Leave(wire) =>
-                dispatchTarget(handle, path, wire, wire.event, sessions, terminal = false)
-            case DragProtocol.ValidatedEvent.Over(wire) =>
-                dispatchTarget(handle, path, wire, wire.event, sessions, terminal = false)
-            case DragProtocol.ValidatedEvent.Drop(wire) =>
-                dispatchTarget(handle, path, wire, wire.event, sessions, terminal = true)
-            case DragProtocol.ValidatedEvent.SortMove(wire @ UIEvent.SortMove(_, sessionId, move)) =>
-                sessions.get.map(_.get(sessionId)).map {
-                    case Some(session) if !session.terminalResolved =>
-                        for
-                            decisions <- AtomicRef.init[DragCommands.DecisionState](DragCommands.DecisionState.None)
-                            _         <- DragCommands.current.let(Present(DragCommands.Dispatch(
-                                DragCommands.Payload.Move(move),
-                                Present(decisions)
-                            ))) {
-                                safeDispatch(handle, path, wire)
-                            }
-                            decision <- finalDecision(decisions, "No sort handler accepted the move.")
-                            _        <- sessions.getAndUpdate(_ + (sessionId -> session.copy(terminalResolved = true)))
-                            _        <- DragCommands.resolve(sessionId, decision)
-                        yield true
-                    case None =>
-                        DragCommands.resolve(
-                            sessionId,
-                            Drag.Decision.Reject(Drag.Rejection.Application("No sort handler accepted the move."))
-                        ).andThen(true)
-                    case _ => true
-                }
-            // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
-            case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
-            case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
-                _: DragProtocol.ValidatedEvent.ContextMenu |
-                _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |
-                _: DragProtocol.ValidatedEvent.ChangeChecked | _: DragProtocol.ValidatedEvent.ChangeNumeric |
-                _: DragProtocol.ValidatedEvent.Submit | _: DragProtocol.ValidatedEvent.KeyDown |
-                _: DragProtocol.ValidatedEvent.KeyUp | _: DragProtocol.ValidatedEvent.Focus |
-                _: DragProtocol.ValidatedEvent.Blur | _: DragProtocol.ValidatedEvent.Scroll |
-                _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
-                _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
-                _: DragProtocol.ValidatedEvent.PointerUp |
-                _: DragProtocol.ValidatedEvent.ScrollPosition | _: DragProtocol.ValidatedEvent.FileSelect |
-                _: DragProtocol.ValidatedEvent.Attach =>
-                safeDispatch(handle, path, event.wire)
-
-    private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =
-        Abort.runPartial[Closed](expiryWake.offer(())).unit
-
-    private def expiryScheduler(
-        sessions: AtomicRef[Map[String, DragSession]],
-        mutex: Meter,
-        expiryWake: Channel[Unit]
-    )(using Frame): Unit < (Async & Abort[Closed]) =
-        Loop.foreach {
-            mutex.run(expireAndArm(sessions)).map { timer =>
-                val next: Unit < (Async & Abort[Closed]) = timer match
-                    case Present(timer) => Async.race(timer.get, expiryWake.take.unit)
-                    case Absent         => expiryWake.take
-                Abort.runPartial[Closed](next).map {
-                    case Result.Success(_) => Loop.continue
-                    case Result.Failure(_) => Loop.done
-                }
-            }
-        }
-
-    // The clock reading, the expiry pass, and the arming of the next timer form one section under the drag mutex, which
-    // also serializes every session admission. A clock moved while holding the same mutex never lands between the reading
-    // and the arming, so the armed deadline is exactly the earliest remaining expiry.
-    private def expireAndArm(sessions: AtomicRef[Map[String, DragSession]])(using Frame): Maybe[Fiber[Unit, Any]] < Async =
-        Clock.nowMonotonic.map { now =>
-            expireSessions(now, sessions).andThen(sessions.get.map { current =>
-                current.valuesIterator.map(_.expiresAt).reduceOption(_.min(_)) match
-                    case None            => Maybe.empty
-                    case Some(expiresAt) => Clock.sleep(expiresAt.minusOrZero(now)).map(Maybe(_))
-            })
-        }
-
-    private def expireSessions(now: Duration, sessions: AtomicRef[Map[String, DragSession]])(using Frame): Unit < Async =
-        sessions.get.map { current =>
-            val (expired, retained) = current.partition((_, session) => session.expiresAt <= now)
-            sessions.set(retained).andThen(Kyo.foreach(expired.toSeq) { case (sessionId, session) =>
-                if session.terminalResolved then ()
-                else
-                    session.resolver.fold((): Unit < Async)(_(
-                        sessionId,
-                        Drag.Decision.Reject(Drag.Rejection.Application("The drag session expired."))
-                    ))
-            }.unit)
-        }
-
-    private def dispatchTarget(
-        handle: Handler,
-        path: Seq[String],
-        wire: UIEvent,
-        data: DragProtocol.TargetData,
-        sessions: AtomicRef[Map[String, DragSession]],
-        terminal: Boolean
-    )(using Frame): Boolean < Async =
-        sessions.get.map(_.get(data.sessionId)).map {
-            case Some(session) if !session.terminalResolved =>
-                val domain = session.event.copy(
-                    operation = data.operation,
-                    targetKey = data.targetKey,
-                    point = Present(data.point),
-                    modifiers = data.modifiers,
-                    position = data.position
-                )
-                if terminal then
-                    for
-                        decisions <- AtomicRef.init[DragCommands.DecisionState](DragCommands.DecisionState.None)
-                        _         <- sessions.getAndUpdate(_ + (data.sessionId -> session.copy(event = domain)))
-                        _         <- DragCommands.current.let(Present(DragCommands.Dispatch(
-                            DragCommands.Payload.Event(domain),
-                            Present(decisions)
-                        ))) {
-                            safeDispatch(handle, path, wire)
-                        }
-                        decision <- finalDecision(decisions, "No drop handler accepted the operation.")
-                        _        <- sessions.getAndUpdate(_ + (data.sessionId -> session.copy(event = domain, terminalResolved = true)))
-                        _        <- DragCommands.resolve(data.sessionId, decision)
-                    yield true
-                else
-                    sessions.getAndUpdate(_ + (data.sessionId -> session.copy(event = domain))).unit
-                        .andThen(DragCommands.current.let(Present(DragCommands.Dispatch(DragCommands.Payload.Event(domain), Absent))) {
-                            safeDispatch(handle, path, wire)
-                        })
-                end if
-            case None if terminal =>
-                DragCommands.resolve(
-                    data.sessionId,
-                    Drag.Decision.Reject(Drag.Rejection.Application("No drop handler accepted the operation."))
-                ).andThen(true)
-            case _ => true
-        }
-
-    private def finalDecision(ref: AtomicRef[DragCommands.DecisionState], emptyReason: String)(using Frame): Drag.Decision < Sync =
-        ref.get.map {
-            case DragCommands.DecisionState.None            => Drag.Decision.Reject(Drag.Rejection.Application(emptyReason))
-            case DragCommands.DecisionState.Accepted        => Drag.Decision.Accept
-            case DragCommands.DecisionState.Rejected(value) => value
-            case DragCommands.DecisionState.Failed(value)   => value
-        }
-
     // Each reactive region starts an observer fiber as one scoped resource. Its finalizer interrupts the observer and
     // awaits the fiber's terminal result. Signal.observe runs each value in a fresh Scope; each value renders, re-walks,
     // and starts its children in that Scope, so the next value or an interrupt closes them transitively. A const node
     // has no signal: it subscribes its children in the enclosing scope. `mounts` is the enclosing region's scope on the mount table
     // that holds its keyed instances, outside every subscription's scopes, and `pass` the render pass of that region.
-    private def subscribeScoped(
+    private[internal] def subscribeScoped(
         rui: ReactiveUI,
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
@@ -2041,20 +812,7 @@ private[kyo] object ReactiveUI:
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying only reactive attrs is `isConst = true` and
         // would otherwise fork no observer of its own.
-        forkChannelObservers(
-            rui.path,
-            rui.reactiveAttrs,
-            rui.reactiveBoolAttrs,
-            rui.reactiveClasses,
-            exchange,
-            rui.frame,
-            rui.renderedAttrValues,
-            rui.renderedBoolAttrValues,
-            rui.renderedClassValues,
-            releases,
-            rui.reactiveStyle,
-            rui.renderedStyleValue
-        ).andThen {
+        forkChannelObservers(rui.path, rui.channels, rui.renderedChannels, exchange, rui.frame, releases).andThen {
             if rui.mounted.nonEmpty then
                 subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, pass, dispatch)
             else if rui.bounded.nonEmpty then
@@ -2141,12 +899,10 @@ private[kyo] object ReactiveUI:
                 // `set`, where no effect context exists to read a `Local` from. With none installed the
                 // original patcher is used unwrapped, so the off path writes exactly what an unobserved one does.
                 Devtools.currentSink.map { devSink =>
-                    val write: String => Unit = devSink match
-                        case Absent          => v => patch(rui.path, v)
-                        case Present(report) =>
-                            v =>
-                                patch(rui.path, v)
-                                report(cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text))
+                    val write = reporting[String](
+                        devSink,
+                        cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text)
+                    )(v => patch(rui.path, v))
                     Log.use { log =>
                         Sync.Unsafe.defer {
                             // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
@@ -2172,23 +928,32 @@ private[kyo] object ReactiveUI:
     ): UI.RenderEvent =
         UI.RenderEvent(path, regionId, frame, kind, UI.RenderCause.Signal, wasted = false, duration = Duration.Zero, bytes = 0)
 
+    /** `write` that reports `event` after each write, for a write that runs on the writer's stack. With no sink `write` itself comes back, so
+      * the off path writes exactly what an unobserved one does.
+      */
+    private[kyo] def reporting[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit): A => Unit =
+        sink match
+            case Absent          => write
+            case Present(report) =>
+                a =>
+                    write(a)
+                    report(event)
+
+    /** [[reporting]] for a write that goes over a channel's fiber. */
+    private def reportingAsync[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit < Async)(using
+        Frame
+    ): A => Unit < Async =
+        sink match
+            case Absent          => write
+            case Present(report) => a => write(a).andThen(Sync.defer(report(event)))
+
     /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
       * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
       */
-    private def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
+    private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
-            case el: Element
-                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
-                    || el.attrs.reactiveStyle.nonEmpty =>
-                forkChannelObservers(
-                    path,
-                    el.attrs.reactiveAttrs,
-                    el.attrs.reactiveBoolAttrs,
-                    el.attrs.reactiveClasses,
-                    exchange,
-                    el.frame,
-                    style = el.attrs.reactiveStyle
-                )
+            case el: Element if el.attrs.hasChannels || Channels.follows(el) =>
+                forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, el.frame, Absent)
             case _ => Kyo.unit
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
@@ -2197,21 +962,15 @@ private[kyo] object ReactiveUI:
       */
     private def forkChannelObservers(
         path: Seq[String],
-        attrs: Map[String, Signal[String]],
-        boolAttrs: Map[String, Signal[Boolean]],
-        classes: Map[String, Signal[Boolean]],
+        channels: Channels,
+        rendered: RenderedChannels,
         exchange: UIExchange,
         // The node these channels belong to, for the devtools report.
         nodeFrame: Frame,
-        renderedAttrs: Map[String, String] = Map.empty,
-        renderedBools: Map[String, Boolean] = Map.empty,
-        renderedClasses: Map[String, Boolean] = Map.empty,
-        releases: Maybe[RowScope] = Absent,
-        style: Maybe[Signal[Style]] = Absent,
-        renderedStyle: Maybe[Seq[(String, String)]] = Absent
+        releases: Maybe[RowScope]
     )(using Frame): Unit < (Async & Scope) =
         // Most nodes bind no channel at all; they leave before the sink is read or a loop is set up.
-        if attrs.isEmpty && boolAttrs.isEmpty && classes.isEmpty && style.isEmpty then Kyo.unit
+        if channels.isEmpty then Kyo.unit
         else
             // Read once, at bind time, for the same reason bindTextRegion does: the fast path's write runs inside
             // the writer's `set`, with no effect context to read a `Local` from. With no sink installed both the
@@ -2225,32 +984,20 @@ private[kyo] object ReactiveUI:
                 // already shows it, while a change landing between render and subscribe differs from it and still fires.
                 def bindAll[A](
                     signals: Map[String, Signal[A]],
-                    rendered: Map[String, A],
+                    seen: Map[String, A],
                     patcher: Maybe[(Seq[String], String, A) => Unit],
                     slow: (String, A) => Unit < Async
                 )(using CanEqual[A, A]): Unit < (Async & Scope) =
                     if signals.isEmpty then Kyo.unit
                     else
-                        val now: Maybe[(Seq[String], String, A) => Unit] = devSink match
-                            case Absent          => patcher
-                            case Present(report) =>
-                                patcher.map(patch =>
-                                    (target, name, value) =>
-                                        patch(target, name, value)
-                                        report(cheapEvent(target, Absent, nodeFrame, UI.RenderKind.Channel(name)))
-                                )
                         Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
-                            val baseline = Maybe.fromOption(rendered.get(name))
-                            now match
-                                case Present(patch) => bindChannel(sig, baseline, v => patch(path, name, v), releases)
-                                case Absent         =>
-                                    val write: A => Unit < Async = devSink match
-                                        case Absent          => v => slow(name, v)
-                                        case Present(report) =>
-                                            v =>
-                                                slow(name, v).andThen(
-                                                    Sync.defer(report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))))
-                                                )
+                            val baseline = Maybe.fromOption(seen.get(name))
+                            def event    = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))
+                            patcher match
+                                case Present(patch) =>
+                                    bindChannel(sig, baseline, reporting[A](devSink, event)(v => patch(path, name, v)), releases)
+                                case Absent =>
+                                    val write = reportingAsync[A](devSink, event)(v => slow(name, v))
                                     Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(write)).unit
                             end match
                         }
@@ -2265,42 +1012,27 @@ private[kyo] object ReactiveUI:
                     val decls                                                    = sig.map(CssStyleRenderer.declarations)
                     // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on
                     // the writer's stack (the synchronous sink) or on its fiber; it never leaves this observer.
-                    val last = new java.util.concurrent.atomic.AtomicReference[Seq[(String, String)]](renderedStyle.getOrElse(Nil))
+                    val last = new java.util.concurrent.atomic.AtomicReference[Seq[(String, String)]](rendered.style.getOrElse(Nil))
                     def step(next: Seq[(String, String)]): Seq[String] =
                         val names = next.iterator.map(_._1).toSet
                         last.getAndSet(next).map(_._1).filterNot(names.contains)
+                    def event = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style"))
                     exchange.stylePatcherNow match
                         case Present(patch) =>
-                            val write: Seq[(String, String)] => Unit = devSink match
-                                case Absent          => next => patch(path, next, step(next))
-                                case Present(report) =>
-                                    next =>
-                                        patch(path, next, step(next))
-                                        report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style")))
-                            bindChannel(decls, renderedStyle, write, releases)
+                            val write = reporting[Seq[(String, String)]](devSink, event)(next => patch(path, next, step(next)))
+                            bindChannel(decls, rendered.style, write, releases)
                         case Absent =>
-                            val write: Seq[(String, String)] => Unit < Async = next =>
-                                Sync.defer(step(next)).map { removed =>
-                                    val sent = exchange.onStylePatch(path, next, removed)
-                                    devSink match
-                                        case Absent          => sent
-                                        case Present(report) =>
-                                            sent.andThen(Sync.defer(report(cheapEvent(
-                                                path,
-                                                Absent,
-                                                nodeFrame,
-                                                UI.RenderKind.Channel("style")
-                                            ))))
-                                    end match
-                                }
-                            Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(write)).unit
+                            val write = reportingAsync[Seq[(String, String)]](devSink, event)(next =>
+                                Sync.defer(step(next)).map(exchange.onStylePatch(path, next, _))
+                            )
+                            Fiber.init(decls.observe(rendered.style, Signal.defaultRepairInterval)(write)).unit
                     end match
                 end bindStyle
 
-                bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
-                    .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
-                    .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
-                    .andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
+                bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+                    .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+                    .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
             }
     end forkChannelObservers
 
@@ -2328,6 +1060,48 @@ private[kyo] object ReactiveUI:
         releases match
             case Present(row) => Sync.Unsafe.defer(row.add(release))
             case Absent       => Scope.ensure(Sync.defer(release()))
+
+    /** The tail of showing a walked value in `table`: the channels of the root it painted, its kids, the end of its pass. */
+    private[internal] def subscribeWalked(
+        path: Seq[String],
+        shown: UI,
+        kids: Seq[ReactiveUI],
+        pass: MountPass,
+        table: MountScope,
+        through: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        dispatch: MountDispatch
+    )(using Frame): Unit < (Async & Scope) =
+        forkRootChannels(path, shown, through)
+            .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, table, dispatch, pass)))
+            .andThen(table.endWalk)
+
+    /** How a region or a mount inside a waiting boundary takes its values: each is a pass with a group of its own, and the first one is due
+      * from now, so the boundary does not reveal before this has rendered and subscribed what it shows. `shownOf` is what a value paints,
+      * `step` shows it through the group.
+      */
+    private[internal] def throughHold[A](hold: BoundaryHold, rui: ReactiveUI)(shownOf: A => UI)(
+        step: (A, UIExchange) => Unit < (Async & Scope)
+    )(using Frame): (A => Unit < (Async & Scope)) < (Async & Scope) =
+        for
+            first <- hold.group
+            // Unsafe: read and cleared in one step by this region's own loop, created before that loop is forked.
+            due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
+            _ <- Scope.ensure(first.close)
+        yield (value: A) =>
+            Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
+                Scope.ensure(group.close)
+                    .andThen(group.paints(BoundaryRange(
+                        rui.region,
+                        rui.path,
+                        rui.contentContext,
+                        rui.parentContext,
+                        shownOf(value),
+                        rui
+                    )))
+                    .andThen(step(value, group))
+                    .andThen(group.started)
+            }
 
     /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
       * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
@@ -2377,9 +1151,7 @@ private[kyo] object ReactiveUI:
                     _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
                 )
                 _ <- release()
-                _ <- forkRootChannels(rui.path, current, through)
-                _ <- Kyo.foreachDiscard(newKids)(subscribeScoped(_, through, signalChangeTime, regionMounts, dispatch, pass))
-                _ <- regionMounts.endWalk
+                _ <- subscribeWalked(rui.path, current, newKids, pass, regionMounts, through, signalChangeTime, dispatch)
             yield ()
 
         def onValue(current: UI, isFirst: Boolean, through: UIExchange): Unit < (Async & Scope) =
@@ -2406,23 +1178,13 @@ private[kyo] object ReactiveUI:
 
         def start(step: (UI, Boolean) => Unit < (Async & Scope)): Unit < (Async & Scope) =
             regionMounts.register.map { watch =>
-                startOwnedFiber {
-                    Abort.run[Throwable] {
-                        var first = true
-                        observed(watch.stamp) { current =>
-                            val isFirst = first
-                            first = false
-                            // Each value is a group of its own, released before anything it subscribed is.
-                            ReleaseGroup.owning(_ => step(current, isFirst))
-                        }
-                    }.map { result =>
-                        result.fold(
-                            _ => (),
-                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                            panic =>
-                                if panic.isInstanceOf[Interrupted] then ()
-                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                        )
+                regionFiber(rui.path, "Reactive subscription fiber") {
+                    var first = true
+                    observed(watch.stamp) { current =>
+                        val isFirst = first
+                        first = false
+                        // Each value is a group of its own, released before anything it subscribed is.
+                        ReleaseGroup.owning(_ => step(current, isFirst))
                     }
                 }
             }
@@ -2430,28 +1192,8 @@ private[kyo] object ReactiveUI:
         exchange.gate match
             case Absent        => start(onValue(_, _, exchange))
             case Present(hold) =>
-                // Inside a waiting boundary every value is a pass with a group of its own, and the first one is due from now, so
-                // the boundary does not reveal before this region has rendered and subscribed what it shows.
-                for
-                    first <- hold.group
-                    due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
-                    _ <- Scope.ensure(first.close)
-                    _ <- start { (current, isFirst) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    current,
-                                    rui
-                                )))
-                                .andThen(onValue(current, isFirst, group))
-                                .andThen(group.started)
-                        }
-                    }
-                yield ()
+                throughHold[(UI, Boolean)](hold, rui)(_._1)((value, group) => onValue(value._1, value._2, group))
+                    .map(held => start((current, isFirst) => held((current, isFirst))))
         end match
     end subscribeRegion
 
@@ -2475,7 +1217,7 @@ private[kyo] object ReactiveUI:
             case Absent        => measured(through)
     end deliverMeasured
 
-    private def measuredPaint[A, S](rui: ReactiveUI, kind: UI.RenderKind, cause: UI.RenderCause, alsoWasted: => Boolean = false)(
+    private[internal] def measuredPaint[A, S](rui: ReactiveUI, kind: UI.RenderKind, cause: UI.RenderCause, alsoWasted: => Boolean = false)(
         paint: => A < S
     )(using Frame): A < (S & Sync) =
         for
@@ -2489,13 +1231,13 @@ private[kyo] object ReactiveUI:
     /** Reports content the enclosing render already painted. Zero duration and zero bytes are not a rounding-off: the cost sits
       * in the enclosing region's own event, and charging it twice would make every parent look cheap and every child expensive.
       */
-    private def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
+    private[internal] def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
         report(rui, kind, UI.RenderCause.Created, Absent, Duration.Zero, alsoWasted = false)
 
     /** One render event to the devtools sink; a no-op with none installed. `probe` is `Absent` both when devtools is off and
       * when nothing was painted, which is why the two collapse into the same zero-cost event.
       */
-    private def report(
+    private[internal] def report(
         rui: ReactiveUI,
         kind: UI.RenderKind,
         cause: UI.RenderCause,
@@ -2513,2293 +1255,6 @@ private[kyo] object ReactiveUI:
                 )
         end match
     end report
-
-    /** One live row of a reusable keyed Foreach region (see subscribeForeachRegion): the cached render
-      * output (reused for paints while the item is unchanged), the walked reactive descendants, the row's
-      * dispatch handler (cached so an event on a live row skips the whole-region walk; Absent for seeded rows,
-      * whose initial walk produced no per-row handler), and the finalizer holding their subscriptions open (it
-      * survives the region's per-value cascade; the registry's owner scope ends it).
-      */
-    final private[kyo] class RowInstance(
-        val key: String,
-        val item: Any,
-        val rowUI: UI,
-        val kids: Seq[ReactiveUI],
-        val handler: Maybe[Handler],
-        val scope: RowScope,
-        val holdsMount: Boolean
-    )
-
-    /** What keeps one keyed row's subscriptions open, closed by the registry when the row is evicted.
-      *
-      * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each released by one call. On a
-      * Scope finalizer each would be an effect of its own, an `Abort` handler around a deferred call, run by the finalizer's close and
-      * await. So bare releases collect here and run in one pass; the finalizer keeps only what is not a bare release (a nested
-      * region's fiber, a mount), which for a plain row is nothing. `group` is the row's release group, marked before any of it is
-      * released.
-      */
-    final private[kyo] class RowScope(val finalizer: Scope.Finalizer, val group: ReleaseGroup):
-        private var releases: List[() => Unit] = Nil
-
-        def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
-
-        /** Runs every release, newest first, and reports the first failure instead of stopping at it. */
-        def releaseAll()(using AllowUnsafe): Maybe[Throwable] =
-            var failed: Maybe[Throwable] = Absent
-            var rest                     = releases
-            while rest.nonEmpty do
-                try rest.head()
-                catch case t if scala.util.control.NonFatal(t) => if failed.isEmpty then failed = Present(t)
-                rest = rest.tail
-            end while
-            releases = Nil
-            failed
-        end releaseAll
-    end RowScope
-
-    /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
-      * happens only from the owning region's sequential observe loop, and from [[evictAll]] once that loop has ended.
-      *
-      * The key index is maintained incrementally (evicted keys leave it, fresh instances join it), so
-      * neither an emission nor an event lookup rebuilds a map over every live row.
-      *
-      * A row is the registry's from the moment it starts subscribing, not from [[replaceAll]]: its scope is a root nothing else
-      * closes, so an emission interrupted in between would otherwise leave what the row had already subscribed running. It stays
-      * the registry's until its release has completed, for the same reason: an emission evicting rows is interrupted when the region
-      * around the list closes, and the rows it had taken out of the list but not yet closed would be left to nobody.
-      */
-    final private[kyo] class RowRegistry(
-        rows: AtomicRef[Vector[RowInstance]],
-        index: AtomicRef[Map[String, RowInstance]],
-        building: AtomicRef[List[RowScope]],
-        releasing: AtomicRef[List[Seq[RowScope]]]
-    ):
-        def snapshot(using Frame): Vector[RowInstance] < Sync = rows.get
-
-        def byKey(using Frame): Map[String, RowInstance] < Sync = index.get
-
-        def find(key: String)(using Frame): Maybe[RowInstance] < Sync =
-            index.get.map(m => Maybe.fromOption(m.get(key)))
-
-        /** Install the new list order; `fresh` are the instances this emission created, the others are
-          * already indexed.
-          */
-        def replaceAll(ordered: Seq[RowInstance], fresh: Seq[RowInstance])(using Frame): Unit < Sync =
-            rows.set(Vector.from(ordered)).andThen(building.set(Nil)).andThen(
-                if fresh.isEmpty then Kyo.unit
-                else index.getAndUpdate(m => fresh.foldLeft(m)((acc, r) => acc.updated(r.key, r))).unit
-            )
-
-        /** Take a row that is about to subscribe; [[replaceAll]] installs it, or [[evictAll]] closes it. */
-        def track(scope: RowScope)(using Frame): Unit < Sync = building.getAndUpdate(scope :: _).unit
-
-        /** Close-and-await every row whose key `keep` rejects: run before the new value paints, so a
-          * vanished or changed row's observers are fully released while the old content is still on screen
-          * (break-before-make, the region-level closed-and-awaited guarantee extended to rows).
-          */
-        def evictExcept(keep: String => Boolean)(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
-                val old  = rows.unsafe.getAndUpdate(_.filter(r => keep(r.key)))
-                val gone = old.filterNot(r => keep(r.key))
-                if gone.isEmpty then Kyo.unit
-                else
-                    // A cleared list drops the whole index at once rather than one key at a time.
-                    if gone.size == old.size then index.unsafe.set(Map.empty)
-                    else discard(index.unsafe.getAndUpdate(_ -- gone.map(_.key)))
-                    val scopes   = gone.map(_.scope)
-                    val failures = take(scopes)
-                    Async.uninterruptible(logFailures(failures).andThen(settle(scopes)))
-                end if
-            }
-
-        /** Closes every row: the listed ones, those still subscribing, and those an emission is releasing, whose release it waits for. */
-        def evictAll(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
-                val scopes   = rows.unsafe.getAndSet(Vector.empty).map(_.scope) ++ building.unsafe.getAndSet(Nil)
-                val failures =
-                    if scopes.isEmpty then Seq.empty
-                    else
-                        index.unsafe.set(Map.empty)
-                        take(scopes)
-                val batches = releasing.unsafe.get()
-                if batches.isEmpty then Kyo.unit
-                else Async.uninterruptible(logFailures(failures).andThen(Kyo.foreachDiscard(batches)(settle)))
-            }
-
-        /** Moves `scopes` from the list to the rows being released, marks their groups, and runs their channel releases, in the step that
-          * took them out of the list: no interrupt falls between taking a row and owning its release. Returns the failed releases.
-          */
-        private def take(scopes: Seq[RowScope])(using AllowUnsafe): Seq[Throwable] =
-            discard(releasing.unsafe.getAndUpdate(scopes :: _))
-            scopes.foreach(_.group.release())
-            scopes.flatMap(_.releaseAll())
-        end take
-
-        private def logFailures(failures: Seq[Throwable])(using Frame): Unit < Async =
-            Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
-
-        /** Closes and awaits the finalizers of one batch of rows, which for a plain row hold nothing and complete without suspending
-          * (initInline). A finalizer another fiber is already closing is awaited, so [[evictAll]] waits for an emission's batch.
-          */
-        private def settle(scopes: Seq[RowScope])(using Frame): Unit < Async =
-            Kyo.foreachDiscard(scopes)(s => s.finalizer.close(Absent).andThen(s.finalizer.await))
-                .andThen(releasing.getAndUpdate(_.filterNot(_ eq scopes)).unit)
-    end RowRegistry
-
-    private[kyo] object RowRegistry:
-        /** The registry for a pass that already holds the thread (see [[SignalNow]]). */
-        def initNow()(using AllowUnsafe): RowRegistry =
-            new RowRegistry(
-                AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe,
-                AtomicRef.Unsafe.init(Map.empty[String, RowInstance]).safe,
-                AtomicRef.Unsafe.init(List.empty[RowScope]).safe,
-                AtomicRef.Unsafe.init(List.empty[Seq[RowScope]]).safe
-            )
-    end RowRegistry
-
-    /** What one list emission changes (see [[RowPlan.decide]]).
-      *
-      * Per position: the key, and the live row that survives there (same key, item compares equal) or `null` where the row is
-      * rebuilt. Everything is an array indexed by position, so an emission that moves two rows of a thousand costs the list one
-      * object per array and the change its rows, rather than a pass over the whole list that allocates per row.
-      *
-      * `built` and `finalRows` are filled in by the caller for the `rebuilt` positions (the effects that walk and subscribe a row
-      * run there); `decide` fills the retained ones.
-      */
-    final private class RowPlan[T](
-        val items: Chunk.Indexed[T],
-        val keys: Array[String],
-        val duplicates: Boolean,
-        val built: Array[RowPlan.Built],
-        val finalRows: Array[RowInstance],
-        var rebuilt: Chunk[Int],
-        retainedKeys: scala.collection.mutable.HashSet[String],
-        prev: Vector[RowInstance]
-    ):
-        def size: Int = keys.length
-
-        def isRetained(key: String): Boolean = retainedKeys.contains(key)
-
-        /** The keys of the rows this emission keeps as they are, read only: no copy, since a list emission pays for this whether or not
-          * anything below it reads them.
-          */
-        def retainedRows: scala.collection.Set[String] = retainedKeys
-
-        /** Every row gets a new instance: the transport repainted the retained rows too, so their subscriptions start
-          * again from their cached UI and walk.
-          */
-        def rebuildAll(): Unit =
-            java.util.Arrays.fill(finalRows.asInstanceOf[Array[AnyRef]], null)
-            rebuilt = Chunk.from(0 until size)
-
-        /** The reactive kids of every row, the region's walk for this emission. Built only when the region's pass plans. */
-        lazy val allKids: Seq[ReactiveUI] = built.toSeq.flatMap(_.kids)
-
-        /** Whether a mount is in any row's walk, from the flag each row took when it was walked, without collecting the walk. */
-        def holdsMount: Boolean =
-            var i = 0
-            while i < size && !built(i).holdsMount do i += 1
-            i < size
-        end holdsMount
-
-        def fragmentChildren(using Frame): Chunk[UI] =
-            val out = new Array[UI](size)
-            var i   = 0
-            while i < size do
-                out(i) = KeyedChild[UI](built(i).key, built(i).rowUI)
-                i += 1
-            Chunk.from(out)
-        end fragmentChildren
-
-        def listRows: Seq[ListRow] =
-            val out = new Array[ListRow](size)
-            var i   = 0
-            while i < size do
-                val b = built(i)
-                out(i) = ListRow(b.key, b.rowUI, b.retained.isEmpty)
-                i += 1
-            end while
-            scala.collection.immutable.ArraySeq.unsafeWrapArray(out)
-        end listRows
-
-        def reordered: Boolean =
-            if prev.size != size then true
-            else
-                var i = 0
-                while i < size && keys(i) == prev(i).key do i += 1
-                i < size
-
-        def finalRowsSeq: Seq[RowInstance] = scala.collection.immutable.ArraySeq.unsafeWrapArray(finalRows)
-
-        def freshRows: Seq[RowInstance] = rebuilt.map(i => finalRows(i)).toSeq
-    end RowPlan
-
-    private object RowPlan:
-        final class Built(
-            val key: String,
-            val item: Any,
-            val rowUI: UI,
-            val kids: Seq[ReactiveUI],
-            val handler: Maybe[Handler],
-            val retained: Maybe[RowInstance],
-            val holdsMount: Boolean
-        )
-
-        /** Whether a mount is at or below `kids`, a row's walk: fixed by the walk, so a row takes it once and keeps it. */
-        def holdsMount(kids: Seq[ReactiveUI]): Boolean = kids.exists(_.containsMount)
-
-        /** Reads an emission once: the key at each position, and the live row kept there. A key that repeats within the emission
-          * disables reuse for all of it.
-          */
-        def decide[T](
-            chunk: Chunk[T],
-            prev: Vector[RowInstance],
-            prevByKey: Map[String, RowInstance],
-            keyFn: T => String
-        ): RowPlan[T] =
-            val items     = chunk.toIndexed
-            val size      = items.length
-            val keys      = new Array[String](size)
-            val kept      = new Array[RowInstance](size)
-            val seen      = presized(size)
-            var dup       = false
-            var keptCount = 0
-            var i         = 0
-            while i < size do
-                val item = items(i)
-                val key  = keyFn(item)
-                keys(i) = key
-                if !seen.add(key) then dup = true
-                prevByKey.get(key) match
-                    case Some(inst) if inst.item.equals(item) =>
-                        kept(i) = inst
-                        keptCount += 1
-                    case _ => ()
-                end match
-                i += 1
-            end while
-            if dup then
-                java.util.Arrays.fill(kept.asInstanceOf[Array[AnyRef]], null)
-                keptCount = 0
-            val built        = new Array[Built](size)
-            val retainedKeys = presized(keptCount)
-            val rebuilt      = new Array[Int](size - keptCount)
-            var j            = 0
-            i = 0
-            while i < size do
-                val inst = kept(i)
-                if inst eq null then
-                    rebuilt(j) = i
-                    j += 1
-                else
-                    retainedKeys += inst.key
-                    built(i) = new Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst), inst.holdsMount)
-                end if
-                i += 1
-            end while
-            new RowPlan(items, keys, dup, built, kept, Chunk.from(rebuilt), retainedKeys, prev)
-        end decide
-
-        /** A set that holds `n` keys without growing. */
-        private def presized(n: Int): scala.collection.mutable.HashSet[String] =
-            val loadFactor = scala.collection.mutable.HashSet.defaultLoadFactor
-            new scala.collection.mutable.HashSet[String](math.max(16, (n / loadFactor).toInt + 1), loadFactor)
-    end RowPlan
-
-    /** Subscribe a reusable keyed Foreach region: rows are owned by a RowRegistry instead of the per-value
-      * Scope cascade. On each list emission only added rows and rows whose item value changed are re-rendered,
-      * re-walked, and re-subscribed; a row whose key and item persist keeps its live observers (its path,
-      * `regionPath :+ key`, is stable across reorders, so no retargeting is needed) and its cached row UI is
-      * reused for the paint. Removed and changed rows are closed and awaited before the new value paints
-      * (break-before-make, matching the whole-region path's ordering contract). Event dispatch resolves through the
-      * same registry (shared via the ForeachSpec): an event on a live row routes to the row's cached handler
-      * instead of re-rendering and re-walking the whole list, falling back to the full walk only when the
-      * registry cannot resolve the target. Duplicate keys disable reuse for that emission (all rows rebuilt,
-      * loud warning), keeping the painted output identical to the non-reusable path. Unkeyed and *Indexed
-      * variants stay on the whole-region path entirely.
-      *
-      * The mounts of every row, re-walked or retained, are one pass of the region, so a retained row's keyed instances are kept, and
-      * the regions inside a retained row, whose subscriptions carry on, are left as they are. A row's key is part of every mount
-      * identity in it, so no claim in one row can collide with another's.
-      */
-    private def subscribeForeachRegion(
-        rui: ReactiveUI,
-        spec: ForeachSpec,
-        exchange: UIExchange,
-        signalChangeTime: AtomicRef[Instant],
-        regionMounts: MountScope,
-        dispatch: MountDispatch
-    )(using Frame): Unit < (Async & Scope) =
-        val path        = rui.path
-        val initialKids = rui.children
-        val svg         = rui.region match
-            case _: ReactiveRegion.HtmlRange  => false
-            case _: ReactiveRegion.SvgElement => true
-        // The tree this region last rendered, so the exchange can send only what moved.
-        // Unsafe: region-scoped, single-writer state created before the observe loop is started.
-        val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
-        spec.node.applyTyped {
-            [T] => (itemSignal, keyFnMaybe, renderFn) =>
-                val keyFn = keyFnMaybe.get // reusable guarantees a key function
-                val rows  = spec.rows
-                for
-                    // Rows outlive the emission that made them, so each is a group inside the list's, not inside an emission's.
-                    around <- ReleaseGroup.current.use(group => group.getOrElse(regionMounts.table.group))
-                    _      <- Scope.ensure(rows.evictAll)
-                    watch  <- regionMounts.register
-                    _      <- startOwnedFiber {
-                        // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
-                        // scoped children still die with it, since a nested region's or mount's release is
-                        // registered on it. Subscribing inline rather than on a forked fiber makes a row that
-                        // suspends finish before the emission does; the paint is already out by then.
-                        // The registry always closes and awaits a row, so its finalizers run on the evicting
-                        // fiber (initInline) instead of a fiber per row, and its channel releases collect in the
-                        // row's scope, which the eviction runs in one pass.
-                        def rowRunner(kids: Seq[ReactiveUI], pass: MountPass): RowScope < Async =
-                            Sync.Unsafe.defer {
-                                val fin   = Scope.Finalizer.Unsafe.initInline()
-                                val scope = new RowScope(fin, around.child())
-                                // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
-                                rows.track(scope).andThen(ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
-                                    Tag[Scope],
-                                    derive = (_: Maybe[Scope.Finalizer]) => fin,
-                                    fork = (parent: Scope.Finalizer) => parent.forked,
-                                    join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
-                                ) {
-                                    ReleaseGroup.current.let(Present(scope.group))(Kyo.foreachDiscard(kids)(
-                                        subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(scope))
-                                    ))
-                                }).andThen(scope)
-                            }
-
-                        def distinctKeys(items: Chunk[T]): Boolean =
-                            val ks = items.toSeq.map(keyFn)
-                            ks.distinct.sizeIs == ks.size
-
-                        // First emission over the already-painted value: skip render and walk entirely; adopt the
-                        // walked initial kids as rows (grouped by their row path segment) and just subscribe them.
-                        def seed(items: Chunk[T]): Unit < (Async & Scope) =
-                            val grouped = initialKids.groupBy(k => k.path.lift(path.length).getOrElse(""))
-                            for
-                                pass  <- regionMounts.beginWalk(initialKids)
-                                built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
-                                    val key  = keyFn(item)
-                                    val kids = grouped.getOrElse(key, Seq.empty)
-                                    rowRunner(kids, pass).map(scope =>
-                                        new RowInstance(key, item, renderFn(i, item), kids, Absent, scope, RowPlan.holdsMount(kids))
-                                    )
-                                }
-                                _ <- regionMounts.endWalk
-                                // No paint here: the enclosing render already put exactly this fragment in the
-                                // DOM. It is still recorded as this region's last render, so the NEXT emission
-                                // diffs against it rather than re-sending every row.
-                                _ <- Sync.Unsafe.defer(
-                                    rendered.set(Present(Fragment[UI](Chunk.from(built.toSeq.map(r => KeyedChild[UI](r.key, r.rowUI))))))
-                                )
-                                _ <- rows.replaceAll(built.toSeq, built.toSeq)
-                                // No paint happened, so no cost is charged, but the rows did come into existence, in the
-                                // enclosing region's paint. Same accounting as the region skip branch in subscribeRegion.
-                                _ <- reportUnpainted(rui, UI.RenderKind.ListPatch(0, built.size))
-                            yield ()
-                            end for
-                        end seed
-
-                        def handle(items: Chunk[T]): Unit < (Async & Scope) =
-                            for
-                                now       <- Clock.now
-                                _         <- signalChangeTime.set(now)
-                                prev      <- rows.snapshot
-                                prevByKey <- rows.byKey
-                                plan = RowPlan.decide(items, prev, prevByKey, keyFn)
-                                _ <-
-                                    if plan.duplicates then
-                                        Log.warn(
-                                            s"kyo-ui: duplicate keys in foreachKeyed at ${path.mkString(".")} within one emission: " +
-                                                "row reuse is disabled for this emission (all rows rebuilt); use distinct keys"
-                                        )
-                                    else Kyo.unit
-                                _ <- rows.evictExcept(plan.isRetained) // removed and changed rows close before the paint
-                                // One synchronous pass over the rebuilt rows (see SignalNow), not an effect loop that suspends per row.
-                                _ <- SignalNow.Locals.take(Sync.Unsafe.defer {
-                                    plan.rebuilt.foreach { i =>
-                                        val key         = plan.keys(i)
-                                        val item        = plan.items(i)
-                                        val rowUI       = renderFn(i, item)
-                                        val (kids, hdl) = walkRow(
-                                            rowUI,
-                                            path :+ key,
-                                            svg,
-                                            rui.contentContext.child(key),
-                                            nestedParentContext(rui.parentContext, rowUI),
-                                            dispatch,
-                                            rui.rows,
-                                            rui.deepRows
-                                        )
-                                        plan.built(i) =
-                                            new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent, RowPlan.holdsMount(kids))
-                                    }
-                                })
-                                // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
-                                firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows, Present(plan.holdsMount))
-                                fragment = Fragment[UI](plan.fragmentChildren)
-                                previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
-                                // A structural command addresses rows by key, so it can say nothing useful
-                                // about an emission whose keys are not unique: two rows would name one
-                                // slot. That emission already rebuilds every row and warns; it also keeps
-                                // the whole-fragment paint, where duplicates degrade positionally instead
-                                // of aliasing. Likewise a row that paints as several roots or as none has
-                                // nothing for a key to name. The wire cannot discover that late and change
-                                // its mind: once the untouched rows are left out of a frame, the client has
-                                // nothing to rebuild them from. So the shape is decided here, beside the
-                                // duplicate-key gate it restates, and without rendering anything.
-                                // So does the emission after one with duplicate keys: its page still shows two rows under one key.
-                                addressable = plan.built.forall(b => HtmlRenderer.paintsAsKeyedRoot(b.rowUI))
-                                kept <- measuredPaint(
-                                    rui,
-                                    UI.RenderKind.ListPatch(plan.rebuilt.length, plan.size),
-                                    UI.RenderCause.Signal,
-                                    alsoWasted = plan.rebuilt.isEmpty && !plan.reordered
-                                ) {
-                                    if plan.duplicates || prevByKey.size != prev.size || !addressable then
-                                        exchange.onChange(rui.region, path, rui.contentContext, rui.parentContext, previous, fragment)
-                                            .andThen(false)
-                                    else
-                                        exchange.onListPatch(
-                                            rui.region,
-                                            path,
-                                            rui.contentContext,
-                                            rui.parentContext,
-                                            previous,
-                                            plan.listRows
-                                        )
-                                }
-                                // A repaint of the kept rows replaced what their subscriptions had painted into them, a
-                                // mount's content among it: subscribe them again, as a whole-list repaint always did.
-                                // Every row is subscribed again, so a pass covers the regions of all of them.
-                                pass <-
-                                    if kept then Kyo.lift(firstPass)
-                                    else
-                                        rows.evictAll.andThen(Sync.defer(plan.rebuildAll())).andThen(regionMounts.beginWalk(
-                                            plan.allKids,
-                                            holdsMount = Present(plan.holdsMount)
-                                        ))
-                                _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
-                                    val b = plan.built(i)
-                                    rowRunner(b.kids, pass).map(scope =>
-                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, scope, b.holdsMount)
-                                    )
-                                }
-                                _ <- regionMounts.endWalk
-                                _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
-                            yield ()
-
-                        Abort.run[Throwable] {
-                            var first = true
-                            itemSignal.observeStamped(watch.stamp) {
-                                items =>
-                                    val isFirst = first
-                                    first = false
-                                    if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
-                                    else handle(items)
-                            }
-                        }.map { result =>
-                            result.fold(
-                                _ => (),
-                                err => Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", err),
-                                panic =>
-                                    if panic.isInstanceOf[Interrupted] then ()
-                                    else Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", panic)
-                            )
-                        }
-                    }
-                yield ()
-                end for
-        }
-    end subscribeForeachRegion
-
-    // ---- Mounted nodes ----
-
-    /** A lifetime the engine ends as one: a value of a region, a row of a keyed list, what a keyed node shows for one state of its claim,
-      * a value of a mount's content, a mount instance with the keyed mounts nested in it, a session. Whatever releases a group marks it
-      * before it interrupts anything in it, so an effect that ends with an interrupt can tell whether a release it belongs to has begun:
-      * a group is released when it or a group around it is marked.
-      *
-      * The groups form a tree that points outwards only, so a group nothing is in any more is collected with what it held. A group that
-      * belongs to a scope is opened with [[ReleaseGroup.owning]]: marking it at the first of the scope's own releases would be too late, since
-      * a scope closes its nested scopes and its newer registrations first, and one of them can interrupt an effect the group holds.
-      */
-    final private[kyo] class ReleaseGroup private (initial: Maybe[ReleaseGroup]):
-        private val around = new java.util.concurrent.atomic.AtomicReference[Maybe[ReleaseGroup]](initial)
-        private val marked = new java.util.concurrent.atomic.AtomicBoolean()
-
-        def release(): Unit = marked.set(true)
-
-        def released: Boolean = ReleaseGroup.releasedFrom(this)
-
-        def child(): ReleaseGroup = new ReleaseGroup(Present(this))
-
-        /** Puts this group inside `outer`: for an instance's group, placed once its owner is known, before its effect runs. */
-        private[ReactiveUI] def placeIn(outer: ReleaseGroup): Unit = around.set(Present(outer))
-    end ReleaseGroup
-
-    private[kyo] object ReleaseGroup:
-        def root(): ReleaseGroup = new ReleaseGroup(Absent)
-
-        @scala.annotation.tailrec
-        private def releasedFrom(group: ReleaseGroup): Boolean =
-            group.marked.get() ||
-                (group.around.get() match
-                    case Present(outer) => releasedFrom(outer)
-                    case Absent         => false)
-
-        /** The group what runs now belongs to, inherited by the fibers it forks. Absent outside every subscription. */
-        val current: Local[Maybe[ReleaseGroup]] = Local.init(Maybe.empty[ReleaseGroup])
-
-        /** Runs `v` in a new group inside the current one (a root when there is none) and in a scope of its own, whose one release in the
-          * current scope marks the group and then closes what `v` registered.
-          */
-        def owning[A, S](v: ReleaseGroup => A < (S & Async & Scope))(using Frame): A < (S & Async & Scope) =
-            current.use { outer =>
-                val group = outer.fold(root())(_.child())
-                Sync.Unsafe.defer {
-                    val inner = Scope.Finalizer.Unsafe.initInline()
-                    ContextEffect.suspendWith(Tag[Scope])(_.ensure(error =>
-                        Sync.Unsafe.defer(group.release()).andThen(inner.close(error)).andThen(inner.await)
-                    )).andThen(
-                        ContextEffect.handle[Scope.Finalizer, Scope, A, S & Async](
-                            Tag[Scope],
-                            derive = (_: Maybe[Scope.Finalizer]) => inner,
-                            fork = (parent: Scope.Finalizer) => parent.forked,
-                            join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
-                        )(current.let(Present(group))(v(group)))
-                    )
-                }
-            }
-    end ReleaseGroup
-
-    /** Where a mount instance belongs, which decides what an interrupt that ends its effect means: nowhere yet (its effect has not
-      * run), to a scope that releases it with a group, or to its table under `identity`, which releases it at a cut.
-      */
-    private[kyo] enum Placement derives CanEqual:
-        case Unplaced
-        case Scoped
-        case Filed(identity: MountIdentity)
-    end Placement
-
-    /** Tells what an interrupt that ends an instance's effect means. An interrupt of the instance's own release, or of a release of a
-      * group around it, is silent; any other is a failure, which shows the node's error view like any other.
-      *
-      * An instance a scope owns is released with its group, which is marked before anything in it is interrupted, so the answer is there
-      * at once. One its table owns may be on its way to a cut: while it waits for one, or no live claim of a region that holds it shows
-      * it (its region is between two values, or the claim of its new pass is not filed yet), the answer waits for the table's next
-      * change, and the instance's own release settles it too.
-      */
-    final private[kyo] class MountFate(val group: ReleaseGroup, table: MountTable):
-        private val placement = new java.util.concurrent.atomic.AtomicReference[Placement](Placement.Unplaced)
-
-        /** The instance belongs to a scope that releases it with `home`. */
-        def scoped(home: ReleaseGroup): Unit =
-            group.placeIn(home)
-            placement.set(Placement.Scoped)
-
-        /** The instance belongs to its table under `identity`. */
-        def filed(identity: MountIdentity): Unit =
-            group.placeIn(table.group)
-            placement.set(Placement.Filed(identity))
-
-        /** The instance is being released: what is in it is released with it, and a verdict that waited is settled. */
-        def condemn(): Unit =
-            group.release()
-            table.settleVerdicts()
-
-        /** Whether the interrupt was a failure, when `s` can tell.
-          *
-          * A filed instance that a live claim shows gets `true`. That includes, on purpose, one whose interrupt came while it was in
-          * transit and that the cut then finds in another region (it moved): like any failed instance that moves, it shows its error
-          * view in its new place and its effect does not run again, and a key change is what starts a new one (see
-          * [[kyo.UI.MountedOps.keyed]]). `false` there would not restart it either: the effect would end without publishing, and the
-          * node would stay pending for good, with neither content nor an error view.
-          */
-        private[ReactiveUI] def judge(s: TableState): Maybe[Boolean] =
-            if group.released then Present(false)
-            else
-                placement.get() match
-                    case Placement.Filed(identity) =>
-                        if s.releasing.exists(_.fate eq this) then Present(false)
-                        else
-                            s.instances.get(identity) match
-                                case Present(slot) if slot.instance.fate eq this =>
-                                    val held  = s.holding(identity)
-                                    val shown = s.views.get(identity).getOrElse(Chunk.empty).filter(v => held.contains(v.region))
-                                    if s.waiting.contains(identity) || shown.isEmpty || shown.exists(_.group.released) then Absent
-                                    else Present(true)
-                                case _ => Absent
-                    case _ => Present(true)
-
-        /** Whether the interrupt that ended the effect is a failure, once that can be told. */
-        def interrupted(using Frame): Boolean < Async = table.verdict(this)
-
-        /** Counts a decision on an interrupt that ended a [[kyo.UI.fork]] fiber of the instance. */
-        def forkInterruptJudged(): Unit = discard(table.session.counters.forkInterrupts.incrementAndGet())
-    end MountFate
-
-    /** What a mounted node's content cell holds.
-      *
-      *   - `Pending(Absent)`: the effect has not published, and the node shows its placeholder.
-      *   - `Pending(Present(snapshot))`: the same, showing the inert snapshot of what the slot showed before. A snapshot is painted and
-      *     nothing else: no region in it is subscribed and no event reaches it.
-      *   - `Ready(ui)`: the published content.
-      *   - `Failed(ui)`: the rendered failure. It is final: a later publish or failure of the same instance leaves it as it is.
-      */
-    private[kyo] enum MountState derives CanEqual:
-        case Pending(snapshot: Maybe[UI])
-        case Ready(ui: UI)
-        case Failed(ui: UI)
-
-        /** Whether the effect has published or failed. */
-        def settled: Boolean =
-            this match
-                case Pending(_) => false
-                case _          => true
-
-        def content(spec: MountedSpec): UI =
-            this match
-                case Pending(snapshot) => snapshot.getOrElse(spec.placeholder)
-                case Ready(ui)         => ui
-                case Failed(ui)        => ui
-    end MountState
-
-    /** A live mount: its content cell, the fiber running its effect, the `Scope` that owns what the effect acquired, and the table of
-      * keyed mounts nested in its content.
-      */
-    final private[kyo] class MountInstance(
-        val cell: SignalRef[MountState],
-        val supervision: MountSupervision,
-        val children: MountTable,
-        runner: Fiber[Unit, Any],
-        scope: Scope.Finalizer,
-        go: Promise[Unit, Any],
-        val fate: MountFate
-    ):
-        /** Lets the effect run. An instance claimed while its table settles what is in transit is made before it may run, so it shows in
-          * its place at once, and runs once the cut has released what had to go.
-          */
-        def launch(using Frame): Unit < Sync = go.completeUnitDiscard
-
-        // Unsafe: written as a subscription showing the instance ends, read when the instance leaves its snapshot after it.
-        private val lastShown = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
-        // Unsafe: set once, by the first paint of this instance that reaches the page, whichever subscription makes it.
-        private val painted = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
-
-        /** Whether the instance has not shown its own content yet, before a paint of `state`, which counts as that first showing unless it
-          * is the snapshot of the instance before it. Until then the slots in its range belong to no instance: the snapshot's slots are
-          * copies of the slots of the instance that left it. A kept instance a later subscription shows again is not new there.
-          */
-        def beforeOwnContent(state: MountState)(using Frame): Boolean < Sync =
-            Sync.Unsafe.defer(if showsSnapshot(state) then !painted.get() else painted.compareAndSet(false, true))
-
-        /** Keeps what a subscription showed as it ends, the content of the mounts nested in it resolved while they are still there. */
-        def keepShown(ui: UI)(using Frame): Unit < Sync = Sync.Unsafe.defer(lastShown.set(Present(ui)))
-
-        /** What the slot keeps showing under `KeepLatest` once this instance is gone: what it showed last, nested mounts included,
-          * which as bare nodes would show only their placeholders. An instance no subscription has shown resolves its regions only.
-          */
-        def snapshot(using Frame): Maybe[UI] < Sync =
-            cell.current.map {
-                case MountState.Pending(snapshot) => snapshot
-                case MountState.Ready(ui)         =>
-                    Sync.Unsafe.defer(lastShown.get()).map(_.fold(resolveReactives(ui).map(Present(_)))(Present(_)))
-                case MountState.Failed(ui) =>
-                    Sync.Unsafe.defer(lastShown.get()).map(_.fold(resolveReactives(ui).map(Present(_)))(Present(_)))
-            }
-
-        /** Stops the effect if it still runs, then releases nested mounts and everything the effect acquired, waiting for all of it.
-          * The wait is explicit because an interrupted `Scope` releases on a fiber of its own that nothing awaits. The instance is marked
-          * released first, so an interrupt this release causes anywhere in it is its own.
-          */
-        def teardown(using Frame): Unit < Async =
-            Sync.Unsafe.defer(fate.condemn())
-                .andThen(runner.interrupt)
-                .andThen(runner.getResult.unit)
-                .andThen(children.evictAll)
-                .andThen(scope.close(Absent))
-                .andThen(scope.await)
-                .andThen(supervision.afterShown.drop)
-    end MountInstance
-
-    private[kyo] object MountInstance:
-        /** An instance a scope owns, released with `home` (the group of `parent` when Absent), its effect running. `frames` are the
-          * boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one.
-          */
-        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, home: Maybe[ReleaseGroup] = Absent)(
-            using Frame
-        ): MountInstance < Sync =
-            make(spec, seed, frames, parent).map { instance =>
-                Sync.Unsafe.defer(instance.fate.scoped(home.getOrElse(parent.group))).andThen(instance.launch).andThen(instance)
-            }
-
-        /** An instance whose owner is still to be settled: its effect runs once it is placed (see [[MountFate]]) and launched. */
-        def make(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
-            for
-                cell <- Signal.initRef[MountState](MountState.Pending(seed))
-                fate        = new MountFate(ReleaseGroup.root(), parent)
-                supervision = MountSupervision(spec, cell, frames, fate)
-                inner       = FailureFrame.Mount(supervision) :: frames
-                scope  <- Scope.Finalizer.init(1)
-                go     <- Promise.init[Unit, Any]
-                runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session, fate)))
-            yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
-
-        /** The table of the content of an instance supervised by `supervision`: its mounts meet the instance and what is around it now,
-          * and its keyed instances are released with the instance's `group`.
-          */
-        private def childTable(supervision: MountSupervision, parent: MountTable, group: ReleaseGroup): MountTable =
-            new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames, group)
-
-        /** An instance that runs no effect and shows its node's error view for `message` from the start: what each place of an identity
-          * shown more than once in one pass gets.
-          */
-        def failed(spec: MountedSpec, message: String, frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
-            for
-                cell <- Signal.initRef[MountState](MountState.Pending(Absent))
-                fate        = new MountFate(ReleaseGroup.root(), parent)
-                supervision = MountSupervision(spec, cell, frames, fate)
-                _      <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
-                _      <- Sync.Unsafe.defer(fate.scoped(parent.group))
-                scope  <- Scope.Finalizer.init(1)
-                go     <- Promise.init[Unit, Any]
-                runner <- Fiber.initUnscoped(Kyo.unit)
-            yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
-
-        /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. An interrupt
-          * that ends the effect fails the node unless `fate` finds it is the instance's own release.
-          */
-        private def runEffect(
-            spec: MountedSpec,
-            cell: SignalRef[MountState],
-            scope: Scope.Finalizer,
-            supervision: MountSupervision,
-            frames: Failures.Scope,
-            session: MountSession,
-            fate: MountFate
-        )(using Frame): Unit < Async =
-            val effect = MountSession.current.let(Present(session))(
-                Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
-            )
-            Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map { result =>
-                supervision.afterShown.built.andThen(result)
-            }.map {
-                case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
-                case Result.Failure(failure) =>
-                    Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
-                        .andThen(supervision.fail(failure, UI.MountErrorSource.Effect))
-                case Result.Panic(t) =>
-                    val failed = t match
-                        case _: Interrupted => fate.interrupted
-                        case _              => Kyo.lift(true)
-                    failed.map { failure =>
-                        if !failure then Kyo.unit
-                        else
-                            Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
-                                .andThen(supervision.fail(t, UI.MountErrorSource.Panic))
-                    }
-            }
-        end runEffect
-    end MountInstance
-
-    /** Routes the failures of one mount instance into its content cell. The first failure wins, and a publish that arrives after a
-      * failure does not overwrite it. The node and the frames are those of the node that shows the instance now: an instance that moves
-      * to another node takes that node's error view, its `onFailure` rules and its boundaries.
-      */
-    final private[kyo] class MountSupervision(
-        initialSpec: MountedSpec,
-        cell: SignalRef[MountState],
-        initialFrames: Failures.Scope,
-        fate: MountFate
-    ):
-        // Unsafe: written by the claim that adopts the instance, read wherever a failure is routed.
-        private val at      = AtomicRef.Unsafe.init((initialSpec, initialFrames))(using AllowUnsafe.embrace.danger)
-        private val failure = AtomicRef.Unsafe.init(Maybe.empty[(Any, UI.MountErrorSource)])(using AllowUnsafe.embrace.danger)
-
-        /** The commands the instance sent that wait for its content to be on the page. */
-        val afterShown = new AfterShown
-
-        private def spec: MountedSpec = at.get()(using AllowUnsafe.embrace.danger)._1
-
-        def frames: Failures.Scope = at.get()(using AllowUnsafe.embrace.danger)._2
-
-        /** Makes `spec` and `frames` the node and frames of this instance. A failed instance that `moved` to another node is shown again
-          * in that node's error view.
-          */
-        def adopt(spec: MountedSpec, frames: Failures.Scope, moved: Boolean)(using Frame): Unit < Sync =
-            Sync.Unsafe.defer {
-                at.set((spec, frames))
-                if !moved then Kyo.unit
-                else
-                    failure.get() match
-                        case Present((raised, source)) => cell.set(MountState.Failed(errorView(raised, source)))
-                        case Absent                    => Kyo.unit
-                end if
-            }
-
-        private def errorView(raised: Any, source: UI.MountErrorSource): UI =
-            val (s, f) = at.get()(using AllowUnsafe.embrace.danger)
-            s.errorUI(s.mountError(raised, source), Failures.views(f))
-
-        /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure goes to the `onFailure` rules around the node, and fails
-          * the node when none matches. An interrupt is a failure only when none reached the fiber (`cancelled`) and the instance is not
-          * being released: then the fiber's own work ended on an interrupt someone else caused, as a mount effect's can (see [[MountFate]]).
-          */
-        def report[E, A](result: Result[E, A], cancelled: Boolean)(using Frame): Unit < Sync =
-            result match
-                case Result.Panic(t: Interrupted)   => interrupted(t, cancelled)
-                case Result.Failure(t: Interrupted) => interrupted(t, cancelled)
-                case Result.Panic(t)                => forked(t)
-                case Result.Failure(failure)        => forked(failure)
-                case _                              => Kyo.unit
-
-        /** Decides on an interrupt that ended a fork fiber; the verdict may wait for a cut, so it is taken on a fiber of its own. */
-        private def interrupted(failure: Interrupted, cancelled: Boolean)(using Frame): Unit < Sync =
-            val judged = Sync.Unsafe.defer(fate.forkInterruptJudged())
-            if cancelled then judged
-            else Fiber.initUnscoped(fate.interrupted.map(failed => (if failed then forked(failure) else Kyo.unit).andThen(judged))).unit
-        end interrupted
-
-        /** The rules may notify or run an action, which suspends, so they run on a fiber of their own. */
-        private def forked(failure: Any)(using Frame): Unit < Sync =
-            Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show}): $failure")
-                .andThen(Fiber.initUnscoped(Failures.handle(own, failure, UI.Reaction.Escalate, UI.MountErrorSource.Fork)).unit)
-
-        /** The frames this node's own failures meet: the node, then what is around it. */
-        private def own: Failures.Scope = FailureFrame.Mount(this) :: frames
-
-        def fail(raised: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
-            Sync.Unsafe.defer(discard(failure.compareAndSet(Absent, Present((raised, source))))).andThen {
-                val failed = MountState.Failed(errorView(raised, source))
-                cell.getAndUpdate {
-                    case done: MountState.Failed => done
-                    case _                       => failed
-                }.unit
-            }
-        end fail
-    end MountSupervision
-
-    private[kyo] object MountSupervision:
-        def publish(ui: UI)(state: MountState): MountState =
-            state match
-                case done: MountState.Failed => done
-                case _                       => MountState.Ready(ui)
-
-        /** The mount instance whose effect is running, read by [[kyo.UI.fork]]. Inheritable, so a `UI.fork` inside a fiber the effect
-          * forked still reports to the same node. Installed around the effect only: engine fibers never see it.
-          */
-        private[kyo] val local: Local[Maybe[MountSupervision]] = Local.init(Maybe.empty[MountSupervision])
-    end MountSupervision
-
-    /** The identity a keyed mount instance keeps across re-renders: the keys of the list rows between it and the owner of its table (the
-      * session root or the mount instance whose content it is in), where its `.keyed` call is written, and its key. Neither positions among
-      * siblings nor the regions around it are part of it, so siblings that come and go, and regions that appear, disappear or re-render
-      * around it, leave it alone (see [[MountTable]]). The hash is computed once.
-      */
-    final private[kyo] case class MountIdentity(rows: List[String], site: UI.MountSite, key: Any) derives CanEqual:
-        override val hashCode: Int = (rows.hashCode * 31 + site.hashCode) * 31 + key.hashCode
-
-    /** Where a region sits in the [[MountTable]] that holds the keyed mounts around it: its path and transparent depth, relative to where
-      * the table's content is shown. That is the region's place in the structure of the rendered tree. A literal argument is a fixed slot,
-      * an `if/else` in it stays in it, and nothing about a region's siblings or the `Frame` it was built under changes its key. Relative,
-      * so a kept instance whose content is shown at another path finds its regions under the same keys. [[RegionKey.top]] stands for the
-      * content itself, which encloses every region in it.
-      */
-    final private[kyo] case class RegionKey(path: Seq[String], depth: Int) derives CanEqual:
-        /** Whether `other` lies inside this region: below its path, or at its path and more deeply nested. */
-        def encloses(other: RegionKey): Boolean =
-            other.path.startsWith(path) && (other.path.size > path.size || other.depth > depth)
-    end RegionKey
-
-    private[kyo] object RegionKey:
-        val top: RegionKey = RegionKey(Vector.empty, -1)
-
-        /** Tree order: by path, segment by segment and a path before every path below it, then by depth. The keys a region encloses
-          * come right after its own, before any key it does not enclose, so the first key after a region's tells whether any region
-          * lies inside it.
-          */
-        given treeOrder: Ordering[RegionKey] with
-            def compare(a: RegionKey, b: RegionKey): Int =
-                val shared = math.min(a.path.size, b.path.size)
-                @scala.annotation.tailrec
-                def from(i: Int): Int =
-                    if i == shared then
-                        if a.path.size != b.path.size then java.lang.Integer.compare(a.path.size, b.path.size)
-                        else java.lang.Integer.compare(a.depth, b.depth)
-                    else
-                        val c = a.path(i).compareTo(b.path(i))
-                        if c != 0 then c else from(i + 1)
-                from(0)
-            end compare
-        end treeOrder
-    end RegionKey
-
-    /** The nodes one render pass of a region owns: its reactive children, and through a constant child (an element that only
-      * carries reactive attributes) that child's own, which the constant node subscribes in the same pass and the same table.
-      */
-    private def passMembers(kids: Seq[ReactiveUI]): Iterator[ReactiveUI] =
-        kids.iterator.flatMap(kid => if kid.isConst && kid.mounted.isEmpty then passMembers(kid.children) else Iterator.single(kid))
-
-    /** What one render pass decided for the keyed mounts it shows, its own and those of the regions nested in it that it subscribes: the
-      * nodes whose identity the pass shows more than once, with the message each of them shows instead of an instance. The regions the pass
-      * subscribes are born in it, under its `id` (see [[MountScope]]).
-      */
-    final private[kyo] class MountPass(val id: Long, duplicates: java.util.IdentityHashMap[ReactiveUI, String]):
-        /** The message `node` shows when the pass found its identity in another place too. */
-        def duplicate(node: ReactiveUI): Maybe[String] = Maybe(duplicates.get(node))
-
-    private[kyo] object MountPass:
-        private val serials = new java.util.concurrent.atomic.AtomicLong()
-
-        /** A number no pass or subscription had before. */
-        def fresh(): Long = serials.incrementAndGet()
-
-        private val noDuplicates = new java.util.IdentityHashMap[ReactiveUI, String]()
-
-        /** The pass of a subscription the table no longer follows: it decides nothing, and nothing it subscribes is followed either. */
-        val stale: MountPass = new MountPass(0L, noDuplicates)
-
-        /** A pass that found nothing to decide. */
-        def clean(id: Long): MountPass = new MountPass(id, noDuplicates)
-    end MountPass
-
-    /** What a [[MountTable]] knows about one region: `cover`, the pass its current subscription was born in, `holds`, the keyed identities
-      * its latest pass shows directly (an identity it shows twice is left out), `walked` and `pass`, the walk that pass saw and what it
-      * decided, so the first pass of a subscription over the very walk its parent decided reuses that decision, and `handoff`, the
-      * snapshots instances that left this region left at their paths for a `KeepLatest` successor here.
-      *
-      * Only regions whose walk holds a mount have an entry. A region without one is followed by the subscription with the newest birth
-      * that acts on it, so a region that gains its first mount in a pass of its own takes its entry then.
-      */
-    final private case class RegionEntry(
-        cover: Long,
-        holds: Set[MountIdentity],
-        walked: Maybe[Seq[ReactiveUI]],
-        complete: Boolean,
-        pass: MountPass,
-        handoff: Dict[Seq[String], UI],
-        // The node that shows each held identity, as the pass recorded it: what a duplicate found at a cut is named by.
-        places: Dict[MountIdentity, ReactiveUI] = Dict.empty
-    )
-
-    /** A live keyed instance, where it was last shown, and in which region. */
-    final private case class MountSlot(instance: MountInstance, path: Seq[String], region: RegionKey)
-
-    /** `waiting` are the identities a cut has to decide: an instance no region shows any more (in transit), one that a second region
-      * claims while the first still shows it, one that waits to start until what is in transit is settled, and one whose duplicate
-      * report may have ended.
-      *
-      * `heldBy` is the regions whose entry holds each identity, changed together with `regions` by every change of an entry's `holds`
-      * (an identity no region holds has no key), so who shows an identity is a lookup and not a scan of every region. Every live
-      * instance is held by a region or waits for a cut: a claim files one only while a region holds it, a pass puts one whose last
-      * holder it took in waiting, and a cut releases what it finds held by none. So a pass finds what it put in transit among the
-      * identities it took from a region.
-      *
-      * `ordered` is the keys of `regions` in tree order (see [[RegionKey.treeOrder]]), changed together with `regions` by every entry a
-      * change adds or drops, so whether a region lies inside another, and which ones do, is a lookup and not a scan of every region.
-      */
-    final private case class TableState(
-        instances: Dict[MountIdentity, MountSlot],
-        regions: Dict[RegionKey, RegionEntry],
-        ordered: scala.collection.immutable.TreeSet[RegionKey],
-        heldBy: Dict[MountIdentity, Set[RegionKey]],
-        waiting: Set[MountIdentity],
-        views: Dict[MountIdentity, Chunk[ClaimView]],
-        // Instances a cut is releasing right now: a new one may not run before they are gone, and the table's end waits for them.
-        releasing: Chunk[MountInstance],
-        // What the cuts decided and the settling fiber has still to carry out, oldest first.
-        decided: Chunk[Decision]
-    ):
-        /** Whether a new instance has to wait for a cut before its effect runs. */
-        def unsettled: Boolean = waiting.nonEmpty || releasing.nonEmpty || decided.nonEmpty
-
-        /** The regions that hold `identity`. */
-        def holding(identity: MountIdentity): Set[RegionKey] = heldBy.getOrElse(identity, Set.empty)
-
-        def holders(identity: MountIdentity): Int = holding(identity).size
-
-        /** The first region after `key` in tree order: one that lies inside `key` when any does. */
-        def next(key: RegionKey): Maybe[RegionKey] = Maybe.fromOption(ordered.minAfter(RegionKey(key.path, key.depth + 1)))
-
-        /** The regions that lie inside `key`, in tree order. */
-        def inside(key: RegionKey): Iterator[RegionKey] =
-            ordered.iteratorFrom(RegionKey(key.path, key.depth + 1)).takeWhile(key.encloses)
-
-        /** This state with `entry` at `key`, `heldBy` following its `holds` and `ordered` its key. */
-        def withEntry(key: RegionKey, entry: RegionEntry): TableState =
-            val old = regions.get(key)
-            copy(
-                regions = regions.update(key, entry),
-                ordered = if old.isEmpty then ordered + key else ordered,
-                heldBy = TableState.reindex(heldBy, key, old.fold(Set.empty[MountIdentity])(_.holds), entry.holds)
-            )
-        end withEntry
-
-        /** What contradicts the invariants: a `heldBy` that differs from the `holds` of the entries, an `ordered` that differs from the
-          * keys of the entries or tells another region than a recount from the paths whether one lies inside it, or a live instance that
-          * no region holds and that waits for no cut. A check for tests, which scans every region and instance.
-          */
-        def inconsistency: Maybe[String] =
-            val recounted = regions.foldLeft(Dict.empty[MountIdentity, Set[RegionKey]])((acc, key, e) =>
-                TableState.reindex(acc, key, Set.empty, e.holds)
-            )
-            // The paths some region lies below, and the deepest region at each path: a region lies inside `key` when one lies below its
-            // path or deeper at it.
-            val (below, deepest) = regions.foldLeft((Set.empty[Seq[String]], Dict.empty[Seq[String], Int])) { (acc, key, _) =>
-                val (paths, depths) = acc
-                (
-                    paths ++ (0 until key.path.size).map(key.path.take),
-                    depths.update(key.path, depths.getOrElse(key.path, key.depth).max(key.depth))
-                )
-            }
-            def same(a: Set[RegionKey], b: Set[RegionKey]): Boolean = a.size == b.size && a.forall(b.contains)
-            if recounted.size != heldBy.size || !recounted.forall((identity, keys) => same(keys, holding(identity))) then
-                Present(s"heldBy ${heldBy.mkString(", ")} differs from the entries' holds ${recounted.mkString(", ")}")
-            else if ordered.size != regions.size || !regions.forall((key, _) => ordered.contains(key)) then
-                Present(s"the regions in tree order ${ordered.mkString(", ")} differ from the entries' keys ${regions.mkString(", ")}")
-            else if !regions.forall((key, _) =>
-                    next(key).exists(key.encloses) == (below.contains(key.path) || deepest(key.path) > key.depth)
-                )
-            then
-                Present(s"the tree order ${ordered.mkString(", ")} tells a region whether one lies inside it otherwise than its paths do")
-            else
-                instances.foldLeft(Maybe.empty[String]) { (found, identity, _) =>
-                    if found.isEmpty && holders(identity) == 0 && !waiting.contains(identity) then
-                        Present(s"the live instance of $identity is held by no region and waits for no cut")
-                    else found
-                }
-            end if
-        end inconsistency
-    end TableState
-
-    private object TableState:
-        val empty: TableState =
-            TableState(
-                Dict.empty,
-                Dict.empty,
-                scala.collection.immutable.TreeSet.empty,
-                Dict.empty,
-                Set.empty,
-                Dict.empty,
-                Chunk.empty,
-                Chunk.empty
-            )
-
-        /** The state of an evicted table, empty like [[empty]] but never `eq` to it or to any other state, so a change computed from a
-          * state read before the eviction fails its compare-and-set, and one computed from this state is never written.
-          */
-        val ended: TableState = empty.copy()
-
-        /** `heldBy` after the entry at `key` went from holding `before` to holding `after`. */
-        def reindex(
-            heldBy: Dict[MountIdentity, Set[RegionKey]],
-            key: RegionKey,
-            before: Set[MountIdentity],
-            after: Set[MountIdentity]
-        ): Dict[MountIdentity, Set[RegionKey]] =
-            if before eq after then heldBy
-            else
-                val dropped = before.foldLeft(heldBy) { (acc, identity) =>
-                    if after.contains(identity) then acc
-                    else
-                        val rest = acc.getOrElse(identity, Set.empty) - key
-                        if rest.isEmpty then acc.remove(identity) else acc.update(identity, rest)
-                }
-                after.foldLeft(dropped) { (acc, identity) =>
-                    if before.contains(identity) then acc else acc.update(identity, acc.getOrElse(identity, Set.empty) + key)
-                }
-    end TableState
-
-    /** What one cut decided, for the settling fiber to carry out in this order: release, let new instances run, switch the nodes, start
-      * the instances that were still to start.
-      */
-    final private case class Decision(
-        released: Chunk[MountSlot],
-        launches: Chunk[MountInstance],
-        switches: Chunk[(ClaimView, ClaimState)],
-        starts: Chunk[(MountIdentity, ClaimView)]
-    )
-
-    /** What a keyed node shows: the live instance of its identity, what its `PendingPolicy` shows while a cut decides who the instance
-      * belongs to, or the report of an identity shown in more than one place.
-      */
-    private[kyo] enum ClaimState:
-        case Live(instance: MountInstance)
-        case Waiting(shown: Maybe[UI])
-        case Duplicate(message: String)
-    end ClaimState
-
-    private[kyo] object ClaimState:
-        given CanEqual[ClaimState, ClaimState] = CanEqual.derived
-
-    /** One keyed node's claim on its identity, which a cut can switch. `group` is the group of the pass that made the claim, and
-      * `showing` the group of what the node shows for its current state, which a switch releases.
-      */
-    final private[kyo] class ClaimView(
-        val node: ReactiveUI,
-        val spec: MountedSpec,
-        val region: RegionKey,
-        val frames: () => Failures.Scope,
-        val seed: Maybe[UI],
-        val state: SignalRef[ClaimState],
-        val group: ReleaseGroup
-    ):
-        val showing = new java.util.concurrent.atomic.AtomicReference[Maybe[ReleaseGroup]](Absent)
-    end ClaimView
-
-    /** What opening a pass changed: the pass, the instances it put in transit, and the duplicate reports it made, with how many
-      * live instances it examined for whether a region still shows them, and how many regions it looked at for one inside its own.
-      */
-    final private case class Opened(
-        pass: MountPass,
-        dropped: Chunk[MountSlot],
-        waits: Boolean,
-        duplicates: Chunk[String],
-        work: Int,
-        examined: Int = 0,
-        below: Int = 0
-    )
-
-    /** Work counts of one session, for measuring what the tables cost: regions registered and unregistered, region passes that planned
-      * their walk and passes that skipped it (no mount in it and none recorded below), cuts recorded and settled, regions a cut check
-      * looked at, live instances a planned pass examined for whether a region still shows them, regions a pass without a mount looked
-      * at for whether one lies inside its own, the verdicts on an interrupted effect that wait for a cut now (see [[MountFate]]), and the
-      * decisions taken on interrupts that ended a [[kyo.UI.fork]] fiber.
-      */
-    final private[kyo] class MountCounters:
-        val pendingVerdicts = new java.util.concurrent.atomic.AtomicLong()
-        val forkInterrupts  = new java.util.concurrent.atomic.AtomicLong()
-        val registered      = new java.util.concurrent.atomic.AtomicLong()
-        val unregistered    = new java.util.concurrent.atomic.AtomicLong()
-        val planned         = new java.util.concurrent.atomic.AtomicLong()
-        val skipped         = new java.util.concurrent.atomic.AtomicLong()
-        val cuts            = new java.util.concurrent.atomic.AtomicLong()
-        val settled         = new java.util.concurrent.atomic.AtomicLong()
-        val scanned         = new java.util.concurrent.atomic.AtomicLong()
-        val examined        = new java.util.concurrent.atomic.AtomicLong()
-        val below           = new java.util.concurrent.atomic.AtomicLong()
-    end MountCounters
-
-    /** The invariant checks of one session's tables, for tests (see `TableState.inconsistency`): how many states were checked, and what
-      * contradicted the invariants, in the order found.
-      */
-    final private[kyo] class MountAudit:
-        import AllowUnsafe.embrace.danger
-
-        private val found = AtomicRef.Unsafe.init(Chunk.empty[String])
-        val checked       = new java.util.concurrent.atomic.AtomicLong()
-
-        private[ReactiveUI] def check(s: TableState): Unit =
-            discard(checked.incrementAndGet())
-            s.inconsistency.foreach(message => discard(found.getAndUpdate(_.append(message))))
-
-        def inconsistencies: Chunk[String] = found.get()
-    end MountAudit
-
-    /** One mount session: the open [[kyo.UI.batch]] blocks, which together form one change, and the tables waiting for that change to end
-      * before they can take a cut. With `audited`, its tables check every state they take (see [[MountAudit]]).
-      */
-    final private[kyo] class MountSession(audited: Boolean = false):
-        import AllowUnsafe.embrace.danger
-
-        private val open    = new java.util.concurrent.atomic.AtomicInteger()
-        private val pending = AtomicRef.Unsafe.init(Set.empty[MountTable])
-        private val top     = AtomicRef.Unsafe.init(Maybe.empty[MountTable])
-        val counters        = new MountCounters
-        val audit           = if audited then Present(new MountAudit) else Maybe.empty[MountAudit]
-
-        /** The session's root table, once [[MountTable.root]] has made it. */
-        def root: Maybe[MountTable] = top.get()
-
-        private[ReactiveUI] def rooted(table: MountTable): Unit = top.set(Present(table))
-
-        def isOpen: Boolean = open.get() > 0
-
-        def enter(): Unit = discard(open.incrementAndGet())
-
-        /** Ends one batch; the last one to end lets every waiting table take its cut. */
-        def exit(): Unit =
-            if open.decrementAndGet() == 0 then pending.getAndSet(Set.empty).foreach(_.closeEpoch())
-
-        /** `table` takes its cut when the change now open ends, or at once when none is open. */
-        def defer(table: MountTable): Unit =
-            discard(pending.getAndUpdate(_ + table))
-            if !isOpen && pending.getAndUpdate(_ - table).contains(table) then table.closeEpoch()
-        end defer
-
-        /** Runs `v` as one change: the cuts its writes cause wait until it ends. */
-        def within[A, S](v: => A < S)(using Frame): A < (S & Sync) =
-            Sync.Unsafe.defer(enter()).andThen(Sync.ensure(Sync.Unsafe.defer(exit()))(MountSession.current.let(Present(this))(v)))
-    end MountSession
-
-    private[kyo] object MountSession:
-        /** The session of the handler or mount effect that is running, inherited by the fibers they fork: where [[kyo.UI.batch]] opens its
-          * change.
-          */
-        val current: Local[Maybe[MountSession]] = Local.init(Maybe.empty[MountSession])
-
-        /** Whether a session subscribed under it checks its tables' states (see [[MountAudit]]). For tests. */
-        val audited: Local[Boolean] = Local.init(false)
-    end MountSession
-
-    /** The passes of one region subscription as its observation records them in [[stamp]] (see `Signal.ReadStamp`): how many started,
-      * which of them last recorded its walk in the table, and whether a write landed since the latest read. A cut waits for a region
-      * until it has seen every write of the change: it was current when the change ended, or a pass that started after that has recorded
-      * its walk.
-      */
-    final private[kyo] class RegionWatch(scope: MountScope):
-        /** What the region's observation records, through `Signal.observeStamped`; each rest rechecks the table. */
-        val stamp: Signal.ReadStamp = new Signal.ReadStamp(() => scope.table.recheck())
-
-        private val planned = new java.util.concurrent.atomic.AtomicLong()
-        private val ended   = new java.util.concurrent.atomic.AtomicBoolean()
-
-        /** The pass that started last has recorded its walk. */
-        def recorded(): Unit =
-            planned.set(stamp.passes)
-            scope.table.recheck()
-
-        def end(): Unit =
-            ended.set(true)
-            scope.table.recheck()
-
-        def started: Long = stamp.passes
-
-        def restedSoFar: Long = stamp.rests
-
-        /** Whether the region has seen every write up to a cut taken when it had started `at` passes and rested `restsAt` times: a pass
-          * started since has recorded its walk, or its latest pass has, and its stamp says nothing landed since, or it re-read and found
-          * its value unchanged since. The last is what catches up a region whose stamp cannot tell (a signal without an exact read).
-          */
-        def caughtUp(at: Long, restsAt: Long)(using AllowUnsafe): Boolean =
-            ended.get() || !scope.followed || {
-                val p = planned.get()
-                p > at || (p == stamp.passes && (!stamp.behind() || stamp.rests > restsAt))
-            }
-    end RegionWatch
-
-    /** The keyed instances of one owner, the session root or a mount instance's content, found by their own [[MountIdentity]], and what
-      * every region of that content shows.
-      *
-      * Regions own no instances. A region's pass records which identities it shows; an instance lives while a region of the table shows it.
-      * A pass covers every region nested in it that it subscribes, so a move between two of them is recorded at once.
-      *
-      * Between regions that render separately the table decides nothing in a pass: release, move and duplicate are decided at a cut. An
-      * instance no region shows any more stays in transit, alive, and a region that shows it next adopts it. A second region that claims
-      * one the first still shows waits, showing what its node's `PendingPolicy` says. A new instance waits to start while anything is in
-      * transit, so what is released is released before it starts. When the change ends (the pass itself, or the [[kyo.UI.batch]] blocks of
-      * the session it falls into), the table records where every region's passes stand; the cut is reached once each has seen every write
-      * so far. A region over a signal without an exact read (one built with `Signal.initRaw`, or a combinator over one) cannot tell whether
-      * a write reached it, so it counts as behind until its next re-read, which its repair timer brings within one repair interval
-      * (`Signal.defaultRepairInterval`): a cut in a table that holds such a region can wait that long. The decision is taken the moment the
-      * cut is reached, by whatever reports the last region caught up: an identity shown once has moved there, one shown nowhere is
-      * released, and one shown in several places is reported at all of them. It depends on what the regions show once they all saw the
-      * writes, never on the order they rendered them in, and a write after it is a change of its own, also when the table's settling fiber
-      * has not yet carried the decision out: a node hidden and shown again gets a new instance.
-      * An event handler is no change of its own: it may wait for what its writes cause, a release or a new instance's content, and a
-      * change that stayed open while it waits would never end.
-      *
-      * An identity shown more than once by one pass is reported at once: that pass is a cut of its own.
-      *
-      * The old subscription of a region stops only once the enclosing region's previous value has released, which can be after the new one
-      * started. Each subscription is born in the pass that subscribed it, and an entry follows the subscription of the pass that last
-      * covered it, so an older one that still runs a pass changes nothing.
-      *
-      * All of it is one immutable state behind one atomic reference, changed by compare-and-set: regions of a table run their passes on
-      * fibers of their own.
-      */
-    final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope, val group: ReleaseGroup):
-        import AllowUnsafe.embrace.danger
-
-        private val state = AtomicRef.Unsafe.init(TableState.empty)
-        // Verdicts on interrupted effects of filed instances that wait for the table to change (see MountFate).
-        private val verdicts = AtomicRef.Unsafe.init(Chunk.empty[(MountFate, Promise.Unsafe[Boolean, Any])])
-        private val watches  = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
-        private val cut      = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
-        private val wake     = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
-        private val running  = new java.util.concurrent.atomic.AtomicBoolean()
-
-        def frames: Failures.Scope = framesOf()
-
-        /** Whether [[evictAll]] has run: the table then holds nothing, follows no subscription and takes no change. */
-        private[ReactiveUI] def closed: Boolean = state.get() eq TableState.ended
-
-        private[ReactiveUI] def read: TableState = state.get()
-
-        /** What the table still holds, one `part=count` per part that is not empty: nothing once it has been evicted and every
-          * subscription on it has ended. For tests.
-          */
-        def leftovers: Chunk[String] =
-            val s = state.get()
-            Chunk(
-                "instances" -> s.instances.size,
-                "regions"   -> s.regions.size,
-                "ordered"   -> s.ordered.size,
-                "heldBy"    -> s.heldBy.size,
-                "waiting"   -> s.waiting.size,
-                "views"     -> s.views.size,
-                "releasing" -> s.releasing.size,
-                "decided"   -> s.decided.size,
-                "watches"   -> watches.get().size,
-                "verdicts"  -> verdicts.get().size,
-                "cut"       -> cut.get().fold(0)(_ => 1),
-                "settling"  -> (if running.get() then 1 else 0)
-            ).filter(_._2 > 0).map((part, n) => s"$part=$n")
-        end leftovers
-
-        /** The paths of the regions the table has an entry for, in tree order. For tests. */
-        def regionPaths: Chunk[Seq[String]] = Chunk.from(state.get().ordered.iterator.map(_.path))
-
-        /** Changes the state by `f` and returns what `f` answered. Once the table is closed `f` sees the empty state it was left in, and
-          * what it would change is dropped: a pass, claim or subscription that comes late adds nothing to an evicted table.
-          */
-        @scala.annotation.tailrec
-        final private[ReactiveUI] def modify[A](f: TableState => (TableState, A)): A =
-            val before       = state.get()
-            val (after, out) = f(before)
-            if (after eq before) || (before eq TableState.ended) then out
-            else if state.compareAndSet(before, after) then
-                session.audit.foreach(_.check(after))
-                if verdicts.get().nonEmpty then settleVerdicts()
-                out
-            else modify(f)
-            end if
-        end modify
-
-        /** Whether the interrupt that ended the effect of `fate`'s instance is a failure: at once when the table can tell, else after the
-          * change that lets it.
-          */
-        private[ReactiveUI] def verdict(fate: MountFate)(using Frame): Boolean < Async =
-            Sync.Unsafe.defer {
-                fate.judge(state.get()) match
-                    case Present(failed) => Kyo.lift(failed)
-                    case Absent          =>
-                        val answer = Promise.Unsafe.init[Boolean, Any]()
-                        discard(verdicts.getAndUpdate(_.append((fate, answer))))
-                        discard(session.counters.pendingVerdicts.incrementAndGet())
-                        // The table may have changed between the judgement and the filing.
-                        settleVerdicts()
-                        answer.safe.get
-            }
-
-        /** Gives every waiting verdict the table can tell now its answer. */
-        private[ReactiveUI] def settleVerdicts(): Unit =
-            val waiting = verdicts.get()
-            if waiting.nonEmpty then
-                val s = state.get()
-                waiting.foreach { entry =>
-                    entry._1.judge(s).foreach { failed =>
-                        if take(entry) then
-                            discard(session.counters.pendingVerdicts.decrementAndGet())
-                            entry._2.completeDiscard(Result.succeed(failed))
-                    }
-                }
-            end if
-        end settleVerdicts
-
-        /** Removes the waiting verdict `entry`; true for the one caller that removed it. */
-        @scala.annotation.tailrec
-        private def take(entry: (MountFate, Promise.Unsafe[Boolean, Any])): Boolean =
-            val now = verdicts.get()
-            if !now.exists(_ eq entry) then false
-            else if verdicts.compareAndSet(now, now.filterNot(_ eq entry)) then true
-            else take(entry)
-        end take
-
-        /** A scope for one subscription of the table's content, shown at `path` with transparent depth `depth`. The table follows the
-          * newest one that `follow`s: a subscription made by a region the table around it no longer follows shows the content and
-          * changes nothing.
-          */
-        def content(path: Seq[String], depth: Int, follow: Boolean = true)(using Frame): MountScope < Sync =
-            Sync.Unsafe.defer {
-                val birth = if follow then MountPass.fresh() else MountPass.stale.id
-                if follow then
-                    modify { s =>
-                        val entry = s.regions.get(RegionKey.top) match
-                            case Present(old) => old.copy(cover = birth)
-                            case Absent       => RegionEntry(birth, Set.empty, Absent, complete = true, MountPass.stale, Dict.empty)
-                        (s.withEntry(RegionKey.top, entry), ())
-                    }
-                end if
-                new MountScope(this, RegionKey.top, birth, path, depth, Nil)
-            }
-
-        /** Registers a region subscription's watch for the cuts of this table, until the current scope closes. */
-        def register(scope: MountScope)(using Frame): RegionWatch < (Sync & Scope) =
-            Sync.Unsafe.defer {
-                val watch = new RegionWatch(scope)
-                discard(watches.getAndUpdate(_ + watch))
-                discard(session.counters.registered.incrementAndGet())
-                Scope.ensure(Sync.Unsafe.defer {
-                    discard(watches.getAndUpdate(_ - watch))
-                    discard(session.counters.unregistered.incrementAndGet())
-                    watch.end()
-                }).andThen(watch)
-            }
-
-        /** Wakes the settling fiber, if one waits. Callable from any thread, without effects. */
-        def recheck(): Unit =
-            decide()
-            if running.get() then wake.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
-        end recheck
-
-        /** The change that put identities in waiting has ended: records where every region's passes stand. */
-        def closeEpoch(): Unit =
-            if state.get().waiting.nonEmpty then
-                val all = watches.get()
-                cut.set(Present(Chunk.from(all.iterator.map(w => (w, w.started, w.restedSoFar)))))
-                discard(session.counters.cuts.incrementAndGet())
-                recheck()
-        end closeEpoch
-
-        /** Makes sure what is waiting gets decided: a settling fiber runs, and the cut is taken when the change ends. */
-        private[ReactiveUI] def awaitCut()(using Frame): Unit < Sync =
-            Sync.Unsafe.defer {
-                val start = running.compareAndSet(false, true)
-                session.defer(this)
-                if start then Fiber.initUnscoped(settling).unit else Kyo.unit
-            }
-
-        private def reached(all: Chunk[(RegionWatch, Long, Long)]): Boolean =
-            discard(session.counters.scanned.addAndGet(all.size))
-            all.forall((w, at, restsAt) => w.caughtUp(at, restsAt))
-
-        /** Takes the cut's decision the moment the cut is reached: called by whatever reports a region caught up, and when the change
-          * ends. Deciding later, on the settling fiber, would let a region that renders a later write record an identity again before
-          * the decision, which would then adopt an instance the cut had to release. Only one caller takes a cut: the one that clears it.
-          * The decision is a change of the table state; what it asks for (releases, launches, switches, starts) is left there for the
-          * settling fiber, which carries it out in order.
-          */
-        private def decide(): Unit =
-            val taken = cut.get()
-            // A closed table has nothing to decide: evictAll released everything a cut could have.
-            if taken.nonEmpty && !closed && reached(taken.get) && cut.compareAndSet(taken, Absent) then
-                discard(session.counters.settled.incrementAndGet())
-                modify { s =>
-                    var instances = s.instances
-                    var released  = Chunk.empty[MountSlot]
-                    var starts    = Chunk.empty[(MountIdentity, ClaimView)]
-                    var switches  = Chunk.empty[(ClaimView, ClaimState)]
-                    var launches  = Chunk.empty[MountInstance]
-                    s.waiting.foreach { identity =>
-                        val held    = s.holding(identity)
-                        val views   = s.views.get(identity).getOrElse(Chunk.empty)
-                        val holding = views.filter(v => held.contains(v.region))
-                        held.size match
-                            case 0 =>
-                                instances.get(identity).foreach { slot =>
-                                    released = released.append(slot)
-                                    instances = instances.remove(identity)
-                                }
-                            case 1 =>
-                                instances.get(identity) match
-                                    case Present(slot) =>
-                                        launches = launches.append(slot.instance)
-                                        holding.foreach(v => switches = switches.append((v, ClaimState.Live(slot.instance))))
-                                        holding.headMaybe.foreach(v =>
-                                            instances = instances.update(identity, slot.copy(path = v.spec.path, region = v.region))
-                                        )
-                                    case Absent =>
-                                        holding.headMaybe.foreach(v => starts = starts.append((identity, v)))
-                            case _ =>
-                                instances.get(identity).foreach { slot =>
-                                    released = released.append(slot)
-                                    instances = instances.remove(identity)
-                                }
-                                // Named from what the regions' passes recorded, so a place whose claim is not filed yet is named too.
-                                val nodes = held.foldLeft(Chunk.empty[ReactiveUI])((acc, key) =>
-                                    s.regions.get(key).flatMap(_.places.get(identity)).fold(acc)(acc.append)
-                                )
-                                val message = duplicateMessage(identity, nodes)
-                                holding.foreach(v => switches = switches.append((v, ClaimState.Duplicate(message))))
-                        end match
-                    }
-                    (
-                        s.copy(
-                            instances = instances,
-                            waiting = Set.empty,
-                            releasing = s.releasing.concat(released.map(_.instance)),
-                            decided = s.decided.append(Decision(released, launches, switches, starts))
-                        ),
-                        ()
-                    )
-                }
-            end if
-        end decide
-
-        /** Carries out what the cuts decided, one decision after another, while anything waits or is still to be carried out. */
-        private def settling(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
-                val signal = wake.get()
-                if closed then
-                    running.set(false)
-                    Kyo.unit
-                else
-                    val next = modify[Maybe[Decision]] { s =>
-                        s.decided.headMaybe match
-                            case Present(d) => (s.copy(decided = s.decided.drop(1)), Present(d))
-                            case Absent     => (s, Absent)
-                    }
-                    next match
-                        case Present(decision) => carryOut(decision).andThen(settling)
-                        case Absent            =>
-                            val s = state.get()
-                            if s.waiting.isEmpty && s.decided.isEmpty then
-                                running.set(false)
-                                // An identity may have started waiting, or a decision been taken, between the read and the flag.
-                                val again = state.get()
-                                if (again.waiting.nonEmpty || again.decided.nonEmpty) && running.compareAndSet(false, true) then settling
-                                else Kyo.unit
-                            else signal.safe.get.andThen(settling)
-                            end if
-                    end match
-                end if
-            }
-
-        /** Releases what a decision released, then lets the instances it kept run, switches the nodes, and starts what was still to start.
-          * What the switched nodes show is released by the switch, so it is marked released before the first instance goes.
-          */
-        private def carryOut(decision: Decision)(using Frame): Unit < Async =
-            val released = decision.released
-            Async.uninterruptible(
-                Sync.Unsafe.defer(decision.switches.foreach((view, _) => view.showing.get().foreach(_.release())))
-                    .andThen(Kyo.foreachDiscard(released)(_.instance.teardown))
-                    .andThen(Sync.Unsafe.defer(modify(s =>
-                        (s.copy(releasing = s.releasing.filterNot(i => released.exists(_.instance eq i))), ())
-                    )))
-            )
-                .andThen(Kyo.foreachDiscard(decision.launches)(_.launch))
-                .andThen(Kyo.foreachDiscard(decision.switches) { (view, next) =>
-                    next match
-                        case ClaimState.Live(instance) =>
-                            instance.supervision.adopt(view.spec, view.frames(), moved = true).andThen(view.state.set(next))
-                        case _ => view.state.set(next)
-                })
-                .andThen(Kyo.foreachDiscard(decision.starts) { (identity, view) =>
-                    MountInstance.make(view.spec, view.seed, view.frames(), this).map { fresh =>
-                        Sync.Unsafe.defer {
-                            fresh.fate.filed(identity)
-                            modify { s =>
-                                if s.instances.contains(identity) || s.holders(identity) == 0 then (s, false)
-                                else (s.copy(instances = s.instances.update(identity, MountSlot(fresh, view.spec.path, view.region))), true)
-                            }
-                        }.map(kept => if kept then fresh.launch.andThen(view.state.set(ClaimState.Live(fresh))) else fresh.teardown)
-                    }
-                })
-        end carryOut
-
-        /** Releases every instance, in transit or not, and waits for all of it, also for the releases a cut has already started: a
-          * teardown of an instance that is already being torn down waits for that one to finish.
-          *
-          * The table is closed from then on (see [[closed]]): its state stays empty, a cut it had recorded is dropped, and the settling
-          * fiber stops. A region that renders, claims or reports a watch later changes nothing in it.
-          */
-        def evictAll(using Frame): Unit < Async =
-            Sync.Unsafe.defer {
-                group.release()
-                val last = state.getAndSet(TableState.ended)
-                val all  = last.instances.foldLeft(last.releasing)((acc, _, slot) => acc.append(slot.instance))
-                cut.set(Absent)
-                session.audit.foreach(_.check(TableState.ended))
-                settleVerdicts()
-                // Wakes the settling fiber, which stops on the closed table.
-                recheck()
-                if all.isEmpty then Kyo.unit
-                else Async.uninterruptible(Kyo.foreachDiscard(all)(_.teardown))
-            }
-    end MountTable
-
-    private[kyo] object MountTable:
-        val nothingToRelease: () => Unit < Async = () => Kyo.unit
-
-        /** The table of a session rooted at `path`, whose keyed instances are released with `group`, and the scope of its one subscription. */
-        def root(path: Seq[String], session: MountSession = new MountSession, group: ReleaseGroup = ReleaseGroup.root())(using
-            Frame
-        ): (MountTable, MountScope) < Sync =
-            val table = new MountTable(session, () => Nil, group)
-            Sync.Unsafe.defer(session.rooted(table)).andThen(table.content(path, 0).map(scope => (table, scope)))
-        end root
-    end MountTable
-
-    /** One subscription's handle on a [[MountTable]]: the region it renders, the pass it was born in, and where the table's content is shown,
-      * which makes region keys relative. The boundaries between the region and the table's content come first in `frames`.
-      */
-    final private[kyo] class MountScope private[ReactiveUI] (
-        val table: MountTable,
-        val region: RegionKey,
-        birth: Long,
-        basePath: Seq[String],
-        baseDepth: Int,
-        boundaries: Failures.Scope
-    ):
-        import AllowUnsafe.embrace.danger
-
-        @volatile private var watch: Maybe[RegionWatch] = Absent
-
-        def frames: Failures.Scope = boundaries ++ table.frames
-
-        /** The entry this subscription acts on: its own, one it takes over as the newest subscription of a region without a covering
-          * pass, or a fresh one for a region that had none. `Absent` when a newer subscription follows the region, and in a closed table,
-          * which follows none.
-          */
-        private def entryIn(s: TableState): Maybe[RegionEntry] =
-            if s eq TableState.ended then Absent
-            else
-                s.regions.get(region) match
-                    case Present(e) if e.cover == birth => Present(e)
-                    case Present(e) if e.cover < birth  => Present(e.copy(cover = birth))
-                    case Present(_)                     => Absent
-                    case Absent                         =>
-                        if birth == MountPass.stale.id then Absent
-                        else Present(RegionEntry(birth, Set.empty, Absent, complete = false, MountPass.stale, Dict.empty))
-
-        /** Whether the table still follows this subscription. */
-        def followed: Boolean = entryIn(table.read).nonEmpty
-
-        def current(using Frame): Boolean < Sync = Sync.Unsafe.defer(followed)
-
-        private[ReactiveUI] def keyOf(at: ReactiveRegion.RegionIdentity): RegionKey =
-            val rel = at.path.drop(basePath.size)
-            RegionKey(rel, if rel.isEmpty then at.transparentDepth - baseDepth else at.transparentDepth)
-
-        /** The scope of the region `kid`, which `pass` subscribes. */
-        def child(pass: MountPass, kid: ReactiveUI): MountScope =
-            val inner = kid.bounded.fold(boundaries)(b => FailureFrame.Boundary(b.settings) :: boundaries)
-            new MountScope(table, keyOf(kid.at), pass.id, basePath, baseDepth, inner)
-
-        /** Registers this subscription's passes for the table's cuts; its observation reports to the answer. */
-        def register(using Frame): RegionWatch < (Sync & Scope) =
-            table.register(this).map { w =>
-                watch = Present(w)
-                w
-            }
-
-        /** The pass that started last has recorded everything it shows. */
-        def recorded(using Frame): Unit < Sync = Sync.Unsafe.defer(watch.foreach(_.recorded()))
-
-        /** Opens a render pass of the region over `kids`, the region's walk. It records what the region and every region nested in the walk
-          * show, gives none of the places of an identity shown twice an instance, and drops the regions the walk no longer has, except
-          * those inside `retained` rows of a keyed list, whose subscriptions carry on. An instance no region shows any more goes in
-          * transit, and leaves its snapshot for a `KeepLatest` successor in the region that showed it; a cut decides it (see
-          * [[MountTable]]). A pass whose walk has no mount, in a region with nothing recorded below it, records nothing.
-          *
-          * `kids` is read only when the pass needs it. `holdsMount`, when the caller knows it, answers whether a mount is in the walk
-          * without reading it, so a keyed list without mounts never collects its rows' walks.
-          */
-        def openWalk(
-            kids: => Seq[ReactiveUI],
-            retained: scala.collection.Set[String] = Set.empty,
-            holdsMount: Maybe[Boolean] = Absent
-        )(using Frame): (MountPass, () => Unit < Async) < Sync =
-            Sync.Unsafe.defer {
-                lazy val walk  = kids
-                lazy val mount = holdsMount match
-                    case Present(known) => known
-                    case Absent         => walk.exists(_.containsMount)
-                val id     = MountPass.fresh()
-                val opened = table.modify { s =>
-                    entryIn(s) match
-                        case Absent => (s, Opened(MountPass.stale, Chunk.empty, false, Chunk.empty, 0))
-                        // The first pass of a subscription over the walk the pass that subscribed it already decided.
-                        case Present(entry) if retained.isEmpty && entry.complete && entry.walked.exists(_ eq walk) =>
-                            (s, Opened(entry.pass, Chunk.empty, false, Chunk.empty, 0))
-                        // A walk without a mount, in a region that holds nothing: a region inside it would be the first after it in tree order.
-                        case Present(entry) if !mount && entry.holds.isEmpty =>
-                            s.next(region) match
-                                case Present(key) if region.encloses(key) =>
-                                    val (next, opened) = plan(s, entry, walk, retained, id)
-                                    (next, opened.copy(below = 1))
-                                case found =>
-                                    (
-                                        s,
-                                        Opened(
-                                            MountPass.clean(id),
-                                            Chunk.empty,
-                                            false,
-                                            Chunk.empty,
-                                            1,
-                                            below = if found.isEmpty then 0 else 1
-                                        )
-                                    )
-                        case Present(entry) => plan(s, entry, walk, retained, id)
-                }
-                if opened.examined > 0 then discard(table.session.counters.examined.addAndGet(opened.examined))
-                if opened.below > 0 then discard(table.session.counters.below.addAndGet(opened.below))
-                if opened.work == 1 then discard(table.session.counters.skipped.incrementAndGet())
-                else if opened.work == 2 then discard(table.session.counters.planned.incrementAndGet())
-                watch.foreach(_.recorded())
-                val reported = Kyo.foreachDiscard(opened.duplicates)(message => Log.warn(s"kyo-ui: $message"))
-                val dropped  = Kyo.foreachDiscard(opened.dropped)(slot => leaveSnapshot(slot.instance, slot.region, slot.path))
-                val waits    = if opened.waits then table.awaitCut() else Kyo.unit
-                reported.andThen(dropped).andThen(waits).andThen((opened.pass, MountTable.nothingToRelease))
-            }
-
-        private def plan(
-            s: TableState,
-            entry: RegionEntry,
-            kids: Seq[ReactiveUI],
-            retained: scala.collection.Set[String],
-            id: Long
-        ): (TableState, Opened) =
-            val rowDepth                               = region.path.size
-            def inRetainedRow(key: RegionKey): Boolean =
-                retained.nonEmpty && key.path.size > rowDepth && key.path.startsWith(region.path) && retained.contains(key.path(rowDepth))
-            val covered =
-                new java.util.LinkedHashMap[
-                    RegionKey,
-                    (Seq[ReactiveUI], scala.collection.mutable.ArrayBuffer[(MountIdentity, ReactiveUI)])
-                ]()
-            val seen = new java.util.LinkedHashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
-            def visit(at: RegionKey, walked: Seq[ReactiveUI]): Unit =
-                val holds = scala.collection.mutable.ArrayBuffer.empty[(MountIdentity, ReactiveUI)]
-                discard(covered.put(at, (walked, holds)))
-                passMembers(walked).foreach { member =>
-                    member.mounted match
-                        case Present(spec) =>
-                            spec.identity.foreach { identity =>
-                                holds += ((identity, member))
-                                discard(seen.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(member))
-                            }
-                        case Absent =>
-                            // A nested region without a mount in its walk needs no entry: its subscription takes one if it gains a mount.
-                            val key = keyOf(member.at)
-                            if member.containsMount && !inRetainedRow(key) then visit(key, member.children)
-                }
-            end visit
-            visit(region, kids)
-            val duplicates = new java.util.IdentityHashMap[ReactiveUI, String]()
-            var doubled    = Set.empty[MountIdentity]
-            var messages   = Chunk.empty[String]
-            seen.forEach { (identity, nodes) =>
-                if nodes.size > 1 then
-                    doubled += identity
-                    val message = duplicateMessage(identity, Chunk.from((0 until nodes.size).map(nodes.get)))
-                    messages = messages.append(message)
-                    nodes.forEach(node => discard(duplicates.put(node, message)))
-            }
-            val pass    = new MountPass(id, duplicates)
-            var lost    = Set.empty[MountIdentity]
-            var heldBy  = s.heldBy
-            var regions = s.regions
-            var ordered = s.ordered
-            s.inside(region).foreach { key =>
-                if !covered.containsKey(key) && !inRetainedRow(key) then
-                    s.regions.get(key).foreach { e =>
-                        lost ++= e.holds
-                        heldBy = TableState.reindex(heldBy, key, e.holds, Set.empty)
-                    }
-                    regions = regions.remove(key)
-                    ordered = ordered - key
-            }
-            var inside = Set.empty[MountIdentity]
-            covered.forEach { (key, value) =>
-                val (walked, found) = value
-                val kept            = found.iterator.filterNot((identity, _) => doubled.contains(identity)).toSeq
-                val holds           = kept.iterator.map(_._1).toSet
-                val places          = Dict.from(kept.toMap)
-                val old             = s.regions.get(key)
-                val before          = old.fold(Set.empty[MountIdentity])(_.holds)
-                inside ++= holds
-                lost ++= before.diff(holds)
-                heldBy = TableState.reindex(heldBy, key, before, holds)
-                val next =
-                    if key == region then
-                        entry.copy(holds = holds, walked = Present(walked), complete = retained.isEmpty, pass = pass, places = places)
-                    else
-                        RegionEntry(
-                            id,
-                            holds,
-                            Present(walked),
-                            complete = true,
-                            pass,
-                            old.fold(Dict.empty[Seq[String], UI])(_.handoff),
-                            places
-                        )
-                if old.isEmpty then ordered = ordered + key
-                regions = regions.update(key, next)
-            }
-            val next     = s.copy(regions = regions, ordered = ordered, heldBy = heldBy)
-            var examined = 0
-            // In transit: instances no region shows any more, which are among the identities this pass took from a region, since every
-            // other live instance is held or waits (see TableState). Contested: identities this pass shows that a region outside it shows
-            // too. Reported duplicates whose places changed may have ended.
-            val dropped = lost.foldLeft(Chunk.empty[(MountIdentity, MountSlot)]) { (acc, identity) =>
-                s.instances.get(identity) match
-                    case Present(slot) =>
-                        examined += 1
-                        if !s.waiting.contains(identity) && next.holders(identity) == 0 then acc.append((identity, slot)) else acc
-                    case Absent => acc
-            }
-            val contested = inside.filter(identity => next.holders(identity) > 1)
-            val reopened  = lost.filter(identity => s.views.get(identity).exists(_.nonEmpty))
-            val waiting   = s.waiting ++ dropped.map(_._1) ++ contested ++ reopened
-            (next.copy(waiting = waiting), Opened(pass, dropped.map(_._2), waiting.size > s.waiting.size, messages, 2, examined))
-        end plan
-
-        /** Leaves what `instance` showed at `path` in `at`, if that region is still there, for a `KeepLatest` successor. */
-        private def leaveSnapshot(instance: MountInstance, at: RegionKey, path: Seq[String])(using Frame): Unit < Sync =
-            instance.snapshot.map {
-                case Absent            => Kyo.unit
-                case Present(snapshot) =>
-                    Sync.Unsafe.defer(table.modify { s =>
-                        s.regions.get(at) match
-                            case Present(e) =>
-                                (s.withEntry(at, e.copy(handoff = e.handoff.update(path, snapshot))), ())
-                            case Absent => (s, ())
-                    })
-            }
-
-        /** [[openWalk]], with the release run and awaited at once. */
-        def beginWalk(
-            kids: => Seq[ReactiveUI],
-            retained: scala.collection.Set[String] = Set.empty,
-            holdsMount: Maybe[Boolean] = Absent
-        )(using Frame): MountPass < Async =
-            openWalk(kids, retained, holdsMount).map((pass, release) => release().andThen(pass))
-
-        /** `ui` as this pass paints it, rooted at `path`: a mount among `kids` that starts from the snapshot of the instance before it
-          * shows that snapshot in its slot already, as the instance will once it starts, rather than an empty slot until then.
-          */
-        def withSeeds(ui: UI, path: Seq[String], kids: Seq[ReactiveUI], pass: MountPass)(using Frame): UI < Sync =
-            Sync.Unsafe.defer {
-                val s = table.read
-                entryIn(s) match
-                    case Present(entry) if !entry.handoff.isEmpty =>
-                        val seeds = kids.foldLeft(Map.empty[Seq[String], UI]) { (acc, kid) =>
-                            kid.mounted.flatMap(spec => seedFor(s, entry, kid, spec, pass)).fold(acc)(seed => acc.updated(kid.path, seed))
-                        }
-                        if seeds.isEmpty then ui else showingSeeds(ui, path, seeds)
-                    case _ => ui
-                end match
-            }
-
-        private def seedFor(s: TableState, entry: RegionEntry, kid: ReactiveUI, spec: MountedSpec, pass: MountPass): Maybe[UI] =
-            spec.node.pendingPolicy match
-                case UI.PendingPolicy.Placeholder => Absent
-                case UI.PendingPolicy.KeepLatest  =>
-                    val starts = pass.duplicate(kid).isEmpty && spec.identity.forall(identity => !s.instances.contains(identity))
-                    if starts then entry.handoff.get(spec.path) else Absent
-
-        /** Ends a pass: the snapshots it could hand on are gone. */
-        def endWalk(using Frame): Unit < Sync =
-            Sync.Unsafe.defer(table.modify { s =>
-                s.regions.get(region) match
-                    case Present(e) if e.cover == birth && !e.handoff.isEmpty =>
-                        (s.withEntry(region, e.copy(handoff = Dict.empty)), ())
-                    case _ => (s, ())
-            })
-
-        /** Leaves what a boundary at `path` showed when it ended, for a successor this region's next pass starts there. */
-        def leave(path: Seq[String], ui: UI)(using Frame): Unit < Sync =
-            Sync.Unsafe.defer(table.modify { s =>
-                entryIn(s) match
-                    case Present(e) => (s.withEntry(region, e.copy(handoff = e.handoff.update(path, ui))), ())
-                    case Absent     => (s, ())
-            })
-
-        /** What a boundary that ended at `path` left there. */
-        def left(path: Seq[String])(using Frame): Maybe[UI] < Sync =
-            Sync.Unsafe.defer(entryIn(table.read).flatMap(_.handoff.get(path)))
-
-        /** The claim of the keyed node `rui` of `pass` on `identity`: the report when the pass shows the identity in another place too;
-          * the live instance when no other region shows it; otherwise, or while something is in transit and the instance is still to
-          * start, what the node's `PendingPolicy` shows until the table's next cut decides. A subscription the table no longer follows
-          * gets the live instance, or one of its own that its scope releases.
-          */
-        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, pass: MountPass)(using
-            Frame
-        ): ClaimView < (Async & Scope) =
-            def view(state: ClaimState, seed: Maybe[UI]): ClaimView < Sync =
-                here.map(group =>
-                    Signal.initRef[ClaimState](state).map(ref => new ClaimView(rui, spec, region, () => frames, seed, ref, group))
-                )
-            pass.duplicate(rui) match
-                case Present(message) => view(ClaimState.Duplicate(message), Absent)
-                case Absent           =>
-                    Sync.Unsafe.defer(table.read).map { s =>
-                        val live = s.instances.get(identity)
-                        entryIn(s) match
-                            case Absent =>
-                                live match
-                                    case Present(slot) => view(ClaimState.Live(slot.instance), Absent)
-                                    case Absent        =>
-                                        here.map(group => MountInstance.start(spec, Absent, frames, table, Present(group))).map(i =>
-                                            Scope.ensure(i.teardown).andThen(view(ClaimState.Live(i), Absent))
-                                        )
-                            case Present(entry) =>
-                                val others  = s.holders(identity) > 1
-                                val pending = s.unsettled
-                                val seed    = spec.node.pendingPolicy match
-                                    case UI.PendingPolicy.Placeholder => Absent
-                                    case UI.PendingPolicy.KeepLatest  => entry.handoff.get(spec.path)
-                                live match
-                                    case Present(slot) if !others =>
-                                        val moved = slot.region != region
-                                        Sync.Unsafe.defer(table.modify { now =>
-                                            now.instances.get(identity) match
-                                                case Present(same) if same.instance eq slot.instance =>
-                                                    (
-                                                        now.copy(instances =
-                                                            now.instances.update(identity, MountSlot(same.instance, spec.path, region))
-                                                        ),
-                                                        ()
-                                                    )
-                                                case _ => (now, ())
-                                        }).andThen(slot.instance.supervision.adopt(spec, frames, moved))
-                                            .andThen(view(ClaimState.Live(slot.instance), Absent))
-                                            .map(registered(identity, _, false))
-                                    case Present(slot) =>
-                                        val shown = spec.node.pendingPolicy match
-                                            case UI.PendingPolicy.Placeholder => Kyo.lift(Maybe.empty[UI])
-                                            case UI.PendingPolicy.KeepLatest  => slot.instance.snapshot
-                                        shown.map(snapshot => view(ClaimState.Waiting(snapshot), seed)).map(registered(identity, _, true))
-                                    case Absent =>
-                                        // While something is in transit, or another region shows the identity too, the instance is made
-                                        // and shown but its effect waits for the cut: what is released goes first, and a duplicate never runs.
-                                        // The effect is let go only once the instance is filed with nothing unsettled in the table.
-                                        val launch = !others && !pending
-                                        MountInstance.make(spec, seed, frames, table).map { fresh =>
-                                            Sync.Unsafe.defer {
-                                                // Placed as the table's before the table holds it, so a cut that launches it finds it placed;
-                                                // the other outcomes place it again, or release it, before it runs.
-                                                fresh.fate.filed(identity)
-                                                table.modify[(Maybe[MountInstance], Boolean)] { now =>
-                                                    now.instances.get(identity) match
-                                                        case Present(other) => (now, (Present(other.instance), false))
-                                                        case Absent         =>
-                                                            if now.holders(identity) == 0 then (now, (Absent, false))
-                                                            else
-                                                                val waits = !launch || now.unsettled
-                                                                (
-                                                                    now.copy(instances =
-                                                                        now.instances.update(identity, MountSlot(fresh, spec.path, region))
-                                                                    ),
-                                                                    (Present(fresh), waits)
-                                                                )
-                                                }
-                                            }.map { (kept, waits) =>
-                                                if kept.isEmpty then
-                                                    // No region holds it any more: a scope that ends with this node.
-                                                    here.map(group => Sync.Unsafe.defer(fresh.fate.scoped(group)))
-                                                        .andThen(fresh.launch).andThen(Scope.ensure(fresh.teardown)).andThen(view(
-                                                            ClaimState.Live(fresh),
-                                                            seed
-                                                        ))
-                                                else if kept.get eq fresh then
-                                                    (if waits then Kyo.unit else fresh.launch)
-                                                        .andThen(view(ClaimState.Live(fresh), seed))
-                                                        .map(registered(identity, _, waits))
-                                                else
-                                                    fresh.teardown.andThen(view(
-                                                        ClaimState.Live(kept.get),
-                                                        Absent
-                                                    )).map(registered(identity, _, false))
-                                            }
-                                        }
-                                end match
-                        end match
-                    }
-            end match
-        end claim
-
-        /** Files `view` under `identity` while the current scope lives; `waits` puts the identity in waiting for the next cut. */
-        private def registered(identity: MountIdentity, view: ClaimView, waits: Boolean)(using Frame): ClaimView < (Sync & Scope) =
-            Sync.Unsafe.defer {
-                val added = table.modify { s =>
-                    val views = s.views.update(identity, s.views.get(identity).getOrElse(Chunk.empty).append(view))
-                    (
-                        s.copy(views = views, waiting = if waits then s.waiting + identity else s.waiting),
-                        waits && !s.waiting.contains(identity)
-                    )
-                }
-                val unfile = Scope.ensure(Sync.Unsafe.defer(table.modify { s =>
-                    val left = s.views.get(identity).getOrElse(Chunk.empty).filterNot(_ eq view)
-                    (s.copy(views = if left.isEmpty then s.views.remove(identity) else s.views.update(identity, left)), ())
-                }))
-                unfile.andThen(if added then table.awaitCut() else Kyo.unit).andThen(view)
-            }
-
-        /** A keyless instance for `spec`, released with the caller's scope; only a subscription the table still follows leaves its snapshot. */
-        def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
-            Sync.Unsafe.defer(entryIn(table.read)).map { entry =>
-                val seed = spec.node.pendingPolicy match
-                    case UI.PendingPolicy.Placeholder => Absent
-                    case UI.PendingPolicy.KeepLatest  => entry.flatMap(_.handoff.get(spec.path))
-                here.map(group => MountInstance.start(spec, seed, frames, table, Present(group))).map { instance =>
-                    Scope.ensure(current.map(still => if still then leaveSnapshot(instance, region, spec.path) else Kyo.unit).andThen(
-                        instance.teardown
-                    ))
-                        .andThen(instance)
-                }
-            }
-
-        /** The group what runs now belongs to: the value, row or claim state being subscribed, or the table's own outside all of them. */
-        private def here(using Frame): ReleaseGroup < Sync = ReleaseGroup.current.use(group => group.getOrElse(table.group))
-    end MountScope
-
-    /** The message each place of an identity shown in several places at once shows. */
-    private def duplicateMessage(identity: MountIdentity, nodes: Chunk[ReactiveUI]): String =
-        val places = nodes.map(_.path.mkString(".")).toSeq.sorted.mkString(", ")
-        val site   = nodes.headMaybe.flatMap(_.mounted).fold("")(spec => s" (UI.mounted at ${spec.node.frame.position.show})")
-        s"the keyed mount ${identity.key}$site is shown in ${nodes.size} places at once: $places. " +
-            "A keyed instance can show in one place only, so none of them gets one. Give each place a key of its own, " +
-            "such as the id of the data it shows, or render repeating data with foreachKeyed."
-    end duplicateMessage
-
-    /** Subscribes a mounted node in the current scope. A keyed node adopts or creates the instance of its identity in the table of the
-      * enclosing mount instance or session; a keyless node gets a new instance that ends with the current scope, which for a node inside
-      * a region is the region's current value.
-      */
-    private def subscribeMounted(
-        rui: ReactiveUI,
-        spec: MountedSpec,
-        exchange: UIExchange,
-        signalChangeTime: AtomicRef[Instant],
-        mounts: MountScope,
-        pass: MountPass,
-        dispatch: MountDispatch
-    )(using Frame): Unit < (Async & Scope) =
-        def show(instance: MountInstance, follow: Boolean): Unit < (Async & Scope) =
-            subscribeMountContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
-        mounts.current.map { follow =>
-            spec.identity match
-                case Absent            => mounts.startKeyless(spec).map(show(_, follow))
-                case Present(identity) =>
-                    mounts.claim(rui, identity, spec, pass).map { view =>
-                        def showClaim(state: ClaimState): Unit < (Async & Scope) =
-                            state match
-                                case ClaimState.Live(instance)     => show(instance, follow)
-                                case ClaimState.Waiting(shown)     => showWaiting(rui, shown, spec, exchange)
-                                case ClaimState.Duplicate(message) =>
-                                    MountInstance.failed(spec, message, mounts.frames, mounts.table)
-                                        .map(failed => Scope.ensure(failed.teardown).andThen(show(failed, follow)))
-                        // The state the claim starts in is shown in this pass, like any node; a cut that switches it later closes what
-                        // that showed and shows the next state in a scope of its own. What a state shows is a group of its own, released
-                        // before it closes.
-                        for
-                            first <- view.state.get
-                            shown <- Scope.Finalizer.init(1)
-                            firstGroup = view.group.child()
-                            closeFirst = Sync.Unsafe.defer(firstGroup.release()).andThen(shown.close(Absent)).andThen(shown.await)
-                            _ <- Sync.Unsafe.defer(view.showing.set(Present(firstGroup)))
-                            _ <- Scope.ensure(closeFirst)
-                            _ <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
-                                Tag[Scope],
-                                derive = (_: Maybe[Scope.Finalizer]) => shown,
-                                fork = (parent: Scope.Finalizer) => parent.forked,
-                                join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
-                            )(ReleaseGroup.current.let(Present(firstGroup))(showClaim(first)))
-                            _ <- startOwnedFiber(
-                                Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
-                                    closeFirst.andThen(ReleaseGroup.owning { group =>
-                                        Sync.Unsafe.defer(view.showing.set(Present(group))).andThen(showClaim(next))
-                                    })
-                                }).unit
-                            )
-                        yield ()
-                        end for
-                    }
-        }
-    end subscribeMounted
-
-    /** Shows what a keyed node waiting for a cut shows: the snapshot its `KeepLatest` policy keeps, held like any snapshot so nothing in
-      * it looks live, or its placeholder. No instance is behind it, so no event reaches it.
-      */
-    private def showWaiting(rui: ReactiveUI, shown: Maybe[UI], spec: MountedSpec, exchange: UIExchange)(using
-        Frame
-    ): Unit < (Async & Scope) =
-        deliverMeasured(rui, UI.RenderCause.Signal, exchange)(
-            _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, shown.getOrElse(spec.placeholder))
-        ).andThen(
-            if shown.isEmpty then Kyo.unit
-            else exchange.onHold(rui.region, true).andThen(Scope.ensure(exchange.onHold(rui.region, false)))
-        )
-
-    /** Shows an instance's content cell in the node's range. The content as it is now is painted at once, so a kept instance replaces
-      * the placeholder its enclosing region just rendered without a visible gap; then a region over the cell follows it. Live content
-      * gets its regions and nested mounts subscribed; a snapshot is only painted.
-      */
-    private def subscribeMountContent(
-        rui: ReactiveUI,
-        spec: MountedSpec,
-        instance: MountInstance,
-        exchange: UIExchange,
-        signalChangeTime: AtomicRef[Instant],
-        dispatch: MountDispatch,
-        // Whether the region showing the node is one its table follows; a subscription that is not takes nothing over.
-        follow: Boolean
-    )(using Frame): Unit < (Async & Scope) =
-        val svgContext = rui.region match
-            case _: ReactiveRegion.HtmlRange  => false
-            case _: ReactiveRegion.SvgElement => true
-        for
-            _       <- dispatch.register(rui.contentContext, instance)
-            _       <- Scope.ensure(dispatch.unregister(rui.contentContext, instance))
-            content <- instance.children.content(rui.path, rui.contentContext.transparentDepth, follow)
-            watch   <- content.register
-            first   <- instance.cell.current
-            // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
-            // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
-            // Until a new instance shows its own content, each paint tells the page that the slots in its range are no one's: they were
-            // the slots of the instance before it, gone with it, and an adopted slot the page kept would show that instance's mounts. A
-            // snapshot paint does not end this, since the slots it brings are the old instance's again.
-            paint = (cause: UI.RenderCause, previous: Maybe[UI], state: MountState, through: UIExchange) =>
-                for
-                    _ <- deliverMeasured(rui, cause, through)(exchange =>
-                        instance.beforeOwnContent(state).map(fresh => if fresh then exchange.onFreshInstance(rui.region) else Kyo.unit)
-                            .andThen(
-                                exchange.onChange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    previous,
-                                    state.content(spec)
-                                )
-                            )
-                    )
-                    // The instance's own content is on its way to the page, so the commands it sent about it follow this paint.
-                    _ <- state match
-                        case MountState.Ready(_) | MountState.Failed(_) => instance.supervision.afterShown.shown(through)
-                        case MountState.Pending(_)                      => Kyo.unit
-                yield ()
-            _ <- first match
-                case MountState.Pending(Absent) => Kyo.unit
-                case state                      => paint(UI.RenderCause.Created, Absent, state, exchange)
-            // A snapshot takes no events, so its range is held while it shows: nothing in it looks like a field the reader can use.
-            _ <- if showsSnapshot(first) then exchange.onHold(rui.region, true) else Kyo.unit
-            // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
-            painted = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
-            _ <- Scope.ensure(Sync.Unsafe.defer(painted.get()).map(last =>
-                if showsSnapshot(last) then exchange.onHold(rui.region, false) else Kyo.unit
-            ))
-            renderState = (state: MountState, through: UIExchange) =>
-                val shown = state.content(spec)
-                for
-                    previous <- Sync.Unsafe.defer(painted.getAndSet(state))
-                    _        <-
-                        if previous eq state then Kyo.unit
-                        else
-                            Clock.now.map(signalChangeTime.set).andThen(
-                                paint(UI.RenderCause.Signal, Present(previous.content(spec)), state, through)
-                            )
-                    _ <- (showsSnapshot(previous), showsSnapshot(state)) match
-                        case (false, true) => through.onHold(rui.region, true)
-                        case (true, false) => through.onHold(rui.region, false)
-                        case _             => Kyo.unit
-                    _ <- state match
-                        case MountState.Pending(Present(_)) => content.recorded
-                        case _                              =>
-                            for
-                                (kids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
-                                    shown,
-                                    rui.path,
-                                    svgContext,
-                                    rui.contentContext,
-                                    nestedParentContext(rui.parentContext, shown),
-                                    dispatch,
-                                    rows = 0L,
-                                    deepRows = Nil
-                                )))
-                                pass <- content.beginWalk(kids)
-                                _    <- forkRootChannels(rui.path, shown, through)
-                                _    <- Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, content, dispatch, pass))
-                                _    <- content.endWalk
-                            yield ()
-                yield ()
-                end for
-            // Inside a waiting boundary every state is a pass with a group of its own, the first one due from now, and the mount loads
-            // until it has published or failed.
-            observed <- exchange.gate match
-                case Absent        => Kyo.lift((state: MountState) => renderState(state, exchange))
-                case Present(hold) =>
-                    import AllowUnsafe.embrace.danger
-                    val loaded = AtomicBoolean.Unsafe.init(first.settled)
-                    for
-                        firstGroup <- hold.group
-                        due = AtomicRef.Unsafe.init(Maybe(firstGroup))
-                        registered <- if first.settled then Kyo.lift(Maybe.empty[BoundaryHold]) else hold.load.map(Present(_))
-                        _          <- Scope.ensure(firstGroup.close)
-                        _ <- Scope.ensure(Sync.Unsafe.defer(if loaded.compareAndSet(false, true) then registered.foreach(_.settle)))
-                    yield (state: MountState) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    state.content(spec),
-                                    rui
-                                )))
-                                .andThen(renderState(state, group))
-                                .andThen(Sync.Unsafe.defer(if state.settled && loaded.compareAndSet(false, true) then
-                                    registered.foreach(_.settle)))
-                                .andThen(group.started)
-                        }
-                    end for
-            _ <- startOwnedFiber(
-                // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
-                Abort.run[Throwable](instance.cell.observeStamped(watch.stamp)(state =>
-                    ReleaseGroup.owning(_ => observed(state))
-                )).map { result =>
-                    result.fold(
-                        _ => (),
-                        err => Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", err),
-                        panic =>
-                            if panic.isInstanceOf[Interrupted] then ()
-                            else Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", panic)
-                    )
-                }
-            )
-            // Registered after the fiber, so it runs before the fiber's interrupt: the nested mounts are still registered, and a
-            // snapshot of this instance shows their content rather than their placeholders.
-            _ <- Scope.ensure(instance.cell.current.map {
-                case MountState.Pending(_) => Kyo.unit
-                case state                 =>
-                    Boundaries.resolveLive(state.content(spec), rui.path, rui.contentContext, dispatch)
-                        .map(resolveReactives).map(instance.keepShown)
-            })
-        yield ()
-        end for
-    end subscribeMountContent
-
-    /** `ui` rooted at `path` with each mount at a path of `seeds` shown as its slot holding that snapshot. Only the static part of `ui`
-      * is walked: the mounts inside a region, a boundary or a mount are painted by those.
-      */
-    private def showingSeeds(ui: UI, path: Seq[String], seeds: Map[Seq[String], UI]): UI =
-        ui match
-            case m: Mounted =>
-                seeds.get(path) match
-                    // A boundary around one mount renders as that mount's slot, here showing the snapshot.
-                    case Some(seed) if Boundaries.implicitOf(m).isEmpty =>
-                        Bounded(UI.Boundary(Absent, Absent, Absent), m, Present(seed))(using m.frame)
-                    case _ => m
-            case e: Element =>
-                val children = e.children.toSeq
-                val shown    = children.zipWithIndex.map((c, i) => showingSeeds(c, path :+ i.toString, seeds))
-                if shown.corresponds(children)(_ eq _) then e else rebuildElement(e, Chunk.from(shown))
-            case f: Fragment[?] =>
-                val children = f.children.toSeq
-                val shown    = children.zipWithIndex.map {
-                    case (kc: KeyedChild[?], _) =>
-                        val inner = showingSeeds(kc.child, path :+ kc.key, seeds)
-                        if inner eq kc.child then kc else KeyedChild[UI](kc.key, inner)(using kc.frame)
-                    case (c, i) => showingSeeds(c, path :+ i.toString, seeds)
-                }
-                if shown.corresponds(children)(_ eq _) then f else Fragment[UI](Chunk.from(shown))(using f.frame)
-            case _ => ui
-
-    /** Whether a mount in `state` shows the inert snapshot of the instance before it. */
-    private def showsSnapshot(state: MountState): Boolean =
-        state match
-            case MountState.Pending(Present(_)) => true
-            case _                              => false
 
     // ---- Shared UI tree utilities (used by both backends) ----
 

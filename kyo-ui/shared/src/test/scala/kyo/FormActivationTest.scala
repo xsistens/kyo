@@ -6,7 +6,6 @@ import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
-import kyo.internal.UIExchange
 
 /** Which activations submit a form: the rule, and the three transports that have to answer it
   * identically for the same markup.
@@ -26,13 +25,7 @@ class FormActivationTest extends kyo.test.Test[Any]:
     private def withDispatch[A](ui: UI)(f: ((Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
         Frame
     ): A < Async =
-        Scope.run {
-            for
-                root         <- ReactiveUI.normalize(ui, Seq.empty)
-                subscription <- ReactiveUI.subscribe(root, UIExchange.noop)
-                result       <- f(subscription.handle)
-            yield result
-        }
+        ReactiveUI.subscribed(ui)(subscription => f(subscription.handle))
 
     /** A form whose only child is a button carrying `declaredType` (omitted when null),
       * dispatched at the button's path. Returns (onSubmit count, onClick count).

@@ -386,12 +386,12 @@ final case class TreeSelect[K] private (
         // NBSP keeps the empty label's line box (Prime renders 'empty').
         val labelUI: UI = lbl(if labelText.isEmpty then " " else labelText)
 
-        val labelContainerUI: UI = div.cssClass("p-treeselect-label-container")(toChild(labelUI))
+        val labelContainerUI: UI = div.cssClass("p-treeselect-label-container")(labelUI)
 
         val dd             = div.cssClass("p-treeselect-dropdown").role("button").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-treeselect-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-treeselect-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-treeselect-dropdown-icon", "p-icon"))
 
         val hiddenCarrier: List[UI] =
             nameV.toList.map { n =>
@@ -440,7 +440,7 @@ final case class TreeSelect[K] private (
                 // expand toggle or a click on empty space ends here.
                 .containClicks(true)
             panel(
-                (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
+                (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(treeUI): UI))*
             )
                 .renderShown(Present(s"${state.idBase}-panel"))
         }
@@ -515,7 +515,7 @@ final case class TreeSelect[K] private (
             }
         end if
 
-        val field = validity.follow(el(((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelContainerUI :: dropdownUI :: hiddenCarrier) ++ panelUI)*))
         // Bindings made one way that nothing hears: every pick or toggle is painted away again.
         val unheard =
             (if disabledFlag || !ReactiveValue.deaf(valueSlot, onChangeF) then Nil

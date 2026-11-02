@@ -53,7 +53,7 @@ final case class IconField private (
             case IconField.Host.Ta(t)  => classes.foldLeft(t)(_.extraClass(_)).render
             case IconField.Host.Sel(s) => classes.foldLeft[Select[?]](s)(_.extraClass(_)).render
         div.cssClass("p-iconfield")(
-            (startSlot ++ List(field) ++ endSlot).map(toChild)*
+            UI.children(startSlot ++ List(field) ++ endSlot)*
         )
     end render
 end IconField

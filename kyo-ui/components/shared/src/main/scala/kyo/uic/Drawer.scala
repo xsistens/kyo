@@ -193,17 +193,17 @@ final case class Drawer private (
                             .jsProp("type", "button")
                             .aria("label", "Close")
                         val pressable = if fixed then shell.aria("disabled", "true") else shell.onClick(close)
-                        List(pressable(toChild(GlyphSvg(Icons.times, "p-icon"))))
+                        List(pressable(GlyphSvg(Icons.times, "p-icon")))
                     else Nil
 
                 // Prime renders the header row even without a title, since it docks the
                 // close button; both absent renders no header at all.
                 val headerUI: List[UI] =
                     if titleChildren.isEmpty && closeBtn.isEmpty then Nil
-                    else List(div.cssClass("p-drawer-header")((titleChildren ++ closeBtn).map(toChild)*))
+                    else List(div.cssClass("p-drawer-header")(UI.children(titleChildren ++ closeBtn)*))
 
-                val contentUI: List[UI] = List(div.cssClass("p-drawer-content")(kids.map(toChild)*))
-                val footerUI: List[UI]  = footerV.toList.map(f => div.cssClass("p-drawer-footer")(toChild(f)))
+                val contentUI: List[UI] = List(div.cssClass("p-drawer-content")(UI.children(kids)*))
+                val footerUI: List[UI]  = footerV.toList.map(f => div.cssClass("p-drawer-footer")(f))
 
                 var box = div
                     .cssClass("p-drawer")
@@ -236,7 +236,7 @@ final case class Drawer private (
                             case _               => ()
                     }
                 end if
-                val boxUI = box((headerUI ++ contentUI ++ footerUI).map(toChild)*)
+                val boxUI = box(UI.children(headerUI ++ contentUI ++ footerUI)*)
 
                 // Enter/leave: the mask fades in via a transient from-state
                 // class (NOT Prime's permanent `p-overlay-mask-enter-active`: the Dialog

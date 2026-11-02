@@ -26,7 +26,7 @@ final case class AvatarGroup private (
 
     private[uic] def render(using Frame): UI =
         div.cssClass("p-avatar-group").cssClass("p-component")(
-            (avatarsV.map(_.render) ++ kids).map(toChild)*
+            UI.children(avatarsV.map(_.render) ++ kids)*
         )
 end AvatarGroup
 

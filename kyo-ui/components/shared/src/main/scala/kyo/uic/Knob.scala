@@ -174,7 +174,7 @@ final case class Knob private (
             val onDrag = (e: PointerEvent) => commit(clamp(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV)))
             root = root.onPointerDown(onDrag).onPointerMove(onDrag)
         end if
-        root(toChild(reactiveSvg))
+        root(reactiveSvg)
     end turnable
 
     /** The root box shared by the interactive and static paths. */
@@ -185,7 +185,7 @@ final case class Knob private (
     end shellRoot
 
     private def staticRoot(value: Double, validity: FieldValidity)(using Frame): UI =
-        shellRoot(validity)(toChild(dialSvg(value, Absent)))
+        shellRoot(validity)(dialSvg(value, Absent))
 
     /** A value the reader asked for: written where the binding is two-way, then reported to [[onChange]]. */
     private def commit(next: Double)(using Frame): UI.Action =
@@ -198,7 +198,7 @@ final case class Knob private (
       */
     private def dialSvg(value: Double, live: Maybe[Signal[Double]])(using Frame): UI =
         val paint = (spec: Maybe[String], token: String) =>
-            spec.flatMap(CssValue.color).getOrElse(Style.Color.variable(token))
+            spec.flatMap(Style.Color.parse).getOrElse(Style.Color.variable(token))
 
         val rangeArc = Svg.path
             .cssClass("p-knob-range")

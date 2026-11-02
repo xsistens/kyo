@@ -309,10 +309,8 @@ final case class Tree[K] private (
         var root = div.cssClass("p-tree").cssClass("p-component")
         if selectable then root = root.cssClass("p-tree-selectable")
         root(
-            toChild(
-                div.cssClass("p-tree-root")(
-                    toChild(list((nodes ++ emptyRow).map(toChild)*))
-                )
+            div.cssClass("p-tree-root")(
+                list(UI.children(nodes ++ emptyRow)*)
             )
         )
     end body
@@ -378,7 +376,7 @@ final case class Tree[K] private (
             .tabIndex(-1)
         if hasChildren && !expansionFixed then toggleBtn = toggleBtn.onClick(toggleNode(node.id))
         val toggle: UI = toggleBtn(
-            toChild(GlyphSvg(if isExpanded then Icons.chevronDown else Icons.chevronRight, "p-tree-node-toggle-icon"))
+            GlyphSvg(if isExpanded then Icons.chevronDown else Icons.chevronRight, "p-tree-node-toggle-icon")
         )
 
         // Multi-select renders Prime's checkbox anatomy per node (the same box the
@@ -397,7 +395,7 @@ final case class Tree[K] private (
                     if isSelected then List(GlyphSvg(Icons.check, "p-checkbox-icon"))
                     else if isIndeterminate then List(GlyphSvg(Icons.minus, "p-checkbox-icon"))
                     else Nil
-                List(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))
+                List(cb(div.cssClass("p-checkbox-box")(UI.children(icon)*)))
             else Nil
 
         val iconSlot: List[UI] = node.icon.toList.map(g => GlyphSvg(g, "p-tree-node-icon"))
@@ -418,13 +416,13 @@ final case class Tree[K] private (
         if selectable then content = content.cssClass("p-tree-node-selectable")
         if isFocused then content = content.cssClass("p-focus").scrollAuto(true)
         node.tooltip.foreach(t => content = content.jsProp("title", t))
-        val contentEl = content(((toggle :: checkboxSlot) ++ iconSlot :+ labelEl).map(toChild)*)
+        val contentEl = content(UI.children((toggle :: checkboxSlot) ++ iconSlot :+ labelEl)*)
 
         val childrenUI: List[UI] =
             if hasChildren && isExpanded then
                 List(
                     ul.cssClass("p-tree-node-children").role("group")(
-                        node.children.map(c => toChild(renderNode(c, exp, sel, rowIndex, focus, roving)))*
+                        UI.children(node.children.map(c => renderNode(c, exp, sel, rowIndex, focus, roving)))*
                     )
                 )
             else Nil
@@ -435,7 +433,7 @@ final case class Tree[K] private (
         if hasChildren then item = item.aria("expanded", isExpanded.toString)
         if isSelected then item = item.aria("selected", "true")
         node.accessibleName.foreach(v => item = item.aria("label", v))
-        item((contentEl :: childrenUI).map(toChild)*)
+        item(UI.children(contentEl :: childrenUI)*)
     end renderNode
 
     /** Toggling a node flips its id in the bound `expanded` set, then fires `onNodeToggle`. */

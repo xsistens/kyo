@@ -72,9 +72,9 @@ private[kyo] object HtmlRenderer:
         ui match
             case _: Reactive[?] | _: Foreach[?, ?] => true
             case el: Element                       =>
-                el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty
-                || el.attrs.reactiveStyle.nonEmpty
+                el.attrs.hasChannels
                 || ReactiveUI.collectSignalRef(el).nonEmpty
+                || Channels.follows(el)
                 || (el match
                     case ta: Textarea => hasSignalRefValue(ta.value)
                     case dd: Dropdown => hasSignalRefValue(dd.value)
@@ -650,9 +650,10 @@ private[kyo] object HtmlRenderer:
 
     private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         ta.value match
-            case Present(Bound.Const(s)) => w(sb, esc(masked(ta.inputMask, s)))
-            case Present(Bound.Ref(ref)) => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, esc(masked(ta.inputMask, s)))
+            case Present(Bound.Ref(ref))    => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
+            case Present(Bound.Follow(sig)) => w(sb, esc(masked(ta.inputMask, SignalNow(sig))))
+            case _                          => ()
 
     // ---- Dropdown (custom div-based overlay) ----
 
@@ -870,7 +871,7 @@ private[kyo] object HtmlRenderer:
             case Present(source) => w(sb, s""" data-kyo-drag-key="${esc(source.key)}"""")
             case Absent          => attrs.dropTarget.foreach(target => w(sb, s""" data-kyo-drag-key="${esc(target.key)}""""))
         attrs.scrollAuto.foreach(v => if v then w(sb, """ data-kyo-scroll-auto="1""""))
-        // Marker only: stop-propagation is decided server-side in ReactiveUI.dispatchToElement; the client never reads this.
+        // Marker only: stop-propagation is decided server-side in EventDispatch.dispatchToElement; the client never reads this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
@@ -977,9 +978,10 @@ private[kyo] object HtmlRenderer:
                             case ci: ConstrainedInput => ci.inputMask
                             case _                    => Absent
                         val text = ti.value match
-                            case Present(Bound.Const(v)) => masked(mask, v)
-                            case Present(Bound.Ref(ref)) => masked(mask, SignalNow(ref))
-                            case _                       => ""
+                            case Present(Bound.Const(v))    => masked(mask, v)
+                            case Present(Bound.Ref(ref))    => masked(mask, SignalNow(ref))
+                            case Present(Bound.Follow(sig)) => masked(mask, SignalNow(sig))
+                            case _                          => ""
                         if FilledClass.filled(text) then Seq(name) else Seq.empty
                     case None => Seq.empty
             case _ => Seq.empty
@@ -1068,9 +1070,10 @@ private[kyo] object HtmlRenderer:
                 w(sb, " type=\"range\"")
                 boolAttr(sb, "disabled", r.disabled)
                 r.value match
-                    case Present(Bound.Const(d)) => w(sb, s""" value="${fmtD(d)}"""")
-                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
-                    case _                       => ()
+                    case Present(Bound.Const(d))    => w(sb, s""" value="${fmtD(d)}"""")
+                    case Present(Bound.Ref(ref))    => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
+                    case Present(Bound.Follow(sig)) => w(sb, s""" value="${fmtD(SignalNow(sig))}"""")
+                    case _                          => ()
                 end match
                 r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
                 r.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
@@ -1112,9 +1115,10 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" value="${esc(s)}"""")
                     if !sel.attrs.jsProps.contains("value") then w(sb, s""" data-kyo-prop-value="${esc(s)}"""")
                 sel.value match
-                    case Present(Bound.Const(s)) => bound(s)
-                    case Present(Bound.Ref(ref)) => bound(SignalNow(ref))
-                    case _                       =>
+                    case Present(Bound.Const(s))    => bound(s)
+                    case Present(Bound.Ref(ref))    => bound(SignalNow(ref))
+                    case Present(Bound.Follow(sig)) => bound(SignalNow(sig))
+                    case _                          =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
                             case opt: Opt if opt.selected == Present(true) =>
@@ -1166,9 +1170,10 @@ private[kyo] object HtmlRenderer:
       */
     private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         value match
-            case Present(Bound.Const(b)) => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
-            case Present(Bound.Ref(ref)) => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
-            case _                       => ()
+            case Present(Bound.Const(b))    => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
+            case Present(Bound.Ref(ref))    => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
+            case Present(Bound.Follow(sig)) => w(sb, " data-kyo-bound"); if SignalNow(sig) then w(sb, " checked")
+            case _                          => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
     /** Formats a value about to be displayed through the element's mask, if it carries one.
@@ -1191,9 +1196,10 @@ private[kyo] object HtmlRenderer:
         SignalNow.Locals
     ): Unit =
         value match
-            case Present(Bound.Const(s)) => w(sb, s""" value="${esc(masked(mask, s))}"""")
-            case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, s""" value="${esc(masked(mask, s))}"""")
+            case Present(Bound.Ref(ref))    => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
+            case Present(Bound.Follow(sig)) => w(sb, s""" value="${esc(masked(mask, SignalNow(sig)))}"""")
+            case _                          => ()
 
     private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         boolAttr(sb, "disabled", pi.disabled)
@@ -1204,6 +1210,11 @@ private[kyo] object HtmlRenderer:
     private def hasSignalRefValue(value: Maybe[Bound[?]]): Boolean = value match
         case Present(_: Bound.Ref[?]) => true
         case _                        => false
+
+    /** Whether the client has to forward the commit of an edit: to write a ref, or to put back what a followed signal's owner did not take. */
+    private def bindsEdit(value: Maybe[Bound[?]]): Boolean = value match
+        case Present(_: Bound.Ref[?] | _: Bound.Follow[?]) => true
+        case _                                             => false
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
       * answers whether there was one.
@@ -1247,14 +1258,14 @@ private[kyo] object HtmlRenderer:
             case _                                                                   =>
         // "change" event: when handler is set OR when .value/.checked(SignalRef) auto-binding is in use
         elem match
-            case ti: TextInput if ti.onChange.nonEmpty || hasSignalRefValue(ti.value)          => add("change")
-            case pi: PickerInput if pi.onChange.nonEmpty || hasSignalRefValue(pi.value)        => add("change")
-            case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => add("change")
-            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => add("change")
-            case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => add("change")
-            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => add("change")
-            case sel: Select if hasSignalRefValue(sel.value)                                   => add("change")
-            case _                                                                             =>
+            case ti: TextInput if ti.onChange.nonEmpty || bindsEdit(ti.value)          => add("change")
+            case pi: PickerInput if pi.onChange.nonEmpty || bindsEdit(pi.value)        => add("change")
+            case bi: BooleanInput if bi.onChange.nonEmpty || bindsEdit(bi.checked)     => add("change")
+            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || bindsEdit(ni.value) => add("change")
+            case ri: RangeInput if ri.onChange.nonEmpty || bindsEdit(ri.value)         => add("change")
+            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty  => add("change")
+            case sel: Select if bindsEdit(sel.value)                                   => add("change")
+            case _                                                                     =>
         end match
         elem match
             case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => add("submit")
@@ -1290,12 +1301,12 @@ private[kyo] object HtmlRenderer:
             namespace == ReactiveRegion.Namespace.Svg ||
             elem.isInstanceOf[Svg.SvgElement] ||
             elem.isInstanceOf[Focusable] ||
-            addressedByClient(elem.attrs)
+            addressedByClient(elem.attrs) ||
+            Channels.follows(elem)
 
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||
-            attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
-            attrs.reactiveStyle.nonEmpty || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.hasChannels || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
             attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
             attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
             attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
@@ -1548,247 +1559,12 @@ private[kyo] object HtmlRenderer:
           |    __focusReturnStack.push({fa:fa,ret:ret,restore:cand[i].hasAttribute("data-kyo-focus-restore")});
           |    if(typeof cand[i].focus==="function")cand[i].focus({preventScroll:true});return;}}
           |}
-          |// ---- range morph (twin of morphNode and its neighbours in DomBackend; keep the two in lockstep) ----
-          |// Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node
-          |// identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
-          |// DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays
-          |// the fallback rather than the default.
-          |function __kyoMorphCompatible(from,to){
-          |  if(from.nodeType!==to.nodeType)return false;
-          |  if(from.nodeType!==1)return true;
-          |  return from.tagName===to.tagName&&from.namespaceURI===to.namespaceURI;
-          |}
-          |function __kyoMorphNode(from,to){
-          |  if(from.nodeType!==1){if(from.nodeValue!==to.nodeValue)from.nodeValue=to.nodeValue;return;}
-          |  __kyoMorphAttrs(from,to);
-          |  // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its
-          |  // subtree alone (INPUT and TEXTAREA have no element children, so they need no such guard).
-          |  if(!((from===document.activeElement)&&from.hasAttribute("contenteditable")))
-          |    __kyoMorphRun(from,from.firstChild,null,to.firstChild,null);
-          |}
-          |// Give back every JS property a previous render set and the incoming element no longer carries. applyJsProps
-          |// removes the data-kyo-prop-* attribute once applied, so the attribute walk cannot see a property leave; the
-          |// value before the first assignment waits in __kyoProps. Twin of restoreJsProps in DomBackend.
-          |function __kyoRestoreProps(from,to){var ps=from.__kyoProps;if(!ps)return;
-          |  for(var n in ps){if(!to.hasAttribute("data-kyo-prop-"+n)){from[n]=ps[n].base;delete ps[n];}}
-          |}
-          |function __kyoMorphAttrs(from,to){
-          |  var tag=from.tagName;
-          |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
-          |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
-          |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
-          |  var own=from.__kyoOwn||{};
-          |  // Read before the walk moves the attribute: whether the previous render had the toggle on.
-          |  var tg=tag==="INPUT"?"checked":(tag==="OPTION"?"selected":null);
-          |  if(tg&&own[tg])tg=null;
-          |  var wasOn=!!tg&&from.hasAttribute(tg);
-          |  // A field renders its value PROPERTY, and the property stops tracking the attribute the first time the
-          |  // user types, so writing the attribute alone is invisible on any field that has been typed into. The
-          |  // attribute may even be unchanged (both empty) when a ref write clears it, so the property is written on
-          |  // every pass. The focused field is the exception below: its own echo must not move the caret.
-          |  for(var i=0;i<to.attributes.length;i++){var a=to.attributes[i];
-          |    if(!own[a.name]){
-          |      if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);
-          |      if(!activeInput)__kyoSyncField(from,a.name,a.value);}}
-          |  // A textarea carries its value as content, never as a value attribute, so the walk above cannot reach its
-          |  // property: mirror the content instead, under the same focus rule. Only a content that moved is a value
-          |  // write; an unbound textarea renders the same content on every pass and keeps what the user typed. The
-          |  // children are not morphed yet, so `from` still holds the previous content. Twin of morphAttrs in DomBackend.
-          |  if(!activeInput&&tag==="TEXTAREA"&&from.textContent!==to.textContent)__kyoSyncField(from,"value",to.textContent);
-          |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
-          |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
-          |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
-          |  // turns the control on or off writes it. A box the render binds (data-kyo-bound) shows the render's state
-          |  // on every pass, so a repaint takes back a tick the app did not accept. A free one is written only on a
-          |  // change: it renders no attribute when off, and a repaint must keep its tick. Twin of morphAttrs in DomBackend.
-          |  if(tg){var on=to.hasAttribute(tg);if(to.hasAttribute("data-kyo-bound")?from[tg]!==on:on!==wasOn)from[tg]=on;}
-          |  __kyoRestoreProps(from,to);
-          |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
-          |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
-          |  // A bound field says so as the unfocused path reads it (an input's value attribute, a textarea's moved
-          |  // content); an unbound field carries neither and keeps what the reader typed. Twin of morphAttrs.
-          |  if(activeInput){var v=tag==="TEXTAREA"?(from.textContent!==to.textContent?to.textContent:null):to.getAttribute("value");
-          |    if(v!==null&&from.value!==v)from.value=v;}
-          |}
-          |// Reconcile the live sibling run of `parent` from `fromStart` up to (not including) `fromEnd`, null meaning
-          |// the end of the parent, toward the run starting at `toStart` inside a detached fragment. Positional, pair
-          |// by pair: what did not move keeps its identity; reordering a keyed list is the two-ended pass's business.
-          |// A portal element does not live in the range: the first sweep moved it under <body> and left an inert slot
-          |// behind. The payload still carries it inline, so reconcile the twin where it actually lives and step over
-          |// the live slot. Re-inserting it here would hand __kyoAdoptPortals a second copy, which retires the twin and
-          |// takes everything hanging off it along. Twin of morphPortalPair in DomBackend.
-          |function __kyoMorphPortalPair(from,to){
-          |  if(from.nodeType!==1||to.nodeType!==1)return false;
-          |  var p=to.getAttribute("data-kyo-path");
-          |  if(p===null||!to.hasAttribute("data-kyo-portal")||from.getAttribute("data-kyo-portal-slot")!==p)return false;
-          |  var twin=__kyoPortalTwin(p);if(!twin)return false;
-          |  // The twin sits outside the range being patched, so the registry follows its reconciliation as a rewrite.
-          |  __kyoRangeRewrite(twin,function(){__kyoMorphNode(twin,to);return twin;});return true;
-          |}
-          |// ---- logical children ----
-          |// A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling
-          |// walk it looks like several unrelated children. It is one: the markers carry the identity the registry is
-          |// keyed by, and pairing them positionally would rewrite marker text and hand the registry a range that is
-          |// no longer there. The morph therefore walks LOGICAL children, an opening marker standing for its span.
-          |function __kyoSpanId(node){
-          |  if(node.nodeType!==8)return null;
-          |  var d=node.data;if(d.indexOf("kyo-rs:")!==0)return null;
-          |  var rest=d.slice(7),sp=rest.indexOf(" ");return sp<0?rest:rest.slice(0,sp);
-          |}
-          |// The flag section of an opening marker (m, s, k=), "" when it carries none.
-          |function __kyoSpanFlags(node){
-          |  if(node.nodeType!==8)return "";
-          |  var sp=node.data.indexOf(" ");return sp<0?"":node.data.slice(sp+1);
-          |}
-          |function __kyoHasFlag(flags,flag){return flags.length>0&&flags.split(" ").indexOf(flag)>=0;}
-          |function __kyoFlagKey(flags){
-          |  if(!flags.length)return null;
-          |  var parts=flags.split(" ");
-          |  for(var i=0;i<parts.length;i++)if(parts[i].indexOf("k=")===0)return parts[i].slice(2);
-          |  return null;
-          |}
-          |function __kyoSpanClose(open,id){
-          |  var n=open.nextSibling;
-          |  while(n){if(n.nodeType===8&&n.data==="kyo-re:"+id)return n;n=n.nextSibling;}
-          |  return null;
-          |}
-          |function __kyoLogicalNext(node){
-          |  var id=__kyoSpanId(node);if(id===null)return node.nextSibling;
-          |  var close=__kyoSpanClose(node,id);return close?close.nextSibling:node.nextSibling;
-          |}
-          |function __kyoEachSpanNode(first,f){
-          |  var id=__kyoSpanId(first),last=first;
-          |  if(id!==null){var close=__kyoSpanClose(first,id);if(close)last=close;}
-          |  var n=first,stop=false;
-          |  while(!stop&&n){var next=n.nextSibling;stop=n===last;f(n);n=next;}
-          |}
-          |function __kyoRemoveLogical(parent,node){__kyoEachSpanNode(node,function(n){parent.removeChild(n);});}
-          |// Returns the first node it inserted, the live counterpart of toNode.
-          |function __kyoInsertLogicalClone(parent,toNode,ref){
-          |  // SMIL animations only start on a node this pass actually inserted; a reused one is already running.
-          |  var first=null;
-          |  __kyoEachSpanNode(toNode,function(n){var fresh=document.importNode(n,true);parent.insertBefore(fresh,ref);ba(fresh);if(first===null)first=fresh;});
-          |  return first;
-          |}
-          |// Two spans of the same id are the same region still sitting here, so the pass recurses into their contents
-          |// and never touches the live markers. Any other mismatch is replaced whole, markers and all. Returns the
-          |// node that starts the slot afterwards: fromNode, or the first node of its replacement.
-          |function __kyoPatchLogical(parent,fromNode,toNode){
-          |  var fid=__kyoSpanId(fromNode),tid=__kyoSpanId(toNode);
-          |  var fclose=fid!==null?__kyoSpanClose(fromNode,fid):null,tclose=tid!==null?__kyoSpanClose(toNode,tid):null;
-          |  if(fclose&&tclose&&fid===tid){
-          |    // A mount that already owns this slot repaints its own content, so the span is opaque and its live
-          |    // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
-          |    // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
-          |    // is what makes that safe; a differing key falls through to the morph and resets the slot. The live
-          |    // marker adopts the incoming key on the way out.
-          |    //
-          |    // A NAMED slot is opaque from the first pass, not from the second. `m` says the client adopted the
-          |    // span; `s` with the same key says the same thing one beat earlier, because the render that emitted
-          |    // the slot named the instance that owns it. Waiting for `m` would cost one destructive morph per slot,
-          |    // and the regions inside the discarded subtree leave the registry with it while the instance
-          |    // republishes asynchronously: a subscription emitting in between dies on an unknown range for good.
-          |    // An UNNAMED slot waits for `m`: without a key nothing tells one instance from the next.
-          |    var lf=__kyoSpanFlags(fromNode),tf=__kyoSpanFlags(toNode),slot=__kyoHasFlag(tf,"s");
-          |    var sameKey=__kyoFlagKey(lf)===__kyoFlagKey(tf),named=__kyoFlagKey(tf)!==null&&sameKey;
-          |    if((__kyoHasFlag(lf,"m")||(named&&__kyoHasFlag(lf,"s")))&&slot&&sameKey)return fromNode;
-          |    __kyoMorphRun(parent,fromNode.nextSibling,fclose,toNode.nextSibling,tclose);
-          |    if(slot){var k=__kyoFlagKey(tf);fromNode.data="kyo-rs:"+fid+(k===null?" m":" m k="+k);}
-          |    return fromNode;}
-          |  if(!fclose&&!tclose&&__kyoMorphPortalPair(fromNode,toNode))return fromNode;
-          |  if(!fclose&&!tclose&&__kyoMorphCompatible(fromNode,toNode)){__kyoMorphNode(fromNode,toNode);return fromNode;}
-          |  var first=__kyoInsertLogicalClone(parent,toNode,fromNode);
-          |  __kyoRemoveLogical(parent,fromNode);
-          |  return first;
-          |}
-          |// Reconcile the live logical run [fromStart,fromEnd) of parent toward [toStart,toEnd).
-          |// A two-ended keyed pass runs first, then a single cursor over whatever it could not settle. The cursor
-          |// alone can only insert IN FRONT of itself, so a key it finds behind itself has to be dragged forward past
-          |// every sibling in between: swapping two rows of a thousand costs 997 moves and a full relayout. Matching
-          |// both ends first relocates only the children that actually changed place.
-          |function __kyoCollectLogical(start,end,nodes,keys){
-          |  var scan=start;
-          |  while(scan&&scan!==end){nodes.push(scan);keys.push(__kyoLogicalKey(scan));scan=__kyoLogicalNext(scan);}
-          |}
-          |// A portal slot carries no path of its own and is keyed by the path of the element it stands in for.
-          |function __kyoLogicalKey(node){
-          |  if(node.nodeType===1){var p=node.getAttribute("data-kyo-path");return p!==null?p:node.getAttribute("data-kyo-portal-slot");}
-          |  var id=__kyoSpanId(node);
-          |  return (id!==null&&__kyoSpanClose(node,id))?id:null;
-          |}
-          |function __kyoMoveLogicalBefore(parent,node,ref){__kyoEachSpanNode(node,function(n){parent.insertBefore(n,ref);});}
-          |// A mount paints its placeholder bare into its slot, and its content arrives inside a range of its own. Taken
-          |// as an element against a span, that pair is replaced whole, and with it every node of a placeholder built
-          |// like its content and everything hanging off them. A bare live run facing exactly one incoming range is
-          |// wrapped in that range instead and reconciled against what it holds: the same markup, the nodes kept.
-          |// Answers [live close, incoming close], or null when the runs are not that pair.
-          |function __kyoWrapInIncomingRange(parent,fromStart,fromEnd,toStart,toEnd){
-          |  if(!toStart||!fromStart||fromStart===fromEnd)return null;
-          |  var tid=__kyoSpanId(toStart);if(tid===null)return null;
-          |  var tclose=__kyoSpanClose(toStart,tid);if(!tclose||tclose.nextSibling!==toEnd)return null;
-          |  for(var n=fromStart;n&&n!==fromEnd;n=n.nextSibling)if(__kyoSpanId(n)!==null)return null;
-          |  parent.insertBefore(document.importNode(toStart,false),fromStart);
-          |  return [parent.insertBefore(document.importNode(tclose,false),fromEnd),tclose];
-          |}
-          |function __kyoMorphRun(parent,fromStart,fromEnd,toStart,toEnd){
-          |  var wrapped=__kyoWrapInIncomingRange(parent,fromStart,fromEnd,toStart,toEnd);
-          |  if(wrapped){__kyoMorphRun(parent,fromStart,wrapped[0],toStart.nextSibling,wrapped[1]);return;}
-          |  var fromNodes=[],fromKeys=[],toNodes=[],toKeys=[];
-          |  __kyoCollectLogical(fromStart,fromEnd,fromNodes,fromKeys);
-          |  __kyoCollectLogical(toStart,toEnd,toNodes,toKeys);
-          |  var fromKeyed=null,toKeyed=null,i;
-          |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null){if(!fromKeyed)fromKeyed={};fromKeyed[fromKeys[i]]=fromNodes[i];}
-          |  for(i=0;i<toKeys.length;i++)if(toKeys[i]!==null){if(!toKeyed)toKeyed={};toKeyed[toKeys[i]]=true;}
-          |  // Invariant: the children still to place are exactly fromNodes[head..tail], a contiguous DOM run ending
-          |  // immediately before tailBoundary. Only run boundaries are ever moved, and only out to a boundary.
-          |  var head=0,tail=fromNodes.length-1,toHead=0,toTail=toNodes.length-1,tailBoundary=fromEnd,scanning=true;
-          |  while(scanning&&head<=tail&&toHead<=toTail){
-          |    if(fromKeys[head]===null||fromKeys[tail]===null||toKeys[toHead]===null||toKeys[toTail]===null)scanning=false;
-          |    else if(fromKeys[head]===toKeys[toHead]){__kyoPatchLogical(parent,fromNodes[head],toNodes[toHead]);head++;toHead++;}
-          |    else if(fromKeys[tail]===toKeys[toTail]){tailBoundary=__kyoPatchLogical(parent,fromNodes[tail],toNodes[toTail]);tail--;toTail--;}
-          |    else if(fromKeys[head]===toKeys[toTail]){
-          |      if(head!==tail)__kyoMoveLogicalBefore(parent,fromNodes[head],tailBoundary);
-          |      tailBoundary=__kyoPatchLogical(parent,fromNodes[head],toNodes[toTail]);head++;toTail--;}
-          |    else if(fromKeys[tail]===toKeys[toHead]){
-          |      if(tail!==head)__kyoMoveLogicalBefore(parent,fromNodes[tail],fromNodes[head]);
-          |      __kyoPatchLogical(parent,fromNodes[tail],toNodes[toHead]);tail--;toHead++;}
-          |    else scanning=false;
-          |  }
-          |  // Hand the unresolved middle to the cursor. The dictionaries stay whole: keys are unique among siblings.
-          |  var cursorFrom=head<=tail?fromNodes[head]:tailBoundary;
-          |  var cursorToEnd=(toTail+1<toNodes.length)?toNodes[toTail+1]:toEnd;
-          |  var cursorTo=toHead<=toTail?toNodes[toHead]:cursorToEnd;
-          |  __kyoMorphCursor(parent,cursorFrom,tailBoundary,cursorTo,cursorToEnd,fromKeyed,toKeyed);
-          |}
-          |// Single-cursor reconciliation of whatever the two-ended pass left over: a keyed child is pulled to the
-          |// cursor by key, an unkeyed one morphs positionally against the first compatible live child.
-          |function __kyoMorphCursor(parent,fromStart,fromEnd,toStart,toEnd,fromKeyed,toKeyed){
-          |  var curFrom=fromStart,curTo=toStart;
-          |  while(curTo&&curTo!==toEnd){
-          |    var toNext=__kyoLogicalNext(curTo),toKey=__kyoLogicalKey(curTo);
-          |    if(toKey!==null){
-          |      var m=fromKeyed?fromKeyed[toKey]:undefined;
-          |      if(m){if(m!==curFrom)__kyoMoveLogicalBefore(parent,m,curFrom);else curFrom=__kyoLogicalNext(curFrom);
-          |        __kyoPatchLogical(parent,m,curTo);}
-          |      else __kyoInsertLogicalClone(parent,curTo,curFrom);
-          |    }else{
-          |      var handled=false,loop=true;
-          |      while(loop&&curFrom&&curFrom!==fromEnd){
-          |        var fromNext=__kyoLogicalNext(curFrom),fromKey=__kyoLogicalKey(curFrom);
-          |        if(fromKey!==null){
-          |          // A keyed live child at an unkeyed slot: keep it if the payload reuses it elsewhere (its own
-          |          // slot moves it into place), else it is stale and goes.
-          |          if(!toKeyed||!Object.prototype.hasOwnProperty.call(toKeyed,fromKey))__kyoRemoveLogical(parent,curFrom);
-          |          curFrom=fromNext;
-          |        }else if(__kyoMorphCompatible(curFrom,curTo)){__kyoMorphNode(curFrom,curTo);curFrom=fromNext;handled=true;loop=false;}
-          |        else{__kyoRemoveLogical(parent,curFrom);curFrom=fromNext;}
-          |      }
-          |      if(!handled)__kyoInsertLogicalClone(parent,curTo,curFrom);
-          |    }
-          |    curTo=toNext;
-          |  }
-          |  while(curFrom&&curFrom!==fromEnd){var fn=__kyoLogicalNext(curFrom);__kyoRemoveLogical(parent,curFrom);curFrom=fn;}
-          |}
+          |// The morph and the list patch live in MorphScript: both clients run that one walk over their own hooks.
+          |var __kyoMorph=(function(h){
+          |""".stripMargin + MorphScript.js +
+            """})({syncField:__kyoSyncField,portalTwin:__kyoPortalTwin,rewrite:function(slot,twin,change){return __kyoRangeRewrite(twin,change);},
+          |  beginAnimations:ba,guardAttached:false,listBefore:__kyoListBefore,listAfter:__kyoListAfter});
+          |var __kyoMorphRun=__kyoMorph.run,__kyoSpanId=__kyoMorph.spanId,__kyoLogicalNext=__kyoMorph.logicalNext,__kyoEachSpanNode=__kyoMorph.eachSpanNode;
           |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
           |// kyoRangeReplace re-reads the live markers afterwards and hands the registry what is actually there.
           |function kyoRangeMorph(endpoints,fragment){
@@ -1852,14 +1628,9 @@ private[kyo] object HtmlRenderer:
           |  var sid=__kyoSpanId(node);if(sid!==null)into.push(sid);
           |  for(var child=node.firstChild;child;child=child.nextSibling)__kyoCollectStartIds(child,into);
           |}
-          |// Reconcile a list region against a row order rather than a rendered document: the payload holds only the
-          |// rows that changed, every other row is named by key and stays where it is. The walk is the same
-          |// two-ended keyed pass __kyoMorphRun uses, with the order standing in for the `to` side. Twin of
-          |// applyListPatch in DomBackend; keep the two in lockstep.
-          |//
-          |// ReactiveUI refused the emission already if the rows are not addressable by key, so there is nothing to
-          |// check and nothing to fall back to: a frame that left the untouched rows out gives us nothing to rebuild
-          |// them from. A row the live range does not hold is therefore a protocol error, not a repaint trigger.
+          |// The server's list patch: the registry lookup and its account of the patch around the walk in MorphScript. ReactiveUI refused the
+          |// emission already if the rows are not addressable by key, so there is nothing to fall back to: a frame that left the untouched
+          |// rows out gives us nothing to rebuild them from, and a row the live range does not hold is a protocol error.
           |function __kyoApplyList(id,keys,changedHtml){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");
@@ -1870,93 +1641,43 @@ private[kyo] object HtmlRenderer:
           |  if(!parent||parent!==endpoints.end.parentNode)kyoRangeFail("anchors are no longer siblings: "+id);
           |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
           |  var fragment=changedHtml.length?range.createContextualFragment(changedHtml):null;
-          |  var parsedKeyed={},parsed=fragment?fragment.firstChild:null;
-          |  while(parsed){var pk=__kyoLogicalKey(parsed);if(pk!==null)parsedKeyed[pk]=parsed;parsed=__kyoLogicalNext(parsed);}
-          |  var fromNodes=[],fromKeys=[];
-          |  __kyoCollectLogical(endpoints.start.nextSibling,endpoints.end,fromNodes,fromKeys);
-          |  var fromKeyed={},i;
-          |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null)fromKeyed[fromKeys[i]]=fromNodes[i];
           |  var prefix=__kyoRangeIdPath(id);if(prefix===null)prefix="";
-          |  var toKeys=[],toNodes=[],targetKeys={};
-          |  for(i=0;i<keys.length;i++){
-          |    var full=prefix.length?prefix+"."+keys[i]:keys[i];
-          |    toKeys.push(full);targetKeys[full]=true;
-          |    toNodes.push(parsedKeyed[full]||null);
-          |  }
-          |  // Focus spans the whole region: a retained row keeps its DOM, but moving it is a remove and an insert,
-          |  // which blurs whatever it holds, so a pure reorder is precisely the case this must survive.
-          |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),active=document.activeElement;
-          |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
-          |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
-          |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
-          |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
-          |  var disturbed=[],repainted=[];
-          |  for(i=0;i<fromKeys.length;i++){
-          |    var fk=fromKeys[i];
-          |    if(fk===null||!Object.prototype.hasOwnProperty.call(targetKeys,fk))disturbed.push(fromNodes[i]);
-          |  }
-          |  for(i=0;i<toKeys.length;i++)if(toNodes[i]){var lv=fromKeyed[toKeys[i]];if(lv){repainted.push(lv);disturbed.push(lv);}}
-          |  var survivors=fragment?kyoLeavePathsRoots(kyoRangeFragmentRoots(fragment)):{};
-          |  var oldEnter=kyoEnterPathsRoots(__kyoLogicalElements(repainted));
-          |  var oldFocus=kyoFocusPathsRoots(__kyoLogicalElements(repainted));
-          |  var ghosts=kyoLeavePrepareRoots(__kyoLogicalElements(disturbed),survivors);
-          |  // The registry follows the patch as DomReactiveRegions.PatchScope does: the ranges of every row leaving or
-          |  // repainted are retired before anything moves (a morph may drop markers, and a dropped marker's id is
-          |  // unreadable afterwards), and the ranges standing where a row was painted or inserted are read right after.
+          |  var full=[],i;
+          |  for(i=0;i<keys.length;i++)full.push(prefix.length?prefix+"."+keys[i]:keys[i]);
+          |  // The registry follows the patch as DomReactiveRegions.PatchScope does: the ranges of every row leaving or repainted are retired
+          |  // before anything moves (a morph may drop markers, and a dropped marker's id is unreadable afterwards), and the ranges standing
+          |  // where a row was painted or inserted are read right after.
           |  var retired=[],found=new Map();
-          |  for(i=0;i<disturbed.length;i++)__kyoEachSpanNode(disturbed[i],function(n){__kyoCollectStartIds(n,retired);});
-          |  var touched=[];
-          |  // Patches a row in place or replaces it, and answers the node that now starts it.
-          |  function place(from,ti){var to=toNodes[ti];if(!to)return from;
-          |    var before=from.previousSibling,until=__kyoLogicalNext(from),at=__kyoPatchLogical(parent,from,to);
-          |    __kyoRangeScanRun(id,before?before.nextSibling:parent.firstChild,until,found);
-          |    if(at!==from){var els=__kyoLogicalElements([at]);for(var q=0;q<els.length;q++)touched.push(els[q]);}
-          |    else if(from.nodeType===1)touched.push(from);
-          |    return at;}
-          |  var head=0,tail=fromNodes.length-1,toHead=0,toTail=toKeys.length-1,tailBoundary=endpoints.end,scanning=true;
-          |  while(scanning&&head<=tail&&toHead<=toTail){
-          |    if(fromKeys[head]===null||fromKeys[tail]===null)scanning=false;
-          |    else if(fromKeys[head]===toKeys[toHead]){place(fromNodes[head],toHead);head++;toHead++;}
-          |    else if(fromKeys[tail]===toKeys[toTail]){tailBoundary=place(fromNodes[tail],toTail);tail--;toTail--;}
-          |    else if(fromKeys[head]===toKeys[toTail]){
-          |      if(head!==tail)__kyoMoveLogicalBefore(parent,fromNodes[head],tailBoundary);
-          |      tailBoundary=place(fromNodes[head],toTail);head++;toTail--;}
-          |    else if(fromKeys[tail]===toKeys[toHead]){
-          |      if(tail!==head)__kyoMoveLogicalBefore(parent,fromNodes[tail],fromNodes[head]);
-          |      place(fromNodes[tail],toHead);tail--;toHead++;}
-          |    else scanning=false;
-          |  }
-          |  var cursor=head<=tail?fromNodes[head]:tailBoundary;
-          |  for(i=toHead;i<=toTail;i++){
-          |    var key=toKeys[i],live2=fromKeyed[key];
-          |    if(live2){if(live2!==cursor)__kyoMoveLogicalBefore(parent,live2,cursor);else cursor=__kyoLogicalNext(cursor);
-          |      place(live2,i);}
-          |    else if(toNodes[i]){
-          |      var prior=cursor.previousSibling;
-          |      var ins=__kyoLogicalElements([__kyoInsertLogicalClone(parent,toNodes[i],cursor)]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);
-          |      __kyoRangeScanRun(id,prior?prior.nextSibling:parent.firstChild,cursor,found);}
-          |    else kyoRangeFail("row is neither retained nor rendered: "+key);
-          |  }
-          |  for(i=0;i<fromKeys.length;i++){
-          |    var lk=fromKeys[i];
-          |    if((lk===null||!Object.prototype.hasOwnProperty.call(targetKeys,lk))&&document.contains(fromNodes[i]))
-          |      __kyoRemoveLogical(parent,fromNodes[i]);
-          |  }
-          |  for(i=0;i<retired.length;i++)__kyoRanges.delete(retired[i]);
-          |  found.forEach(function(pair,key){__kyoRanges.set(key,pair);});
-          |  var finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
+          |  var scope={
+          |    retire:function(node){__kyoEachSpanNode(node,function(n){__kyoCollectStartIds(n,retired);});},
+          |    placed:function(first,until){__kyoRangeScanRun(id,first,until,found);},
+          |    finish:function(){for(var r=0;r<retired.length;r++)__kyoRanges.delete(retired[r]);found.forEach(function(pair,key){__kyoRanges.set(key,pair);});}
+          |  };
+          |  if(!__kyoMorph.applyList({parent:parent,start:endpoints.start,end:endpoints.end,fragment:fragment},scope,full,null))
+          |    kyoRangeFail("row is neither retained nor rendered in "+id);
+          |}
+          |// What a list patch reads before anything moves. Focus spans the whole region: a retained row keeps its DOM, but moving it is a
+          |// remove and an insert, which blurs whatever it holds, so a pure reorder is precisely the case this must survive.
+          |function __kyoListBefore(target,disturbed,repainted){
+          |  var oldRoots=kyoRangeRoots(target.start,target.end),active=document.activeElement;
+          |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
+          |  return {
+          |    locator:inside?kyoRangeFocusLocator(oldRoots,active):null,
+          |    ss:inside&&typeof active.selectionStart==="number"?active.selectionStart:null,
+          |    se:inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null,
+          |    oldEnter:kyoEnterPathsRoots(repainted),oldFocus:kyoFocusPathsRoots(repainted),
+          |    ghosts:kyoLeavePrepareRoots(disturbed,target.fragment?kyoLeavePathsRoots(kyoRangeFragmentRoots(target.fragment)):{})
+          |  };
+          |}
+          |// What a list patch does once the rows stand: the properties, focus and caret, enter and focus seeds, ghosts, portals, sweeps.
+          |function __kyoListAfter(state,target,touched){
+          |  var finalRoots=kyoRangeRoots(target.start,target.end),i;
           |  for(i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
-          |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);
-          |  if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
-          |  kyoSeedEnterRoots(touched,oldEnter);kyoSeedFocusRoots(touched,oldFocus);kyoSpawnGhosts(ghosts);
+          |  var restored=kyoRangeResolveFocus(finalRoots,state.locator);
+          |  if(restored){restored.focus({preventScroll:true});if(state.ss!==null)kyoSetCaret(restored,state.ss,state.se);}
+          |  kyoSeedEnterRoots(touched,state.oldEnter);kyoSeedFocusRoots(touched,state.oldFocus);kyoSpawnGhosts(state.ghosts);
           |  for(i=0;i<touched.length;i++)__kyoAdoptPortals(touched[i]);
           |  __kyoRetireOrphanTwins();sweepFocusAuto();sweepScrollAuto(true);
-          |}
-          |// The elements of a set of logical children, each span contributing the elements it brackets.
-          |function __kyoLogicalElements(nodes){
-          |  var out=[];
-          |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
-          |  return out;
           |}
           |// The topmost node above this one: the Document for anything attached, the detached subtree's own root
           |// otherwise. Two nodes share a tree exactly when this returns the same node for both. Twin of treeRoot
@@ -2273,7 +1994,7 @@ private[kyo] object HtmlRenderer:
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
            |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
-           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}if(op.SetBoolAttrByPath.name==="checked"&&sbpel.tagName==="INPUT")__kyoSyncChecked(sbpel,op.SetBoolAttrByPath.value);}
            |  }else if(op.SetClassByPath){
            |    // Path-addressed reactive class: toggle in place so CSS transitions fire. Not owned: the render carries its value.
            |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
@@ -2359,6 +2080,15 @@ private[kyo] object HtmlRenderer:
            |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
            |function __kyoSyncField(el,name,value){
            |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value){el.value=value;__kyoFilled(el);}
+           |  else if(name==="value"&&el.tagName==="SELECT"&&el.value!==value)el.value=value;
+           |}
+           |// A patch of checked: a control shows its property once the reader has toggled it. The browser took the group's selection from
+           |// the other radios when the reader clicked this one, so each bound radio of the group shows what its attribute says again; a free
+           |// radio's tick stays. Twin of syncChecked in DomBackend.
+           |function __kyoSyncChecked(el,on){
+           |  el.checked=on;
+           |  if(el.type==="radio"&&el.name){var rs=document.querySelectorAll("input[type=radio][data-kyo-bound]");
+           |    for(var i=0;i<rs.length;i++){var r=rs[i];if(r.name===el.name&&r.form===el.form)r.checked=r.hasAttribute("checked");}}
            |}
            |// filledClass: a text field's class follows whether it holds text (kyo.internal.FilledClass, shared with DomBackend).
            |${FilledClass.js}
@@ -2874,7 +2604,7 @@ private[kyo] object HtmlRenderer:
            |      }
            |    }
            |    // Enter on a focused <select> would otherwise trigger the form's default submit;
-           |    // kyo-ui treats Enter on Select as a dropdown interaction (see ReactiveUI.dispatchToElement),
+           |    // kyo-ui treats Enter on Select as a dropdown interaction (see EventDispatch.dispatchToElement),
            |    // so we suppress the browser default to keep TUI/browser parity.
            |    if(e.key==="Enter"&&e.target&&e.target.tagName==="SELECT")e.preventDefault();
            |    // Enter on a focused <input type=checkbox|radio>: HTML spec only activates these via Space,

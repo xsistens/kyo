@@ -64,23 +64,45 @@ abstract class UicTest extends kyo.test.Test[Any]:
             }
         }
 
+    /** The attribute and boolean-attribute patches a native element's edit brings, oldest first, as `(name, value)`. Runs `ui` under the engine
+      * and sends `event`, as the client would, to the first element whose tag holds `at` in the first page; with `mounted`, once a mount has
+      * published. That one edit reaching the kernel is what a field with native state relies on to put back what its owner did not take; a
+      * handler called directly goes past it.
+      */
+    private[uic] def assertsAfter(ui: UI, mounted: Boolean = false)(at: String)(event: Seq[String] => kyo.internal.UIEvent)(using
+        Frame
+    ): Chunk[(String, String)] < Async =
+        import kyo.internal.RecordingExchange.Op
+        val log = new kyo.internal.RecordingExchange
+        for
+            html <- renderHtml(ui)
+            path = pathHolding(html, at)
+            cmds    <- headlessCommands
+            patches <- kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { sub =>
+                (if mounted then log.awaitOp(_.isInstanceOf[Op.Paint]) else Kyo.unit)
+                    .andThen(sub.handle(path, event(path)))
+                    .andThen(log.ops)
+            }
+        yield patches.collect {
+            case op: Op.Attr     => (op.name, op.value)
+            case op: Op.BoolAttr => (op.name, op.value.toString)
+        }
+        end for
+    end assertsAfter
+
+    /** Whether a native element's binding is the one-way kind. */
+    private[uic] def follows(b: Maybe[UI.Bound[?]]): Boolean = b match
+        case Present(_: UI.Bound.Follow[?]) => true
+        case _                              => false
+
     /** Runs `ui` under the engine, hands `act` the tree its mounts and regions last published (the whole of `ui` when
-      * none did), and answers whether a region published again after `act` ran. That is the one sign a field paints
-      * what its owner holds once more after a report the owner did not take: nothing in the markup changes.
+      * none did), and answers with what the field published last once `act` made it publish again, so a test can read what
+      * it now shows.
       *
       * A region publishes while it settles too, so `act` runs only once every ref in `reads` has an observer parked on it
       * again (`waiters`), which the engine does only after handling the value before: the barrier
       * [[DataTableReuseTest]] uses. `within` only turns a wait that never ends into an answer instead of a hang; it is not
       * what passes a test.
-      */
-    private[uic] def repaintsAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
-        Frame,
-        kyo.test.AssertScope
-    ): Boolean < Async =
-        publishedAfter(ui, reads*)(act).map(_.nonEmpty)
-
-    /** [[repaintsAfter]], answering with what the field published last once `act` made it publish again, so a test can
-      * read what it now shows.
       */
     private[uic] def publishedAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
         Frame,
@@ -115,7 +137,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
         drive(ui, ready, reads, acts) { d =>
             for
                 holds <- settles(
-                    Sync.defer(d.published.get.size > d.publishedBefore).map(grew =>
+                    Sync.defer(d.published.size > d.publishedBefore).map(grew =>
                         if grew then d.since.map(until) else Kyo.lift(false)
                     ),
                     d.within
@@ -146,7 +168,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * it publishes. A tree that never becomes ready fails the test.
       */
     private[uic] def readyTree(ui: UI)(ready: UI => Boolean < Sync)(using Frame, kyo.test.AssertScope): UI < Async =
-        drive(ui, ready, Nil, Nil)(d => Sync.defer(d.published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*)))
+        drive(ui, ready, Nil, Nil)(d => Sync.defer(d.published).map(seen => if seen.isEmpty then ui else UI.fragment(seen*)))
 
     /** The first HTML a transport renders for `ui`, which is what a static page carries. */
     private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
@@ -166,22 +188,24 @@ abstract class UicTest extends kyo.test.Test[Any]:
         holds: ((String, String)) => Boolean
     )(using Frame, kyo.test.AssertScope): Boolean < Async =
         drive(ui, ready, Nil, acts)(d =>
-            settles(Sync.defer(d.patched.get.take(d.patched.get.size - d.patchedBefore).exists(holds)), d.within)
+            settles(Sync.defer(d.patched.take(d.patched.size - d.patchedBefore).exists(holds)), d.within)
         )
 
     /** What [[drive]] hands its `finish`: everything the field published and patched, and how much of each came before
       * the last gesture.
       */
     final private class Driven(
-        val published: java.util.concurrent.atomic.AtomicReference[List[UI]],
-        val patched: java.util.concurrent.atomic.AtomicReference[List[(String, String)]],
+        log: kyo.internal.RecordingExchange,
         val publishedBefore: Int,
         val patchedBefore: Int,
         val within: Duration
     )(using Frame):
+        def published: List[UI]             = UicTest.publishedIn(log)
+        def patched: List[(String, String)] = UicTest.patchedIn(log)
+
         /** Every tree published since the last gesture, newest first. */
         def since: UI < Sync =
-            Sync.defer(published.get).map(now => UI.fragment(now.take(now.size - publishedBefore)*))
+            Sync.defer(published).map(now => UI.fragment(now.take(now.size - publishedBefore)*))
     end Driven
 
     /** Runs `ui` under the engine, waits for it to be `ready`, runs the gestures (each tried again until it finds what it
@@ -190,49 +214,32 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private def drive[R](ui: UI, ready: UI => Boolean < Sync, reads: Seq[Signal.SignalRef[?]], acts: Seq[UI => Any < Async])(
         finish: Driven => R < Async
     )(using Frame, kyo.test.AssertScope): R < Async =
-        val within = 5.seconds
-        Scope.run {
-            val published      = new java.util.concurrent.atomic.AtomicReference[List[UI]](Nil)
-            val patched        = new java.util.concurrent.atomic.AtomicReference[List[(String, String)]](Nil)
-            def all: UI < Sync = Sync.defer(published.get).map(seen => if seen.isEmpty then ui else UI.fragment(seen*))
-            headlessCommands.map { cmds =>
-                kyo.internal.UICommands.commands.let(Present(cmds)) {
-                    for
-                        root <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)
-                        _    <- kyo.internal.ReactiveUI.subscribe(
-                            root,
-                            new kyo.internal.UIExchange:
-                                def onChange(
-                                    region: kyo.internal.ReactiveRegion,
-                                    path: Seq[String],
-                                    contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
-                                    parentContext: kyo.internal.ReactiveRegion.ParentContext,
-                                    previous: Maybe[UI],
-                                    changed: UI
-                                )(using Frame): Unit < Async = Sync.defer(discard(published.updateAndGet(changed :: _)))
-                                override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                                    Sync.defer(discard(patched.updateAndGet((name, value) :: _)))
-                        )
-                        // A mount publishes what it wired once its effect ran; act on that, not on the placeholder. A
-                        // field with no mount publishes nothing here, and is acted on as it rendered.
-                        _      <- settles(Sync.defer(published.get.nonEmpty), within)
-                        parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
-                        _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
-                        set <- settles(all.map(ready), within)
-                        _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
-                        last <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
-                            for
-                                before <- Sync.defer((published.get.size, patched.get.size))
-                                done   <- settles(
-                                    all.map(t => Abort.run[AssertionError](Abort.catching[AssertionError](act(t))).map(_.isSuccess)),
-                                    within
-                                )
-                                _ = if !done then throw new AssertionError("a gesture never found what it acts on")
-                            yield before
-                        }
-                        r <- finish(Driven(published, patched, last._1, last._2, within))
-                    yield r
-                }
+        val within         = 5.seconds
+        val log            = new kyo.internal.RecordingExchange
+        def seen: List[UI] = UicTest.publishedIn(log)
+        def all: UI < Sync = Sync.defer(seen).map(trees => if trees.isEmpty then ui else UI.fragment(trees*))
+        headlessCommands.map { cmds =>
+            kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { _ =>
+                for
+                    // A mount publishes what it wired once its effect ran; act on that, not on the placeholder. A
+                    // field with no mount publishes nothing here, and is acted on as it rendered.
+                    _      <- settles(Sync.defer(seen.nonEmpty), within)
+                    parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
+                    _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
+                    set <- settles(all.map(ready), within)
+                    _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
+                    last <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
+                        for
+                            before <- Sync.defer((seen.size, UicTest.patchedIn(log).size))
+                            done   <- settles(
+                                all.map(t => Abort.run[AssertionError](Abort.catching[AssertionError](act(t))).map(_.isSuccess)),
+                                within
+                            )
+                            _ = if !done then throw new AssertionError("a gesture never found what it acts on")
+                        yield before
+                    }
+                    r <- finish(Driven(log, last._1, last._2, within))
+                yield r
             }
         }
     end drive
@@ -509,7 +516,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
 
     /** Clicks the first element `target` matches the way the dispatcher delivers a click: the target's own handlers
       * first, then each enclosing element's, innermost first, until an element that declared a click handler also set
-      * `stopPropagation(true)` (`ReactiveUI.keepBubbling`). `onClickSelf` counts on the target alone, and a disabled
+      * `stopPropagation(true)` (`kyo.internal.EventDispatch.keepBubbling`). `onClickSelf` counts on the target alone, and a disabled
       * target skips its own handlers but still lets the click bubble, as the dispatcher does.
       *
       * [[click]] runs one element's handler in isolation, which cannot show what a click on a row inside a panel does
@@ -572,6 +579,15 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def clickAt(path: Seq[String]): kyo.internal.UIEvent =
         kyo.internal.UIEvent.Click(path, kyo.internal.MouseEventData(UI.Modifiers.none, Absent))
 
+    /** The `data-kyo-path` of the first element whose tag holds `text` in `html`, which is the address the client sends it events by. */
+    private[uic] def pathHolding(html: String, text: String): Seq[String] =
+        val tag = ("""<[^>]*""" + java.util.regex.Pattern.quote(text) + """[^>]*>""").r
+            .findFirstIn(html).getOrElse(throw new AssertionError(s"no element holding $text in $html"))
+        val raw = """data-kyo-path="([^"]*)"""".r.findFirstMatchIn(tag).map(_.group(1))
+            .getOrElse(throw new AssertionError(s"the element holding $text carries no path: $tag"))
+        if raw.isEmpty then Seq.empty else raw.split('.').toSeq
+    end pathHolding
+
     /** The `data-kyo-path` the element with id `id` carries in `html`, which is the address the client clicks it by. */
     private[uic] def pathOf(html: String, id: String): Seq[String] =
         val tag = ("""<[^>]*\bid="""" + java.util.regex.Pattern.quote(id) + """"[^>]*>""").r
@@ -599,6 +615,14 @@ abstract class UicTest extends kyo.test.Test[Any]:
 end UicTest
 
 object UicTest:
+
+    /** Every tree `log` was asked to paint, newest first. */
+    private[uic] def publishedIn(log: kyo.internal.RecordingExchange): List[UI] =
+        log.recorded.collect { case op: kyo.internal.RecordingExchange.Op.Paint => op.ui }.toList.reverse
+
+    /** Every attribute patch `log` took, as `(name, value)`, newest first. */
+    private[uic] def patchedIn(log: kyo.internal.RecordingExchange): List[(String, String)] =
+        log.recorded.collect { case op: kyo.internal.RecordingExchange.Op.Attr => (op.name, op.value) }.toList.reverse
 
     /** Where the elements of a headless page sit, by id: what [[UicTest.headlessCommands]] answers a measure with. Empty,
       * the page has no layout and every measure is answered as for an element not on it. A case that drives a gesture

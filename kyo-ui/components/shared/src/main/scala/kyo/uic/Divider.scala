@@ -87,8 +87,8 @@ final case class Divider private (
         end match
         val content: List[UI] =
             if kids.isEmpty then Nil
-            else List(div.cssClass("p-divider-content")(kids.map(toChild)*))
-        el(content.map(toChild)*)
+            else List(div.cssClass("p-divider-content")(UI.children(kids)*))
+        el(UI.children(content)*)
     end render
 end Divider
 

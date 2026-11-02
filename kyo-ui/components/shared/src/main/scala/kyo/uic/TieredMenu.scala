@@ -186,7 +186,7 @@ final case class TieredMenu private (
                     .focusRestore(true)
                     .preventScrollKeys
                     .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
-                val listUI: UI = list(rowsUI.map(toChild)*)
+                val listUI: UI = list(UI.children(rowsUI)*)
                 // Quiet: the menu reports its own binding.
                 val bare    = Overlay(slot.bound).quiet
                 val overlay = onPopupF.fold(bare)(f => bare.onOpenChange(f))
@@ -208,7 +208,7 @@ final case class TieredMenu private (
                 if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
                 var root = div.cssClass("p-tieredmenu").cssClass("p-component")
                 idV.foreach(v => root = root.id(v))
-                root(toChild(list(rowsUI.map(toChild)*)))
+                root(list(UI.children(rowsUI)*))
         end match
     end body
 end TieredMenu

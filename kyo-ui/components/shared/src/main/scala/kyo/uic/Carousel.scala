@@ -322,7 +322,7 @@ final case class Carousel[A] private (
                 .aria("roledescription", "slide")
                 .cssClass("p-carousel-item-active", r.map(p => inWindow(i, p, n)))
                 .style(_.flexGrow(0).flexShrink(0).flexBasis(basis(n)))(
-                    toChild(templateF.map(_(a)).getOrElse(stringToUI(a.toString)))
+                    templateF.map(_(a)).getOrElse(stringToUI(a.toString))
                 )
         val itemEls: List[UI] = entries match
             case Reading.Fixed(as) => as.zipWithIndex.map((a, i) => itemEl(a, i, as.size))
@@ -360,14 +360,14 @@ final case class Carousel[A] private (
                         else ()
                     turn
             }
-        val stripEl: UI = strip(itemEls.map(toChild)*)
+        val stripEl: UI = strip(UI.children(itemEls)*)
 
         var viewport = div.cssClass("p-carousel-viewport")
         if verticalFlag then
-            viewport = viewport.style(_.height(CssValue.length(verticalHeightV.getOrElse("300px"))))
+            viewport = viewport.style(_.height(Length.parse(verticalHeightV.getOrElse("300px"))))
         val viewportEl: UI = viewport(stripEl)
 
-        val content: UI = div.cssClass("p-carousel-content")((prev ++ (viewportEl :: next)).map(toChild)*)
+        val content: UI = div.cssClass("p-carousel-content")(UI.children(prev ++ (viewportEl :: next))*)
 
         val indicators: List[UI] =
             if showIndicatorsFlag then
@@ -414,17 +414,17 @@ final case class Carousel[A] private (
                 .style(_.flexGrow(1).flexShrink(0).flexBasis((100.0 / numVisibleV).pct))
             if i == 0 then el = el.cssClass("p-carousel-item-start")
             if i == visible.size - 1 then el = el.cssClass("p-carousel-item-end")
-            el(toChild(templateF.map(_(a)).getOrElse(stringToUI(a.toString))))
+            el(templateF.map(_(a)).getOrElse(stringToUI(a.toString)))
         }
 
-        val track: UI = div.cssClass("p-carousel-item-list")(itemEls.map(toChild)*)
+        val track: UI = div.cssClass("p-carousel-item-list")(UI.children(itemEls)*)
 
         var viewport = div.cssClass("p-carousel-viewport")
         if verticalFlag then
-            viewport = viewport.style(_.height(CssValue.length(verticalHeightV.getOrElse("300px"))))
+            viewport = viewport.style(_.height(Length.parse(verticalHeightV.getOrElse("300px"))))
         val viewportEl: UI = viewport(track)
 
-        val content: UI = div.cssClass("p-carousel-content")((prev ++ (viewportEl :: next)).map(toChild)*)
+        val content: UI = div.cssClass("p-carousel-content")(UI.children(prev ++ (viewportEl :: next))*)
 
         val indicators: List[UI] =
             if showIndicatorsFlag && pages > 0 then List(indicatorList(page, pages, Nil, _ => ()))
@@ -437,7 +437,7 @@ final case class Carousel[A] private (
     private def shell(content: UI, indicators: List[UI])(using Frame): UI =
         var root = div.cssClass("p-carousel").cssClass("p-component").role("region")
         root = root.cssClass(if verticalFlag then "p-carousel-vertical" else "p-carousel-horizontal")
-        root(toChild(div.cssClass("p-carousel-content-container")((content :: indicators).map(toChild)*)))
+        root(div.cssClass("p-carousel-content-container")(UI.children(content :: indicators)*))
     end shell
 
     /** A prev/next navigator (Prime's secondary text rounded Button). */
@@ -490,7 +490,7 @@ final case class Carousel[A] private (
                             case _                                                               => ()
                     }
                 end if
-                toChild(item(toChild(btn)))
+                item(btn)
             }*
         )
     end indicatorList

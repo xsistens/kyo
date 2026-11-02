@@ -394,9 +394,7 @@ final case class Select[A] private (
           * opt into to be told which option is highlighted. Absent only in the placeholder, which
           * has no highlight to announce.
           */
-        idBase: Maybe[String],
-        /** Draws the panel again from what the query's owner holds, after a one-way report the owner may not take. */
-        repaint: UI.Action = ()
+        idBase: Maybe[String]
     ):
         /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
         def setOpen(v: Boolean)(using Frame): UI.Action = ReactiveValue.change(Present(open), v, onOpenF)
@@ -450,15 +448,12 @@ final case class Select[A] private (
                     case Present(slot) if slot.const.isEmpty => Kyo.lift(slot)
                     case Present(slot)                       => Signal.initRef(slot.const.getOrElse("")).map(r => ReactiveValue[String](r))
                     case Absent                              => Signal.initRef("").map(r => ReactiveValue[String](r))
-                // Counts the repaints a one-way query asks for; read with the panel, so a report the owner declines is
-                // painted back.
-                paints <- Signal.initRef(0)
                 // Unbound, and with no host supplying what it holds, the field keeps what the reader picks itself.
                 own <-
                     if choice.isEmpty && currentV.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base), Present(paints))
+            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -470,7 +465,7 @@ final case class Select[A] private (
         using Frame
     ): UI =
         val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base, Absent)
+        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base)
     end wired
 
     /** [[wired]] over the panel and query state however they are bound. */
@@ -478,17 +473,13 @@ final case class Select[A] private (
         open: ReactiveValue[Boolean],
         hi: SignalRef[Int],
         q: ReactiveValue[String],
-        base: Maybe[String],
-        paints: Maybe[SignalRef[Int]]
+        base: Maybe[String]
     )(using Frame): UI =
-        val validity           = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
-        val panel              = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q).and(painted))
-        val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
-        // The paint count is read and dropped: it is there so a repaint changes what the region reads.
-        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), (qq, _)), (held, ld, ph)), opts) =>
+        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q))
+        panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base, repaint)), ph, ld, validity)
+            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -565,7 +556,7 @@ final case class Select[A] private (
         // NBSP keeps the empty label's line box (Prime renders &nbsp;).
         val labelUI: UI =
             selDrawn match
-                case Present(drawn) if !showPlaceholder => lbl(toChild(drawn))
+                case Present(drawn) if !showPlaceholder => lbl(drawn)
                 case _                                  => lbl(if labelText.isEmpty then " " else labelText)
 
         // Explicitly typed effect: an untyped match would infer `Any`, passing the
@@ -585,15 +576,15 @@ final case class Select[A] private (
                         .aria("label", "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
-                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
                 )
             else Nil
 
         val dd = span.cssClass("p-select-dropdown")
         // PrimeVue's loading slot: the spinner takes the chevron's place in the dropdown cell.
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon"))
 
         // Hidden form carrier: a div trigger has no native form value.
         val hiddenCarrier: List[UI] =
@@ -697,7 +688,7 @@ final case class Select[A] private (
             }
         end if
 
-        val field = validity.follow(el(((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
         val cards = unknownCard ++ unheardCard
         if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
@@ -825,7 +816,7 @@ final case class Select[A] private (
                     row = row.aria("label", labelF(a))
                     t(a)
                 case Absent => span.cssClass("p-select-option-label")(labelF(a))
-            row((checkSlot :+ content).map(toChild)*)
+            row(UI.children(checkSlot :+ content)*)
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
@@ -836,13 +827,13 @@ final case class Select[A] private (
 
         val listUI: UI =
             div.cssClass("p-select-list-container")(
-                toChild {
+                {
                     // The list is named by `aria-controls` and holds the option ids; it does NOT
                     // carry the announcement, because it never holds focus and the attribute is
                     // read off the element that does.
                     var list = ul.cssClass("p-select-list").role("listbox")
                     s.idBase.foreach(b => list = list.id(listId(b)))
-                    list((rows ++ emptyRow).map(toChild)*)
+                    list(UI.children(rows ++ emptyRow)*)
                 }
             )
 
@@ -862,15 +853,14 @@ final case class Select[A] private (
                     .aria("label", "Filter")
                     .aria("haspopup", "listbox")
                     .aria("expanded", "true")
-                // Two way, the field writes the query itself; one way it shows what the owner holds, reports what the
-                // reader types and is painted back to the owner's query (see [[ReactiveValue.repainting]]).
-                filterEl = s.q.writable.fold(filterEl.value(s.qV))(r => filterEl.value(r))
+                // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
+                // types, and kyo-ui puts it back to the owner's query.
+                filterEl = filterEl.value(s.q.bound)
                 filterEl = filterEl
                     // Typing re-filters; highlight the first match (Prime behavior).
                     .onInput(text =>
                         s.hi.set(0)
                             .andThen(ReactiveValue.change(Present(s.q), text, onFilterQueryF))
-                            .andThen(if s.q.writable.isEmpty then s.repaint else (): UI.Action)
                     )
                     // The header is where focus goes and therefore where the option keyboard lives:
                     // the arrows move the highlight, the caret keeps Space and the printable keys,
@@ -885,14 +875,10 @@ final case class Select[A] private (
                 }
                 List(
                     div.cssClass("p-select-header")(
-                        toChild(
-                            div.cssClass("p-iconfield")(
-                                toChild(filterEl),
-                                toChild(
-                                    span.cssClass("p-inputicon")(
-                                        toChild(GlyphSvg(Icons.search, "p-icon"))
-                                    )
-                                )
+                        div.cssClass("p-iconfield")(
+                            filterEl,
+                            span.cssClass("p-inputicon")(
+                                GlyphSvg(Icons.search, "p-icon")
                             )
                         )
                     )
