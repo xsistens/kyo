@@ -621,14 +621,31 @@ object UI:
     end MountedOps
     export MountedOps.*
 
-    /** Prototype, not implemented: how the [[kyo.UI.mounted]] nodes inside a subtree load and fail. While the mounts it catches load
-      * for the first time, including the mounts in their content, the boundary shows its placeholder once, in its own place, and then
-      * reveals its content at once. A failed mount counts as loaded and shows the error view in its own place. The innermost boundary
-      * catches a mount; an error view that does not match a failure leaves it to the next boundary around it. A mount's own
-      * `.placeholder`, `.onError` and `.whilePending` are a boundary around that mount alone.
+    /** Sets how the [[kyo.UI.mounted]] nodes inside a subtree load and fail. While the mounts it catches load for the first time, including
+      * the mounts in their content, the boundary shows its placeholder once, in its own place, and then reveals its content at once. A
+      * failed mount counts as loaded and shows the error view in its own place. The innermost boundary catches a mount; an error view that
+      * does not match a failure leaves it to the next boundary around it. A mount's own `.placeholder`, `.onError` and `.whilePending` are a
+      * boundary around that mount alone.
       */
     def boundary: Boundary = Boundary(Absent, Absent, Absent)
 
+    /** The settings of a [[kyo.UI.boundary]], applied to a subtree with `apply`. Each setter returns a copy.
+      *
+      *   - `.placeholder` is what makes a boundary wait. Without one it holds nothing back, and only its other settings apply. A boundary
+      *     with a placeholder and no mounts inside shows its content at once.
+      *   - `.whilePending` decides what a re-render that brings new mounts shows while they load: under `KeepLatest`, the default, the whole
+      *     old content stays, live for reading and taking no events; under `Placeholder`, the placeholder comes back. A re-render whose mounts
+      *     are all kept shows at once.
+      *   - `.onError` draws a failed mount in that mount's own place, also when it fails after publishing, sits in a region below the boundary
+      *     or in the content of another mount. A failure it does not match goes on to the boundary around this one, and one that nothing
+      *     matches gets the built-in error node.
+      *   - `.onFailure` and `.onNotice` are for what is not a mount's load: a failing event handler, [[kyo.UI.fork]] fiber or
+      *     [[kyo.UI.report]], and where a `Notify` goes.
+      *
+      * A mount's own settings come first. A mount with its own `.placeholder` does not hold the boundary around it, and its own `.onError` wins
+      * over the boundary's, which still catches its siblings. A mount that appears after the boundary revealed does not bring the placeholder
+      * back: it loads in its own place and the rest stays live.
+      */
     final case class Boundary(
         placeholderView: Maybe[UI],
         errorView: Maybe[PartialFunction[MountError, UI]],
@@ -636,18 +653,30 @@ object UI:
         failureRules: Maybe[PartialFunction[Any, Reaction]] = Absent,
         noticeSink: Maybe[Throwable => Unit < Async] = Absent
     ):
-        def placeholder(ui: UI): Boundary                          = copy(placeholderView = Present(ui))
+
+        /** Shown while the mounts it catches load, in its own place. Without one the boundary does not wait. See [[whilePending]] for what a
+          * later re-render shows.
+          */
+        def placeholder(ui: UI): Boundary = copy(placeholderView = Present(ui))
+
+        /** Draws a failed mount in that mount's place. A failure the function does not match goes to the boundary around this one. For what
+          * fails outside a mount's load, see [[onFailure]].
+          */
         def onError(pf: PartialFunction[MountError, UI]): Boundary = copy(errorView = Present(pf))
-        def whilePending(p: PendingPolicy): Boundary               = copy(pending = Present(p))
+
+        /** What a re-render bringing new mounts shows while they load, see [[kyo.UI.PendingPolicy]]. It needs a [[placeholder]] to wait at all. */
+        def whilePending(p: PendingPolicy): Boundary = copy(pending = Present(p))
 
         /** Picks the [[kyo.UI.Reaction]] for a failure inside the boundary that nothing closer handles: an event handler's, a
-          * [[kyo.UI.fork]] fiber's, a [[kyo.UI.report]]. A failure the rules do not match goes to the boundary around this one.
+          * [[kyo.UI.fork]] fiber's, a [[kyo.UI.report]]. A failure the rules do not match goes to the boundary around this one. For a mount
+          * that fails, see [[onError]].
           */
         def onFailure(rules: PartialFunction[Any, Reaction]): Boundary = copy(failureRules = Present(rules))
 
         /** Where a `Notify` inside the boundary goes, a toast or a banner say. The innermost boundary with a sink takes it. */
         def onNotice(sink: Throwable => Unit < Async): Boundary = copy(noticeSink = Present(sink))
-        def apply(ui: UI)(using Frame): UI                      = Ast.Bounded(this, ui, Absent)
+
+        def apply(ui: UI)(using Frame): UI = Ast.Bounded(this, ui, Absent)
 
         /** Whether the boundary holds its content back while the mounts it catches load. */
         private[kyo] def waits: Boolean = placeholderView.nonEmpty
