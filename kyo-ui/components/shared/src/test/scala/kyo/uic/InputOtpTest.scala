@@ -112,13 +112,15 @@ class InputOtpTest extends ReactiveValueContract:
         end for
     }
 
-    "a cell edit its owner does not take is painted away again" in {
+    "a cell edit its owner does not take is put back" in {
         for
-            held  <- Signal.initRef("1")
-            again <- repaintsAfter(otp.value(held.readOnly).onChange(_ => ()).render, held)(t =>
-                cells(t).map(cs => handled(cs(1).onInput.getOrElse(throw new AssertionError("no input handler"))("7")))
-            )
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef("1")
+            patches <- assertsAfter(
+                otp.value(held.readOnly).onChange(_ => ()).render,
+                mounted = true
+            )("Please enter OTP character 2")(kyo.internal.UIEvent.Input(_, "7"))
+        yield assert(patches == Chunk(("value", "")), s"patches: $patches")
+        end for
     }
 
 end InputOtpTest

@@ -375,15 +375,13 @@ final case class Listbox[K] private (
                             Present(ReactiveValue[String](r)): Maybe[ReactiveValue[String]]
                         )
                     else Kyo.lift(filterQuerySlot)
-                // Counts the repaints a one-way query asks for, read with the list (see [[Select]]).
-                paints <- Signal.initRef(0)
                 // Unbound, a list that selects keeps what the reader picks itself.
                 own <-
                     if selectedRef.isEmpty && selectionModeV != SelectionMode.None then Signal.initRef(Set.empty[K]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
                 self = own.fold(this)(r => copy(selectedRef = Present(SetBinding.of(ReactiveValue(r)))))
-            yield self.subscribed(q, Present(hi), Present(base), validity, Present(paints))
-        }.placeholder(subscribed(filterQuerySlot.filter(_.const.isEmpty), Absent, Absent, validity, Absent))
+            yield self.subscribed(q, Present(hi), Present(base), validity)
+        }.placeholder(subscribed(filterQuerySlot.filter(_.const.isEmpty), Absent, Absent, validity))
         // A selection bound one way that nothing hears: every click is painted away again.
         val deaf    = selectionModeV != SelectionMode.None && !disabledFlag && selectedRef.exists(_.deaf(onChangeF.orElse(onItemClickF)))
         val unheard =
@@ -402,8 +400,7 @@ final case class Listbox[K] private (
         qRef: Maybe[ReactiveValue[String]],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
-        validity: FieldValidity,
-        paints: Maybe[SignalRef[Int]]
+        validity: FieldValidity
     )(using Frame): UI =
         // The selection, the query and the highlight are read as ONE region (see [[Reading]]): a row click writes the
         // highlight and the selection, and a nested region would repaint the values it closed over.
@@ -411,11 +408,8 @@ final case class Listbox[K] private (
         val sel   = selectedRef.fold(Reading.Fixed(Set.empty[K]))(s => Reading.Live(s.signal))
         val query = shown.fold(Reading.Fixed(""))(Reading.Live(_))
         val hi    = hiRef.fold(Reading.Fixed(-1))(Reading.Live(_))
-        // The paint count is read and dropped: it is there so a repaint changes what the region reads.
-        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
-        val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
-        validity.follow(sel.and(query.and(painted)).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, (q, _)), h), opts) =>
-            copy(optionsV = opts).body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h, repaint)(validity)
+        validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, q), h), opts) =>
+            copy(optionsV = opts).body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h)(validity)
         })
     end subscribed
 
@@ -439,8 +433,7 @@ final case class Listbox[K] private (
         qRef: Maybe[ReactiveValue[String]],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
-        hi: Int = -1,
-        repaint: UI.Action = ()
+        hi: Int = -1
     )(validity: FieldValidity)(using Frame): UI =
         val shownGroups =
             if query.isEmpty then optionsV
@@ -557,13 +550,11 @@ final case class Listbox[K] private (
                 .aria("label", "Filter")
             // Absent only in the static projection of a listbox that owns its query, before
             // the mount allocates it: the header still renders, it just does not filter yet.
-            // Two way, the field writes the query itself; one way it shows what the owner holds, reports what the reader
-            // types and is painted back to the owner's query (see [[Select.filterQuery]]).
+            // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
+            // types, and kyo-ui puts it back to the owner's query (see [[Select.filterQuery]]).
             qRef.foreach { q =>
-                field = q.writable.fold(field.value(query))(r => field.value(r))
-                field = field.onInput(text =>
-                    ReactiveValue.change(Present(q), text, onFilterQueryF).andThen(if q.writable.isEmpty then repaint else (): UI.Action)
-                )
+                field = field.value(q.bound)
+                field = field.onInput(text => ReactiveValue.change(Present(q), text, onFilterQueryF))
             }
             div.cssClass("p-listbox-header")(field)
         end header

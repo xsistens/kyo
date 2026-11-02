@@ -16,9 +16,12 @@ class InputNumberTest extends ReactiveValueContract:
 
     /** The number the field shows, drawn from the bound number. */
     private def shownNumber(t: UI)(using Frame): Double < Sync =
+        def parsed(v: String): Double = v.toDoubleOption.getOrElse(throw new AssertionError(s"the field shows no number: $v"))
         number(t).map(_.value match
-            case Present(UI.Bound.Const(v)) => v.toDoubleOption.getOrElse(throw new AssertionError(s"the field shows no number: $v"))
-            case other                      => throw new AssertionError(s"the field is bound as $other"))
+            case Present(UI.Bound.Const(v))    => Kyo.lift(parsed(v))
+            case Present(UI.Bound.Follow(sig)) => sig.current.map(parsed)
+            case other                         => throw new AssertionError(s"the field is bound as $other"))
+    end shownNumber
 
     private def increment(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-inputnumber-increment-button")
 
@@ -104,24 +107,25 @@ class InputNumberTest extends ReactiveValueContract:
         startText = Present("4.")
     ))
 
-    "a number its owner does not take is painted away again" in {
+    "a number its owner does not take is put back" in {
         for
-            held  <- Signal.initRef(3.0)
-            again <- repaintsAfter(uic.InputNumber().value(held.readOnly).onChange(_ => ()).render, held)(t =>
-                number(t).map(n => handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0)))
-            )
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef(3.0)
+            patches <- assertsAfter(
+                uic.InputNumber().value(held.readOnly).onChange(_ => ()).render
+            )("p-inputnumber-input")(kyo.internal.UIEvent.ChangeNumeric(_, 7.0))
+        yield assert(patches == Chunk(("value", "3")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a number the owner does not take is put back" in {
+    "a constant with a listener puts back a number the owner does not take" in {
         for
-            first <- shownNumber(uic.InputNumber().value(3.0).onChange(_ => ()).render)
-            again <- repaintsAfter(uic.InputNumber().value(3.0).onChange(_ => ()).render)(t =>
-                number(t).map(n => handled(n.onChangeNumeric.getOrElse(throw new AssertionError("no change handler"))(7.0)))
-            )
+            first   <- shownNumber(uic.InputNumber().value(3.0).onChange(_ => ()).render)
+            patches <- assertsAfter(
+                uic.InputNumber().value(3.0).onChange(_ => ()).render
+            )("p-inputnumber-input")(kyo.internal.UIEvent.ChangeNumeric(_, 7.0))
         yield
             assert(first == 3.0, s"the page as first rendered shows $first for the constant 3")
-            assert(again, "the field kept what the reader did, though its owner never took it")
+            assert(patches == Chunk(("value", "3")), s"patches: $patches")
         end for
     }
 

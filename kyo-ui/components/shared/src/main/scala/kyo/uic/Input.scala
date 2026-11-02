@@ -169,13 +169,11 @@ final case class Input private (
     def inputMask(mask: String): Input = copy(inputMaskV = Present(mask))
 
     private[uic] def render(using Frame): UI =
-        val validity                                            = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        def field(shown: Maybe[String], repaint: UI.Action): UI = typeV match
+        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val built: UI = typeV match
             case InputType.Text =>
                 buildField(
                     withConstraints(input),
-                    shown,
-                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -184,20 +182,16 @@ final case class Input private (
             case InputType.Email =>
                 buildField(
                     withConstraints(emailInput),
-                    shown,
-                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
                     validity
                 )
             case InputType.Number =>
-                buildField(numberInput, shown, repaint, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
+                buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
             case InputType.Password =>
                 buildField(
                     withConstraints(passwordInput),
-                    shown,
-                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -206,8 +200,6 @@ final case class Input private (
             case InputType.Tel =>
                 buildField(
                     withConstraints(telInput),
-                    shown,
-                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
@@ -216,21 +208,11 @@ final case class Input private (
             case InputType.URL =>
                 buildField(
                     withConstraints(urlInput),
-                    shown,
-                    repaint,
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
                     validity
                 )
-        // A two-way ref is kyo-ui's own binding. A one-way signal draws the field from what its owner holds and paints it
-        // again after each report (ReactiveValue.repainting): an echo of what the reader typed leaves the focused field's
-        // caret alone, and an edit the owner did not take is put back.
-        val built = valueBinding match
-            case Present(ReactiveVariable(_))    => field(Absent, ())
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((v, repaint) => field(Present(v), repaint))
-            case Present(ReactiveValue.Const(v)) => field(Present(v), ())
-            case Absent                          => field(Absent, ())
         val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
         if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
@@ -247,8 +229,6 @@ final case class Input private (
       */
     private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
-        shown: Maybe[String],
-        repaint: UI.Action,
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => UI.Action) => T,
         setOnChange: (T, String => UI.Action) => T,
@@ -270,10 +250,9 @@ final case class Input private (
         // field's text, the reader's edit of a starting one): kyo-ui toggles it there, the static render from the start.
         b = b.filledClass("p-filled")
         filledUpV.foreach((cls, closest) => b = b.filledClass(cls, closest))
-        valueBinding match
-            case Present(ReactiveVariable(r)) => b = b.value(r)
-            case _                            => shown.foreach(v => b = b.value(v))
-        end match
+        // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
+        // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
+        valueBinding.foreach(slot => b = b.value(slot.bound))
         // A constant placeholder joins the attribute chain via the concrete factory's
         // String setter; a reactive one uses kyo-ui's placeholder patch channel (in-place
         // setAttribute, no re-render), declared on the shared TextInput bound.
@@ -295,8 +274,8 @@ final case class Input private (
             case Present(TextValue.Const(v)) => b.aria("description", v)
             case Present(TextValue.Dyn(s))   => b.aria("description", s)
             case Absent                      => b
-        b = onInputF.map(f => setOnInput(b, v => f(v).andThen(repaint))).getOrElse(b)
-        b = onChangeF.map(f => setOnChange(b, v => f(v).andThen(repaint))).getOrElse(b)
+        b = onInputF.map(f => setOnInput(b, f)).getOrElse(b)
+        b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
         b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
         b

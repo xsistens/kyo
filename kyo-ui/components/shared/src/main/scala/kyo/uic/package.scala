@@ -57,8 +57,8 @@ package object uic:
             )
         end unknown
 
-        /** The card for a value a reader edits, bound one way with nobody to hear the edit: every change is painted away
-          * again. `setter` names the binding, `events` the events that would hear it.
+        /** The card for a value a reader edits, bound one way with nobody to hear the edit: every change is put
+          * back. `setter` names the binding, `events` the events that would hear it.
           */
         def unheard(component: String, setter: String, events: String)(using Frame): UI =
             card(
