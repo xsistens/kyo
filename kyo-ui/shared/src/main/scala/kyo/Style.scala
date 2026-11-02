@@ -915,6 +915,19 @@ object Style:
         private def clamp255(v: Int): Int      = math.max(0, math.min(255, v))
         private def clamp01(v: Double): Double = math.max(0.0, math.min(1.0, v))
 
+        /** `var(--token)` or `var(token)`, and 3, 4, 6 or 8 digit hex with or without `#`; `Absent` for anything else, a named color among it.
+          * Never throws.
+          */
+        def parse(value: String): Maybe[Color] =
+            val t = value.trim
+            if t.startsWith("var(") && t.endsWith(")") then
+                val inner = t.drop(4).dropRight(1).trim
+                val name  = if inner.startsWith("--") then inner.drop(2) else inner
+                if name.nonEmpty then Present(variable(name)) else Absent
+            else hex(t)
+            end if
+        end parse
+
         /** Parses a hex color. Accepts 3, 4, 6, or 8 hex digits with or without a leading `#`; returns `Absent` for any other length or any
           * non-hex character. Never throws.
           */
