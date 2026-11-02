@@ -1044,6 +1044,21 @@ private[kyo] object ReactiveUI:
             case Present(row) => Sync.Unsafe.defer(row.add(release))
             case Absent       => Scope.ensure(Sync.defer(release()))
 
+    /** The tail of showing a walked value in `table`: the channels of the root it painted, its kids, the end of its pass. */
+    private[internal] def subscribeWalked(
+        path: Seq[String],
+        shown: UI,
+        kids: Seq[ReactiveUI],
+        pass: MountPass,
+        table: MountScope,
+        through: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        dispatch: MountDispatch
+    )(using Frame): Unit < (Async & Scope) =
+        forkRootChannels(path, shown, through)
+            .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, table, dispatch, pass)))
+            .andThen(table.endWalk)
+
     /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
       * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
       * region's scope on the mount table, which outlives the subscription (see [[MountTable]]).
@@ -1092,9 +1107,7 @@ private[kyo] object ReactiveUI:
                     _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
                 )
                 _ <- release()
-                _ <- forkRootChannels(rui.path, current, through)
-                _ <- Kyo.foreachDiscard(newKids)(subscribeScoped(_, through, signalChangeTime, regionMounts, dispatch, pass))
-                _ <- regionMounts.endWalk
+                _ <- subscribeWalked(rui.path, current, newKids, pass, regionMounts, through, signalChangeTime, dispatch)
             yield ()
 
         def onValue(current: UI, isFirst: Boolean, through: UIExchange): Unit < (Async & Scope) =

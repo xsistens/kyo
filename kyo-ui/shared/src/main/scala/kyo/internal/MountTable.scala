@@ -1826,9 +1826,7 @@ private[kyo] object MountRegions:
                                     deepRows = Nil
                                 )))
                                 pass <- content.beginWalk(kids)
-                                _    <- forkRootChannels(rui.path, shown, through)
-                                _    <- Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, content, dispatch, pass))
-                                _    <- content.endWalk
+                                _    <- subscribeWalked(rui.path, shown, kids, pass, content, through, signalChangeTime, dispatch)
                             yield ()
                 yield ()
                 end for
