@@ -209,7 +209,7 @@ final case class InputNumber private (
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
-        // A value bound one way that nothing hears: every change the reader makes is painted away again.
+        // A value bound one way that nothing hears: every change the reader makes is put back.
         val quiet = readonlyFlag || disabledFlag.constTrue
         if valueBinding.exists { case InputNumber.Value.Dyn(_) => true; case _ => false } && onChangeF.isEmpty && !quiet
         then fragment(field, KeyDiagnostics.unheard("InputNumber", "value", "onChange"))
@@ -222,13 +222,12 @@ final case class InputNumber private (
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
         valueBinding match
             case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref), validity))
-            // Bound one way, the field is painted again after each report, so a number the owner does not take is put back.
+            // Bound one way, the native field follows the signal, so kyo-ui puts back a number the owner does not take. A constant
+            // somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
             case Present(InputNumber.Value.Dyn(sig)) =>
-                ReactiveValue.repainting(sig)((v, repaint) => body(Present(v), Absent, validity, repaint = repaint))
-            // A constant somebody hears is painted again after each report too, so a number its owner does not take is put
-            // back; a constant nobody hears is fixed (drawn read-only) and has nothing to repaint.
+                sig.render(v => body(Present(v), Absent, validity, native = Present(sig.map(InputNumber.format))))
             case Present(InputNumber.Value.Const(v)) if onChangeF.isDefined =>
-                ReactiveValue.repainting(Signal.initConst(v))((v, repaint) => body(Present(v), Absent, validity, repaint = repaint))
+                body(Present(v), Absent, validity, native = Present(Signal.initConst(InputNumber.format(v))))
             case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent, validity)
             // No `render` here on purpose: a text binding is kyo's own two-way channel on
             // the field, so the value travels without a subscription. Re-rendering the
@@ -236,9 +235,9 @@ final case class InputNumber private (
             case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, validity, Present(ref))
             // The static projection of a starting text: the mount takes it over as the field's own.
             case Present(InputNumber.Value.TextConst(t)) => body(Absent, Absent, validity, textShown = Present(t))
-            // Text bound one way, painted again after each report, so text the owner does not take is put back.
+            // Text bound one way: the native field follows it, so kyo-ui puts back text the owner does not take.
             case Present(InputNumber.Value.TextDyn(sig)) =>
-                ReactiveValue.repainting(sig)((t, repaint) => body(Absent, Absent, validity, textShown = Present(t), repaint = repaint))
+                sig.render(t => body(Absent, Absent, validity, textShown = Present(t), native = Present(sig)))
             case Absent => body(Absent, Absent, validity)
 
     private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
@@ -260,9 +259,10 @@ final case class InputNumber private (
         ref: Maybe[SignalRef[Double]],
         validity: FieldValidity,
         text: Maybe[SignalRef[String]] = Absent,
-        repaint: UI.Action = (),
         // Text shown but not written: a one-way text binding, or a starting text before the mount takes it over.
-        textShown: Maybe[String] = Absent
+        textShown: Maybe[String] = Absent,
+        // What the native field follows, where the binding is one way.
+        native: Maybe[Signal[String]] = Absent
     )(using Frame): UI =
         // === the native number field ============================================
         // The wrapper's `p-inputwrapper-filled` follows the text the number field holds, toggled by kyo-ui's client, so a
@@ -290,16 +290,17 @@ final case class InputNumber private (
         // native mechanism: the spinner and validation both round to it. (The value model
         // stays Double; a whole one.)
         in = in.step(if integerFlag then stepV.max(1.0).round.toDouble else stepV)
-        (text, textShown) match
-            case (Present(t), _) => in = in.value(t)
-            case (_, Present(t)) => in = in.value(t)
-            case _               => value.foreach(v => in = in.value(InputNumber.format(v)))
+        (native, text, textShown) match
+            case (Present(n), _, _) => in = in.value(n)
+            case (_, Present(t), _) => in = in.value(t)
+            case (_, _, Present(t)) => in = in.value(t)
+            case _                  => value.foreach(v => in = in.value(InputNumber.format(v)))
         end match
         // A text binding hears every keystroke: a ref is written by the field itself, so only the report is left; text
-        // shown one way is reported and the field painted back to what its owner holds.
+        // shown one way is reported, and kyo-ui puts the field back to what its owner holds.
         def reportText(t: String): UI.Action = onTextF.fold[UI.Action](())(f => f(t))
         if interactive && text.isDefined then in = in.onInput(reportText)
-        if interactive && textShown.isDefined then in = in.onInput(t => reportText(t).andThen(repaint))
+        if interactive && textShown.isDefined then in = in.onInput(reportText)
         placeholderText match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
@@ -317,7 +318,7 @@ final case class InputNumber private (
         // before the write-back (the browser only ENFORCES min/max on form submit). A
         // text-bound field is left out of it: its content is what the reader typed, and
         // normalising a Double back into it would rewrite `4.` to `4` under them.
-        if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref).andThen(repaint))
+        if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref))
         // A field bound to a ref holds the number it committed, clamped, so the blur reports the ref as focus leaves.
         // Anywhere else only the field holds what the reader typed (a commit with no ref writes nowhere, and a one-way
         // owner's repaint can land after the blur), so the blur reports the text the field carries, read the way a spin
@@ -348,8 +349,8 @@ final case class InputNumber private (
                         // Shown one way: the step is taken from the owner's text and only reported.
                         case Present(cur) =>
                             val next = clamp(cur.toDoubleOption.getOrElse(0.0) + dir * stepV)
-                            reportText(InputNumber.format(next)).andThen(onChangeF.fold[UI.Action](())(f => f(next))).andThen(repaint)
-                        case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref).andThen(repaint)
+                            reportText(InputNumber.format(next)).andThen(onChangeF.fold[UI.Action](())(f => f(next)))
+                        case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref)
 
         def spinButton(dir: Int, cls: String, glyph: IconGlyph): UI =
             var b = button

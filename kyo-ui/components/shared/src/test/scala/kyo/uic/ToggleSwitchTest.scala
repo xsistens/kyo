@@ -36,17 +36,23 @@ class ToggleSwitchTest extends ReactiveValueContract:
         end for
     }
 
-    "a toggle its owner does not take is painted away again" in {
+    "a toggle its owner does not take is put back" in {
         for
-            held  <- Signal.initRef(false)
-            again <-
-                repaintsAfter(uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()).render, held)(t => box(t).map(toggle(_, true)))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held <- Signal.initRef(false)
+            ui = uic.ToggleSwitch().checked(held.readOnly).onChange(_ => ()).render
+            native  <- box(ui)
+            patches <- assertsAfter(ui)("p-toggleswitch-input")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield
+            assert(follows(native.checked), s"the native box follows the signal: ${native.checked}")
+            assert(patches == Chunk(("checked", "false")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a toggle the owner does not take is put back" in {
-        for again <- repaintsAfter(uic.ToggleSwitch().checked(false).onChange(_ => ()).render)(t => box(t).map(toggle(_, true)))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    "a constant with a listener puts back a toggle the owner does not take" in {
+        for patches <- assertsAfter(
+                uic.ToggleSwitch().checked(false).onChange(_ => ()).render
+            )("p-toggleswitch-input")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield assert(patches == Chunk(("checked", "false")), s"patches: $patches")
     }
 
     "a fixed constant of true is drawn on" in {
@@ -66,7 +72,7 @@ class ToggleSwitchTest extends ReactiveValueContract:
             h    <- held.get
             s    <- seen.get
         yield
-            assert(b.checked.exists { case UI.Bound.Const(c) => c; case _ => false }, s"shows the signal: ${b.checked}")
+            assert(follows(b.checked), s"follows the signal: ${b.checked}")
             assert(s == List(false) && h, s"reported $s, held $h")
     }
 

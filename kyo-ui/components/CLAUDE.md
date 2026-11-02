@@ -106,16 +106,18 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   when unbound, like an HTML `dialog` with `open`, and shows until the reader closes it; one with its own opener
   (SpeedDial, a Popover with a trigger, the pickers) starts closed. A static placeholder that draws such own state from
   a constant signal draws it quietly (`Dialog.quiet`, `Overlay.quiet`), or it reports a binding nobody made.
-- **A field with NATIVE state paints itself again after a one-way report.** The browser moves a tick, a caret's text,
-  a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it
-  was, so nothing renders and the control keeps what nobody accepted. Such a field draws a one-way signal (and a
-  constant somebody hears, `Signal.initConst`) through `ReactiveValue.repainting`, whose body gets a `repaint` to run after each report: a count the mount owns is read
-  beside the signal, so the field is drawn again from what the owner holds, and the morph puts the control back (a
-  bound box through kyo-ui's `data-kyo-bound` marker, a text field through its value, even while focused). The heard
-  constant covers the boolean fields, Slider, InputNumber's `value` and Rating (both of its value slots); a text field's
-  constant is excluded, since it is the starting text the reader goes on editing, never a value to put back. A constant
-  nobody hears is fixed and has nothing to repaint. A two-way ref needs none of it, and a field that draws everything
-  itself (ToggleButton, ColorPicker, Knob, the pickers) has nothing native to fall out of step.
+- **A field with NATIVE state binds it through kyo-ui, which puts back what its owner did not take.** The browser moves a tick,
+  a caret's text, a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it was,
+  so no emission would ever reach the control. A one-way signal goes straight to the native element's setter (`value`, `checked`), which
+  stores it as `UI.Bound.Follow`: the element shows it through an attribute channel, in place, and after an edit the kernel compares what the
+  signal holds with what the event carried and sends the patch when they differ. A commit always counts, a keystroke only where `onInput` is
+  set; a radio's group gets its selection back with it. A field whose chrome draws nothing from the value (Input, TextArea, Password without
+  feedback) has no region around it, so a keystroke renders nothing; one whose chrome does (CheckBox, RadioButton, ToggleSwitch, Slider, Rating,
+  InputNumber, InputOtp, Password with feedback) draws the chrome in a region over the signal and binds the native element to the signal inside
+  it. A constant somebody hears follows `Signal.initConst` (`ReactiveValue.native`): that covers the boolean fields, Slider, InputNumber's
+  `value` and Rating; a text field's constant is excluded, since it is the starting text the reader goes on editing, never a value to put
+  back. A constant nobody hears is fixed. A two-way ref needs none of it, and a field that draws everything itself (ToggleButton, ColorPicker,
+  Knob, the pickers) has nothing native to fall out of step.
 - **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
   caller for write access so that the callers who want write-back can have it. Reading needs
   none (`Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike), so check which

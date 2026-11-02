@@ -127,26 +127,32 @@ final case class CheckBox private (
     end render
 
     /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
-      * one way, or to a constant somebody hears, it paints the box again after the report, so a toggle the owner does not
-      * take is taken back (ReactiveValue.repainting). A constant nobody hears is fixed: drawn read-only, reachable and
+      * one way, or to a constant somebody hears, the native box follows it, so kyo-ui takes back a toggle the owner does not
+      * take (`UI.Bound.Follow`). A constant nobody hears is fixed: drawn read-only, reachable and
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        def toggle(repaint: UI.Action): Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then
-                Present(b => ReactiveValue.change(checkedBinding, b, onChangeF).andThen(repaint))
+        val toggle: Maybe[Boolean => UI.Action] =
+            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
             else Absent
         checkedBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, toggle(()), validity))
-            case Present(ReactiveValue.Dyn(sig)) => ReactiveValue.repainting(sig)((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
-                ReactiveValue.repainting(Signal.initConst(v))((b, repaint) => body(b, toggle(repaint), validity))
-            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, Absent, validity)
-            case Absent                          => body(false, toggle(()), validity)
+            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, b, toggle, validity))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, sig, toggle, validity))
+            case Present(slot @ ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
+                body(v, slot.native, toggle, validity)
+            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, v, Absent, validity)
+            case Absent                          => body(false, false, toggle, validity)
         end match
     end drawn
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
+    private def body(
+        isChecked: Boolean,
+        native: Boolean | Signal[Boolean],
+        onChg: Maybe[Boolean => UI.Action],
+        validity: FieldValidity
+    )(using
+        Frame
+    ): UI =
         val isReadonly    = readonlyFlag.getOrElse(false)
         val isDisplayOnly = displayOnlyFlag.getOrElse(false)
         val isMixed       = indeterminateFlag.getOrElse(false)
@@ -158,7 +164,7 @@ final case class CheckBox private (
         // native, and only `disabled` gets the `.p-disabled` visual treatment.
         val blocked = isReadonly || isDisplayOnly
 
-        var box = checkbox.cssClass("p-checkbox-input").checked(isChecked)
+        var box = checkbox.cssClass("p-checkbox-input").checked(native)
         if !tabbableFlag then box = box.tabIndex(-1)
         box = idV.map(v => box.id(v)).getOrElse(box)
         if isMixed then box = box.indeterminate(true).aria("checked", "mixed")

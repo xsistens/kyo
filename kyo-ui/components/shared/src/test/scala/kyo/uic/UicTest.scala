@@ -64,23 +64,45 @@ abstract class UicTest extends kyo.test.Test[Any]:
             }
         }
 
+    /** The attribute and boolean-attribute patches a native element's edit brings, oldest first, as `(name, value)`. Runs `ui` under the engine
+      * and sends `event`, as the client would, to the first element whose tag holds `at` in the first page; with `mounted`, once a mount has
+      * published. That one edit reaching the kernel is what a field with native state relies on to put back what its owner did not take; a
+      * handler called directly goes past it.
+      */
+    private[uic] def assertsAfter(ui: UI, mounted: Boolean = false)(at: String)(event: Seq[String] => kyo.internal.UIEvent)(using
+        Frame
+    ): Chunk[(String, String)] < Async =
+        import kyo.internal.RecordingExchange.Op
+        val log = new kyo.internal.RecordingExchange
+        for
+            html <- renderHtml(ui)
+            path = pathHolding(html, at)
+            cmds    <- headlessCommands
+            patches <- kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { sub =>
+                (if mounted then log.awaitOp(_.isInstanceOf[Op.Paint]) else Kyo.unit)
+                    .andThen(sub.handle(path, event(path)))
+                    .andThen(log.ops)
+            }
+        yield patches.collect {
+            case op: Op.Attr     => (op.name, op.value)
+            case op: Op.BoolAttr => (op.name, op.value.toString)
+        }
+        end for
+    end assertsAfter
+
+    /** Whether a native element's binding is the one-way kind. */
+    private[uic] def follows(b: Maybe[UI.Bound[?]]): Boolean = b match
+        case Present(_: UI.Bound.Follow[?]) => true
+        case _                              => false
+
     /** Runs `ui` under the engine, hands `act` the tree its mounts and regions last published (the whole of `ui` when
-      * none did), and answers whether a region published again after `act` ran. That is the one sign a field paints
-      * what its owner holds once more after a report the owner did not take: nothing in the markup changes.
+      * none did), and answers with what the field published last once `act` made it publish again, so a test can read what
+      * it now shows.
       *
       * A region publishes while it settles too, so `act` runs only once every ref in `reads` has an observer parked on it
       * again (`waiters`), which the engine does only after handling the value before: the barrier
       * [[DataTableReuseTest]] uses. `within` only turns a wait that never ends into an answer instead of a hang; it is not
       * what passes a test.
-      */
-    private[uic] def repaintsAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
-        Frame,
-        kyo.test.AssertScope
-    ): Boolean < Async =
-        publishedAfter(ui, reads*)(act).map(_.nonEmpty)
-
-    /** [[repaintsAfter]], answering with what the field published last once `act` made it publish again, so a test can
-      * read what it now shows.
       */
     private[uic] def publishedAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
         Frame,
@@ -556,6 +578,15 @@ abstract class UicTest extends kyo.test.Test[Any]:
     /** A click as the client sends it: addressed by the path the element had on the page, not by the element. */
     private[uic] def clickAt(path: Seq[String]): kyo.internal.UIEvent =
         kyo.internal.UIEvent.Click(path, kyo.internal.MouseEventData(UI.Modifiers.none, Absent))
+
+    /** The `data-kyo-path` of the first element whose tag holds `text` in `html`, which is the address the client sends it events by. */
+    private[uic] def pathHolding(html: String, text: String): Seq[String] =
+        val tag = ("""<[^>]*""" + java.util.regex.Pattern.quote(text) + """[^>]*>""").r
+            .findFirstIn(html).getOrElse(throw new AssertionError(s"no element holding $text in $html"))
+        val raw = """data-kyo-path="([^"]*)"""".r.findFirstMatchIn(tag).map(_.group(1))
+            .getOrElse(throw new AssertionError(s"the element holding $text carries no path: $tag"))
+        if raw.isEmpty then Seq.empty else raw.split('.').toSeq
+    end pathHolding
 
     /** The `data-kyo-path` the element with id `id` carries in `html`, which is the address the client clicks it by. */
     private[uic] def pathOf(html: String, id: String): Seq[String] =

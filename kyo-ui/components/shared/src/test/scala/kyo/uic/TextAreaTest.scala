@@ -75,13 +75,13 @@ class TextAreaTest extends ReactiveValueContract:
         end for
     }
 
-    "an edit its owner does not take is painted away again" in {
+    "an edit its owner does not take is put back" in {
         for
-            held  <- Signal.initRef("a")
-            again <- repaintsAfter(uic.TextArea().value(held.readOnly).onInput(_ => ()).render, held)(t =>
-                field(t).map(f => handled(f.onInput.getOrElse(throw new AssertionError("no input handler"))("ab")))
-            )
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef("a")
+            patches <-
+                assertsAfter(uic.TextArea().value(held.readOnly).onInput(_ => ()).render)("p-textarea")(kyo.internal.UIEvent.Input(_, "ab"))
+        yield assert(patches == Chunk(("value", "a")), s"patches: $patches")
+        end for
     }
 
 end TextAreaTest
