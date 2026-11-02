@@ -251,7 +251,7 @@ final case class ColorPicker private (
             val (hr, hg, hb) = ColorPicker.hsvToRgb(h, 1.0, 1.0) // pure hue tint
             val handle       = div.cssClass("p-colorpicker-color-handle").aria("hidden", "true")
                 .style(_.left((s * 100).pct).top(((1 - v) * 100).pct))
-            div.cssClass("p-colorpicker-color-background").style(_.bg(_.rgb(hr, hg, hb)))(toChild(handle))
+            div.cssClass("p-colorpicker-color-background").style(_.bg(_.rgb(hr, hg, hb)))(handle)
         end planeVisual
         def hueVisual(hex: String): UI =
             val (h, _, _) = ColorPicker.hsvOf(hex)
@@ -350,8 +350,8 @@ final case class ColorPicker private (
             )
         }
         div.cssClass("p-colorpicker-content")(
-            toChild(selector((planeInner :: axes).map(toChild)*)),
-            toChild(hue((hueInner :: hueAxis).map(toChild)*))
+            selector(UI.children(planeInner :: axes)*),
+            hue(UI.children(hueInner :: hueAxis)*)
         )
     end content
 
@@ -361,10 +361,8 @@ final case class ColorPicker private (
                 // Without a bound value or while disabled, an inline picker renders no slider, so
                 // nothing in it takes focus and the root is the one place the id can name.
                 shellRoot(validity, ownsId = color.isEmpty || !interactive)(
-                    toChild(
-                        div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
-                            toChild(content(color, fallbackHex, wire = wire))
-                        )
+                    div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
+                        content(color, fallbackHex, wire = wire)
                     )
                 )
             }
@@ -423,7 +421,7 @@ final case class ColorPicker private (
         val staticRoot: UI =
             validated { validity =>
                 shellRoot(validity, false, "p-uic-overlay-anchor")(
-                    toChild(previewSwatchOf(hex => previewSwatch(hex, ()), color, fallbackHex))
+                    previewSwatchOf(hex => previewSwatch(hex, ()), color, fallbackHex)
                 )
             }
         UI.mounted {
@@ -467,12 +465,12 @@ final case class ColorPicker private (
             .anchor(anchorV)
             .seedFocus(false)
             .matchWidth(false)(
-                div.cssClass("p-colorpicker-panel")(toChild(content(color, fallbackHex, Present(panel))))
+                div.cssClass("p-colorpicker-panel")(content(color, fallbackHex, Present(panel)))
             )
         validated { validity =>
             shellRoot(validity, false, "p-uic-overlay-anchor")(
-                toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), color, fallbackHex)),
-                toChild(floating)
+                previewSwatchOf(hex => previewSwatch(hex, toggle), color, fallbackHex),
+                floating
             )
         }
     end wired

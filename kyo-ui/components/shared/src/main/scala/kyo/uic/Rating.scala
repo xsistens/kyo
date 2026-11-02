@@ -247,12 +247,12 @@ final case class Rating private (
                     eff
                 }
             end if
-            val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(toChild(hidden: UI))
+            val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(hidden: UI)
 
             val icon: UI =
                 if active then GlyphSvg(onIconV.getOrElse(Icons.starFill), "p-rating-icon", "p-rating-on-icon")
                 else GlyphSvg(offIconV.getOrElse(Icons.star), "p-rating-icon", "p-rating-off-icon")
-            opt(toChild(hiddenSlot), toChild(icon))
+            opt(hiddenSlot, icon)
         }
 
         // The radios inside form one group, so the box around them says so: an `aria-label` on a
@@ -271,7 +271,7 @@ final case class Rating private (
                 case Present(r) => r.use(d => f(math.rint(d)))
                 case Absent     => f(value.toDouble))
         }
-        el(options.map(toChild)*)
+        el(UI.children(options)*)
     end body
 
     /** Prime's select semantics: picking the current value clears to 0. */

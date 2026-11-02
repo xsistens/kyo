@@ -136,7 +136,7 @@ final case class Panel private (
                 .role("heading")
                 .aria("level", headerLevelV.token.drop(1))
         val titleSlot: List[UI] = (headerUIV, headerText) match
-            case (Present(u), _)                       => List(span.cssClass("p-panel-title")(toChild(u)))
+            case (Present(u), _)                       => List(span.cssClass("p-panel-title")(u))
             case (Absent, Present(TextValue.Const(t))) => List(titleShell(t))
             case (Absent, Present(TextValue.Dyn(s)))   => List(titleShell(s))
             case _                                     => Nil
@@ -152,7 +152,7 @@ final case class Panel private (
                 // so replacing it never resets the content's collapse transition).
                 List(
                     div.cssClass("p-panel-header-actions")(
-                        toChild(Reading.of(slot).render { c =>
+                        Reading.of(slot).render { c =>
                             var b = button
                                 .cssClass("p-panel-toggle-button")
                                 .cssClass("p-button")
@@ -172,28 +172,28 @@ final case class Panel private (
                             // its id from the panel's, per the derivation HasElementId
                             // describes.
                             idV.foreach(base => b = b.id(s"$base-toggle"))
-                            b(toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon")))
-                        })
+                            b(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon"))
+                        }
                     )
                 )
             case Absent => Nil
 
         val headerUI: List[UI] =
             if titleSlot.isEmpty && actions.isEmpty then Nil
-            else List(div.cssClass("p-panel-header")((titleSlot ++ actions).map(toChild)*))
+            else List(div.cssClass("p-panel-header")(UI.children(titleSlot ++ actions)*))
 
-        val footerUI: List[UI]     = footerV.toList.map(f => div.cssClass("p-panel-footer")(toChild(f)))
+        val footerUI: List[UI]     = footerV.toList.map(f => div.cssClass("p-panel-footer")(f))
         val contentInner: List[UI] =
-            (div.cssClass("p-panel-content")(kids.map(toChild)*): UI) :: footerUI
+            (div.cssClass("p-panel-content")(UI.children(kids)*): UI) :: footerUI
         val containerBase =
             div.cssClass("p-panel-content-container")(
-                div.cssClass("p-panel-content-wrapper")(contentInner.map(toChild)*)
+                div.cssClass("p-panel-content-wrapper")(UI.children(contentInner)*)
             )
         val container: UI = toggleSlot match
             case Present(slot) => Reading.of(slot).render(collapseContainer(_, contentInner))
             case Absent        => containerBase
 
-        shell((headerUI :+ container).map(toChild)*)
+        shell(UI.children(headerUI :+ container)*)
     end body
 
     /** The animated content container: `containerBase`'s twin carrying
@@ -204,7 +204,7 @@ final case class Panel private (
     private def collapseContainer(collapsed: Boolean, inner: List[UI])(using Frame): UI =
         var c = div.cssClass("p-panel-content-container").cssClass("p-uic-collapse")
         if collapsed then c = c.cssClass("p-uic-collapsed")
-        c(div.cssClass("p-panel-content-wrapper")(inner.map(toChild)*))
+        c(div.cssClass("p-panel-content-wrapper")(UI.children(inner)*))
     end collapseContainer
 end Panel
 

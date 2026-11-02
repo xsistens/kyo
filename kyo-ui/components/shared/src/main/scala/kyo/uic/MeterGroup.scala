@@ -133,12 +133,12 @@ final case class MeterGroup private (
                             case Orientation.Vertical   => _.height(Length.Pct(pct(m.value))).bg(colorOf(m, i))
                         span.cssClass("p-metergroup-meter").style(sized)
         }
-        val meters: UI = div.cssClass("p-metergroup-meters")(segments.map(toChild)*)
+        val meters: UI = div.cssClass("p-metergroup-meters")(UI.children(segments)*)
 
         val labels: UI = ol
             .cssClass("p-metergroup-label-list")
             .cssClass(s"p-metergroup-label-list-${labelOrientationV.token}")(
-                metersV.zipWithIndex.map { (m, i) =>
+                UI.children(metersV.zipWithIndex.map { (m, i) =>
                     val content: List[UI] = labelTemplateV match
                         case Present(f) => List(f(m, pct(m.value)))
                         case Absent     =>
@@ -158,15 +158,15 @@ final case class MeterGroup private (
                                 case TextValue.Const(t) =>
                                     span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)")
                             List(lead, labelText)
-                    toChild(li.cssClass("p-metergroup-label")(content.map(toChild)*))
-                }*
+                    li.cssClass("p-metergroup-label")(UI.children(content)*)
+                })*
             )
 
         val startLabels: List[UI] = if labelPositionV == LabelPosition.Start then List(labels) else Nil
         val endLabels: List[UI]   = if labelPositionV == LabelPosition.End then List(labels) else Nil
         val body: List[UI]        =
             startLabels ++ startTemplateV.toList ++ List(meters) ++ endTemplateV.toList ++ endLabels
-        root(body.map(toChild)*)
+        root(UI.children(body)*)
     end render
 
     /** Formats the max for `aria-valuemax` without a trailing `.0`. */

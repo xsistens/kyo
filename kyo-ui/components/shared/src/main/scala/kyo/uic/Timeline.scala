@@ -93,7 +93,7 @@ final case class Timeline[A] private (
             .cssClass("p-timeline")
             .cssClass("p-component")
             .cssClass(s"p-timeline-${alignV.token}")
-            .cssClass(s"p-timeline-${layoutV.token}")(entries.children(eventEls).map(toChild)*)
+            .cssClass(s"p-timeline-${layoutV.token}")(UI.children(entries.children(eventEls))*)
     end render
 
     /** One `div.p-timeline-event` per event; the last one draws no connector. */
@@ -101,22 +101,22 @@ final case class Timeline[A] private (
         val n = events.length
         events.zipWithIndex.map { (a, i) =>
             val oppositeEl: UI = div.cssClass("p-timeline-event-opposite")(
-                oppositeF.toList.map(f => toChild(f(a)))*
+                UI.children(oppositeF.toList.map(f => f(a)))*
             )
             // Custom marker content replaces the default dot; the default marker is
             // an empty div; Prime paints it entirely via ::before/::after.
             val markerEl: UI = markerF match
-                case Present(f) => div.cssClass("p-timeline-event-marker")(toChild(f(a)))
+                case Present(f) => div.cssClass("p-timeline-event-marker")(f(a))
                 case Absent     => div.cssClass("p-timeline-event-marker")
             val connectorSlot: List[UI] =
                 if i < n - 1 then List(div.cssClass("p-timeline-event-connector")) else Nil
             val separatorEl: UI = div.cssClass("p-timeline-event-separator")(
-                (markerEl :: connectorSlot).map(toChild)*
+                UI.children(markerEl :: connectorSlot)*
             )
             val contentEl: UI = div.cssClass("p-timeline-event-content")(
-                contentF.toList.map(f => toChild(f(a)))*
+                UI.children(contentF.toList.map(f => f(a)))*
             )
-            div.cssClass("p-timeline-event")(toChild(oppositeEl), toChild(separatorEl), toChild(contentEl))
+            div.cssClass("p-timeline-event")(oppositeEl, separatorEl, contentEl)
         }
     end eventEls
 end Timeline

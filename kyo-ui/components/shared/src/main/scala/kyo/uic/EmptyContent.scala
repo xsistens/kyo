@@ -45,7 +45,7 @@ private[uic] object EmptyContent:
       */
     private def one(c: EmptyContent)(wrap: HtmlChildVal => UI)(using Frame): UI =
         c match
-            case Text(TextValue.Const(t)) => wrap(toChild(stringToUI(t)))
-            case Text(TextValue.Dyn(s))   => wrap(toChild(signalStringToUI(s)))
-            case Ui(u)                    => wrap(toChild(u))
+            case Text(TextValue.Const(t)) => wrap(stringToUI(t))
+            case Text(TextValue.Dyn(s))   => wrap(signalStringToUI(s))
+            case Ui(u)                    => wrap(u)
 end EmptyContent

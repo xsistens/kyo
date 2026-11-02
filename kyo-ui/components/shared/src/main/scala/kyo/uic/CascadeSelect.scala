@@ -391,8 +391,8 @@ final case class CascadeSelect[A] private (
 
         val dd             = div.cssClass("p-cascadeselect-dropdown")
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-cascadeselect-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-cascadeselect-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-cascadeselect-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-cascadeselect-dropdown-icon", "p-icon"))
 
         val hiddenCarrier: List[UI] =
             nameV.toList.map(n => hiddenInput.jsProp("name", n).value(current))
@@ -441,7 +441,7 @@ final case class CascadeSelect[A] private (
                     // chain (a leaf, a group row, a nested panel) ends at this root panel.
                     .containClicks(true)(
                         div.cssClass("p-cascadeselect-list-container")(
-                            toChild(list(items, Nil, current, openMap, Present(state), pick))
+                            list(items, Nil, current, openMap, Present(state), pick)
                         )
                     )
                     .renderOpen
@@ -509,7 +509,7 @@ final case class CascadeSelect[A] private (
             }
         end if
 
-        val field = validity.follow(el(((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI)*))
         val cards = unknownCard ++ unheardCard
         if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
@@ -555,7 +555,7 @@ final case class CascadeSelect[A] private (
                     st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(pick(a))
-                row(toChild(content(toChild(span.cssClass("p-cascadeselect-option-text")(labelF(a))))))
+                row(content(span.cssClass("p-cascadeselect-option-text")(labelF(a))))
 
             case (CascadeItem.Group(label, children), i) =>
                 val p                      = path :+ i
@@ -582,11 +582,9 @@ final case class CascadeSelect[A] private (
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(toggleGroup)
                 val contentUI: UI = content(
-                    toChild(span.cssClass("p-cascadeselect-option-text")(label)),
-                    toChild(
-                        span.cssClass("p-cascadeselect-group-icon-container")(
-                            toChild(GlyphSvg(Icons.angleRight, "p-cascadeselect-group-icon"))
-                        )
+                    span.cssClass("p-cascadeselect-option-text")(label),
+                    span.cssClass("p-cascadeselect-group-icon-container")(
+                        GlyphSvg(Icons.angleRight, "p-cascadeselect-group-icon")
                     )
                 )
                 // The side sub-panel: Prime's nested list skin on the Overlay primitive
@@ -610,13 +608,13 @@ final case class CascadeSelect[A] private (
                                 .renderOpen
                         )
                     case _ => Nil
-                row((contentUI :: panel).map(toChild)*)
+                row(UI.children(contentUI :: panel)*)
         }
         // Named by `aria-controls`; the announcement itself rides the trigger, which is the one
         // element focus is ever on.
         var listEl = ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")
         if path.isEmpty then st.foreach(state => state.idBase.foreach(b => listEl = listEl.id(listId(b))))
-        listEl(rows.map(toChild)*)
+        listEl(UI.children(rows)*)
     end list
 end CascadeSelect
 

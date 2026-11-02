@@ -88,7 +88,7 @@ final case class Avatar private (
                 case (Absent, Present(g), _)      => GlyphSvg(g, "p-avatar-icon")
                 case (Absent, Absent, Present(u)) => img(ImgSrc.Path(u), accName)
                 case _                            => span.cssClass("p-avatar-text")("")
-        val badgeChild: List[UI] = badgeV.toList.map(b => span.cssClass("p-uic-avatar-badge")(toChild(b)))
+        val badgeChild: List[UI] = badgeV.toList.map(b => span.cssClass("p-uic-avatar-badge")(b))
 
         val withA11y =
             if interactiveFlag then el.cssClass("p-uic-clickable").role("button").aria("label", accName)
@@ -109,7 +109,7 @@ final case class Avatar private (
                     case Absent => activated
                 end match
             else withA11y
-        withEvt((content :: badgeChild).map(toChild)*)
+        withEvt(UI.children(content :: badgeChild)*)
     end render
 end Avatar
 

@@ -503,15 +503,13 @@ final case class MultiSelect[A] private (
                 case MultiSelectDisplay.Chip if selected.nonEmpty && !overMax =>
                     selected.map { a =>
                         span.cssClass("p-multiselect-chip-item")(
-                            toChild(
-                                Chip(labelF(a))
-                                    .extraClass("p-multiselect-chip")
-                                    // A disabled field changes nothing, so its chips offer no removal.
-                                    .removable(!disabledFlag && !fixed)
-                                    .isolateRemove(true)
-                                    .onRemove(write(current - key(a)))
-                                    .render
-                            )
+                            Chip(labelF(a))
+                                .extraClass("p-multiselect-chip")
+                                // A disabled field changes nothing, so its chips offer no removal.
+                                .removable(!disabledFlag && !fixed)
+                                .isolateRemove(true)
+                                .onRemove(write(current - key(a)))
+                                .render
                         )
                     }
                 case _ if overMax && selected.nonEmpty =>
@@ -537,9 +535,9 @@ final case class MultiSelect[A] private (
         var lbl = div.cssClass("p-multiselect-label")
         if showPlaceholder then lbl = lbl.cssClass("p-placeholder")
         if selected.isEmpty && placeholder.isEmpty then lbl = lbl.cssClass("p-multiselect-label-empty")
-        val labelUI: UI = lbl(labelChildren.map(toChild)*)
+        val labelUI: UI = lbl(UI.children(labelChildren)*)
 
-        val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(toChild(labelUI))
+        val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(labelUI)
 
         // Explicitly typed effect (the untyped-match Any-inference trap).
         val clearEffect: UI.Action =
@@ -556,14 +554,14 @@ final case class MultiSelect[A] private (
                         .aria("label", "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
-                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
                 )
             else Nil
 
         val dd             = div.cssClass("p-multiselect-dropdown")
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-multiselect-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-multiselect-dropdown-icon", "p-icon"))
 
         // Hidden form carrier: comma-joined selected keys in options order.
         val hiddenCarrier: List[UI] =
@@ -653,7 +651,7 @@ final case class MultiSelect[A] private (
             }
         end if
 
-        val field = validity.follow(el(((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
         // A selection bound one way that nothing hears: every toggle is painted away again.
         val unheard: List[UI] =
             if disabledFlag || !choice.exists(_.deaf(onChangeF)) then Nil
@@ -720,7 +718,7 @@ final case class MultiSelect[A] private (
             var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
             if isSel then cb = cb.cssClass("p-checkbox-checked")
             val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
-            cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))
+            cb(div.cssClass("p-checkbox-box")(UI.children(icon)*))
         end rowCheckbox
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-multiselect-option-group") { (a, i) =>
@@ -734,7 +732,7 @@ final case class MultiSelect[A] private (
             if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(toggleOption(a))
-            row(List[UI](rowCheckbox(isSel), span(labelF(a))).map(toChild)*)
+            row(UI.children(List[UI](rowCheckbox(isSel), span(labelF(a))))*)
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
@@ -745,15 +743,13 @@ final case class MultiSelect[A] private (
 
         val listUI: UI =
             div.cssClass("p-multiselect-list-container")(
-                toChild(
-                    {
-                        // Named by `aria-controls` and holding the option ids; the announcement
-                        // itself rides the focused element, which is never this list.
-                        var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
-                        s.idBase.foreach(b => list = list.id(listId(b)))
-                        list((rows ++ emptyRow).map(toChild)*)
-                    }
-                )
+                {
+                    // Named by `aria-controls` and holding the option ids; the announcement
+                    // itself rides the focused element, which is never this list.
+                    var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
+                    s.idBase.foreach(b => list = list.id(listId(b)))
+                    list(UI.children(rows ++ emptyRow)*)
+                }
             )
 
         // Header: the REAL uic.CheckBox (interactive select-all, const-checked so
@@ -804,18 +800,16 @@ final case class MultiSelect[A] private (
                      }
                      List(
                          div.cssClass("p-iconfield").cssClass("p-multiselect-filter-container")(
-                             toChild(filterEl),
-                             toChild(
-                                 span.cssClass("p-inputicon")(
-                                     toChild(GlyphSvg(Icons.search, "p-icon"))
-                                 )
+                             filterEl,
+                             span.cssClass("p-inputicon")(
+                                 GlyphSvg(Icons.search, "p-icon")
                              )
                          )
                      )
                  else Nil)
 
         val header: List[UI] =
-            if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(headerKids.map(toChild)*))
+            if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(UI.children(headerKids)*))
             else Nil
 
         Overlay.hosted(s.open, onOpenF)

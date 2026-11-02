@@ -237,7 +237,7 @@ final case class Galleria private (
                 if off then b = b.cssClass("p-disabled").jsProp("disabled", "true")
                 else if fixed then b = b.aria("disabled", "true")
                 else b = b.onClick(setActive(target))
-                b(toChild(GlyphSvg(glyph, iconCls)))
+                b(GlyphSvg(glyph, iconCls))
             end navButton
 
             val itemNav: (List[UI], List[UI]) =
@@ -278,12 +278,12 @@ final case class Galleria private (
             val caption: List[UI] =
                 if titleSlot.nonEmpty || subtitleSlot.nonEmpty then
                     List(
-                        div.cssClass("p-galleria-caption")((titleSlot ++ subtitleSlot).map(toChild)*)
+                        div.cssClass("p-galleria-caption")(UI.children(titleSlot ++ subtitleSlot)*)
                     )
                 else Nil
 
             val itemsEl: UI = div.cssClass("p-galleria-items")(
-                (itemNav._1 ++ List(div.cssClass("p-galleria-item")(toChild(preview)): UI) ++ itemNav._2 ++ caption).map(toChild)*
+                UI.children(itemNav._1 ++ List(div.cssClass("p-galleria-item")(preview): UI) ++ itemNav._2 ++ caption)*
             )
 
             val indicators: List[UI] =
@@ -294,21 +294,17 @@ final case class Galleria private (
                                 var item = li.cssClass("p-galleria-indicator")
                                 if i == active then item = item.cssClass("p-galleria-indicator-active")
                                 if !fixed then item = item.onClick(setActive(i))
-                                toChild(
-                                    item(
-                                        toChild(
-                                            roving(
-                                                button
-                                                    .cssClass("p-galleria-indicator-button")
-                                                    .jsProp("type", "button")
-                                                    .aria("label", s"Item ${i + 1}")
-                                                    .tabIndex(if i == active then 0 else -1),
-                                                base,
-                                                dotId,
-                                                i,
-                                                focus
-                                            )
-                                        )
+                                item(
+                                    roving(
+                                        button
+                                            .cssClass("p-galleria-indicator-button")
+                                            .jsProp("type", "button")
+                                            .aria("label", s"Item ${i + 1}")
+                                            .tabIndex(if i == active then 0 else -1),
+                                        base,
+                                        dotId,
+                                        i,
+                                        focus
                                     )
                                 )
                             }*
@@ -317,7 +313,7 @@ final case class Galleria private (
                 else Nil
 
             val itemsContainer: UI = div.cssClass("p-galleria-items-container")(
-                ((itemsEl :: indicators)).map(toChild)*
+                UI.children((itemsEl :: indicators))*
             )
 
             val thumbnails: List[UI] =
@@ -366,38 +362,32 @@ final case class Galleria private (
                             .aria("label", s"Item ${i + 1}")
                             .aria("current", if i == active then "page" else "false")
                         itemEl(
-                            toChild(
-                                roving(
-                                    if fixed then thumb.aria("disabled", "true") else thumb.onClick(setActive(i)),
-                                    base,
-                                    thumbId,
-                                    i,
-                                    focus
-                                )(toChild(content))
-                            )
+                            roving(
+                                if fixed then thumb.aria("disabled", "true") else thumb.onClick(setActive(i)),
+                                base,
+                                thumbId,
+                                i,
+                                focus
+                            )(content)
                         )
                     }
 
                     List(
                         div.cssClass("p-galleria-thumbnails")(
-                            toChild(
-                                div.cssClass("p-galleria-thumbnails-content")(
-                                    (thumbNav._1 ++ List(
-                                        div.cssClass("p-galleria-thumbnails-viewport")(
-                                            div.cssClass("p-galleria-thumbnail-items")(thumbItems.map(toChild)*)
-                                        ): UI
-                                    ) ++ thumbNav._2).map(toChild)*
-                                )
+                            div.cssClass("p-galleria-thumbnails-content")(
+                                UI.children(thumbNav._1 ++ List(
+                                    div.cssClass("p-galleria-thumbnails-viewport")(
+                                        div.cssClass("p-galleria-thumbnail-items")(UI.children(thumbItems)*)
+                                    ): UI
+                                ) ++ thumbNav._2)*
                             )
                         )
                     )
                 else Nil
 
             div.cssClass("p-galleria").cssClass("p-component")(
-                toChild(
-                    div.cssClass("p-galleria-content")(
-                        ((itemsContainer :: thumbnails)).map(toChild)*
-                    )
+                div.cssClass("p-galleria-content")(
+                    UI.children((itemsContainer :: thumbnails))*
                 )
             )
 

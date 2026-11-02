@@ -503,7 +503,7 @@ final case class AutoComplete[A] private (
         // === in-field affordances ================================================
         def loaderSpan: UI =
             span.cssClass("p-autocomplete-loader")(
-                toChild(GlyphSvg(Icons.spinner, "p-icon", "p-icon-spin"))
+                GlyphSvg(Icons.spinner, "p-icon", "p-icon-spin")
             )
         val loader: List[UI] = loadingV match
             case Present(BoolValue.Const(true))  => List(loaderSpan)
@@ -518,7 +518,7 @@ final case class AutoComplete[A] private (
                         .cssClass("p-autocomplete-clear-icon")
                         .jsProp("type", "button")
                         .aria("label", "Clear")
-                        .onClick(ReactiveValue.change(valueBinding, "", onChangeF))(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .onClick(ReactiveValue.change(valueBinding, "", onChangeF))(GlyphSvg(Icons.times, "p-icon"))
                 )
             case _ => Nil
 
@@ -550,7 +550,7 @@ final case class AutoComplete[A] private (
                         }
                     case Absent => if !interactive then dd = dd.disabled(true)
                 end match
-                List(dd(toChild(GlyphSvg(Icons.chevronDown, "p-icon"))))
+                List(dd(GlyphSvg(Icons.chevronDown, "p-icon")))
             else Nil
 
         // === floating panel ======================================================
@@ -563,7 +563,7 @@ final case class AutoComplete[A] private (
         if disabledFlag then el = el.cssClass("p-disabled")
         if fluidFlag then el = el.cssClass("p-autocomplete-fluid")
         if panelShown then el = el.cssClass("p-uic-overlay-anchor")
-        el(((field :: loader) ++ clear ++ dropdownUI ++ panel).map(toChild)*)
+        el(UI.children((field :: loader) ++ clear ++ dropdownUI ++ panel)*)
     end body
 
     /** The floating suggestion panel: Prime's `.p-autocomplete-overlay` skin on
@@ -575,8 +575,8 @@ final case class AutoComplete[A] private (
         val hiEff          = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
         val rows: List[UI] = OptionItem.rows(visibleGroups, "p-autocomplete-option-group") { (a, i) =>
             val content: HtmlChildVal = itemTemplateF match
-                case Present(t) => toChild(t(a))
-                case Absent     => toChild(stringToUI(labelF(a)))
+                case Present(t) => t(a)
+                case Absent     => stringToUI(labelF(a))
             var row = li
                 .cssClass("p-autocomplete-option")
                 .role("option")
@@ -593,10 +593,10 @@ final case class AutoComplete[A] private (
             else Nil
         val listUI: UI =
             div.cssClass("p-autocomplete-list-container")(
-                toChild {
+                {
                     var list = ul.cssClass("p-autocomplete-list").role("listbox")
                     s.idBase.foreach(b => list = list.id(listId(b)))
-                    list((rows ++ emptyRow).map(toChild)*)
+                    list(UI.children(rows ++ emptyRow)*)
                 }
             )
         Overlay(s.open)

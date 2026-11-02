@@ -110,7 +110,7 @@ final case class OverlayBadge private (
 
     private[uic] def render(using Frame): UI =
         div.cssClass("p-overlaybadge")(
-            (childV :: badgeV.toList.map(_.render)).map(toChild)*
+            UI.children(childV :: badgeV.toList.map(_.render))*
         )
 end OverlayBadge
 

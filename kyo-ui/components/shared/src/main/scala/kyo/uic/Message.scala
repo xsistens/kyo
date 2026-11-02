@@ -141,7 +141,7 @@ final case class Message private (
                         severityV match
                             case SeverityValue.Const(s) => List(GlyphSvg(defaultIconFor(s), "p-message-icon"))
                             case SeverityValue.Dyn(sig) => List(sig.render(s => GlyphSvg(defaultIconFor(s), "p-message-icon")))
-        val textChild: List[UI]  = List(span.cssClass("p-message-text")(kids.map(toChild)*))
+        val textChild: List[UI]  = List(span.cssClass("p-message-text")(UI.children(kids)*))
         val closeChild: List[UI] =
             if !closableFlag then Nil
             else
@@ -150,11 +150,11 @@ final case class Message private (
                     .jsProp("type", "button")
                     .aria("label", "Close")
                 onDismissedEff.foreach(e => btn = btn.onClick(e))
-                List(btn(toChild(GlyphSvg(Icons.times, "p-message-close-icon"))))
+                List(btn(GlyphSvg(Icons.times, "p-message-close-icon")))
 
         el(
             div.cssClass("p-message-content-wrapper")(
-                div.cssClass("p-message-content")((iconChild ++ textChild ++ closeChild).map(toChild)*)
+                div.cssClass("p-message-content")(UI.children(iconChild ++ textChild ++ closeChild)*)
             )
         )
     end render

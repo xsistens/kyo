@@ -546,7 +546,7 @@ final case class Listbox[K] private (
             case Absent                      => ()
         end match
         accessibleNameRefV.foreach(v => list = list.aria("labelledby", v))
-        val listUI: UI = list((rows ++ emptyRow).map(toChild)*)
+        val listUI: UI = list(UI.children(rows ++ emptyRow)*)
 
         def header: UI =
             var field = input
@@ -565,7 +565,7 @@ final case class Listbox[K] private (
                     ReactiveValue.change(Present(q), text, onFilterQueryF).andThen(if q.writable.isEmpty then repaint else (): UI.Action)
                 )
             }
-            div.cssClass("p-listbox-header")(toChild(field))
+            div.cssClass("p-listbox-header")(field)
         end header
 
         // A signal switch shows and hides the header in a region of its own, so the list beside it stays put.
@@ -578,7 +578,7 @@ final case class Listbox[K] private (
         var root = div.cssClass("p-listbox").cssClass("p-component")
         if disabledFlag then root = root.cssClass("p-disabled")
         root = validity.mark(root)
-        root((headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*)
+        root(UI.children(headerSlot :+ (div.cssClass("p-listbox-list-container")(listUI): UI))*)
     end body
 
     /** The id the roving highlight addresses one option by, derived from the listbox's own. */
@@ -632,7 +632,7 @@ final case class Listbox[K] private (
                 it.text match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)
-        row(((checkSlot ++ iconSlot :+ labelSlot) ++ extraSlot).map(toChild)*)
+        row(UI.children((checkSlot ++ iconSlot :+ labelSlot) ++ extraSlot)*)
     end renderOption
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onItemClick`. */

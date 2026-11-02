@@ -354,17 +354,17 @@ final case class TreeTable[A] private (
                 }.toSet
 
         val headRow: UI =
-            tr(cols.map(c =>
-                toChild(headerCell(c, sort, flags.getOrElse(c.headerV, c.sortableConst), interactive))
-            )*)
+            tr(UI.children(cols.map(c =>
+                headerCell(c, sort, flags.getOrElse(c.headerV, c.sortableConst), interactive)
+            ))*)
 
         val bodyRows: List[UI] =
             if nodeList.isEmpty then
                 List(
                     tr.cssClass("p-treetable-empty-message")(
-                        toChild(EmptyContent.render(emptyContentV, "No records found")(c =>
+                        EmptyContent.render(emptyContentV, "No records found")(c =>
                             td.colspan(math.max(cols.length, 1))(c)
-                        ))
+                        )
                     )
                 )
             else
@@ -386,7 +386,7 @@ final case class TreeTable[A] private (
                         case Present(w) => col.style(_.width(w.px))
                         case Absent     => col
                 )
-                List(colgroup(cs.map(toChild)*))
+                List(colgroup(UI.children(cs)*))
 
         var tbl = table.cssClass("p-treetable-table").role("treegrid")
         // A grid that takes more than one row at a time has to say so: a reader who cannot see the
@@ -401,10 +401,10 @@ final case class TreeTable[A] private (
             case Absent                      => ()
         end match
         val tableEl: UI = tbl(
-            (colGroupUI ++ List[UI](
-                thead.cssClass("p-treetable-thead")(toChild(headRow)),
-                tbody.cssClass("p-treetable-tbody")(bodyRows.map(toChild)*)
-            )).map(toChild)*
+            UI.children(colGroupUI ++ List[UI](
+                thead.cssClass("p-treetable-thead")(headRow),
+                tbody.cssClass("p-treetable-tbody")(UI.children(bodyRows)*)
+            ))*
         )
 
         var root = div.cssClass("p-treetable").cssClass("p-component")
@@ -421,7 +421,7 @@ final case class TreeTable[A] private (
             case Size.Large  => root = root.cssClass("p-treetable-lg")
             case Size.Normal => ()
         end match
-        root((unheard :+ div.cssClass("p-treetable-table-container")(toChild(tableEl))).map(toChild)*)
+        root(UI.children(unheard :+ div.cssClass("p-treetable-table-container")(tableEl))*)
     end body
 
     /** Bindings made one way that nothing hears: the headers, togglers or rows take presses that change nothing. A
@@ -517,7 +517,7 @@ final case class TreeTable[A] private (
 
         cell(
             div.cssClass("p-treetable-column-header-content")(
-                ((span.cssClass("p-treetable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
+                UI.children((span.cssClass("p-treetable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge))*
             )
         )
     end headerCell
@@ -619,8 +619,8 @@ final case class TreeTable[A] private (
             end match
 
             val cellValue: HtmlChildVal = c.bodyF match
-                case Present(f) => toChild(f(node.data))
-                case Absent     => toChild(stringToUI(c.textF.map(_(node.data)).getOrElse("")))
+                case Present(f) => f(node.data)
+                case Absent     => stringToUI(c.textF.map(_(node.data)).getOrElse(""))
 
             // The FIRST column carries the toggler: indent = depth × 1rem (Prime's
             // inline marginLeft); leaves keep the box but hide it (Prime's inline
@@ -638,9 +638,9 @@ final case class TreeTable[A] private (
                         if !expansionFixed then toggler = toggler.onClick(toggleNode(id)).stopPropagation(true)
                     else toggler = toggler.cssClass("p-uic-tt-toggle-hidden").aria("hidden", "true")
                     val togglerEl: UI = toggler(
-                        toChild(GlyphSvg(if isExp then Icons.chevronDown else Icons.chevronRight, "p-treetable-node-toggle-icon"))
+                        GlyphSvg(if isExp then Icons.chevronDown else Icons.chevronRight, "p-treetable-node-toggle-icon")
                     )
-                    List(toChild(togglerEl), cellValue)
+                    List(togglerEl, cellValue)
                 else List(cellValue)
 
             var content = div.cssClass("p-treetable-body-cell-content")
@@ -679,7 +679,7 @@ final case class TreeTable[A] private (
         end if
         if isSel then row = row.cssClass("p-treetable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
-        row(tds.map(toChild)*)
+        row(UI.children(tds)*)
     end renderRow
 
     private def rowId(base: String, index: Int): String = s"$base-r$index"

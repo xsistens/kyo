@@ -110,7 +110,7 @@ final case class Link private (
             targetV.foreach(t => el = applyTarget(el, t))
             onClickEff.foreach(e => el = el.onClick(e))
         end if
-        el(contentChildren.map(toChild)*)
+        el(UI.children(contentChildren)*)
     end anchor
 
     /** Maps the string `target` onto kyo's typed `Target`; frame names (not

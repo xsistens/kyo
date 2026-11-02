@@ -200,7 +200,7 @@ final case class ToggleButton private (
                     case _                           => span.cssClass("p-togglebutton-label")("\u00A0"): UI
                 iconSlot :+ labelUI
 
-        el(span.cssClass("p-togglebutton-content")(contentChildren.map(toChild)*))
+        el(span.cssClass("p-togglebutton-content")(UI.children(contentChildren)*))
     end body
 end ToggleButton
 

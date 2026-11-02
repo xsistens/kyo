@@ -171,7 +171,7 @@ object ToastService:
                 .cssClass(s"p-toast-${position.token}")
                 .role("alert")
                 .aria("live", "polite")(
-                    queued.map(q => toChild(messageUI(q, position, remove)))*
+                    UI.children(queued.map(q => messageUI(q, position, remove)))*
                 )
 
     private def messageUI(q: Queued, position: OverlayPosition, remove: Int => UI.Action)(using Frame): UI =
@@ -181,7 +181,7 @@ object ToastService:
         val textParts: List[UI] =
             msg.summary.toList.map(t => span.cssClass("p-toast-summary")(t)) ++
                 msg.detail.toList.map(t => div.cssClass("p-toast-detail")(t))
-        val text: UI           = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
+        val text: UI           = div.cssClass("p-toast-message-text")(UI.children(textParts)*)
         val closeBtn: List[UI] =
             if !msg.closable then Nil
             else
@@ -190,7 +190,7 @@ object ToastService:
                         .cssClass("p-toast-close-button")
                         .jsProp("type", "button")
                         .aria("label", "Close")
-                        .onClick(remove(q.id))(toChild(GlyphSvg(Icons.times, "p-toast-close-icon")))
+                        .onClick(remove(q.id))(GlyphSvg(Icons.times, "p-toast-close-icon"))
                 )
         var message = div
             .cssClass("p-toast-message")
@@ -203,10 +203,8 @@ object ToastService:
             .data("uic-toast-id", q.id.toString)
         msg.life.foreach(d => message = message.data("uic-life", d.toMillis.toString))
         message(
-            toChild(
-                div.cssClass("p-toast-message-content")(
-                    ((icon :: text :: closeBtn)).map(toChild)*
-                )
+            div.cssClass("p-toast-message-content")(
+                UI.children((icon :: text :: closeBtn))*
             )
         )
     end messageUI

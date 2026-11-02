@@ -93,7 +93,7 @@ final case class FlexBox private (
         gapRaw match
             case Present(v) => box = box.data("uic-gap", v)
             case Absent     => ()
-        box.style(s)(kids.map(toChild)*)
+        box.style(s)(UI.children(kids)*)
     end render
 end FlexBox
 

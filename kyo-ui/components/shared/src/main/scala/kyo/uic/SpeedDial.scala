@@ -229,7 +229,7 @@ final case class SpeedDial private (
                             .onKeyDownRaw(itemKey(i, navigable, itemId, focus, close))
                         if open.isDefined then btn = btn.onClick(activate)
                     end if
-                    li.cssClass("p-speeddial-item").role("presentation")(toChild(btn: UI))
+                    li.cssClass("p-speeddial-item").role("presentation")(btn: UI)
                 }
 
         var el = div
@@ -242,7 +242,7 @@ final case class SpeedDial private (
         if isOpen then el = el.cssClass("p-speeddial-open")
         var list = ul.cssClass("p-speeddial-list").role("menu")
         if base.nonEmpty then list = list.id(listId)
-        el(toChild(toggleBtn: UI), toChild(list(actionUIs.map(toChild)*)))
+        el(toggleBtn: UI, list(UI.children(actionUIs)*))
     end body
 
     /** Moves focus along the fan, and closes it on Escape or Tab.
