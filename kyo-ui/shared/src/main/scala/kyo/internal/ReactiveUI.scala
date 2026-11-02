@@ -1059,6 +1059,33 @@ private[kyo] object ReactiveUI:
             .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, through, signalChangeTime, table, dispatch, pass)))
             .andThen(table.endWalk)
 
+    /** How a region or a mount inside a waiting boundary takes its values: each is a pass with a group of its own, and the first one is due
+      * from now, so the boundary does not reveal before this has rendered and subscribed what it shows. `shownOf` is what a value paints,
+      * `step` shows it through the group.
+      */
+    private[internal] def throughHold[A](hold: BoundaryHold, rui: ReactiveUI)(shownOf: A => UI)(
+        step: (A, UIExchange) => Unit < (Async & Scope)
+    )(using Frame): (A => Unit < (Async & Scope)) < (Async & Scope) =
+        for
+            first <- hold.group
+            // Unsafe: read and cleared in one step by this region's own loop, created before that loop is forked.
+            due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
+            _ <- Scope.ensure(first.close)
+        yield (value: A) =>
+            Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
+                Scope.ensure(group.close)
+                    .andThen(group.paints(BoundaryRange(
+                        rui.region,
+                        rui.path,
+                        rui.contentContext,
+                        rui.parentContext,
+                        shownOf(value),
+                        rui
+                    )))
+                    .andThen(step(value, group))
+                    .andThen(group.started)
+            }
+
     /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
       * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
       * region's scope on the mount table, which outlives the subscription (see [[MountTable]]).
@@ -1148,28 +1175,8 @@ private[kyo] object ReactiveUI:
         exchange.gate match
             case Absent        => start(onValue(_, _, exchange))
             case Present(hold) =>
-                // Inside a waiting boundary every value is a pass with a group of its own, and the first one is due from now, so
-                // the boundary does not reveal before this region has rendered and subscribed what it shows.
-                for
-                    first <- hold.group
-                    due = AtomicRef.Unsafe.init(Maybe(first))(using AllowUnsafe.embrace.danger)
-                    _ <- Scope.ensure(first.close)
-                    _ <- start { (current, isFirst) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    current,
-                                    rui
-                                )))
-                                .andThen(onValue(current, isFirst, group))
-                                .andThen(group.started)
-                        }
-                    }
-                yield ()
+                throughHold[(UI, Boolean)](hold, rui)(_._1)((value, group) => onValue(value._1, value._2, group))
+                    .map(held => start((current, isFirst) => held((current, isFirst))))
         end match
     end subscribeRegion
 

@@ -1838,27 +1838,14 @@ private[kyo] object MountRegions:
                     import AllowUnsafe.embrace.danger
                     val loaded = AtomicBoolean.Unsafe.init(first.settled)
                     for
-                        firstGroup <- hold.group
-                        due = AtomicRef.Unsafe.init(Maybe(firstGroup))
                         registered <- if first.settled then Kyo.lift(Maybe.empty[BoundaryHold]) else hold.load.map(Present(_))
-                        _          <- Scope.ensure(firstGroup.close)
-                        _ <- Scope.ensure(Sync.Unsafe.defer(if loaded.compareAndSet(false, true) then registered.foreach(_.settle)))
-                    yield (state: MountState) =>
-                        Sync.Unsafe.defer(due.getAndSet(Absent)).map(_.fold(hold.group)(Kyo.lift)).map { group =>
-                            Scope.ensure(group.close)
-                                .andThen(group.paints(BoundaryRange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    state.content(spec),
-                                    rui
-                                )))
-                                .andThen(renderState(state, group))
-                                .andThen(Sync.Unsafe.defer(if state.settled && loaded.compareAndSet(false, true) then
-                                    registered.foreach(_.settle)))
-                                .andThen(group.started)
+                        held       <- throughHold[MountState](hold, rui)(_.content(spec)) { (state, group) =>
+                            renderState(state, group).andThen(Sync.Unsafe.defer(
+                                if state.settled && loaded.compareAndSet(false, true) then registered.foreach(_.settle)
+                            ))
                         }
+                        _ <- Scope.ensure(Sync.Unsafe.defer(if loaded.compareAndSet(false, true) then registered.foreach(_.settle)))
+                    yield held
                     end for
             // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
             _ <- regionFiber(rui.path, "Mounted content region") {
