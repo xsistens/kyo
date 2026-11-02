@@ -565,7 +565,7 @@ final case class Select[A] private (
         // NBSP keeps the empty label's line box (Prime renders &nbsp;).
         val labelUI: UI =
             selDrawn match
-                case Present(drawn) if !showPlaceholder => lbl(toChild(drawn))
+                case Present(drawn) if !showPlaceholder => lbl(drawn)
                 case _                                  => lbl(if labelText.isEmpty then " " else labelText)
 
         // Explicitly typed effect: an untyped match would infer `Any`, passing the
@@ -585,15 +585,15 @@ final case class Select[A] private (
                         .aria("label", "Clear")
                         .onClick(clearEffect)
                         // The clear sits inside the field, whose click opens the panel.
-                        .stopPropagation(true)(toChild(GlyphSvg(Icons.times, "p-icon")))
+                        .stopPropagation(true)(GlyphSvg(Icons.times, "p-icon"))
                 )
             else Nil
 
         val dd = span.cssClass("p-select-dropdown")
         // PrimeVue's loading slot: the spinner takes the chevron's place in the dropdown cell.
         val dropdownUI: UI =
-            if loading then dd(toChild(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin")))
-            else dd(toChild(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon")))
+            if loading then dd(GlyphSvg(Icons.spinner, "p-select-loading-icon", "p-icon", "p-icon-spin"))
+            else dd(GlyphSvg(Icons.chevronDown, "p-select-dropdown-icon", "p-icon"))
 
         // Hidden form carrier: a div trigger has no native form value.
         val hiddenCarrier: List[UI] =
@@ -697,7 +697,7 @@ final case class Select[A] private (
             }
         end if
 
-        val field = validity.follow(el(((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI).map(toChild)*))
+        val field = validity.follow(el(UI.children((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
         val cards = unknownCard ++ unheardCard
         if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
@@ -825,7 +825,7 @@ final case class Select[A] private (
                     row = row.aria("label", labelF(a))
                     t(a)
                 case Absent => span.cssClass("p-select-option-label")(labelF(a))
-            row((checkSlot :+ content).map(toChild)*)
+            row(UI.children(checkSlot :+ content)*)
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
@@ -836,13 +836,13 @@ final case class Select[A] private (
 
         val listUI: UI =
             div.cssClass("p-select-list-container")(
-                toChild {
+                {
                     // The list is named by `aria-controls` and holds the option ids; it does NOT
                     // carry the announcement, because it never holds focus and the attribute is
                     // read off the element that does.
                     var list = ul.cssClass("p-select-list").role("listbox")
                     s.idBase.foreach(b => list = list.id(listId(b)))
-                    list((rows ++ emptyRow).map(toChild)*)
+                    list(UI.children(rows ++ emptyRow)*)
                 }
             )
 
@@ -885,14 +885,10 @@ final case class Select[A] private (
                 }
                 List(
                     div.cssClass("p-select-header")(
-                        toChild(
-                            div.cssClass("p-iconfield")(
-                                toChild(filterEl),
-                                toChild(
-                                    span.cssClass("p-inputicon")(
-                                        toChild(GlyphSvg(Icons.search, "p-icon"))
-                                    )
-                                )
+                        div.cssClass("p-iconfield")(
+                            filterEl,
+                            span.cssClass("p-inputicon")(
+                                GlyphSvg(Icons.search, "p-icon")
                             )
                         )
                     )

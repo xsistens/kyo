@@ -114,7 +114,7 @@ final case class Breadcrumb private (
             case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
             case Absent                      => navBase.aria("label", "Breadcrumb")
         // Only the list follows a live trail: which crumb is last, and so current, moves with it.
-        labelled(toChild(entries.render(items => UI.ol.cssClass("p-breadcrumb-list")(trail(items).map(toChild)*))))
+        labelled(entries.render(items => UI.ol.cssClass("p-breadcrumb-list")(UI.children(trail(items))*)))
     end render
 
     /** The rows of the list: the home item and the crumbs, separated by the chevron. */
@@ -125,12 +125,12 @@ final case class Breadcrumb private (
         val lastIdx = allItems.length - 1
         allItems.zipWithIndex.flatMap { case ((it, isHome), i) =>
             val itemCls       = if isHome then "p-breadcrumb-home-item" else "p-breadcrumb-item"
-            val row: UI       = li.cssClass(itemCls)(toChild(renderLink(it, i == lastIdx)))
+            val row: UI       = li.cssClass(itemCls)(renderLink(it, i == lastIdx))
             val sep: List[UI] =
                 if i < lastIdx then
                     List(
                         li.cssClass("p-breadcrumb-separator").aria("hidden", "true")(
-                            toChild(GlyphSvg(sepGlyph, "p-breadcrumb-separator-icon"))
+                            GlyphSvg(sepGlyph, "p-breadcrumb-separator-icon")
                         )
                     )
                 else Nil
@@ -160,11 +160,11 @@ final case class Breadcrumb private (
         val labelSlot: List[UI] = it.text match
             case TextValue.Dyn(s)   => List(span.cssClass("p-breadcrumb-item-label")(s))
             case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))
-        val linked = anchor((iconSlot ++ labelSlot).map(toChild)*)
+        val linked = anchor(UI.children(iconSlot ++ labelSlot)*)
         // The click handler sits on a display-contents wrapper so kyo does not
         // suppress the anchor's native navigation; the handler fires in addition.
         onItemClickF match
-            case Present(f) => span.cssClass("p-uic-link-wrapper").onClick(f(it))(toChild(linked))
+            case Present(f) => span.cssClass("p-uic-link-wrapper").onClick(f(it))(linked)
             case Absent     => linked
     end renderLink
 end Breadcrumb

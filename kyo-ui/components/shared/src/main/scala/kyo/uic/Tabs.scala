@@ -361,15 +361,15 @@ final case class Tabs[K] private (
             if lazyPanelsFlag then
                 listed.render { (ts, sel) =>
                     val a = resolveIn(ts, sel)
-                    div.cssClass("p-tabpanels")(ts.filter(t => a.contains(t.id)).map(t => toChild(panel(t)(toChild(t.content))))*)
+                    div.cssClass("p-tabpanels")(UI.children(ts.filter(t => a.contains(t.id)).map(t => panel(t)(t.content)))*)
                 }
             else
-                def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.id, act)(toChild(t.content))
+                def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.id, act)(t.content)
                 entries match
-                    case Reading.Fixed(ts) => div.cssClass("p-tabpanels")(ts.map(t => toChild(shown(t)))*)
+                    case Reading.Fixed(ts) => div.cssClass("p-tabpanels")(UI.children(ts.map(t => shown(t)))*)
                     case Reading.Live(sig) =>
                         given CanEqual[Chunk[Tab[K]], Chunk[Tab[K]]] = CanEqual.derived
-                        div.cssClass("p-tabpanels")(toChild(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(shown)))
+                        div.cssClass("p-tabpanels")(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(shown))
                 end match
         // The caller's id on the component's own root, as HasElementId requires of a container.
         // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
@@ -379,7 +379,7 @@ final case class Tabs[K] private (
         val headers = listed.render { (ts, sel) =>
             copy(tabList = ts).tablistWith(resolveIn(ts, sel), base, focus)
         }
-        root(toChild(headers), toChild(panels))
+        root(headers, panels)
     end body
 
     private def tablistWith(active: Maybe[K], base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
@@ -398,7 +398,7 @@ final case class Tabs[K] private (
                 case TextValue.Const(x) => span(x): UI
                 case TextValue.Dyn(s)   => span(s): UI
             val content: List[UI] = (iconSlot :+ textSlot) ++ countSlot ++ barSlot
-            val kids              = content.map(toChild)
+            val kids              = UI.children(content)
             t.urlV match
                 case Present(u) =>
                     // An anchor has no native `disabled`, so a disabled nav tab drops its
@@ -424,12 +424,8 @@ final case class Tabs[K] private (
             end match
         }
         div.cssClass("p-tablist")(
-            toChild(
-                div.cssClass("p-tablist-content").cssClass("p-tablist-viewport")(
-                    toChild(
-                        div.cssClass("p-tablist-tab-list").role("tablist")(headers.map(toChild)*)
-                    )
-                )
+            div.cssClass("p-tablist-content").cssClass("p-tablist-viewport")(
+                div.cssClass("p-tablist-tab-list").role("tablist")(UI.children(headers)*)
             )
         )
     end tablistWith

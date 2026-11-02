@@ -150,7 +150,7 @@ final case class DataView[A] private (
                     case Absent       => sig.foreach(f)
             }
             div.cssClass("p-dataview-content")(
-                (rows :+ sig.map(_.isEmpty).render(isEmpty => if isEmpty then emptyMessage else UI.empty)).map(toChild)*
+                UI.children(rows :+ sig.map(_.isEmpty).render(isEmpty => if isEmpty then emptyMessage else UI.empty))*
             )
         end listed
 
@@ -171,8 +171,8 @@ final case class DataView[A] private (
             pag.render
         }
 
-        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(toChild(h)))
-        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-dataview-footer")(toChild(f)))
+        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(h))
+        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-dataview-footer")(f))
 
         // PrimeReact's busy state: the sheet's absolute overlay composed with the
         // dimming .p-overlay-mask (position resolves to absolute: the dataview rule
@@ -181,7 +181,7 @@ final case class DataView[A] private (
             div
                 .cssClass("p-dataview-loading-overlay")
                 .cssClass("p-overlay-mask")(
-                    toChild(ProgressSpinner().size(Size.Small).accessibleName("Loading").render)
+                    ProgressSpinner().size(Size.Small).accessibleName("Loading").render
                 )
         val loadingOverlay: List[UI] = loadingV match
             case Present(BoolValue.Const(true))  => List(overlayDiv)
@@ -195,7 +195,7 @@ final case class DataView[A] private (
             .cssClass(s"p-dataview-${layoutV.token}")
         el = loadingV.foldFlag(el)(el.cssClass("p-dataview-loading", _))
         el(
-            (loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot).map(toChild)*
+            UI.children(loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot)*
         )
     end render
 
@@ -218,7 +218,7 @@ final case class DataView[A] private (
         val children: List[UI] =
             if rows.isEmpty then List(emptyMessage)
             else template.toList.flatMap(f => rows.map(f))
-        div.cssClass("p-dataview-content")(children.map(toChild)*)
+        div.cssClass("p-dataview-content")(UI.children(children)*)
     end contentEl
 end DataView
 

@@ -34,7 +34,7 @@ final case class Text private (
         maxLinesV.foreach { n =>
             el = el.cssClass("p-uic-text--clamp").data("uic-max-lines", n.toString)
         }
-        el(kids.map(toChild)*)
+        el(UI.children(kids)*)
     end render
 end Text
 

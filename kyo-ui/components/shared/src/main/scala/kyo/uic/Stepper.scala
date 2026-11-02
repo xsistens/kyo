@@ -276,8 +276,8 @@ final case class Stepper[K] private (
             case TextValue.Const(t) => span.cssClass("p-step-title")(t): UI
             case TextValue.Dyn(s)   => span.cssClass("p-step-title")(s)
         val headerEl: UI = header(
-            toChild(span.cssClass("p-step-number")((i + 1).toString)),
-            toChild(titleSlot)
+            span.cssClass("p-step-number")((i + 1).toString),
+            titleSlot
         )
 
         var stepEl = div.cssClass("p-step").role("presentation")
@@ -287,7 +287,7 @@ final case class Stepper[K] private (
         // vertical layout renders it inside the active panel instead.
         val separatorSlot: List[UI] =
             if !verticalFlag && i < stepList.length - 1 then List(span.cssClass("p-stepper-separator")) else Nil
-        stepEl((headerEl :: separatorSlot).map(toChild)*)
+        stepEl(UI.children(headerEl :: separatorSlot)*)
     end stepHeader
 
     private def horizontalBody(cur: Int, ids: List[String], focus: String => UI.Action)(using Frame): UI =
@@ -300,8 +300,8 @@ final case class Stepper[K] private (
         var root = div.cssClass("p-stepper").cssClass("p-component")
         if linearFlag then root = root.cssClass("p-stepper-readonly")
         root(
-            toChild(div.cssClass("p-steplist").role("tablist")(stepEls.map(toChild)*)),
-            toChild(div.cssClass("p-steppanels")(panel.map(toChild)*))
+            div.cssClass("p-steplist").role("tablist")(UI.children(stepEls)*),
+            div.cssClass("p-steppanels")(UI.children(panel)*)
         )
     end horizontalBody
 
@@ -312,7 +312,7 @@ final case class Stepper[K] private (
         var p = div.cssClass("p-steppanel").role("tabpanel")
         if animated then
             p = p.cssClass("p-uic-steppanel-anim").enterTransition("p-uic-enter-fade").leaveTransition("p-uic-leave-fade")
-        p(st.content.map(toChild)*)
+        p(UI.children(st.content)*)
     end horizontalPanel
 
     /** Wraps the active panel in a step-keyed mount so a step change animates it:
@@ -336,7 +336,7 @@ final case class Stepper[K] private (
         var p = div.cssClass("p-steppanel").cssClass("p-steppanel-active")
         if animated then
             p = p.cssClass("p-uic-steppanel-anim").enterTransition("p-uic-enter-fade").leaveTransition("p-uic-leave-fade")
-        p(toChild(div.cssClass("p-steppanel-content-wrapper")(wrapperChildren.map(toChild)*)))
+        p(div.cssClass("p-steppanel-content-wrapper")(UI.children(wrapperChildren)*))
     end verticalPanel
 
     private def verticalBody(cur: Int, ids: List[String], focus: String => UI.Action)(using Frame): UI =
@@ -350,7 +350,7 @@ final case class Stepper[K] private (
                 else
                     val sep: List[UI] =
                         if i < stepList.length - 1 then List(span.cssClass("p-stepper-separator")) else Nil
-                    val wrapperChildren = sep :+ div.cssClass("p-steppanel-content")(st.content.map(toChild)*)
+                    val wrapperChildren = sep :+ div.cssClass("p-steppanel-content")(UI.children(st.content)*)
                     List(
                         animatedPanel(
                             cur,
@@ -361,12 +361,12 @@ final case class Stepper[K] private (
 
             var item = div.cssClass("p-stepitem")
             if isActive then item = item.cssClass("p-stepitem-active")
-            item((stepHeader(st, i, cur, tablist = false, ids, focus) :: panel).map(toChild)*)
+            item(UI.children(stepHeader(st, i, cur, tablist = false, ids, focus) :: panel)*)
         }
 
         var root = div.cssClass("p-stepper").cssClass("p-component")
         if linearFlag then root = root.cssClass("p-stepper-readonly")
-        root(items.map(toChild)*)
+        root(UI.children(items)*)
     end verticalBody
 
     /** Header click: ask for the step (value wins, matching render), written into a two-way binding and reported, then

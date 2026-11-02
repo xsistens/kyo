@@ -83,7 +83,7 @@ final case class ProgressBar private (
         root
             .cssClass("p-progressbar-determinate")
             .aria("valuenow", pct.toString)(
-                div.cssClass("p-progressbar-value").style(_.width(pct.pct))(label.map(toChild)*)
+                div.cssClass("p-progressbar-value").style(_.width(pct.pct))(UI.children(label)*)
             )
     end determinateBody
 

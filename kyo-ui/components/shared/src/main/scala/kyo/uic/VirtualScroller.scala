@@ -145,7 +145,7 @@ final case class VirtualScroller[A] private (
                         ): Unit < Async
                     }
                 }
-                v(toChild(inner))
+                v(inner)
 
     /** The reactive window for scroll position `scrollTop`: the full-height spacer plus the absolutely-positioned rows
       * of the visible window (+ overscan above and below). Replacing this on scroll (via the reactive `outerHTML`
@@ -164,7 +164,7 @@ final case class VirtualScroller[A] private (
                 val rows: List[UI] = (firstIdx until lastIdx).toList.map { i =>
                     div
                         .cssClass("p-uic-vs-item")
-                        .style(_.top((i * itemSizeV).px).height(itemSizeV.px))(toChild(tpl(items(i))))
+                        .style(_.top((i * itemSizeV).px).height(itemSizeV.px))(tpl(items(i)))
                 }
                 // Prime's spacer holds the full scroll extent (`.p-virtualscroller-spacer`): an out-of-flow 1px column of the
                 // total height, so the shell's native scrollbar spans all rows.
@@ -174,7 +174,7 @@ final case class VirtualScroller[A] private (
                 div
                     .cssClass("p-virtualscroller-content")
                     .data("uic-vs-first", firstIdx.toString)
-                    .data("uic-vs-count", (lastIdx - firstIdx).toString)((spacer :: rows).map(toChild)*)
+                    .data("uic-vs-count", (lastIdx - firstIdx).toString)(UI.children(spacer :: rows)*)
     end window
 
     /** The window over a [[RowSource]]: the same geometry, with the rows taken from what
@@ -199,7 +199,7 @@ final case class VirtualScroller[A] private (
                         else Skeleton().height(s"${itemSizeV}px").render
                     div
                         .cssClass("p-uic-vs-item")
-                        .style(_.top((i * itemSizeV).px).height(itemSizeV.px))(toChild(cell))
+                        .style(_.top((i * itemSizeV).px).height(itemSizeV.px))(cell)
                 }
                 val spacer = div
                     .cssClass("p-virtualscroller-spacer")
@@ -207,7 +207,7 @@ final case class VirtualScroller[A] private (
                 div
                     .cssClass("p-virtualscroller-content")
                     .data("uic-vs-first", firstIdx.toString)
-                    .data("uic-vs-count", (lastIdx - firstIdx).toString)((spacer :: rows).map(toChild)*)
+                    .data("uic-vs-count", (lastIdx - firstIdx).toString)(UI.children(spacer :: rows)*)
     end sourceWindow
 end VirtualScroller
 

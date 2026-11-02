@@ -67,11 +67,9 @@ object Node:
       * `HtmlChildVal*` argument list, e.g. `div(uic.Button("Save"))`.
       *
       * A `Node => UI => HtmlChildVal` chain would need two implicit hops, which Scala
-      * does not perform, so this direct conversion is required. It uses the
-      * `private[kyo]` `HtmlChildVal` constructor, reachable because `kyo.uic` is a
-      * subpackage of `kyo`.
+      * does not perform, so this direct conversion is required.
       */
-    implicit def nodeToChild(c: Node)(using Frame): HtmlChildVal = new HtmlChildVal(c.render)
+    implicit def nodeToChild(c: Node)(using Frame): HtmlChildVal = HtmlChildVal.lift[UI](c.render)
 
     /** Lift into a bare `UI` for `fragment(...)`, `when(...)`, and signal-render
       * contexts that expect `UI` rather than `HtmlChildVal`.

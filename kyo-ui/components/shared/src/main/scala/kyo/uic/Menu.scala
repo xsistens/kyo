@@ -219,9 +219,9 @@ final case class Menu private (
                     // Only a row with an action declares a click handler. A url row declares none,
                     // because kyo-ui prevent-defaults a click on any anchor carrying one, and the
                     // browser following the link IS what the row is for.
-                    row(toChild(MenuRender.itemContent("menu", it, it.actionV, Absent, roving = false)))
+                    row(MenuRender.itemContent("menu", it, it.actionV, Absent, roving = false))
             }
-            val list = ul.cssClass("p-menu-list")(rowUIs.map(toChild)*)
+            val list = ul.cssClass("p-menu-list")(UI.children(rowUIs)*)
             popupSlot match
                 case Present(slot) =>
                     // The links are the stops, so focus goes to the list only to bring the reader
@@ -239,7 +239,7 @@ final case class Menu private (
                 case Absent =>
                     var root = named(nav.cssClass("p-menu").cssClass("p-component"))
                     idV.foreach(v => root = root.id(v))
-                    root(toChild(list))
+                    root(list)
             end match
         }
     end navigationOver
@@ -352,7 +352,7 @@ final case class Menu private (
                     partBase.foreach(base => row = row.id(s"$base-active"))
                 val act: Maybe[UI.Action] =
                     if hiRef.isDefined && !it.disabledFlag.constTrue then Present(activate(it)) else Absent
-                row(toChild(MenuRender.itemContent("menu", it, act, Absent, roving = true)))
+                row(MenuRender.itemContent("menu", it, act, Absent, roving = true))
         }
 
         var list = named(ul.cssClass("p-menu-list").role("menu"))
@@ -394,7 +394,7 @@ final case class Menu private (
                     .panelClass("p-menu")
                     .panelClass("p-component")
                     .panelClass("p-menu-overlay")
-                    .seedFocus(false)(list(rowUIs.map(toChild)*))
+                    .seedFocus(false)(list(UI.children(rowUIs)*))
                 // Where the host read the popup's open state in its own region it gates the panel itself.
                 popupShown match
                     case Present(true)  => overlay.renderShown(partBase.map(b => s"$b-panel"))
@@ -417,7 +417,7 @@ final case class Menu private (
                     hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
                 var root = div.cssClass("p-menu").cssClass("p-component")
                 idV.foreach(v => root = root.id(v))
-                root(toChild(list(rowUIs.map(toChild)*)))
+                root(list(UI.children(rowUIs)*))
         end match
     end body
 end Menu

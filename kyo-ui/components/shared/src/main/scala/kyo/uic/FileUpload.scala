@@ -175,8 +175,8 @@ final case class FileUpload private (
             case TextValue.Const(t) => span.cssClass("p-button-label")(t)
             case TextValue.Dyn(s)   => span.cssClass("p-button-label")(s)
         val chooseEl: UI = choose(
-            toChild(GlyphSvg(Icons.plus, "p-button-icon")),
-            toChild(chooseLabelEl)
+            GlyphSvg(Icons.plus, "p-button-icon"),
+            chooseLabelEl
         )
 
         // A bound value ref is the label's source of truth; without one the mount's own
@@ -218,9 +218,9 @@ final case class FileUpload private (
         validity.follow(
             validity.mark(root)(
                 div.cssClass("p-fileupload-basic-content")(
-                    toChild(chooseEl),
-                    toChild(fileLabelEl),
-                    toChild(file)
+                    chooseEl,
+                    fileLabelEl,
+                    file
                 )
             )
         )

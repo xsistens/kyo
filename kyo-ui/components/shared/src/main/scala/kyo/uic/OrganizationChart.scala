@@ -194,7 +194,7 @@ final case class OrganizationChart[K] private (
             if !pickable then Absent
             else at.filter(shown.contains).orElse(Maybe.fromOption(shown.find(sel.contains))).orElse(Maybe.fromOption(shown.headOption))
         val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel, stop, cursor))
-        div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
+        div.cssClass("p-organizationchart").cssClass("p-component")(UI.children(inner)*)
     end body
 
     /** Every node's place in the chart, root first, which is what a node box's id is derived from: a collapse does not
@@ -269,16 +269,14 @@ final case class OrganizationChart[K] private (
                 List(
                     pressable
                         .stopPropagation(true)(
-                            toChild(
-                                GlyphSvg(
-                                    if isExpanded then Icons.chevronDown else Icons.chevronUp,
-                                    "p-organizationchart-node-toggle-button-icon"
-                                )
+                            GlyphSvg(
+                                if isExpanded then Icons.chevronDown else Icons.chevronUp,
+                                "p-organizationchart-node-toggle-button-icon"
                             )
                         )
                 )
             else Nil
-        val nodeRow: UI = tr(td.colspan(colspan)(box((toChild(labelSlot) :: toggle.map(toChild))*)))
+        val nodeRow: UI = tr(td.colspan(colspan)(box(UI.children(labelSlot :: toggle)*)))
 
         // The subtree rows render whenever there ARE children; a collapsed subtree
         // keeps its layout and hides via visibility (Prime's childStyle).
@@ -304,20 +302,20 @@ final case class OrganizationChart[K] private (
                             if i != node.children.length - 1 then right = right.cssClass("p-organizationchart-connector-top")
                             List(left(" "), right(" "))
                         }
-                        r(cells.map(toChild)*)
+                        r(UI.children(cells)*)
                     end if
                 end linesRow
 
                 val childrenRow: UI =
                     var r = tr.cssClass("p-organizationchart-node-children")
                     if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
-                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expandedAt, sel, stop, cursor)))))*)
+                    r(UI.children(node.children.map(c => td.colspan(2)(renderNode(c, expandedAt, sel, stop, cursor))))*)
                 end childrenRow
 
                 List(downRow, linesRow, childrenRow)
 
         table.cssClass("p-organizationchart-table")(
-            toChild(tbody((nodeRow :: subtreeRows).map(toChild)*))
+            tbody(UI.children(nodeRow :: subtreeRows)*)
         )
     end renderNode
 

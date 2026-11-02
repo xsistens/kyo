@@ -121,7 +121,7 @@ final case class Fieldset private (
                         // `UI.legend`, not the bare name: this class has its own `legend` setter,
                         // which shadows the element factory inside it.
                         UI.legend.cssClass("p-fieldset-legend")(
-                            toChild(Reading.of(slot).render { c =>
+                            Reading.of(slot).render { c =>
                                 val b = button
                                     .cssClass("p-fieldset-toggle-button")
                                     .jsProp("type", "button")
@@ -131,27 +131,27 @@ final case class Fieldset private (
                                     if fixed then b.aria("disabled", "true")
                                     else b.onClick(ReactiveValue.update(collapsedSlot, !_, onCollapsedF))
                                 pressable(
-                                    toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon")),
-                                    toChild(labelSpan)
+                                    GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon"),
+                                    labelSpan
                                 )
-                            })
+                            }
                         )
                     )
                 case Absent if legendV.isDefined =>
-                    List(UI.legend.cssClass("p-fieldset-legend")(toChild(labelSpan)))
+                    List(UI.legend.cssClass("p-fieldset-legend")(labelSpan))
                 case Absent => Nil
 
         val containerBase =
             div.cssClass("p-fieldset-content-container").role("region")(
                 div.cssClass("p-fieldset-content-wrapper")(
-                    div.cssClass("p-fieldset-content")(kids.map(toChild)*)
+                    div.cssClass("p-fieldset-content")(UI.children(kids)*)
                 )
             )
         val container: UI = toggleSlot match
             case Present(slot) => Reading.of(slot).render(collapseContainer(_))
             case Absent        => containerBase
 
-        shell((legendUI :+ container).map(toChild)*)
+        shell(UI.children(legendUI :+ container)*)
     end body
 
     /** The animated content container: `containerBase`'s twin carrying
@@ -164,7 +164,7 @@ final case class Fieldset private (
         if collapsed then c = c.cssClass("p-uic-collapsed")
         c(
             div.cssClass("p-fieldset-content-wrapper")(
-                div.cssClass("p-fieldset-content")(kids.map(toChild)*)
+                div.cssClass("p-fieldset-content")(UI.children(kids)*)
             )
         )
     end collapseContainer

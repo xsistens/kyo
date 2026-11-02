@@ -93,7 +93,7 @@ final case class Tag private (
             // the span would rebuild the span on every emission to change one character.
             case TextValue.Dyn(s) => span.cssClass("p-tag-label")(s)
         }
-        el((iconChild ++ labelChild ++ kids).map(toChild)*)
+        el(UI.children(iconChild ++ labelChild ++ kids)*)
     end render
 end Tag
 

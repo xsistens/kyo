@@ -413,7 +413,7 @@ final case class DatePicker[A] private (
         else if !floating && oref.isEmpty then dd = dd.disabled(true)
         else oref.foreach(r => dd = dd.onClick(seedGrid(nav).andThen(togglePanel(r))))
         end if
-        val dropdown: UI = dd(toChild(GlyphSvg(Icons.calendar, "p-icon")))
+        val dropdown: UI = dd(GlyphSvg(Icons.calendar, "p-icon"))
 
         var el = div.cssClass("p-datepicker").cssClass("p-component")
         el = validity.markClass(el)
@@ -424,7 +424,7 @@ final case class DatePicker[A] private (
         openSignal match
             case Present(sig) if floating => el = el.cssClass("p-uic-overlay-anchor", sig.bound)
             case _                        => ()
-        validity.follow(el(toChild(field), toChild(dropdown), toChild(panel)))
+        validity.follow(el(field, dropdown, panel))
     end assemble
 
     /** The text field. Under a [[value]] binding it shows the held value and reads a typed text back (`editable`); under
@@ -700,10 +700,8 @@ final case class DatePicker[A] private (
                     case _                   => Nil
                 val calendar: UI =
                     div.cssClass("p-datepicker-calendar-container")(
-                        toChild(
-                            div.cssClass("p-datepicker-calendar")(
-                                ((headerUI(view, year, month, nav) :: grid)).map(toChild)*
-                            )
+                        div.cssClass("p-datepicker-calendar")(
+                            UI.children((headerUI(view, year, month, nav) :: grid))*
                         )
                     )
                 val monthGrid: List[UI] =
@@ -723,7 +721,7 @@ final case class DatePicker[A] private (
             .cssClass("p-component")
         if inline then panel = panel.cssClass("p-datepicker-panel-inline")
         if kind.timeOnly then panel = panel.cssClass("p-datepicker-timeonly")
-        panel((calendarChildren ++ timeChildren ++ barChildren).map(toChild)*)
+        panel(UI.children(calendarChildren ++ timeChildren ++ barChildren)*)
     end panelUI
 
     /** The page the month override and the header buttons write: the minted ref in a mounted picker, else the caller's own. */
@@ -755,7 +753,7 @@ final case class DatePicker[A] private (
                     b = b.onClick(mref.set(DatePicker.pad(target._1, 4) + "-" + DatePicker.pad(target._2, 2)))
                 case Absent => b = b.disabled(true)
             end match
-            b(toChild(GlyphSvg(glyph, "p-icon")))
+            b(GlyphSvg(glyph, "p-icon"))
         end navButton
 
         val (prevTarget, nextTarget) = view match
@@ -793,12 +791,12 @@ final case class DatePicker[A] private (
                 val base = year - Math.floorMod(year, 10)
                 List(span.cssClass("p-datepicker-decade")(s"$base - ${base + 9}"))
 
-        val title: UI = div.cssClass("p-datepicker-title")(titleChildren.map(toChild)*)
+        val title: UI = div.cssClass("p-datepicker-title")(UI.children(titleChildren)*)
 
         div.cssClass("p-datepicker-header")(
-            toChild(navButton("p-datepicker-prev-button", Icons.chevronLeft, prevTarget, "Previous Month")),
-            toChild(title),
-            toChild(navButton("p-datepicker-next-button", Icons.chevronRight, nextTarget, "Next Month"))
+            navButton("p-datepicker-prev-button", Icons.chevronLeft, prevTarget, "Previous Month"),
+            title,
+            navButton("p-datepicker-next-button", Icons.chevronRight, nextTarget, "Next Month")
         )
     end headerUI
 
@@ -832,7 +830,7 @@ final case class DatePicker[A] private (
                 span.cssClass("p-datepicker-weekday")(wd)
             )
         }
-        val headRow: UI = tr((headWeek ++ headDays).map(toChild)*)
+        val headRow: UI = tr(UI.children(headWeek ++ headDays)*)
 
         // Cells: previous-month lead-in, the month itself, next-month fill to a full week.
         val leading: List[UI] = (0 until firstDow).toList.map { i =>
@@ -871,7 +869,7 @@ final case class DatePicker[A] private (
                     val weekNo        = DatePicker.isoWeekNumber(year, month, firstDayInRow)
                     List(td.cssClass("p-datepicker-weeknumber")(span.cssClass("p-disabled")(weekNo.toString)))
                 else Nil
-            tr.role("row")((weekCell ++ week).map(toChild)*)
+            tr.role("row")(UI.children(weekCell ++ week)*)
         }
 
         // ONE tab stop with the arrows inside it, and the highlight announced rather than focused: a day is a `<span>`, not a
@@ -888,7 +886,7 @@ final case class DatePicker[A] private (
             if cursorIso.nonEmpty then
                 grid = grid.aria("activedescendant", n.cellId(firstDow + DatePicker.dayOf(cursorIso) - 1))
         }
-        grid(((headRow :: bodyRows)).map(toChild)*)
+        grid(UI.children((headRow :: bodyRows))*)
     end dayView
 
     /** The day the keyboard is on, clamped into the month on the screen. */
@@ -1194,8 +1192,8 @@ final case class DatePicker[A] private (
         // lays the cells straight into a wrapping flex box. The rows carry the structure and `display: contents` in the extra
         // sheet keeps the layout.
         val rows: List[UI] =
-            cells.grouped(perRow).toList.map(row => div.role("row")(row.map(toChild)*))
-        grid(rows.map(toChild)*)
+            cells.grouped(perRow).toList.map(row => div.role("row")(UI.children(row)*))
+        grid(UI.children(rows)*)
     end granularGrid
 
     /** A pick in the grid the kind picks in (`YearMonth`, `Year`): write the value, close. */
@@ -1263,14 +1261,14 @@ final case class DatePicker[A] private (
                 .jsProp("type", "button")
                 .aria("label", label)
             if editable && inBounds(iso) then b = b.onClick(write(iso)) else b = b.disabled(true)
-            b(toChild(GlyphSvg(glyph, "p-icon")))
+            b(GlyphSvg(glyph, "p-icon"))
         end spinButton
 
         def column(cls: String, inc: String, dec: String, text: String, incLabel: String, decLabel: String): UI =
             div.cssClass(cls)(
-                toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, incLabel, inc)),
-                toChild(span(text)),
-                toChild(spinButton("p-datepicker-decrement-button", Icons.chevronDown, decLabel, dec))
+                spinButton("p-datepicker-increment-button", Icons.chevronUp, incLabel, inc),
+                span(text),
+                spinButton("p-datepicker-decrement-button", Icons.chevronDown, decLabel, dec)
             )
 
         val hourText = hourFormatV match
@@ -1287,7 +1285,7 @@ final case class DatePicker[A] private (
                     "Next Hour",
                     "Previous Hour"
                 ),
-                div(toChild(span(":"))),
+                div(span(":")),
                 column(
                     "p-datepicker-minute-picker",
                     candidate(hour, Math.floorMod(minute + 1, 60)),
@@ -1302,14 +1300,14 @@ final case class DatePicker[A] private (
                         val toggle = candidate(Math.floorMod(hour + 12, 24), minute)
                         List(
                             div.cssClass("p-datepicker-ampm-picker")(
-                                toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, "AM/PM", toggle)),
-                                toChild(span(if hour < 12 then "AM" else "PM")),
-                                toChild(spinButton("p-datepicker-decrement-button", Icons.chevronDown, "AM/PM", toggle))
+                                spinButton("p-datepicker-increment-button", Icons.chevronUp, "AM/PM", toggle),
+                                span(if hour < 12 then "AM" else "PM"),
+                                spinButton("p-datepicker-decrement-button", Icons.chevronDown, "AM/PM", toggle)
                             )
                         )
                     case HourFormat.H24 => Nil)
 
-        div.cssClass("p-datepicker-time-picker")(columns.map(toChild)*)
+        div.cssClass("p-datepicker-time-picker")(UI.children(columns)*)
     end timePickerUI
 
     // === button bar =========================================================
@@ -1332,7 +1330,7 @@ final case class DatePicker[A] private (
             b = action match
                 case Present(a) => b.onClick(a)
                 case Absent     => b.disabled(true)
-            b(toChild(span.cssClass("p-button-label")(label)))
+            b(span.cssClass("p-button-label")(label))
         end barButton
 
         val todayButton: List[UI] = todayV.toList.map { t =>
@@ -1380,7 +1378,7 @@ final case class DatePicker[A] private (
 
         val clearButton: UI = barButton("p-datepicker-clear-button", "Clear", Present(clearAction))
 
-        div.cssClass("p-datepicker-buttonbar")((todayButton :+ clearButton).map(toChild)*)
+        div.cssClass("p-datepicker-buttonbar")(UI.children(todayButton :+ clearButton)*)
     end buttonBarUI
 
     /** Derives `(year, month)` from the month override, else the held value, else the reference value, else January 2000. */

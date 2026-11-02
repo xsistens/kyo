@@ -17,14 +17,6 @@ import kyo.UI.Ast.HtmlChildVal
   */
 package object uic:
 
-    /** Wrap a fully-rendered `UI` as a kyo `HtmlChildVal`, so a `List[UI]` produced
-      * inside a component's `render` can be splatted into a kyo container's
-      * `apply(cs: HtmlChildVal*)`. Uses the `private[kyo]` constructor, available
-      * because this lives in package `kyo`. Splatting is needed because an implicit
-      * `UI => HtmlChildVal` conversion is NOT applied element-wise to a `xs*` splat.
-      */
-    private[uic] def toChild(u: UI): HtmlChildVal = new HtmlChildVal(u)
-
     /** Row and option IDENTITY is the one piece of configuration a component cannot
       * infer and cannot fail loudly about on its own: a wrong key does not crash, it
       * quietly applies a selection to the wrong record, and only with the data that

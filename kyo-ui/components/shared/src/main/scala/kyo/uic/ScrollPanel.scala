@@ -41,7 +41,7 @@ final case class ScrollPanel private (
         heightV.foreach(h => st = st.height(CssValue.length(h)))
         div.cssClass("p-scrollpanel").cssClass("p-component").style(st)(
             div.cssClass("p-scrollpanel-content-container")(
-                div.cssClass("p-scrollpanel-content")(kids.map(toChild)*)
+                div.cssClass("p-scrollpanel-content")(UI.children(kids)*)
             )
         )
     end render

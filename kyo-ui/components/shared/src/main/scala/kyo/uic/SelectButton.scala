@@ -340,7 +340,7 @@ final case class SelectButton[A] private (
             end if
             tb.render
         }
-        el((keyCollisionCard ++ unknownCard(unknown) ++ unheardCard ++ buttons).map(toChild)*)
+        el(UI.children(keyCollisionCard ++ unknownCard(unknown) ++ unheardCard ++ buttons)*)
     end body
 
     /** The loud card rendered ahead of the fused buttons when the option keys

@@ -121,7 +121,7 @@ final case class Popover private (
         if quiet then overlay = overlay.quiet
         if flipped then overlay = overlay.panelClass("p-popover-flipped")
         val panel: UI =
-            overlay(div.cssClass("p-popover-content")(kids.map(toChild)*)).render
+            overlay(div.cssClass("p-popover-content")(UI.children(kids)*)).render
         triggerV match
             case Present(t) =>
                 // A constant nobody hears is fixed: the trigger stays, says so, and toggles nothing.
@@ -134,8 +134,8 @@ final case class Popover private (
                 var shell = span.cssClass("p-uic-popover-trigger")
                 toggle.foreach(act => shell = shell.onClick(act))
                 div.cssClass("p-uic-overlay-anchor").cssClass("p-uic-popover-anchor")(
-                    toChild(shell(toChild(control))),
-                    toChild(panel)
+                    shell(control),
+                    panel
                 )
             case _ => panel
         end match

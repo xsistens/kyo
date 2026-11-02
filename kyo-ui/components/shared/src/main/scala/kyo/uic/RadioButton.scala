@@ -150,7 +150,7 @@ final case class RadioButton private (
         end if
 
         // The dot icon is always present; Prime's CSS scales it 0.1 → 1 on checked.
-        val boxDiv = div.cssClass("p-radiobutton-box")(toChild(div.cssClass("p-radiobutton-icon"): UI))
+        val boxDiv = div.cssClass("p-radiobutton-box")(div.cssClass("p-radiobutton-icon"): UI)
 
         var root = div.cssClass("p-radiobutton").cssClass("p-component")
         if isChecked then root = root.cssClass("p-radiobutton-checked")
@@ -163,9 +163,9 @@ final case class RadioButton private (
         root = validity.markClass(root)
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
 
-        val control: UI = root(List[UI](box, boxDiv).map(toChild)*)
+        val control: UI = root(UI.children(List[UI](box, boxDiv))*)
         labelText match
-            case Present(t) => label.cssClass("p-uic-control-label")(List[UI](control, span(t)).map(toChild)*)
+            case Present(t) => label.cssClass("p-uic-control-label")(UI.children(List[UI](control, span(t)))*)
             case Absent     => control
     end body
 end RadioButton
