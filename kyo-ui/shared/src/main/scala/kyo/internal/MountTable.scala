@@ -149,14 +149,14 @@ final private[kyo] class ReleaseGroup private (initial: Maybe[ReleaseGroup]):
     private[internal] val around = new java.util.concurrent.atomic.AtomicReference[Maybe[ReleaseGroup]](initial)
     private val marked           = new java.util.concurrent.atomic.AtomicBoolean()
 
-    def release(): Unit = marked.set(true)
+    def release()(using AllowUnsafe): Unit = marked.set(true)
 
     def released: Boolean = ReleaseGroup.releasedFrom(this)
 
-    def child(): ReleaseGroup = new ReleaseGroup(Present(this))
+    def child()(using AllowUnsafe): ReleaseGroup = new ReleaseGroup(Present(this))
 
     /** Puts this group inside `outer`: for an instance's group, placed once its owner is known, before its effect runs. */
-    private[internal] def placeIn(outer: ReleaseGroup): Unit = around.set(Present(outer))
+    private[internal] def placeIn(outer: ReleaseGroup)(using AllowUnsafe): Unit = around.set(Present(outer))
 end ReleaseGroup
 
 private[kyo] object ReleaseGroup:
@@ -177,8 +177,8 @@ private[kyo] object ReleaseGroup:
       */
     def owning[A, S](v: ReleaseGroup => A < (S & Async & Scope))(using Frame): A < (S & Async & Scope) =
         current.use { outer =>
-            val group = outer.fold(root())(_.child())
             Sync.Unsafe.defer {
+                val group = outer.fold(root())(_.child())
                 val inner = Scope.Finalizer.Unsafe.initInline()
                 ContextEffect.suspendWith(Tag[Scope])(_.ensure(error =>
                     Sync.Unsafe.defer(group.release()).andThen(inner.close(error)).andThen(inner.await)
@@ -215,17 +215,17 @@ final private[kyo] class MountFate(val group: ReleaseGroup, table: MountTable):
     private val placement = new java.util.concurrent.atomic.AtomicReference[Placement](Placement.Unplaced)
 
     /** The instance belongs to a scope that releases it with `home`. */
-    def scoped(home: ReleaseGroup): Unit =
+    def scoped(home: ReleaseGroup)(using AllowUnsafe): Unit =
         group.placeIn(home)
         placement.set(Placement.Scoped)
 
     /** The instance belongs to its table under `identity`. */
-    def filed(identity: MountIdentity): Unit =
+    def filed(identity: MountIdentity)(using AllowUnsafe): Unit =
         group.placeIn(table.group)
         placement.set(Placement.Filed(identity))
 
     /** The instance is being released: what is in it is released with it, and a verdict that waited is settled. */
-    def condemn(): Unit =
+    def condemn()(using AllowUnsafe): Unit =
         group.release()
         table.settleVerdicts()
 
@@ -257,7 +257,7 @@ final private[kyo] class MountFate(val group: ReleaseGroup, table: MountTable):
     def interrupted(using Frame): Boolean < Async = table.verdict(this)
 
     /** Counts a decision on an interrupt that ended a [[kyo.UI.fork]] fiber of the instance. */
-    def forkInterruptJudged(): Unit = discard(table.session.counters.forkInterrupts.incrementAndGet())
+    def forkInterruptJudged()(using AllowUnsafe): Unit = discard(table.session.counters.forkInterrupts.incrementAndGet())
 end MountFate
 
 /** What a mounted node's content cell holds.
@@ -441,8 +441,10 @@ final private[kyo] class MountSupervision(
     /** The commands the instance sent that wait for its content to be on the page. */
     val afterShown = new AfterShown
 
+    // Unsafe: one read of the node and frames the last claim adopted, for a report or a handler that holds no proof; it changes nothing.
     private[internal] def spec: MountedSpec = at.get()(using AllowUnsafe.embrace.danger)._1
 
+    // Unsafe: one read of the node and frames the last claim adopted, for a report or a handler that holds no proof; it changes nothing.
     def frames: Failures.Scope = at.get()(using AllowUnsafe.embrace.danger)._2
 
     /** Makes `spec` and `frames` the node and frames of this instance. A failed instance that `moved` to another node is shown again
@@ -460,8 +462,10 @@ final private[kyo] class MountSupervision(
         }
 
     private def errorView(raised: Any, source: UI.MountErrorSource): UI =
+        // Unsafe: one read of the node and frames the last claim adopted, for a report or a handler that holds no proof; it changes nothing.
         val (s, f) = at.get()(using AllowUnsafe.embrace.danger)
         s.errorUI(s.mountError(raised, source), Failures.views(f))
+    end errorView
 
     /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure goes to the `onFailure` rules around the node, and fails
       * the node when none matches. An interrupt is a failure only when none reached the fiber (`cancelled`) and the instance is not
@@ -568,7 +572,7 @@ private[kyo] object MountPass:
     private val serials = new java.util.concurrent.atomic.AtomicLong()
 
     /** A number no pass or subscription had before. */
-    def fresh(): Long = serials.incrementAndGet()
+    def fresh()(using AllowUnsafe): Long = serials.incrementAndGet()
 
     private val noDuplicates = new java.util.IdentityHashMap[ReactiveUI, String]()
 
@@ -800,45 +804,46 @@ end MountCounters
   * contradicted the invariants, in the order found.
   */
 final private[kyo] class MountAudit:
-    import AllowUnsafe.embrace.danger
 
-    private[internal] val found = AtomicRef.Unsafe.init(Chunk.empty[String])
+    // Unsafe: made as the session is, which no effect context reaches; a test reads it through inconsistencies.
+    private[internal] val found = AtomicRef.Unsafe.init(Chunk.empty[String])(using AllowUnsafe.embrace.danger)
     val checked                 = new java.util.concurrent.atomic.AtomicLong()
 
-    private[internal] def check(s: TableState): Unit =
+    private[internal] def check(s: TableState)(using AllowUnsafe): Unit =
         discard(checked.incrementAndGet())
         s.inconsistency.foreach(message => discard(found.getAndUpdate(_.append(message))))
 
-    def inconsistencies: Chunk[String] = found.get()
+    def inconsistencies(using AllowUnsafe): Chunk[String] = found.get()
 end MountAudit
 
 /** One mount session: the open [[kyo.UI.batch]] blocks, which together form one change, and the tables waiting for that change to end
   * before they can take a cut. With `audited`, its tables check every state they take (see [[MountAudit]]).
   */
 final private[kyo] class MountSession(audited: Boolean = false):
-    import AllowUnsafe.embrace.danger
 
-    private val open    = new java.util.concurrent.atomic.AtomicInteger()
-    private val pending = AtomicRef.Unsafe.init(Set.empty[MountTable])
-    private val top     = AtomicRef.Unsafe.init(Maybe.empty[MountTable])
+    private val open = new java.util.concurrent.atomic.AtomicInteger()
+    // Unsafe: a session is made with `new`, where a test or a subscription does not hold a proof; both refs are only read and written below,
+    // by methods that do.
+    private val pending = AtomicRef.Unsafe.init(Set.empty[MountTable])(using AllowUnsafe.embrace.danger)
+    private val top     = AtomicRef.Unsafe.init(Maybe.empty[MountTable])(using AllowUnsafe.embrace.danger)
     val counters        = new MountCounters
     val audit           = if audited then Present(new MountAudit) else Maybe.empty[MountAudit]
 
     /** The session's root table, once [[MountTable.root]] has made it. */
-    def root: Maybe[MountTable] = top.get()
+    def root(using AllowUnsafe): Maybe[MountTable] = top.get()
 
-    private[internal] def rooted(table: MountTable): Unit = top.set(Present(table))
+    private[internal] def rooted(table: MountTable)(using AllowUnsafe): Unit = top.set(Present(table))
 
     def isOpen: Boolean = open.get() > 0
 
-    def enter(): Unit = discard(open.incrementAndGet())
+    def enter()(using AllowUnsafe): Unit = discard(open.incrementAndGet())
 
     /** Ends one batch; the last one to end lets every waiting table take its cut. */
-    def exit(): Unit =
+    def exit()(using AllowUnsafe): Unit =
         if open.decrementAndGet() == 0 then pending.getAndSet(Set.empty).foreach(_.closeEpoch())
 
     /** `table` takes its cut when the change now open ends, or at once when none is open. */
-    def defer(table: MountTable): Unit =
+    def defer(table: MountTable)(using AllowUnsafe): Unit =
         discard(pending.getAndUpdate(_ + table))
         if !isOpen && pending.getAndUpdate(_ - table).contains(table) then table.closeEpoch()
     end defer
@@ -865,17 +870,19 @@ end MountSession
   */
 final private[kyo] class RegionWatch(scope: MountScope):
     /** What the region's observation records, through `Signal.observeStamped`; each rest rechecks the table. */
-    val stamp: Signal.ReadStamp = new Signal.ReadStamp(() => scope.table.recheck())
+    val stamp: Signal.ReadStamp =
+        // Unsafe: a rest arrives on the writer's stack, inside its set, where no effect context exists.
+        new Signal.ReadStamp(() => scope.table.recheck()(using AllowUnsafe.embrace.danger))
 
     private val planned         = new java.util.concurrent.atomic.AtomicLong()
     private[internal] val ended = new java.util.concurrent.atomic.AtomicBoolean()
 
     /** The pass that started last has recorded its walk. */
-    def recorded(): Unit =
+    def recorded()(using AllowUnsafe): Unit =
         planned.set(stamp.passes)
         scope.table.recheck()
 
-    def end(): Unit =
+    def end()(using AllowUnsafe): Unit =
         ended.set(true)
         scope.table.recheck()
 
@@ -925,27 +932,29 @@ end RegionWatch
   * fibers of their own.
   */
 final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope, val group: ReleaseGroup):
-    import AllowUnsafe.embrace.danger
 
-    private[internal] val state = AtomicRef.Unsafe.init(TableState.empty)
+    // Unsafe: a table is made with `new` by the code that opens its session or content, which holds no proof to pass on to the
+    // constructor (a proof there would reach every method). The fields are only read and written by methods that hold one.
+    private[internal] val state = AtomicRef.Unsafe.init(TableState.empty)(using AllowUnsafe.embrace.danger)
     // Verdicts on interrupted effects of filed instances that wait for the table to change (see MountFate).
-    private val verdicts          = AtomicRef.Unsafe.init(Chunk.empty[(MountFate, Promise.Unsafe[Boolean, Any])])
-    private val watches           = AtomicRef.Unsafe.init(Set.empty[RegionWatch])
-    private val cut               = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])
-    private val wake              = AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]())
+    private val verdicts = AtomicRef.Unsafe.init(Chunk.empty[(MountFate, Promise.Unsafe[Boolean, Any])])(using AllowUnsafe.embrace.danger)
+    private val watches  = AtomicRef.Unsafe.init(Set.empty[RegionWatch])(using AllowUnsafe.embrace.danger)
+    private val cut      = AtomicRef.Unsafe.init(Maybe.empty[Chunk[(RegionWatch, Long, Long)]])(using AllowUnsafe.embrace.danger)
+    private val wake     =
+        AtomicRef.Unsafe.init(Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger))(using AllowUnsafe.embrace.danger)
     private[internal] val running = new java.util.concurrent.atomic.AtomicBoolean()
 
     def frames: Failures.Scope = framesOf()
 
     /** Whether [[evictAll]] has run: the table then holds nothing, follows no subscription and takes no change. */
-    private[internal] def closed: Boolean = state.get() eq TableState.ended
+    private[internal] def closed(using AllowUnsafe): Boolean = state.get() eq TableState.ended
 
-    private[internal] def read: TableState = state.get()
+    private[internal] def read(using AllowUnsafe): TableState = state.get()
 
     /** What the table still holds, one `part=count` per part that is not empty: nothing once it has been evicted and every
       * subscription on it has ended. For tests.
       */
-    def leftovers: Chunk[String] =
+    def leftovers(using AllowUnsafe): Chunk[String] =
         val s = state.get()
         Chunk(
             "instances" -> s.instances.size,
@@ -964,13 +973,13 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
     end leftovers
 
     /** The paths of the regions the table has an entry for, in tree order. For tests. */
-    def regionPaths: Chunk[Seq[String]] = Chunk.from(state.get().ordered.iterator.map(_.path))
+    def regionPaths(using AllowUnsafe): Chunk[Seq[String]] = Chunk.from(state.get().ordered.iterator.map(_.path))
 
     /** Changes the state by `f` and returns what `f` answered. Once the table is closed `f` sees the empty state it was left in, and
       * what it would change is dropped: a pass, claim or subscription that comes late adds nothing to an evicted table.
       */
     @scala.annotation.tailrec
-    final private[internal] def modify[A](f: TableState => (TableState, A)): A =
+    final private[internal] def modify[A](f: TableState => (TableState, A))(using AllowUnsafe): A =
         val before       = state.get()
         val (after, out) = f(before)
         if (after eq before) || (before eq TableState.ended) then out
@@ -999,7 +1008,7 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
         }
 
     /** Gives every waiting verdict the table can tell now its answer. */
-    private[internal] def settleVerdicts(): Unit =
+    private[internal] def settleVerdicts()(using AllowUnsafe): Unit =
         val waiting = verdicts.get()
         if waiting.nonEmpty then
             val s = state.get()
@@ -1015,7 +1024,7 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
 
     /** Removes the waiting verdict `entry`; true for the one caller that removed it. */
     @scala.annotation.tailrec
-    private[internal] def take(entry: (MountFate, Promise.Unsafe[Boolean, Any])): Boolean =
+    private[internal] def take(entry: (MountFate, Promise.Unsafe[Boolean, Any]))(using AllowUnsafe): Boolean =
         val now = verdicts.get()
         if !now.exists(_ eq entry) then false
         else if verdicts.compareAndSet(now, now.filterNot(_ eq entry)) then true
@@ -1054,13 +1063,13 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
         }
 
     /** Wakes the settling fiber, if one waits. Callable from any thread, without effects. */
-    def recheck(): Unit =
+    def recheck()(using AllowUnsafe): Unit =
         decide()
         if running.get() then wake.getAndSet(Promise.Unsafe.init[Unit, Any]()).completeDiscard(Result.succeed(()))
     end recheck
 
     /** The change that put identities in waiting has ended: records where every region's passes stand. */
-    def closeEpoch(): Unit =
+    def closeEpoch()(using AllowUnsafe): Unit =
         if state.get().waiting.nonEmpty then
             val all = watches.get()
             cut.set(Present(Chunk.from(all.iterator.map(w => (w, w.started, w.restedSoFar)))))
@@ -1076,7 +1085,7 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
             if start then Fiber.initUnscoped(settling).unit else Kyo.unit
         }
 
-    private def reached(all: Chunk[(RegionWatch, Long, Long)]): Boolean =
+    private def reached(all: Chunk[(RegionWatch, Long, Long)])(using AllowUnsafe): Boolean =
         discard(session.counters.scanned.addAndGet(all.size))
         all.forall((w, at, restsAt) => w.caughtUp(at, restsAt))
 
@@ -1086,7 +1095,7 @@ final private[kyo] class MountTable(val session: MountSession, framesOf: () => F
       * The decision is a change of the table state; what it asks for (releases, launches, switches, starts) is left there for the
       * settling fiber, which carries it out in order.
       */
-    private[internal] def decide(): Unit =
+    private[internal] def decide()(using AllowUnsafe): Unit =
         val taken = cut.get()
         // A closed table has nothing to decide: evictAll released everything a cut could have.
         if taken.nonEmpty && !closed && reached(taken.get) && cut.compareAndSet(taken, Absent) then
@@ -1248,7 +1257,6 @@ final private[kyo] class MountScope private[internal] (
     baseDepth: Int,
     boundaries: Failures.Scope
 ):
-    import AllowUnsafe.embrace.danger
 
     @volatile private var watch: Maybe[RegionWatch] = Absent
 
@@ -1270,7 +1278,7 @@ final private[kyo] class MountScope private[internal] (
                     else Present(RegionEntry(birth, Set.empty, Absent, complete = false, MountPass.stale, Dict.empty))
 
     /** Whether the table still follows this subscription. */
-    def followed: Boolean = entryIn(table.read).nonEmpty
+    def followed(using AllowUnsafe): Boolean = entryIn(table.read).nonEmpty
 
     def current(using Frame): Boolean < Sync = Sync.Unsafe.defer(followed)
 
@@ -1701,9 +1709,9 @@ private[kyo] object MountRegions:
                         // that showed and shows the next state in a scope of its own. What a state shows is a group of its own, released
                         // before it closes.
                         for
-                            first <- view.state.get
-                            shown <- Scope.Finalizer.init(1)
-                            firstGroup = view.group.child()
+                            first      <- view.state.get
+                            shown      <- Scope.Finalizer.init(1)
+                            firstGroup <- Sync.Unsafe.defer(view.group.child())
                             closeFirst = Sync.Unsafe.defer(firstGroup.release()).andThen(shown.close(Absent)).andThen(shown.await)
                             _ <- Sync.Unsafe.defer(view.showing.set(Present(firstGroup)))
                             _ <- Scope.ensure(closeFirst)
@@ -1835,8 +1843,9 @@ private[kyo] object MountRegions:
             observed <- exchange.gate match
                 case Absent        => Kyo.lift((state: MountState) => renderState(state, exchange))
                 case Present(hold) =>
-                    import AllowUnsafe.embrace.danger
-                    val loaded = AtomicBoolean.Unsafe.init(first.settled)
+                    // Unsafe: whether this mount has told the boundary it loaded, made before its loop is forked, where no proof is at hand;
+                    // read and written only inside Sync.Unsafe.defer below.
+                    val loaded = AtomicBoolean.Unsafe.init(first.settled)(using AllowUnsafe.embrace.danger)
                     for
                         registered <- if first.settled then Kyo.lift(Maybe.empty[BoundaryHold]) else hold.load.map(Present(_))
                         held       <- throughHold[MountState](hold, rui)(_.content(spec)) { (state, group) =>

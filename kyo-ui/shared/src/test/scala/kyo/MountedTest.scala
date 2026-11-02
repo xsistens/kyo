@@ -86,7 +86,7 @@ class MountedTest extends kyo.test.Test[Any]:
 
     /** Asserts that the mount tables of `sub` checked their states and found every one consistent. */
     private def assertConsistent(sub: ReactiveUI.Subscription)(using Frame, kyo.test.AssertScope): Unit < Sync =
-        Sync.defer {
+        Sync.Unsafe.defer {
             val audit = sub.mountSession.audit
             assert(audit.nonEmpty, "the subscription was not audited")
             val found = audit.get.inconsistencies
@@ -512,7 +512,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 againPass <- newer.beginWalk(region.children)
                 again     <- newer.claim(node, identity, spec, againPass).map(liveOf)
                 _         <- newer.endWalk
-                found     <- Sync.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
+                found     <- Sync.Unsafe.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
                 _         <- table.evictAll
                 after     <- released.get
             yield
@@ -533,9 +533,10 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             cells <- dispatch.registered
             gated <- dispatch.gated
+            left  <- Sync.Unsafe.defer(session.root.fold(Chunk("no root table"))(_.leftovers))
         yield
             val c = session.counters
-            session.root.fold(Chunk("no root table"))(_.leftovers) ++
+            left ++
                 Chunk(
                     "unended watches"  -> (c.registered.get - c.unregistered.get),
                     "pending verdicts" -> c.pendingVerdicts.get,
@@ -589,7 +590,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _ <- assertEventually(released.get.map(_ == 2))
                     // The list's pass that dropped row b dropped the entries of the regions in it too, though their subscriptions
                     // ended only as the row closed.
-                    _ <- Sync.defer {
+                    _ <- Sync.Unsafe.defer {
                         val paths = sub.mountSession.root.fold(Chunk.empty[Seq[String]])(_.regionPaths)
                         assert(
                             !paths.exists(_.startsWith(Seq("1", "b"))) && paths.exists(_.startsWith(Seq("1", "a"))),
@@ -653,13 +654,13 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             // The scope that registered the watch has closed after the eviction: the watch ended and reported the region caught up.
             _ <- assertEventually(
-                Sync.defer(table.leftovers).map { left =>
+                Sync.Unsafe.defer(table.leftovers).map { left =>
                     assert(left.isEmpty, s"the evicted table holds ${left.mkString(", ")}")
                     true
                 },
                 5.seconds
             )
-            found <- Sync.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
+            found <- Sync.Unsafe.defer(table.session.audit.fold(Chunk("not audited"))(_.inconsistencies))
         yield assert(found.isEmpty, s"mount table states against the invariants: ${found.mkString("; ")}")
         end for
     }
@@ -687,7 +688,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _    <- inner.endWalk
                     _    <- table.content(Seq.empty, 0)
                     _    <- assertEventually(live.fold(Kyo.lift(false))(_.cell.current.map(_.isInstanceOf[kyo.internal.MountState.Ready])))
-                    left <- Sync.defer(table.leftovers)
+                    left <- Sync.Unsafe.defer(table.leftovers)
                 yield (left, live.nonEmpty)
             }
             gone <- released.get
