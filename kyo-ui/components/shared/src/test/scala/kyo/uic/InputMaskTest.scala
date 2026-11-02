@@ -96,13 +96,16 @@ class InputMaskTest extends ReactiveValueContract:
         end for
     }
 
-    "a commit its owner does not take is painted away again" in {
+    "a commit its owner does not take is put back" in {
         for
-            held  <- Signal.initRef("1")
-            again <- repaintsAfter(uic.InputMask("99").value(held.readOnly).onChange(_ => ()).render, held)(t =>
-                field(t).map(f => handled(f.onChange.getOrElse(throw new AssertionError("no change handler"))("12")))
-            )
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef("1")
+            patches <-
+                assertsAfter(uic.InputMask("99").value(held.readOnly).onChange(_ => ()).render)("p-inputtext")(kyo.internal.UIEvent.Change(
+                    _,
+                    "12"
+                ))
+        yield assert(patches == Chunk(("value", "1")), s"patches: $patches")
+        end for
     }
 
 end InputMaskTest

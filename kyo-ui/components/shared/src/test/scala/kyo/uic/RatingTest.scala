@@ -33,8 +33,12 @@ class RatingTest extends ReactiveValueContract:
         for
             rs <- radios(t)
             os <- options(t)
+            on <- Kyo.foreach(rs)(_.checked match
+                case Present(UI.Bound.Const(c))    => Kyo.lift(c)
+                case Present(UI.Bound.Follow(sig)) => sig.current
+                case _                             => Kyo.lift(false))
         yield
-            val native = rs.indexWhere(_.checked.exists { case UI.Bound.Const(c) => c; case _ => false }) + 1
+            val native = on.indexWhere(identity) + 1
             val drawn  = os.count(_.attrs.cssClasses.contains("p-rating-option-active"))
             if drawn != native then throw new AssertionError(s"drawn $drawn active stars over a checked star $native")
             native
@@ -165,31 +169,39 @@ class RatingTest extends ReactiveValueContract:
         yield assert(rs.forall(_.name.contains("stars-1")))
     }
 
-    "a star its owner does not take is painted away again" in {
+    "a star its owner does not take is put back on the native radio, which carries no handler" in {
         for
-            held  <- Signal.initRef(2)
-            again <-
-                repaintsAfter(uic.Rating().value(held.readOnly).onChange(_ => ()).render, held)(t => options(t).map(os => click(os(3))))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef(2)
+            patches <- assertsAfter(
+                uic.Rating().value(held.readOnly).onChange(_ => ()).render
+            )("""aria-label="4 stars"""")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield assert(patches == Chunk(("checked", "false")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a star the owner does not take is put back" in {
+    "a constant with a listener puts back a star the owner does not take" in {
         for
-            first <- stars(uic.Rating().value(2).onChange(_ => ()).render)
-            again <- repaintsAfter(uic.Rating().value(2).onChange(_ => ()).render)(t => options(t).map(os => click(os(3))))
+            first   <- stars(uic.Rating().value(2).onChange(_ => ()).render)
+            patches <-
+                assertsAfter(uic.Rating().value(2).onChange(_ => ()).render)("""aria-label="4 stars"""")(kyo.internal.UIEvent.ChangeChecked(
+                    _,
+                    true
+                ))
         yield
             assert(first == 2, s"the page as first rendered shows $first stars for the constant 2")
-            assert(again, "the field kept what the reader did, though its owner never took it")
+            assert(patches == Chunk(("checked", "false")), s"patches: $patches")
         end for
     }
 
     "and so does a constant bound as a Double" in {
         for
-            first <- stars(uic.Rating().value(2.0).onChange(_ => ()).render)
-            again <- repaintsAfter(uic.Rating().value(2.0).onChange(_ => ()).render)(t => options(t).map(os => click(os(3))))
+            first   <- stars(uic.Rating().value(2.0).onChange(_ => ()).render)
+            patches <- assertsAfter(
+                uic.Rating().value(2.0).onChange(_ => ()).render
+            )("""aria-label="4 stars"""")(kyo.internal.UIEvent.ChangeChecked(_, true))
         yield
             assert(first == 2, s"the page as first rendered shows $first stars for the constant 2")
-            assert(again, "the field kept what the reader did, though its owner never took it")
+            assert(patches == Chunk(("checked", "false")), s"patches: $patches")
         end for
     }
 

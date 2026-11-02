@@ -37,16 +37,23 @@ class RadioButtonTest extends ReactiveValueContract:
         end for
     }
 
-    "a selection its owner does not take is painted away again" in {
+    "a selection its owner does not take is put back" in {
         for
-            held  <- Signal.initRef(false)
-            again <- repaintsAfter(uic.RadioButton().checked(held.readOnly).onChange(_ => ()).render, held)(t => radio(t).map(select))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held <- Signal.initRef(false)
+            ui = uic.RadioButton().checked(held.readOnly).onChange(_ => ()).render
+            native  <- radio(ui)
+            patches <- assertsAfter(ui)("p-radiobutton-input")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield
+            assert(follows(native.checked), s"the native box follows the signal: ${native.checked}")
+            assert(patches == Chunk(("checked", "false")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a selection the owner does not take is put back" in {
-        for again <- repaintsAfter(uic.RadioButton().checked(false).onChange(_ => ()).render)(t => radio(t).map(select))
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+    "a constant with a listener puts back a selection the owner does not take" in {
+        for patches <- assertsAfter(
+                uic.RadioButton().checked(false).onChange(_ => ()).render
+            )("p-radiobutton-input")(kyo.internal.UIEvent.ChangeChecked(_, true))
+        yield assert(patches == Chunk(("checked", "false")), s"patches: $patches")
     }
 
     "a fixed constant of true is drawn selected" in {

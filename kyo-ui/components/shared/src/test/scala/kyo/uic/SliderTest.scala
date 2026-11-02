@@ -15,8 +15,9 @@ class SliderTest extends ReactiveValueContract:
     /** Where the native range input stands, which the fill and the handle are drawn from. */
     private def at(ui: UI)(using Frame): Double < Sync =
         range(ui).map(_.value match
-            case Present(UI.Bound.Const(v)) => v
-            case other                      => throw new AssertionError(s"the range input is bound as $other"))
+            case Present(UI.Bound.Const(v))    => Kyo.lift(v)
+            case Present(UI.Bound.Follow(sig)) => sig.current
+            case other                         => throw new AssertionError(s"the range input is bound as $other"))
 
     holds(new Slot[uic.Slider, Double](
         name = "value",
@@ -46,24 +47,27 @@ class SliderTest extends ReactiveValueContract:
         }
     ))
 
-    "a drag its owner does not take is painted away again" in {
+    "a drag its owner does not take is put back" in {
         for
-            held  <- Signal.initRef(20.0)
-            again <- repaintsAfter(uic.Slider().value(held.readOnly).onChange(_ => ()).render, held)(t =>
-                range(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no change handler"))(60.0)))
-            )
-        yield assert(again, "the field kept what the reader did, though its owner never took it")
+            held    <- Signal.initRef(20.0)
+            patches <- assertsAfter(
+                uic.Slider().value(held.readOnly).onChange(_ => ()).render
+            )("p-uic-slider-native")(kyo.internal.UIEvent.ChangeNumeric(_, 60.0))
+        yield assert(patches == Chunk(("value", "20")), s"patches: $patches")
+        end for
     }
 
-    "a constant with a listener paints itself again after a report, so a drag the owner does not take is put back" in {
+    "a constant with a listener puts back a drag the owner does not take" in {
         for
-            first <- at(uic.Slider().value(30.0).onChange(_ => ()).render)
-            again <- repaintsAfter(uic.Slider().value(30.0).onChange(_ => ()).render)(t =>
-                range(t).map(r => handled(r.onChange.getOrElse(throw new AssertionError("no change handler"))(60.0)))
-            )
+            first   <- at(uic.Slider().value(30.0).onChange(_ => ()).render)
+            patches <-
+                assertsAfter(uic.Slider().value(30.0).onChange(_ => ()).render)("p-uic-slider-native")(kyo.internal.UIEvent.ChangeNumeric(
+                    _,
+                    60.0
+                ))
         yield
             assert(first == 30.0, s"the page as first rendered shows $first for the constant 30")
-            assert(again, "the field kept what the reader did, though its owner never took it")
+            assert(patches == Chunk(("value", "30")), s"patches: $patches")
         end for
     }
 

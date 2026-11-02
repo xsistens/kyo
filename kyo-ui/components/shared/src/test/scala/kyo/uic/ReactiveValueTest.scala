@@ -82,15 +82,17 @@ class ReactiveValueTest extends UicTest:
             assert(bindingOf(uic.Slider().value(sig)) == "one-way")
             assert(bindingOf(uic.Slider().value(ref.readOnly)) == "one-way")
     }
-    "a one-way field paints what its owner holds again after a report, and only then" in {
+    "the binding a native control takes: a signal or a ref as it is, a constant as a signal that stays" in {
         for
-            held <- Signal.initRef("a")
-            field = ReactiveValue.repainting(held.readOnly)((v, repaint) => UI.div.cssClass("probe").onClick(repaint)(v))
-            again <- repaintsAfter(field, held)(t => elementWithClass(t, "probe").map(click))
-            idle  <- repaintsAfter(field, held)(_ => Kyo.unit)
+            ref     <- Signal.initRef("a")
+            onConst <- ReactiveValue[String]("c").native match
+                case s: Signal[String] @unchecked => s.current
+                case other                        => throw new AssertionError(s"a constant stayed a value: $other")
         yield
-            assert(again, "the report did not paint the field again")
-            assert(!idle, "the field painted again with no report at all")
+            assert(onConst == "c")
+            assert(ReactiveValue[String](ref).native.isInstanceOf[SignalRef[?]])
+            assert(ReactiveValue[String](ref.readOnly).native.isInstanceOf[Signal[?]])
+        end for
     }
 
 end ReactiveValueTest
