@@ -906,12 +906,10 @@ private[kyo] object ReactiveUI:
                 // `set`, where no effect context exists to read a `Local` from. With none installed the
                 // original patcher is used unwrapped, so the off path writes exactly what an unobserved one does.
                 Devtools.currentSink.map { devSink =>
-                    val write: String => Unit = devSink match
-                        case Absent          => v => patch(rui.path, v)
-                        case Present(report) =>
-                            v =>
-                                patch(rui.path, v)
-                                report(cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text))
+                    val write = reporting[String](
+                        devSink,
+                        cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text)
+                    )(v => patch(rui.path, v))
                     Log.use { log =>
                         Sync.Unsafe.defer {
                             // A failing write is logged to the Log bound here: the write runs inside the writer's `set`.
@@ -936,6 +934,25 @@ private[kyo] object ReactiveUI:
         kind: UI.RenderKind
     ): UI.RenderEvent =
         UI.RenderEvent(path, regionId, frame, kind, UI.RenderCause.Signal, wasted = false, duration = Duration.Zero, bytes = 0)
+
+    /** `write` that reports `event` after each write, for a write that runs on the writer's stack. With no sink `write` itself comes back, so
+      * the off path writes exactly what an unobserved one does.
+      */
+    private[kyo] def reporting[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit): A => Unit =
+        sink match
+            case Absent          => write
+            case Present(report) =>
+                a =>
+                    write(a)
+                    report(event)
+
+    /** [[reporting]] for a write that goes over a channel's fiber. */
+    private def reportingAsync[A](sink: Maybe[UI.RenderEvent => Unit], event: => UI.RenderEvent)(write: A => Unit < Async)(using
+        Frame
+    ): A => Unit < Async =
+        sink match
+            case Absent          => write
+            case Present(report) => a => write(a).andThen(Sync.defer(report(event)))
 
     /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
       * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
@@ -980,26 +997,14 @@ private[kyo] object ReactiveUI:
                 )(using CanEqual[A, A]): Unit < (Async & Scope) =
                     if signals.isEmpty then Kyo.unit
                     else
-                        val now: Maybe[(Seq[String], String, A) => Unit] = devSink match
-                            case Absent          => patcher
-                            case Present(report) =>
-                                patcher.map(patch =>
-                                    (target, name, value) =>
-                                        patch(target, name, value)
-                                        report(cheapEvent(target, Absent, nodeFrame, UI.RenderKind.Channel(name)))
-                                )
                         Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
                             val baseline = Maybe.fromOption(seen.get(name))
-                            now match
-                                case Present(patch) => bindChannel(sig, baseline, v => patch(path, name, v), releases)
-                                case Absent         =>
-                                    val write: A => Unit < Async = devSink match
-                                        case Absent          => v => slow(name, v)
-                                        case Present(report) =>
-                                            v =>
-                                                slow(name, v).andThen(
-                                                    Sync.defer(report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))))
-                                                )
+                            def event    = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))
+                            patcher match
+                                case Present(patch) =>
+                                    bindChannel(sig, baseline, reporting[A](devSink, event)(v => patch(path, name, v)), releases)
+                                case Absent =>
+                                    val write = reportingAsync[A](devSink, event)(v => slow(name, v))
                                     Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(write)).unit
                             end match
                         }
@@ -1018,30 +1023,15 @@ private[kyo] object ReactiveUI:
                     def step(next: Seq[(String, String)]): Seq[String] =
                         val names = next.iterator.map(_._1).toSet
                         last.getAndSet(next).map(_._1).filterNot(names.contains)
+                    def event = cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style"))
                     exchange.stylePatcherNow match
                         case Present(patch) =>
-                            val write: Seq[(String, String)] => Unit = devSink match
-                                case Absent          => next => patch(path, next, step(next))
-                                case Present(report) =>
-                                    next =>
-                                        patch(path, next, step(next))
-                                        report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style")))
+                            val write = reporting[Seq[(String, String)]](devSink, event)(next => patch(path, next, step(next)))
                             bindChannel(decls, rendered.style, write, releases)
                         case Absent =>
-                            val write: Seq[(String, String)] => Unit < Async = next =>
-                                Sync.defer(step(next)).map { removed =>
-                                    val sent = exchange.onStylePatch(path, next, removed)
-                                    devSink match
-                                        case Absent          => sent
-                                        case Present(report) =>
-                                            sent.andThen(Sync.defer(report(cheapEvent(
-                                                path,
-                                                Absent,
-                                                nodeFrame,
-                                                UI.RenderKind.Channel("style")
-                                            ))))
-                                    end match
-                                }
+                            val write = reportingAsync[Seq[(String, String)]](devSink, event)(next =>
+                                Sync.defer(step(next)).map(exchange.onStylePatch(path, next, _))
+                            )
                             Fiber.init(decls.observe(rendered.style, Signal.defaultRepairInterval)(write)).unit
                     end match
                 end bindStyle

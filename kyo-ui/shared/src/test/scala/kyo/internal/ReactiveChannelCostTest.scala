@@ -30,6 +30,12 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
         def paints: Int  = exchange.recorded.count { case _: Op.Paint | _: Op.List => true; case _ => false }
     end Recording
 
+    "with no devtools sink a write comes back as it is, so the off path costs no wrapper" in {
+        val write: Int => Unit = _ => ()
+        val wrapped            = ReactiveUI.reporting[Int](Absent, throw new AssertionError("no sink, so no event is built"))(write)
+        assert(wrapped eq write)
+    }
+
     "a thousand class channels on one signal share one registration" in {
         Scope.run {
             for
