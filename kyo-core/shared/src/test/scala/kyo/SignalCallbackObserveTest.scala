@@ -253,6 +253,72 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
             assert(late.map(_.toList) == Present(List(1, 2)))
         }
 
+        "a delivery asked for during a delivery runs after it, and the repeat that follows is no duplicate" in {
+            val r                              = Signal.SignalRef.Unsafe.init(1)
+            val seen                           = scala.collection.mutable.ListBuffer.empty[Int]
+            lazy val sub: Signal.Sub[Int, Int] = new Signal.Sub[Int, Int](
+                r,
+                identity,
+                v =>
+                    // The second delivery is asked for while the first has yet to record its value.
+                    if v == 1 then
+                        r.set(2)
+                        sub.deliver()
+                    discard(seen += v)
+                ,
+                rethrow,
+                Absent
+            )
+            sub.deliver()
+            sub.deliver()
+            assert(seen.toList == List(1, 2))
+        }
+
+        "subscribing and releasing inside each delivery keeps the subscriber current and in order, on one registration" in {
+            val r    = ref(0)
+            val seen = scala.collection.mutable.ListBuffer.empty[Int]
+            discard(r.unsafeObserveProjected[Int](
+                identity,
+                Absent,
+                v =>
+                    discard(seen += v)
+                    if v >= 0 && v < 20 then
+                        val (_, release) = observe(r)(identity)
+                        r.unsafe.set(v + 1)
+                        release()
+                    end if
+                ,
+                rethrow
+            ))
+            assert(seen.toList == (0 to 20).toList)
+            assert(r.unsafe.waiters() == 1)
+            r.unsafe.set(-2)
+            assert(seen.last == -2)
+            assert(r.unsafe.waiters() == 1)
+        }
+
+        "the last subscriber leaving inside its own delivery does not strand one that joins there" in {
+            val r                             = ref(0)
+            var joined                        = Maybe.empty[scala.collection.mutable.ListBuffer[Int]]
+            lazy val leave: Maybe[() => Unit] = r.unsafeObserveProjected[Int](
+                identity,
+                Present(0),
+                _ =>
+                    leave.foreach(_())
+                    val (seen, _) = observe(r)(identity)
+                    joined = Present(seen)
+                    r.unsafe.set(2)
+                ,
+                rethrow
+            )
+            discard(leave)
+            r.unsafe.set(1)
+            assert(joined.map(_.toList) == Present(List(1, 2)))
+            assert(r.unsafe.waiters() == 1)
+            r.unsafe.set(3)
+            assert(joined.map(_.toList) == Present(List(1, 2, 3)))
+        }
+
         "an unchanged write delivers nothing" in {
             val r         = ref(0)
             val (seen, _) = observe(r)(identity)

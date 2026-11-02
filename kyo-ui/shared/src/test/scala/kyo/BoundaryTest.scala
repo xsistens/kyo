@@ -68,6 +68,109 @@ class BoundaryTest extends UIScreen:
     /** How often `name` received each kind, in the order of [[kinds]]. */
     private def received(log: Chunk[String], name: String): Chunk[Int] = kinds.map(kind => log.count(_ == s"$name:$kind"))
 
+    /** Runs `f` with the event handler of a subscription whose paints reach `screen`, and which holds the first paint `shownWhen` holds
+      * for on its way out until `f` returns: a client that has it, and answers, while the server still delivers. `reached` completes when
+      * that paint has reached the screen.
+      */
+    private def holdingPaint[A](ui: UI)(shownWhen: String => Boolean)(
+        f: (Screen, Promise[Unit, Any], (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
+    )(using Frame): A < Async =
+        Scope.run {
+            for
+                initial <- HtmlRenderer.render(ui, Seq.empty)
+                screen = new Screen(initial)
+                reached <- Promise.init[Unit, Any]
+                letGo   <- Promise.init[Unit, Any]
+                exchange = new UIExchange:
+                    def onChange(
+                        region: ReactiveRegion,
+                        path: Seq[String],
+                        context: ReactiveRegion.RegionIdentity,
+                        parentContext: ReactiveRegion.ParentContext,
+                        previous: Maybe[UI],
+                        painted: UI
+                    )(using Frame): Unit < Async =
+                        screen.onChange(region, path, context, parentContext, previous, painted).andThen(screen.now).map { shown =>
+                            if shownWhen(shown) then reached.completeUnitDiscard.andThen(letGo.get) else Kyo.unit
+                        }
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                sub  <- ReactiveUI.subscribe(root, exchange)
+                a    <- f(screen, reached, sub.handle)
+                _    <- letGo.completeUnitDiscard
+            yield a
+        }
+
+    "an event answering the reveal's paint reaches the content while that paint is still on its way out" in {
+        for
+            log  <- AtomicRef.init(Chunk.empty[String])
+            gate <- Promise.init[Unit, Any]
+            ui = div(UI.boundary.placeholder(probe("placeholder", log))(UI.mounted(gate.get.andThen(probe("content", log)))))
+            during <- holdingPaint(ui)(v => v.contains("content")) { (screen, reached, handle) =>
+                for
+                    _      <- screen.await("the placeholder")(_.contains("placeholder"))
+                    _      <- gate.completeUnitDiscard
+                    _      <- reached.get
+                    _      <- sendAll(handle, Seq("0"))
+                    during <- log.get
+                yield during
+            }
+        yield assert(received(during, "content") == kinds.map(_ => 1) && received(during, "placeholder") == kinds.map(_ => 0), s"$during")
+    }
+
+    "under Placeholder, an event answering the placeholder's paint reaches it while that paint is still on its way out" in {
+        for
+            log   <- AtomicRef.init(Chunk.empty[String])
+            key   <- Signal.initRef("a")
+            gateB <- Promise.init[Unit, Any]
+            effect = (k: String) => (if k == "a" then Kyo.unit else gateB.get).andThen(probe(s"content:$k", log))
+            ui     = div(
+                UI.boundary.placeholder(probe("placeholder", log)).whilePending(PendingPolicy.Placeholder)(
+                    key.render(k => UI.mounted(effect(k)).keyed(k))
+                )
+            )
+            sawContent = new java.util.concurrent.atomic.AtomicBoolean(false)
+            during <- holdingPaint(ui) { v =>
+                if v.contains("content:a") then sawContent.set(true)
+                sawContent.get() && v.contains("placeholder")
+            } { (screen, reached, handle) =>
+                for
+                    _      <- screen.await("content:a")(_.contains("content:a"))
+                    _      <- key.set("b")
+                    _      <- reached.get
+                    _      <- sendAll(handle, Seq("0"))
+                    during <- log.get
+                yield during
+            }
+        yield assert(received(during, "placeholder") == kinds.map(_ => 1), s"$during")
+    }
+
+    "a click answering the paint that ends a wait reaches the new content while that paint is still on its way out" in {
+        for
+            route    <- Signal.initRef("1")
+            likes    <- AtomicInt.init(0)
+            started2 <- Promise.init[Unit, Any]
+            never    <- Promise.init[Unit, Any]
+            detail = (id: String) =>
+                val load = id match
+                    case "2" => started2.completeUnitDiscard.andThen(never.get)
+                    case _   => Kyo.unit
+                UI.mounted(load.andThen(div(span(s"title:$id"), button(s"like:$id").onClick(likes.incrementAndGet)))).keyed(id)
+            ui   = div(UI.boundary.placeholder(span("skel"))(div(span("header"), route.render(id => div(detail(id))))))
+            like = Seq("0", "1", "0", "1")
+            count <- holdingPaint(ui)(v => v.contains("title:3") && !v.contains("title:1")) { (screen, reached, handle) =>
+                for
+                    _     <- screen.await("issue 1")(_.contains("title:1"))
+                    _     <- route.set("2")
+                    _     <- started2.get
+                    _     <- route.set("3")
+                    _     <- reached.get
+                    _     <- handle(like, UIEvent.Click(like, MouseEventData(UI.Modifiers.none, Absent)))
+                    count <- likes.get
+                yield count
+            }
+        yield assert(count == 1, s"the click reached issue 3 $count times")
+    }
+
     // ---- One mount: its own modifiers and a boundary around it behave the same ----
 
     private case class Form(name: String, wrap: (UI.Ast.Mounted, Boundary) => UI)

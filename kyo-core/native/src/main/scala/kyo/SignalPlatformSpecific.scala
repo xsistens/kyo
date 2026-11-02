@@ -10,7 +10,7 @@ private[kyo] object SignalPlatformSpecific:
     val hubSlot: Maybe[SignalRef.Unsafe.HubSlot] =
         Present(
             new SignalRef.Unsafe.HubSlot:
-                def install(ref: SignalRef.Unsafe[?], hub: AnyRef): Boolean =
+                def install(ref: SignalRef.Root[?], hub: AnyRef): Boolean =
                     val field = AtomicRef[AnyRef](fromRawPtr(Intrinsics.classFieldRawPtr(ref, "hub")))
                     field.compareExchangeStrong(null: AnyRef, hub)
         )

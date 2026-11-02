@@ -616,6 +616,8 @@ val example: Unit < Async =
 
 Signals also compose as values. `signal.map(f)` derives a signal, `a.combineLatest(b)` pairs two and updates when either changes, and `a.zip(b)` updates only once both have changed. `signal.observe(f)` runs `f` for the current value and again on every change, each time inside a fresh `Scope` that is closed before the next value's `f` runs, so whatever `f` forks for one value is interrupted when the value changes. `observe` runs until interrupted, so fork it.
 
+`ref.zoom(get)(set)` is a writable `SignalRef` over one part of a reference's value, so two consumers can each bind their own field of one value. A write goes through `set` into the whole, atomically; writing the part it already holds writes nothing; and an observer of the part, like its `next`, moves only when the part changes. `get` and `set` must be pure and cheap, and obey `get(set(a, b)) == b`.
+
 ## Shared mutable state
 
 Across fibers, state lives in atomics, contended-write counters, or a bounded cache.
