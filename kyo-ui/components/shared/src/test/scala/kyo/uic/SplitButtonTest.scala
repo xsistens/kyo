@@ -56,16 +56,8 @@ class SplitButtonTest extends ReactiveValueContract:
                     case HtmlOp.ObserveViewportById(id) => observed.updateAndGet(_.append(id)).andThen(measured.completeUnitDiscard)
                     case _                              => Kyo.unit
                 }
-                exchange = new UIExchange:
-                    def onChange(
-                        region: ReactiveRegion,
-                        path: Seq[String],
-                        contentContext: ReactiveRegion.RegionIdentity,
-                        parentContext: ReactiveRegion.ParentContext,
-                        previous: Maybe[UI],
-                        changed: UI
-                    )(using Frame): Unit < Async = Abort.run[Closed](painted.put(())).unit
-                ui = UI.div(SplitButton("Release").onClick(presses.incrementAndGet).open(open).items(rows).render)
+                exchange = new RecordingExchange(beforePaint = (_, _) => Abort.run[Closed](painted.put(())).unit)
+                ui       = UI.div(SplitButton("Release").onClick(presses.incrementAndGet).open(open).items(rows).render)
                 html <- HtmlRenderer.render(ui, Seq.empty)
                 // The primary segment, by the path the page shows it at: it is the same before and after the mount.
                 primary = """<button[^>]*p-splitbutton-button[^>]*>""".r.findFirstIn(html)
