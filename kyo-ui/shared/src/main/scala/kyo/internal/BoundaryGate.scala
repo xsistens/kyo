@@ -333,13 +333,14 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
                     else
                         val replay = held
                         Kyo.foreachDiscard(replay)(parent.deliver)
-                out.andThen(Sync.Unsafe.defer {
+                // The range takes events again before the paint goes out: a client that has it may answer at once.
+                unhold.andThen(out).andThen(Sync.Unsafe.defer {
                     done = true
                     held = Chunk.empty
                     val waiting = commands
                     commands = Chunk.empty
                     waiting
-                }).map(Kyo.foreachDiscard(_)(parent.afterShown)).andThen(unhold).andThen(endWait).andThen(up.end)
+                }).map(Kyo.foreachDiscard(_)(parent.afterShown)).andThen(endWait).andThen(up.end)
             else if !waited then
                 // The range keeps what it shows; it is marked on the page so that nobody types into what will not reach the server.
                 Sync.Unsafe.defer {
@@ -464,11 +465,12 @@ final private[kyo] class BoundaryGate(
                     policy match
                         case UI.PendingPolicy.KeepLatest  => Kyo.unit
                         case UI.PendingPolicy.Placeholder =>
-                            paintRange(placeholder).andThen(Sync.Unsafe.defer {
+                            // Before the paint goes out, as for a reveal.
+                            Sync.Unsafe.defer {
                                 revealed = false
                                 showingSnapshot = false
                                 shown = Present(placeholder)
-                            })
+                            }.andThen(paintRange(placeholder))
             }
         }
 
@@ -506,14 +508,17 @@ final private[kyo] class BoundaryGate(
         locked {
             if closed.get() || revealed then Kyo.unit
             else if !due && rewaits.get() == 0 then
-                displayedContent.map(paintRange).andThen(Sync.Unsafe.defer {
-                    revealed = true
-                    shown = Absent
-                    val waiting = commands
-                    commands = Chunk.empty
-                    waiting
-                    // The commands follow the nested paints, since they may be about what those paints bring.
-                }).map(waiting => repaintNested.andThen(Kyo.foreachDiscard(waiting)(sendOut)))
+                displayedContent.map { content =>
+                    // Before the paint goes out: a client that has it may answer at once, and that event has to reach the content.
+                    Sync.Unsafe.defer {
+                        revealed = true
+                        shown = Absent
+                        val waiting = commands
+                        commands = Chunk.empty
+                        waiting
+                        // The commands follow the nested paints, since they may be about what those paints bring.
+                    }.map(waiting => paintRange(content).andThen(repaintNested).andThen(Kyo.foreachDiscard(waiting)(sendOut)))
+                }
             else if passes.get() == 0 && !seedPainted then
                 (seed, policy) match
                     case (Present(snapshot), UI.PendingPolicy.KeepLatest) =>
