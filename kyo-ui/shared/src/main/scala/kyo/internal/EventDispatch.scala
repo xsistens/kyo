@@ -217,17 +217,19 @@ private[kyo] object EventDispatch:
     /** Read current checked value from Maybe[Bound[Boolean]]. */
     private def readChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
         checked match
-            case Present(Bound.Const(b)) => b
-            case Present(Bound.Ref(ref)) => ref.get
-            case _                       => false
+            case Present(Bound.Const(b))    => b
+            case Present(Bound.Ref(ref))    => ref.get
+            case Present(Bound.Follow(sig)) => sig.current
+            case _                          => false
 
     /** Toggle checked and auto-set SignalRef if bound. Returns the new value. */
     private def toggleChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
         checked match
             case Present(Bound.Ref(ref)) =>
                 ref.getAndUpdate(!_).map(!_)
-            case Present(Bound.Const(b)) => !b
-            case _                       => true
+            case Present(Bound.Const(b))    => !b
+            case Present(Bound.Follow(sig)) => sig.current.map(!_)
+            case _                          => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
     private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
@@ -237,9 +239,10 @@ private[kyo] object EventDispatch:
         else
             for
                 current <- sel.value match
-                    case Present(Bound.Ref(ref)) => ref.get
-                    case Present(Bound.Const(s)) => Kyo.lift(s)
-                    case _                       => Kyo.lift("")
+                    case Present(Bound.Ref(ref))    => ref.get
+                    case Present(Bound.Const(s))    => Kyo.lift(s)
+                    case Present(Bound.Follow(sig)) => sig.current
+                    case _                          => Kyo.lift("")
                 currentIdx = values.indexOf(current).max(0)
                 nextIdx    =
                     if forward then (currentIdx + 1)    % values.size
@@ -558,9 +561,10 @@ private[kyo] object EventDispatch:
                                 case Present(v) => v
                                 case Absent     =>
                                     ti.value match
-                                        case Present(Bound.Ref(ref)) => ref.get
-                                        case Present(Bound.Const(v)) => v
-                                        case _                       => ""
+                                        case Present(Bound.Ref(ref))    => ref.get
+                                        case Present(Bound.Const(v))    => v
+                                        case Present(Bound.Follow(sig)) => sig.current
+                                        case _                          => ""
                             held.map(v => ti.onBlurText.get(mouse, v).unit)
                         case _ => ()
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(text).andThen(true)

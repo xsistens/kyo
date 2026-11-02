@@ -74,6 +74,7 @@ private[kyo] object HtmlRenderer:
             case el: Element                       =>
                 el.attrs.hasChannels
                 || ReactiveUI.collectSignalRef(el).nonEmpty
+                || Channels.follows(el)
                 || (el match
                     case ta: Textarea => hasSignalRefValue(ta.value)
                     case dd: Dropdown => hasSignalRefValue(dd.value)
@@ -649,9 +650,10 @@ private[kyo] object HtmlRenderer:
 
     private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         ta.value match
-            case Present(Bound.Const(s)) => w(sb, esc(masked(ta.inputMask, s)))
-            case Present(Bound.Ref(ref)) => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, esc(masked(ta.inputMask, s)))
+            case Present(Bound.Ref(ref))    => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
+            case Present(Bound.Follow(sig)) => w(sb, esc(masked(ta.inputMask, SignalNow(sig))))
+            case _                          => ()
 
     // ---- Dropdown (custom div-based overlay) ----
 
@@ -976,9 +978,10 @@ private[kyo] object HtmlRenderer:
                             case ci: ConstrainedInput => ci.inputMask
                             case _                    => Absent
                         val text = ti.value match
-                            case Present(Bound.Const(v)) => masked(mask, v)
-                            case Present(Bound.Ref(ref)) => masked(mask, SignalNow(ref))
-                            case _                       => ""
+                            case Present(Bound.Const(v))    => masked(mask, v)
+                            case Present(Bound.Ref(ref))    => masked(mask, SignalNow(ref))
+                            case Present(Bound.Follow(sig)) => masked(mask, SignalNow(sig))
+                            case _                          => ""
                         if FilledClass.filled(text) then Seq(name) else Seq.empty
                     case None => Seq.empty
             case _ => Seq.empty
@@ -1067,9 +1070,10 @@ private[kyo] object HtmlRenderer:
                 w(sb, " type=\"range\"")
                 boolAttr(sb, "disabled", r.disabled)
                 r.value match
-                    case Present(Bound.Const(d)) => w(sb, s""" value="${fmtD(d)}"""")
-                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
-                    case _                       => ()
+                    case Present(Bound.Const(d))    => w(sb, s""" value="${fmtD(d)}"""")
+                    case Present(Bound.Ref(ref))    => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
+                    case Present(Bound.Follow(sig)) => w(sb, s""" value="${fmtD(SignalNow(sig))}"""")
+                    case _                          => ()
                 end match
                 r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
                 r.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
@@ -1111,9 +1115,10 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" value="${esc(s)}"""")
                     if !sel.attrs.jsProps.contains("value") then w(sb, s""" data-kyo-prop-value="${esc(s)}"""")
                 sel.value match
-                    case Present(Bound.Const(s)) => bound(s)
-                    case Present(Bound.Ref(ref)) => bound(SignalNow(ref))
-                    case _                       =>
+                    case Present(Bound.Const(s))    => bound(s)
+                    case Present(Bound.Ref(ref))    => bound(SignalNow(ref))
+                    case Present(Bound.Follow(sig)) => bound(SignalNow(sig))
+                    case _                          =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
                             case opt: Opt if opt.selected == Present(true) =>
@@ -1165,9 +1170,10 @@ private[kyo] object HtmlRenderer:
       */
     private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         value match
-            case Present(Bound.Const(b)) => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
-            case Present(Bound.Ref(ref)) => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
-            case _                       => ()
+            case Present(Bound.Const(b))    => w(sb, " data-kyo-bound"); if b then w(sb, " checked")
+            case Present(Bound.Ref(ref))    => w(sb, " data-kyo-bound"); if SignalNow(ref) then w(sb, " checked")
+            case Present(Bound.Follow(sig)) => w(sb, " data-kyo-bound"); if SignalNow(sig) then w(sb, " checked")
+            case _                          => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
     /** Formats a value about to be displayed through the element's mask, if it carries one.
@@ -1190,9 +1196,10 @@ private[kyo] object HtmlRenderer:
         SignalNow.Locals
     ): Unit =
         value match
-            case Present(Bound.Const(s)) => w(sb, s""" value="${esc(masked(mask, s))}"""")
-            case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
-            case _                       => ()
+            case Present(Bound.Const(s))    => w(sb, s""" value="${esc(masked(mask, s))}"""")
+            case Present(Bound.Ref(ref))    => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
+            case Present(Bound.Follow(sig)) => w(sb, s""" value="${esc(masked(mask, SignalNow(sig)))}"""")
+            case _                          => ()
 
     private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         boolAttr(sb, "disabled", pi.disabled)
@@ -1203,6 +1210,11 @@ private[kyo] object HtmlRenderer:
     private def hasSignalRefValue(value: Maybe[Bound[?]]): Boolean = value match
         case Present(_: Bound.Ref[?]) => true
         case _                        => false
+
+    /** Whether the client has to forward the commit of an edit: to write a ref, or to put back what a followed signal's owner did not take. */
+    private def bindsEdit(value: Maybe[Bound[?]]): Boolean = value match
+        case Present(_: Bound.Ref[?] | _: Bound.Follow[?]) => true
+        case _                                             => false
 
     /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
       * answers whether there was one.
@@ -1246,14 +1258,14 @@ private[kyo] object HtmlRenderer:
             case _                                                                   =>
         // "change" event: when handler is set OR when .value/.checked(SignalRef) auto-binding is in use
         elem match
-            case ti: TextInput if ti.onChange.nonEmpty || hasSignalRefValue(ti.value)          => add("change")
-            case pi: PickerInput if pi.onChange.nonEmpty || hasSignalRefValue(pi.value)        => add("change")
-            case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => add("change")
-            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => add("change")
-            case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => add("change")
-            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => add("change")
-            case sel: Select if hasSignalRefValue(sel.value)                                   => add("change")
-            case _                                                                             =>
+            case ti: TextInput if ti.onChange.nonEmpty || bindsEdit(ti.value)          => add("change")
+            case pi: PickerInput if pi.onChange.nonEmpty || bindsEdit(pi.value)        => add("change")
+            case bi: BooleanInput if bi.onChange.nonEmpty || bindsEdit(bi.checked)     => add("change")
+            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || bindsEdit(ni.value) => add("change")
+            case ri: RangeInput if ri.onChange.nonEmpty || bindsEdit(ri.value)         => add("change")
+            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty  => add("change")
+            case sel: Select if bindsEdit(sel.value)                                   => add("change")
+            case _                                                                     =>
         end match
         elem match
             case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => add("submit")
@@ -1289,7 +1301,8 @@ private[kyo] object HtmlRenderer:
             namespace == ReactiveRegion.Namespace.Svg ||
             elem.isInstanceOf[Svg.SvgElement] ||
             elem.isInstanceOf[Focusable] ||
-            addressedByClient(elem.attrs)
+            addressedByClient(elem.attrs) ||
+            Channels.follows(elem)
 
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||

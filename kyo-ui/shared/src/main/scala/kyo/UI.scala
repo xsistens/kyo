@@ -1098,11 +1098,11 @@ object UI:
       */
     def stylesheetCss(sheet: Stylesheet)(using Frame): String = sheet.render
 
-    /** A property value that is either a constant or a reactive [[kyo.SignalRef]].
+    /** A property value that is a constant, a signal the element follows, or a reactive [[kyo.SignalRef]] it writes back to.
       *
-      * Setters that accept both a plain value and a writable signal (the `value`/`checked` family) store their argument as a `Bound`:
-      * `Bound.Const` for a one-shot value, `Bound.Ref` for a `SignalRef` that establishes two-way binding. Renderers and backends match on
-      * the two cases to decide whether to wire input/change listeners back to the signal.
+      * The `value`/`checked` setters store their argument as a `Bound`: `Bound.Const` for a one-shot value, `Bound.Follow` for a read-only
+      * signal, `Bound.Ref` for a `SignalRef` that establishes two-way binding. Renderers and backends match on the three cases to decide
+      * whether to wire input/change listeners back to the signal.
       *
       * @tparam A
       *   the type of the underlying property value
@@ -1110,8 +1110,20 @@ object UI:
     sealed trait Bound[+A]
 
     object Bound:
-        final case class Const[A](value: A)        extends Bound[A]
+        final case class Const[A](value: A) extends Bound[A]
+
+        /** One-way: the element shows `signal` in place, and an edit its owner did not take is put back. */
+        final case class Follow[A](signal: Signal[A]) extends Bound[A]
+
         final case class Ref[A](ref: SignalRef[A]) extends Bound[A]
+
+        /** A `SignalRef` binds two way, any other `Signal` one way, anything else is a constant. The choice is made on the runtime class, so
+          * `ref: Signal[A]` still binds two way; `ref.readOnly` is the opt-out.
+          */
+        def apply[A](v: A | Signal[A]): Bound[A] = v match
+            case r: SignalRef[A] @unchecked => Ref(r)
+            case s: Signal[A] @unchecked    => Follow(s)
+            case a: A @unchecked            => Const(a)
     end Bound
 
     /** The typed identity of a key in a [[kyo.UI.KeyboardEvent]].
@@ -2093,10 +2105,8 @@ object UI:
                     attrs.dataAttrs.updated(kyo.internal.FilledClass.upKey, name).updated(kyo.internal.FilledClass.targetKey, closest)
                 ))
 
-            def value(v: String): Self
-
-            /** Binds the input to a `SignalRef` two-way: edits write the new text back into the ref, and ref changes update the input. */
-            def value(v: SignalRef[String]): Self
+            /** A constant is the field's starting text. A read-only `Signal` is what the field shows, in place, and an edit its owner does not take is put back: at the commit, and at each keystroke when `onInput` is set. A `SignalRef` binds two way: typing writes into the ref, and ref changes update the field. */
+            def value(v: String | Signal[String]): Self
 
             /** REACTIVE placeholder: the `placeholder` attribute tracks `sig`, patched IN PLACE on emission, with
               * no re-render of the field. Owns the `placeholder` attribute, so do not also set the constant
@@ -2166,25 +2176,16 @@ object UI:
         sealed trait PickerInput extends Focusable with HasDisabled:
             def value: Maybe[Bound[String]]
             def onChange: Maybe[String => Action]
-            def value(v: String): Self
 
-            /** Binds the picker to a `SignalRef` two-way: a selection writes back into the ref, and ref changes update the selection. */
-            def value(v: SignalRef[String]): Self
         end PickerInput
 
         /** Capability trait for boolean inputs that carry a `checked` flag (constant or `SignalRef`) and a `Boolean` `onChange` (`checkbox`, `radio`). */
         sealed trait BooleanInput extends Focusable with HasDisabled:
             def checked: Maybe[Bound[Boolean]]
             def onChange: Maybe[Boolean => Action]
-            def checked(v: Boolean): Self
 
-            /** Binds the checked state to a `SignalRef` two-way: toggling writes back into the ref, and ref changes update the control. */
-            def checked(v: SignalRef[Boolean]): Self
-
-            /** Reactive (one-way) `checked` from a read-only `Signal`; use the `SignalRef` overload for two-way binding. */
-            def checked(v: Signal[Boolean]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(b => this.checked(b): UI))
+            /** A constant is fixed unless a handler takes the toggle. A read-only `Signal` is what the control shows, in place, and a toggle its owner does not take is put back. A `SignalRef` binds two way: toggling writes back into the ref, and ref changes update the control. */
+            def checked(v: Boolean | Signal[Boolean]): Self
         end BooleanInput
 
         /** Capability marker for elements with semantic activation (button, anchor): can be triggered by keyboard as well as click. */
@@ -2658,13 +2659,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): Textarea              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): Textarea   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): Textarea        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): Textarea          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): Textarea          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): Textarea  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): Textarea = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): Textarea         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): Textarea                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): Textarea              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): Textarea             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): Textarea = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): Textarea               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Textarea                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -2680,11 +2680,10 @@ object UI:
             type Self = Select
             def withAttrs(a: Attrs): Select = copy(attrs = a)
 
-            def apply(cs: HtmlChildVal*): Select      = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def value(v: String): Select              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): Select   = copy(value = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): Select          = copy(disabled = Present(v))
-            def onChange(f: String => Action): Select = copy(onChange = Present(f))
+            def apply(cs: HtmlChildVal*): Select          = copy(children = children ++ Chunk.from(cs.map(_.value)))
+            def value(v: String | Signal[String]): Select = copy(value = Present(Bound(v)))
+            def disabled(v: Boolean): Select              = copy(disabled = Present(v))
+            def onChange(f: String => Action): Select     = copy(onChange = Present(f))
         end Select
 
         final case class Hr(attrs: Attrs = Attrs())(using val frame: Frame) extends Block with Void:
@@ -2774,10 +2773,9 @@ object UI:
             type Self = Checkbox
             def withAttrs(a: Attrs): Checkbox = copy(attrs = a)
 
-            def checked(v: Boolean): Checkbox            = copy(checked = Present(Bound.Const(v)))
-            def checked(v: SignalRef[Boolean]): Checkbox = copy(checked = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): Checkbox           = copy(disabled = Present(v))
-            def onChange(f: Boolean => Action): Checkbox = copy(onChange = Present(f))
+            def checked(v: Boolean | Signal[Boolean]): Checkbox = copy(checked = Present(Bound(v)))
+            def disabled(v: Boolean): Checkbox                  = copy(disabled = Present(v))
+            def onChange(f: Boolean => Action): Checkbox        = copy(onChange = Present(f))
 
             /** Sets the DOM `indeterminate` property, a visual tri-state distinct from `checked` (the checkbox shows a dash, not a tick). */
             def indeterminate(v: Boolean): Checkbox =
@@ -2800,11 +2798,10 @@ object UI:
             type Self = Radio
             def withAttrs(a: Attrs): Radio = copy(attrs = a)
 
-            def checked(v: Boolean): Radio            = copy(checked = Present(Bound.Const(v)))
-            def checked(v: SignalRef[Boolean]): Radio = copy(checked = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): Radio           = copy(disabled = Present(v))
-            def onChange(f: Boolean => Action): Radio = copy(onChange = Present(f))
-            def name(v: String): Radio                = copy(name = Present(v))
+            def checked(v: Boolean | Signal[Boolean]): Radio = copy(checked = Present(Bound(v)))
+            def disabled(v: Boolean): Radio                  = copy(disabled = Present(v))
+            def onChange(f: Boolean => Action): Radio        = copy(onChange = Present(f))
+            def name(v: String): Radio                       = copy(name = Present(v))
         end Radio
 
         // ---- Text inputs (value + placeholder + onInput + onChange: String) ----
@@ -2838,13 +2835,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): Input              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): Input   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): Input        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): Input          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): Input          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): Input  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): Input = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): Input         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): Input                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): Input                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): Input                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): Input              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): Input             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): Input = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): Input               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Input                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -2867,13 +2863,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): PasswordInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): PasswordInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): PasswordInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): PasswordInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): PasswordInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): PasswordInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): PasswordInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): PasswordInput =
                 copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
@@ -2897,13 +2892,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): EmailInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): EmailInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): EmailInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): EmailInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): EmailInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): EmailInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): EmailInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): EmailInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): EmailInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): EmailInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): EmailInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): EmailInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): EmailInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -2926,13 +2920,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): TelInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): TelInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): TelInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): TelInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): TelInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): TelInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): TelInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): TelInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): TelInput                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): TelInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): TelInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): TelInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): TelInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): TelInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -2955,13 +2948,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): UrlInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): UrlInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): UrlInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): UrlInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): UrlInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): UrlInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): UrlInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): UrlInput                    = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): UrlInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): UrlInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): UrlInput               = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): UrlInput                      = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -2984,13 +2976,12 @@ object UI:
             def inputFilter: Maybe[InputFilter]                   = textInputAttrs.inputFilter
             def inputMask: Maybe[String]                          = textInputAttrs.inputMask
 
-            def value(v: String): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): SearchInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): SearchInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): SearchInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): SearchInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): SearchInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): SearchInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): SearchInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): SearchInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def inputFilter(v: InputFilter): SearchInput = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): SearchInput        = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
@@ -3015,13 +3006,12 @@ object UI:
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
             def onBlurText: Maybe[(MouseEvent, String) => Action] = textInputAttrs.onBlurText
 
-            def value(v: String): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
-            def value(v: SignalRef[String]): NumberInput   = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
-            def placeholder(v: String): NumberInput        = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
-            def readOnly(v: Boolean): NumberInput          = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
-            def disabled(v: Boolean): NumberInput          = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Action): NumberInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Action): NumberInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def value(v: String | Signal[String]): NumberInput = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
+            def placeholder(v: String): NumberInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
+            def readOnly(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            def disabled(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
+            def onInput(f: String => Action): NumberInput      = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): NumberInput     = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def onBlur(f: (MouseEvent, String) => Action): NumberInput = copy(textInputAttrs = textInputAttrs.copy(onBlurText = Present(f)))
             def min(v: Double): NumberInput                            = copy(min = Present(v))
             def max(v: Double): NumberInput                            = copy(max = Present(v))
@@ -3038,11 +3028,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = DateInput
-            def withAttrs(a: Attrs): DateInput           = copy(attrs = a)
-            def value(v: String): DateInput              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): DateInput   = copy(value = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): DateInput          = copy(disabled = Present(v))
-            def onChange(f: String => Action): DateInput = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): DateInput               = copy(attrs = a)
+            def value(v: String | Signal[String]): DateInput = copy(value = Present(Bound(v)))
+            def disabled(v: Boolean): DateInput              = copy(disabled = Present(v))
+            def onChange(f: String => Action): DateInput     = copy(onChange = Present(f))
         end DateInput
 
         final case class TimeInput(
@@ -3052,11 +3041,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = TimeInput
-            def withAttrs(a: Attrs): TimeInput           = copy(attrs = a)
-            def value(v: String): TimeInput              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): TimeInput   = copy(value = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): TimeInput          = copy(disabled = Present(v))
-            def onChange(f: String => Action): TimeInput = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): TimeInput               = copy(attrs = a)
+            def value(v: String | Signal[String]): TimeInput = copy(value = Present(Bound(v)))
+            def disabled(v: Boolean): TimeInput              = copy(disabled = Present(v))
+            def onChange(f: String => Action): TimeInput     = copy(onChange = Present(f))
         end TimeInput
 
         final case class ColorInput(
@@ -3066,11 +3054,10 @@ object UI:
             onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = ColorInput
-            def withAttrs(a: Attrs): ColorInput           = copy(attrs = a)
-            def value(v: String): ColorInput              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): ColorInput   = copy(value = Present(Bound.Ref(v)))
-            def disabled(v: Boolean): ColorInput          = copy(disabled = Present(v))
-            def onChange(f: String => Action): ColorInput = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): ColorInput               = copy(attrs = a)
+            def value(v: String | Signal[String]): ColorInput = copy(value = Present(Bound(v)))
+            def disabled(v: Boolean): ColorInput              = copy(disabled = Present(v))
+            def onChange(f: String => Action): ColorInput     = copy(onChange = Present(f))
         end ColorInput
 
         // ---- Special inputs ----
@@ -3085,14 +3072,13 @@ object UI:
             onChange: Maybe[Double => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = RangeInput
-            def withAttrs(a: Attrs): RangeInput           = copy(attrs = a)
-            def value(v: Double): RangeInput              = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[Double]): RangeInput   = copy(value = Present(Bound.Ref(v)))
-            def min(v: Double): RangeInput                = copy(min = Present(v))
-            def max(v: Double): RangeInput                = copy(max = Present(v))
-            def step(v: Double): RangeInput               = copy(step = Present(if v <= 0 then 1.0 else v))
-            def disabled(v: Boolean): RangeInput          = copy(disabled = Present(v))
-            def onChange(f: Double => Action): RangeInput = copy(onChange = Present(f))
+            def withAttrs(a: Attrs): RangeInput               = copy(attrs = a)
+            def value(v: Double | Signal[Double]): RangeInput = copy(value = Present(Bound(v)))
+            def min(v: Double): RangeInput                    = copy(min = Present(v))
+            def max(v: Double): RangeInput                    = copy(max = Present(v))
+            def step(v: Double): RangeInput                   = copy(step = Present(if v <= 0 then 1.0 else v))
+            def disabled(v: Boolean): RangeInput              = copy(disabled = Present(v))
+            def onChange(f: Double => Action): RangeInput     = copy(onChange = Present(f))
         end RangeInput
 
         final case class FileInput(
@@ -3117,9 +3103,8 @@ object UI:
             value: Maybe[Bound[String]] = Absent
         )(using val frame: Frame) extends Inline with Void:
             type Self = HiddenInput
-            def withAttrs(a: Attrs): HiddenInput         = copy(attrs = a)
-            def value(v: String): HiddenInput            = copy(value = Present(Bound.Const(v)))
-            def value(v: SignalRef[String]): HiddenInput = copy(value = Present(Bound.Ref(v)))
+            def withAttrs(a: Attrs): HiddenInput               = copy(attrs = a)
+            def value(v: String | Signal[String]): HiddenInput = copy(value = Present(Bound(v)))
         end HiddenInput
 
         final case class Anchor(

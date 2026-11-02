@@ -450,7 +450,7 @@ private[kyo] object ReactiveUI:
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Bounded => true
         case el: Element                                                 =>
-            collectSignalRef(el).nonEmpty || el.attrs.hasChannels
+            collectSignalRef(el).nonEmpty || el.attrs.hasChannels || Channels.follows(el)
         case _ => false
 
     /** The Fragment a Foreach paints for `items`: one KeyedChild per element, keyed by the key function (or
@@ -935,7 +935,7 @@ private[kyo] object ReactiveUI:
       */
     private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
-            case el: Element if el.attrs.hasChannels =>
+            case el: Element if el.attrs.hasChannels || Channels.follows(el) =>
                 forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, el.frame, Absent)
             case _ => Kyo.unit
 
