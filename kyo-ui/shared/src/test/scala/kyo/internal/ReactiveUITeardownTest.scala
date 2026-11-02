@@ -23,6 +23,21 @@ import kyo.*
   */
 class ReactiveUITeardownTest extends kyo.test.Test[Any]:
 
+    "closing the scope before a region's fiber has taken a step leaves no observer, and a later write paints nothing" in {
+        val rec = new RecordingExchange
+        for
+            ref <- Signal.initRef("a")
+            // Nothing between the subscribe and the close lets the fiber run, on the one thread of JS and Wasm in particular.
+            _      <- Scope.run(ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty).map(ReactiveUI.subscribe(_, rec).unit))
+            parked <- ref.waiters
+            _      <- ref.set("b")
+            paints <- rec.paints
+        yield
+            assert(parked == 0)
+            assert(paints.isEmpty)
+        end for
+    }
+
     "bound element replacement does not recursively subscribe to itself" in {
         for
             ref           <- Signal.initRef("")

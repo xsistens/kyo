@@ -343,7 +343,7 @@ private[kyo] object RowRegions:
                     around <- ReleaseGroup.current.use(group => group.getOrElse(regionMounts.table.group))
                     _      <- Scope.ensure(rows.evictAll)
                     watch  <- regionMounts.register
-                    _      <- startOwnedFiber {
+                    _      <- regionFiber(rui.path, "Reactive subscription fiber") {
                         // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
                         // scoped children still die with it, since a nested region's or mount's release is
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
@@ -489,23 +489,13 @@ private[kyo] object RowRegions:
                                 _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
                             yield ()
 
-                        Abort.run[Throwable] {
-                            var first = true
-                            itemSignal.observeStamped(watch.stamp) {
-                                items =>
-                                    val isFirst = first
-                                    first = false
-                                    if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
-                                    else handle(items)
-                            }
-                        }.map { result =>
-                            result.fold(
-                                _ => (),
-                                err => Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", err),
-                                panic =>
-                                    if panic.isInstanceOf[Interrupted] then ()
-                                    else Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", panic)
-                            )
+                        var first = true
+                        itemSignal.observeStamped(watch.stamp) {
+                            items =>
+                                val isFirst = first
+                                first = false
+                                if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
+                                else handle(items)
                         }
                     }
                 yield ()

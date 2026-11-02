@@ -639,47 +639,23 @@ private[kyo] object ReactiveUI:
         private[kyo] def withDragLock[A](v: => A < Async)(using Frame): A < (Async & Abort[Closed]) = dragLock.run(v)
     end Subscription
 
-    private enum OwnedFiberState derives CanEqual:
-        case Waiting
-        case Running(fiber: Fiber[Unit, Any])
-        case Closed
-    end OwnedFiberState
-
-    private[internal] def startOwnedFiber(task: => Unit < Async)(using Frame): Unit < (Async & Scope) =
-        for
-            state <- AtomicRef.init[OwnedFiberState](OwnedFiberState.Waiting)
-            start <- Promise.init[Unit, Any]
-            _     <- Scope.ensure(closeOwnedFiber(state))
-            fiber <- Fiber.initUnscoped(start.get.andThen(task))
-            _     <- installOwnedFiber(state, start, fiber)
-        yield ()
-    end startOwnedFiber
-
-    private def installOwnedFiber(
-        state: AtomicRef[OwnedFiberState],
-        start: Promise[Unit, Any],
-        fiber: Fiber[Unit, Any]
-    )(using Frame): Unit < Async =
-        state.get.flatMap {
-            case OwnedFiberState.Waiting =>
-                state.compareAndSet(OwnedFiberState.Waiting, OwnedFiberState.Running(fiber)).flatMap { installed =>
-                    if installed then start.completeUnitDiscard
-                    else installOwnedFiber(state, start, fiber)
-                }
-            case _: OwnedFiberState.Running =>
-                Abort.panic(IllegalStateException("Reactive observer fiber was installed twice"))
-            case OwnedFiberState.Closed =>
-                fiber.interrupt.andThen(fiber.getResult.unit)
-        }
-    end installOwnedFiber
-
-    private def closeOwnedFiber(state: AtomicRef[OwnedFiberState])(using Frame): Unit < Async =
-        state.getAndSet(OwnedFiberState.Closed).flatMap {
-            case OwnedFiberState.Running(fiber) => fiber.interrupt.andThen(fiber.getResult.unit)
-            case OwnedFiberState.Waiting        => ()
-            case OwnedFiberState.Closed         => ()
-        }
-    end closeOwnedFiber
+    /** Starts a region's fiber in the current scope, which interrupts it and awaits its unwind when it closes. What ends it other than
+      * that interrupt is logged as `what` at `path`.
+      */
+    private[internal] def regionFiber(path: Seq[String], what: String)(observe: => Unit < (Async & Abort[Throwable]))(using
+        Frame
+    ): Unit < (Async & Scope) =
+        Fiber.init {
+            Abort.run[Throwable](observe).map { result =>
+                result.fold(
+                    _ => (),
+                    err => Log.error(s"$what failed at path=${path.mkString(".")}", err),
+                    panic =>
+                        if panic.isInstanceOf[Interrupted] then ()
+                        else Log.error(s"$what failed at path=${path.mkString(".")}", panic)
+                )
+            }
+        }.unit
 
     /** Subscribe all reactive boundaries under the caller's Scope. Returns the dispatch handle + change
       * time; lifecycle is owned by the enclosing Scope (closing it interrupts every region fiber and awaits its unwind).
@@ -703,7 +679,7 @@ private[kyo] object ReactiveUI:
             // after the worker's own teardown and makes "closed scope implies no worker" hold on every exit.
             _ <- Scope.ensure(expiryWorkers.set(0))
             _ <- expiryWorkers.set(1)
-            _ <- startOwnedFiber(
+            _ <- Fiber.init(
                 Abort.run[Any] {
                     Sync.ensure(expiryWorkers.set(0))(expiryScheduler(dragSessions, dragMutex, expiryWake))
                 }.unit
@@ -1145,23 +1121,13 @@ private[kyo] object ReactiveUI:
 
         def start(step: (UI, Boolean) => Unit < (Async & Scope)): Unit < (Async & Scope) =
             regionMounts.register.map { watch =>
-                startOwnedFiber {
-                    Abort.run[Throwable] {
-                        var first = true
-                        observed(watch.stamp) { current =>
-                            val isFirst = first
-                            first = false
-                            // Each value is a group of its own, released before anything it subscribed is.
-                            ReleaseGroup.owning(_ => step(current, isFirst))
-                        }
-                    }.map { result =>
-                        result.fold(
-                            _ => (),
-                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                            panic =>
-                                if panic.isInstanceOf[Interrupted] then ()
-                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                        )
+                regionFiber(rui.path, "Reactive subscription fiber") {
+                    var first = true
+                    observed(watch.stamp) { current =>
+                        val isFirst = first
+                        first = false
+                        // Each value is a group of its own, released before anything it subscribed is.
+                        ReleaseGroup.owning(_ => step(current, isFirst))
                     }
                 }
             }

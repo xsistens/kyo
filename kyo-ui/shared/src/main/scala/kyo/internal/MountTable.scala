@@ -1713,7 +1713,7 @@ private[kyo] object MountRegions:
                                 fork = (parent: Scope.Finalizer) => parent.forked,
                                 join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
                             )(ReleaseGroup.current.let(Present(firstGroup))(showClaim(first)))
-                            _ <- startOwnedFiber(
+                            _ <- Fiber.init(
                                 Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
                                     closeFirst.andThen(ReleaseGroup.owning { group =>
                                         Sync.Unsafe.defer(view.showing.set(Present(group))).andThen(showClaim(next))
@@ -1862,20 +1862,10 @@ private[kyo] object MountRegions:
                                 .andThen(group.started)
                         }
                     end for
-            _ <- startOwnedFiber(
-                // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
-                Abort.run[Throwable](instance.cell.observeStamped(watch.stamp)(state =>
-                    ReleaseGroup.owning(_ => observed(state))
-                )).map { result =>
-                    result.fold(
-                        _ => (),
-                        err => Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", err),
-                        panic =>
-                            if panic.isInstanceOf[Interrupted] then ()
-                            else Log.error(s"Mounted content region failed at path=${rui.path.mkString(".")}", panic)
-                    )
-                }
-            )
+            // Each state is shown in a group of its own: the content of the last one goes when the next arrives.
+            _ <- regionFiber(rui.path, "Mounted content region") {
+                instance.cell.observeStamped(watch.stamp)(state => ReleaseGroup.owning(_ => observed(state)))
+            }
             // Registered after the fiber, so it runs before the fiber's interrupt: the nested mounts are still registered, and a
             // snapshot of this instance shows their content rather than their placeholders.
             _ <- Scope.ensure(instance.cell.current.map {

@@ -1553,6 +1553,8 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
                 UI.div.id("cl-portal").portal(true)(tick.map(n => UI.span(s"p:$n").id("cl-p"): UI)),
                 Svg.svg(tick.render(n => Svg.g(Svg.circle.cx(n.toDouble).cy(5).r(3).id(s"cl-c$n"))))
             )
+            // An earlier test's result can come before its mount's last finalizers, the registry's close among them.
+            _      <- assertEventually(Sync.defer(DomReactiveRegions.openCount == 0), 5.seconds)
             before <- Sync.defer(DomReactiveRegions.openCount)
             ready = new DomTestEnv.MountReady
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
