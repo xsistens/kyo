@@ -28,18 +28,11 @@ private[kyo] case class ReactiveUI(
     deepRows: List[Int] = Nil,
     // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
     // (empty for non-element / attribute-less nodes).
-    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
-    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveStyle: Maybe[Signal[Style]] = Absent,
-    // Render-time snapshots: the values the enclosing paint already put into the DOM. Subscribe skips an observer's first
+    channels: Channels = Channels.empty,
+    // Render-time snapshot: the value the enclosing paint already put into the DOM. Subscribe skips an observer's first
     // emission while it still equals its snapshot, so a fresh paint is not patched again.
     renderedValue: Maybe[UI] = Absent,
-    renderedAttrValues: Map[String, String] = Map.empty,
-    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
-    renderedClassValues: Map[String, Boolean] = Map.empty,
-    // The inline-style channel's declarations at render (see UI.Element.inlineStyle): what the first patch diffs against.
-    renderedStyleValue: Maybe[Seq[(String, String)]] = Absent,
+    renderedChannels: RenderedChannels = RenderedChannels.empty,
     // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
     // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
     foreachSpec: Maybe[ForeachSpec] = Absent,
@@ -142,10 +135,7 @@ private[kyo] object ReactiveUI:
             children = rui.children.map(unpainted),
             foreachSpec = rui.foreachSpec.map(_.copy(renderedItems = Absent)),
             renderedValue = Absent,
-            renderedAttrValues = Map.empty,
-            renderedBoolAttrValues = Map.empty,
-            renderedClassValues = Map.empty,
-            renderedStyleValue = Absent
+            renderedChannels = RenderedChannels.empty
         )
 
     /* Normalization and the tree walk carry, for the mounted nodes and regions they meet, the session's dispatch table and which
@@ -294,10 +284,8 @@ private[kyo] object ReactiveUI:
                     deepRows,
                     discoverRootBound = false
                 )
-                val attrSnap  = currentValues(ui.attrs.reactiveAttrs)
-                val boolSnap  = currentValues(ui.attrs.reactiveBoolAttrs)
-                val classSnap = currentValues(ui.attrs.reactiveClasses)
-                val styleSnap = ui.attrs.reactiveStyle.map(s => CssStyleRenderer.declarations(SignalNow(s)))
+                val channels = Channels.of(ui)
+                val snapshot = channels.rendered
                 ReactiveUI(
                     path,
                     elementSignal,
@@ -311,14 +299,8 @@ private[kyo] object ReactiveUI:
                     at = regionIdentity,
                     rows = rows,
                     deepRows = deepRows,
-                    reactiveAttrs = ui.attrs.reactiveAttrs,
-                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
-                    reactiveClasses = ui.attrs.reactiveClasses,
-                    reactiveStyle = ui.attrs.reactiveStyle,
-                    renderedAttrValues = attrSnap,
-                    renderedBoolAttrValues = boolSnap,
-                    renderedClassValues = classSnap,
-                    renderedStyleValue = styleSnap,
+                    channels = channels,
+                    renderedChannels = snapshot,
                     frame = ui.frame
                 )
 
@@ -468,8 +450,7 @@ private[kyo] object ReactiveUI:
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Bounded => true
         case el: Element                                                 =>
-            collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
-            || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveStyle.nonEmpty
+            collectSignalRef(el).nonEmpty || el.attrs.hasChannels
         case _ => false
 
     /** The Fragment a Foreach paints for `items`: one KeyedChild per element, keyed by the key function (or
@@ -507,16 +488,6 @@ private[kyo] object ReactiveUI:
         else walkStatic(rowUI, rowPath, svg, context, parentContext, cells, rows, deepRows)
         end if
     end walkRow
-
-    /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
-      * map answers without a loop.
-      */
-    private def currentValues[A](channels: Map[String, Signal[A]])(using AllowUnsafe, Frame, SignalNow.Locals): Map[String, A] =
-        if channels.isEmpty then Map.empty[String, A]
-        else
-            val b = Map.newBuilder[String, A]
-            channels.foreach((n, s) => b += n -> SignalNow(s))
-            b.result()
 
     /** Walk a static UI tree. Collect reactive children, build handle. */
     private[internal] def walkStatic(
@@ -848,20 +819,7 @@ private[kyo] object ReactiveUI:
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying only reactive attrs is `isConst = true` and
         // would otherwise fork no observer of its own.
-        forkChannelObservers(
-            rui.path,
-            rui.reactiveAttrs,
-            rui.reactiveBoolAttrs,
-            rui.reactiveClasses,
-            exchange,
-            rui.frame,
-            rui.renderedAttrValues,
-            rui.renderedBoolAttrValues,
-            rui.renderedClassValues,
-            releases,
-            rui.reactiveStyle,
-            rui.renderedStyleValue
-        ).andThen {
+        forkChannelObservers(rui.path, rui.channels, rui.renderedChannels, exchange, rui.frame, releases).andThen {
             if rui.mounted.nonEmpty then
                 subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, pass, dispatch)
             else if rui.bounded.nonEmpty then
@@ -984,18 +942,8 @@ private[kyo] object ReactiveUI:
       */
     private[internal] def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
         content match
-            case el: Element
-                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
-                    || el.attrs.reactiveStyle.nonEmpty =>
-                forkChannelObservers(
-                    path,
-                    el.attrs.reactiveAttrs,
-                    el.attrs.reactiveBoolAttrs,
-                    el.attrs.reactiveClasses,
-                    exchange,
-                    el.frame,
-                    style = el.attrs.reactiveStyle
-                )
+            case el: Element if el.attrs.hasChannels =>
+                forkChannelObservers(path, Channels.of(el), RenderedChannels.empty, exchange, el.frame, Absent)
             case _ => Kyo.unit
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
@@ -1004,21 +952,15 @@ private[kyo] object ReactiveUI:
       */
     private def forkChannelObservers(
         path: Seq[String],
-        attrs: Map[String, Signal[String]],
-        boolAttrs: Map[String, Signal[Boolean]],
-        classes: Map[String, Signal[Boolean]],
+        channels: Channels,
+        rendered: RenderedChannels,
         exchange: UIExchange,
         // The node these channels belong to, for the devtools report.
         nodeFrame: Frame,
-        renderedAttrs: Map[String, String] = Map.empty,
-        renderedBools: Map[String, Boolean] = Map.empty,
-        renderedClasses: Map[String, Boolean] = Map.empty,
-        releases: Maybe[RowScope] = Absent,
-        style: Maybe[Signal[Style]] = Absent,
-        renderedStyle: Maybe[Seq[(String, String)]] = Absent
+        releases: Maybe[RowScope]
     )(using Frame): Unit < (Async & Scope) =
         // Most nodes bind no channel at all; they leave before the sink is read or a loop is set up.
-        if attrs.isEmpty && boolAttrs.isEmpty && classes.isEmpty && style.isEmpty then Kyo.unit
+        if channels.isEmpty then Kyo.unit
         else
             // Read once, at bind time, for the same reason bindTextRegion does: the fast path's write runs inside
             // the writer's `set`, with no effect context to read a `Local` from. With no sink installed both the
@@ -1032,7 +974,7 @@ private[kyo] object ReactiveUI:
                 // already shows it, while a change landing between render and subscribe differs from it and still fires.
                 def bindAll[A](
                     signals: Map[String, Signal[A]],
-                    rendered: Map[String, A],
+                    seen: Map[String, A],
                     patcher: Maybe[(Seq[String], String, A) => Unit],
                     slow: (String, A) => Unit < Async
                 )(using CanEqual[A, A]): Unit < (Async & Scope) =
@@ -1047,7 +989,7 @@ private[kyo] object ReactiveUI:
                                         report(cheapEvent(target, Absent, nodeFrame, UI.RenderKind.Channel(name)))
                                 )
                         Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
-                            val baseline = Maybe.fromOption(rendered.get(name))
+                            val baseline = Maybe.fromOption(seen.get(name))
                             now match
                                 case Present(patch) => bindChannel(sig, baseline, v => patch(path, name, v), releases)
                                 case Absent         =>
@@ -1072,7 +1014,7 @@ private[kyo] object ReactiveUI:
                     val decls                                                    = sig.map(CssStyleRenderer.declarations)
                     // Unsafe: one channel's own last write, read and replaced in one step by whichever of its writes runs, on
                     // the writer's stack (the synchronous sink) or on its fiber; it never leaves this observer.
-                    val last = new java.util.concurrent.atomic.AtomicReference[Seq[(String, String)]](renderedStyle.getOrElse(Nil))
+                    val last = new java.util.concurrent.atomic.AtomicReference[Seq[(String, String)]](rendered.style.getOrElse(Nil))
                     def step(next: Seq[(String, String)]): Seq[String] =
                         val names = next.iterator.map(_._1).toSet
                         last.getAndSet(next).map(_._1).filterNot(names.contains)
@@ -1084,7 +1026,7 @@ private[kyo] object ReactiveUI:
                                     next =>
                                         patch(path, next, step(next))
                                         report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel("style")))
-                            bindChannel(decls, renderedStyle, write, releases)
+                            bindChannel(decls, rendered.style, write, releases)
                         case Absent =>
                             val write: Seq[(String, String)] => Unit < Async = next =>
                                 Sync.defer(step(next)).map { removed =>
@@ -1100,14 +1042,14 @@ private[kyo] object ReactiveUI:
                                             ))))
                                     end match
                                 }
-                            Fiber.init(decls.observe(renderedStyle, Signal.defaultRepairInterval)(write)).unit
+                            Fiber.init(decls.observe(rendered.style, Signal.defaultRepairInterval)(write)).unit
                     end match
                 end bindStyle
 
-                bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
-                    .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
-                    .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
-                    .andThen(style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
+                bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+                    .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+                    .andThen(channels.style.fold(Kyo.unit: Unit < (Async & Scope))(bindStyle))
             }
     end forkChannelObservers
 

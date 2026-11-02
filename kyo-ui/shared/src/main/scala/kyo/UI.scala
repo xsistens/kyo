@@ -2267,7 +2267,11 @@ object UI:
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.
             reactiveStyle: Maybe[Signal[Style]] = Absent
-        )
+        ):
+            /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
+            def hasChannels: Boolean =
+                reactiveAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty || reactiveStyle.nonEmpty
+        end Attrs
 
         // ---- Non-element AST cases ----
 

@@ -72,8 +72,7 @@ private[kyo] object HtmlRenderer:
         ui match
             case _: Reactive[?] | _: Foreach[?, ?] => true
             case el: Element                       =>
-                el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty
-                || el.attrs.reactiveStyle.nonEmpty
+                el.attrs.hasChannels
                 || ReactiveUI.collectSignalRef(el).nonEmpty
                 || (el match
                     case ta: Textarea => hasSignalRefValue(ta.value)
@@ -1294,8 +1293,7 @@ private[kyo] object HtmlRenderer:
 
     private def addressedByClient(attrs: Attrs): Boolean =
         attrs.identifier.nonEmpty ||
-            attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
-            attrs.reactiveStyle.nonEmpty || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.hasChannels || attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
             attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
             attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
             attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
