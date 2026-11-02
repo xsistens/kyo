@@ -108,7 +108,7 @@ final case class MeterGroup private (
         if maxV <= 0 then 0.0 else math.max(0.0, math.min(100.0, v / maxV * 100.0))
 
     private def colorOf(m: MeterGroup.Meter, index: Int): Style.Color =
-        m.color.flatMap(CssValue.color).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
+        m.color.flatMap(Style.Color.parse).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
 
     private[uic] def render(using Frame): UI =
         val totalPct = math.round(pct(metersV.map(_.value).sum))

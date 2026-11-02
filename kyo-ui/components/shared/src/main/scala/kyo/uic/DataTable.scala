@@ -3233,7 +3233,7 @@ final case class DataTable[A] private (
         // and the sticky header and the frozen columns resolve against the same box in
         // both directions.
         if !windowOn then
-            scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
+            scrollHeightV.foreach(h => container = container.style(_.maxHeight(Length.parse(h))))
             container(tableEl)
         else
             // Prime's own nesting for a virtually scrolled table, which the extracted
