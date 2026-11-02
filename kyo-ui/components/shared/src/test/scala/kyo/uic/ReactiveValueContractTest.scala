@@ -540,6 +540,25 @@ abstract class ReactiveValueContract extends UicTest:
                 got  <- seen.get
             yield assert(got.size == 1 && got.head._1 == s.next && got.head._2 == s.next, s"reported, held: $got")
         }
+
+        s"${s.name}: a zoom is a ref: a gesture writes through it into the whole, and only its part" in s.laidOut {
+            for
+                whole <- Signal.initRef(Zoomed(s.start, 0))
+                part = whole.zoom(_.part)((w, a) => w.copy(part = a))
+                seen   <- Signal.initRef(Chunk.empty[(A, A)])
+                _      <- s.asked(s.render(s.hear(s.bind(part), v => part.get.map(h => seen.updateAndGet(_.append((v, h))).unit))))
+                got    <- seen.get
+                result <- whole.get
+            yield
+                assert(got.size == 1 && got.head._1 == s.next && got.head._2 == s.next, s"reported, held: $got")
+                assert(result == Zoomed(s.next, 0), s"the whole holds $result")
+            end for
+        }
     end heardBy
+
+    /** A value with a part a zoom binds, and a field beside it that no gesture may touch. */
+    final private case class Zoomed[A](part: A, other: Int)
+    private object Zoomed:
+        given [A](using CanEqual[A, A]): CanEqual[Zoomed[A], Zoomed[A]] = CanEqual.derived
 
 end ReactiveValueContract
