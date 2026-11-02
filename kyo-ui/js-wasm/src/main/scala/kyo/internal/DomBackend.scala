@@ -46,662 +46,119 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
-    /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
-    private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node)(using
-        Frame
-    ): Unit =
-        morphNodeRun(parent, fromStart, fromEnd, toStart, toEnd)
+    /** What a list patch read before anything moved, handed through [[MorphScript]] and back. */
+    final private class ListState(
+        val locator: Maybe[RangeFocus],
+        val selectionStart: Maybe[Int],
+        val selectionEnd: Maybe[Int],
+        val oldEnter: Set[String],
+        val oldFocusAuto: Set[String],
+        val ghosts: Seq[(dom.Element, dom.Element, String)]
+    )
 
-    /** The list patch, for the same table. */
+    /** [[MorphScript]] over this client's hooks, built once for the page. Reconciling a re-rendered region against its live nodes instead of
+      * replacing them is what keeps node identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
+      * DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays the fallback.
+      *
+      * A host whose `Content-Security-Policy` lacks `unsafe-eval` fails here, at mount, loudly (see `mountInto`).
+      */
+    private[kyo] lazy val morphScript: js.Dynamic =
+        given Frame                                               = Frame.internal
+        def elements(nodes: js.Array[dom.Node]): Seq[dom.Element] = nodes.toSeq.collect { case e: dom.Element => e }
+        val hooks                                                 = js.Dynamic.literal(
+            syncField = js.Any.fromFunction3((el: dom.Element, name: String, value: String) => syncFieldProperty(el, name, value)),
+            portalTwin = js.Any.fromFunction1((path: String) => portalTwin(path)),
+            rewrite = js.Any.fromFunction3((slot: dom.Node, twin: dom.Node, change: js.Function0[dom.Node]) =>
+                discard(DomReactiveRegions.rewriting(slot, twin)(Maybe(change())))
+            ),
+            beginAnimations = js.Any.fromFunction1((node: dom.Node) =>
+                node match
+                    case element: dom.Element => beginAnimationsSync(element)
+                    case _                    => ()
+            ),
+            // An onAttached hook may have put content of its own inside an element; the server-push client has no such hook.
+            guardAttached = true,
+            listBefore = js.Any.fromFunction3((target: js.Dynamic, disturbed: js.Array[dom.Node], repainted: js.Array[dom.Node]) =>
+                listBefore(target.scalaTarget.asInstanceOf[DomReactiveRegions.MorphTarget], elements(disturbed), elements(repainted))
+                    .asInstanceOf[js.Any]
+            ),
+            listAfter = js.Any.fromFunction3((state: js.Any, target: js.Dynamic, touched: js.Array[dom.Node]) =>
+                listAfter(state.asInstanceOf[ListState], target.scalaTarget.asInstanceOf[DomReactiveRegions.MorphTarget], elements(touched))
+            )
+        )
+        js.Dynamic.newInstance(js.Dynamic.global.Function)("h", MorphScript.js).asInstanceOf[js.Function1[js.Any, js.Dynamic]](hooks)
+    end morphScript
+
+    /** The reconciler of a live run, for the table that holds the two clients to one answer (`DomBackendMorphParityTest`). */
+    private[kyo] def morphRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node, toEnd: dom.Node): Unit =
+        discard(morphScript.run(parent, fromStart, fromEnd, toStart, toEnd))
+
+    /** Reconcile a list region against a row order rather than a rendered document. The payload holds only the rows that changed; every other
+      * row is named by key and stays where it is. Answers `false`, having changed nothing, when the rows are not individually addressable;
+      * the caller then repaints the whole list.
+      */
     private[kyo] def listPatch(
         target: DomReactiveRegions.MorphTarget,
         scope: DomReactiveRegions.PatchScope,
         path: Seq[String],
         rows: Seq[ListRow]
     )(using Frame): Boolean =
-        applyListPatch(target, scope, path, rows)
-
-    // ---- Range morph ---------------------------------------------------------------------------------------
-    //
-    // Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node identity
-    // across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a DOM-local expando
-    // holds. Replacing the range is always correct and always loses all of it, so it stays the fallback rather than
-    // the default. Twin of `__kyoMorphNode` and its neighbours in HtmlRenderer.clientJs; keep the two in lockstep.
-
-    /** Reconcile a live portal slot against the portal element the payload carries inline, and answer whether that
-      * is what this pair is.
-      *
-      * The pair matches when the incoming node is a portal element, the live node is the inert slot standing in for
-      * it at the same path, and the twin the first sweep parked under `<body>` is still there. The twin is then the
-      * node that gets reconciled; the slot stays exactly where it is. Anything else is not this case and reconciles
-      * the ordinary way.
-      *
-      * The twin sits outside the range being patched, so the range's own account of its markers does not reach it:
-      * the reconciliation runs as a registry rewrite, which retires the ranges inside the twin and reads back the
-      * ones standing there afterwards.
-      */
-    private def morphPortalPair(from: dom.Node, to: dom.Node)(using Frame): Boolean =
-        (from.nodeType == dom.Node.ELEMENT_NODE && to.nodeType == dom.Node.ELEMENT_NODE) && {
-            val slot     = from.asInstanceOf[dom.Element]
-            val incoming = to.asInstanceOf[dom.Element]
-            val path     = incoming.getAttribute("data-kyo-path")
-            path != null &&
-            incoming.hasAttribute("data-kyo-portal") &&
-            slot.getAttribute("data-kyo-portal-slot") == path && {
-                val twin = portalTwin(path)
-                (twin != null) && {
-                    discard(DomReactiveRegions.rewriting(slot, twin) {
-                        morphEl(twin, incoming)
-                        Present(twin)
-                    })
-                    true
-                }
-            }
-        }
-
-    /** Whether `to` can be reconciled onto `from` in place, or has to replace it outright. */
-    private def morphCompatible(from: dom.Node, to: dom.Node): Boolean =
-        from.nodeType == to.nodeType && {
-            if from.nodeType != dom.Node.ELEMENT_NODE then true
-            else
-                val fromEl = from.asInstanceOf[dom.Element]
-                val toEl   = to.asInstanceOf[dom.Element]
-                fromEl.tagName == toEl.tagName && fromEl.namespaceURI == toEl.namespaceURI
-        }
-
-    /** Reconcile one live node toward `toNode`. A node of a different kind or tag cannot be patched into the target,
-      * so it is replaced; everything else keeps its identity.
-      */
-    private def morphNode(fromNode: dom.Node, toNode: dom.Node)(using Frame): Unit =
-        if fromNode.nodeType != dom.Node.ELEMENT_NODE then
-            if fromNode.nodeValue != toNode.nodeValue then fromNode.nodeValue = toNode.nodeValue
-        else morphEl(fromNode.asInstanceOf[dom.Element], toNode.asInstanceOf[dom.Element])
-
-    private def morphEl(fromEl: dom.Element, toEl: dom.Element)(using Frame): Unit =
-        // The same element value shown again, with an onAttached hook that may have put content of its own inside: kyo's
-        // children of it are unchanged too, and reconciling them would remove what the hook put there.
-        val attached  = fromEl.getAttribute("data-kyo-attach")
-        val unchanged = attached != null && attached == toEl.getAttribute("data-kyo-attach")
-        morphAttrs(fromEl, toEl)
-        // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its subtree
-        // alone (INPUT and TEXTAREA have no element children, so they need no such guard).
-        val editing = (fromEl eq document.activeElement) && fromEl.hasAttribute("contenteditable")
-        if !editing && !unchanged then morphChildren(fromEl, toEl)
-    end morphEl
-
-    private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
-        val tag         = fromEl.tagName
-        val activeInput = (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
-        // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries the
-        // client-set value, so reconciling would clobber it. Twin of the `own` shield in `__kyoMorphAttrs`.
-        val owned = ownedAttrs(fromEl)
-        // Read before the walk below moves the attribute: whether the previous render had the control on.
-        val toggle   = toggleAttr(tag)
-        val toggled  = toggle != null && !owned.exists(_.contains(toggle))
-        val renderOn = toggled && fromEl.hasAttribute(toggle)
-        val toAttrs  = toEl.attributes
-        var i        = 0
-        while i < toAttrs.length do
-            val attribute = toAttrs(i)
-            val name      = attribute.name
-            if !owned.exists(_.contains(name)) then
-                if fromEl.getAttribute(name) != attribute.value then fromEl.setAttribute(name, attribute.value)
-                // A field renders its `value` PROPERTY, and the property stops tracking the attribute the first time
-                // the user types. Writing the attribute alone is therefore invisible on any field that has been typed
-                // into: a ref write that clears it leaves the typed text on screen. The attribute may even be
-                // unchanged in that case (both empty), so the property is written on every pass rather than only when
-                // the attribute moves. The focused field is the exception the block below owns: overwriting its live
-                // value with its own echo would move the caret.
-                if !activeInput then syncFieldProperty(fromEl, name, attribute.value)
-            end if
-            i += 1
-        end while
-        // A textarea carries its value as content, never as a `value` attribute, so the walk above cannot reach its
-        // property: mirror the content instead, under the same focus rule. Only a content that moved is a value write;
-        // an unbound textarea renders the same content on every pass and keeps what the user typed, as an unbound
-        // input does. The children are not morphed yet, so `fromEl` still holds the previous content.
-        if !activeInput && tag == "TEXTAREA" && fromEl.textContent != toEl.textContent then
-            syncFieldProperty(fromEl, "value", toEl.textContent)
-        // Remove attributes gone from `to`. Walk the live NamedNodeMap backward so a removal never shifts an index
-        // still to be visited (no intermediate collection allocated).
-        val fromAttrs = fromEl.attributes
-        var j         = fromAttrs.length - 1
-        while j >= 0 do
-            val name = fromAttrs(j).name
-            if !owned.exists(_.contains(name)) && !toEl.hasAttribute(name) then fromEl.removeAttribute(name)
-            j -= 1
-        end while
-        // A checkbox, a radio and an option show their PROPERTY once the reader has toggled them, and the property
-        // no longer follows the attribute, so a render that turns the control on or off has to write the property.
-        // A box the render binds says so (`data-kyo-bound`) and shows the render's state on every pass, so a repaint
-        // takes back a tick the app did not accept. A free control is written only on a change of the rendered state:
-        // it renders no attribute when off, so writing on every pass would take the reader's tick from every unbound
-        // box in a repainted region. Twin of `__kyoMorphAttrs`.
-        if toggled then
-            val on   = toEl.hasAttribute(toggle)
-            val live = fromEl.asInstanceOf[js.Dynamic].selectDynamic(toggle).asInstanceOf[Boolean]
-            if if toEl.hasAttribute("data-kyo-bound") then live != on else on != renderOn then
-                fromEl.asInstanceOf[js.Dynamic].updateDynamic(toggle)(on)
-        end if
-        restoreJsProps(fromEl, toEl)
-        // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
-        // focused field's live `.value` (its caret) with its own echo (the value already matches); assign only a
-        // genuine external change (a submit-clear, a programmatic update). A field the render binds says so the way
-        // the unfocused path reads it: an input carries a `value` attribute, a textarea's content moved. An unbound
-        // field carries neither and keeps what the reader typed.
-        if activeInput then
-            val incoming: Maybe[String] =
-                if tag == "TEXTAREA" then
-                    if fromEl.textContent != toEl.textContent then Present(toEl.textContent) else Absent
-                else Maybe(toEl.getAttribute("value"))
-            val dynamic = fromEl.asInstanceOf[js.Dynamic]
-            incoming.foreach(v => if dynamic.value.asInstanceOf[String] != v then dynamic.value = v)
-        end if
-    end morphAttrs
-
-    /** The attribute that turns an element's toggle on (`checked` for an input, `selected` for an option), or null
-      * for an element with none. An input that is neither a checkbox nor a radio ignores `checked`, so the name
-      * applies to every input.
-      */
-    private def toggleAttr(tag: String): String =
-        if tag == "INPUT" then "checked" else if tag == "OPTION" then "selected" else null
-
-    /** Give back every JS property a previous render set on `el` and the incoming one no longer carries.
-      *
-      * [[applyJsPropsSync]] removes the `data-kyo-prop-*` attribute once it has assigned the property, so the
-      * attribute walk cannot see a property leave. The value the element had before the first assignment is kept
-      * on the element (`__kyoProps`) and assigned back here, which is how a checkbox that leaves the mixed state
-      * loses its dash. Mirrors `__kyoRestoreProps` in HtmlRenderer.reactiveRangesJs.
-      */
-    private def restoreJsProps(el: dom.Element, incoming: dom.Element): Unit =
-        val d = el.asInstanceOf[js.Dynamic]
-        if !js.isUndefined(d.__kyoProps) then
-            val props = d.__kyoProps.asInstanceOf[js.Dictionary[js.Dynamic]]
-            props.keys.toSeq.foreach { name =>
-                if !incoming.hasAttribute(JsPropPrefix + name) then
-                    d.updateDynamic(name)(props(name).base)
-                    discard(props.remove(name))
-            }
-        end if
-    end restoreJsProps
-
-    private def morphChildren(fromParent: dom.Element, toParent: dom.Element)(using Frame): Unit =
-        morphNodeRun(fromParent, fromParent.firstChild, null, toParent.firstChild, null)
-
-    // ---- logical children ----------------------------------------------------------------------------------
-    //
-    // A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling walk it
-    // looks like several unrelated children. It is one: the markers carry the identity the registry is keyed by, and
-    // pairing them up positionally would rewrite marker text and hand the registry a range that is no longer there.
-    // The morph therefore walks LOGICAL children, where an opening marker stands for its whole span.
-
-    /** The reconciliation key of a logical child: an element's `data-kyo-path`, a span's range id, else `Absent` for
-      * text and plain comments, which reconcile positionally. A portal slot carries no path of its own and is keyed
-      * by the path of the element it stands in for, so the incoming portal element finds it wherever it sits.
-      */
-    private def logicalKey(node: dom.Node): Maybe[String] =
-        if node.nodeType == dom.Node.ELEMENT_NODE then
-            val element = node.asInstanceOf[dom.Element]
-            val path    = element.getAttribute("data-kyo-path")
-            Maybe(if path != null then path else element.getAttribute("data-kyo-portal-slot"))
-        else DomReactiveRegions.startMarkerId(node).filter(id => spanClose(node, id).nonEmpty)
-
-    /** The next logical sibling: past the whole span for an opening marker, the next node otherwise. */
-    private def logicalNext(node: dom.Node): dom.Node =
-        val close: Maybe[dom.Node] = DomReactiveRegions.startMarkerId(node).flatMap(spanClose(node, _))
-        close match
-            case Present(marker) => marker.nextSibling
-            case Absent          => node.nextSibling
-    end logicalNext
-
-    private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
-        eachSpanNode(node)(current => discard(parent.removeChild(current)))
-
-    /** Insert a live copy of the logical child starting at `toNode` before `ref`, returning the copy's first node. */
-    private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node): dom.Node =
-        var first: dom.Node = null
-        eachSpanNode(toNode) { current =>
-            val fresh = document.importNode(current, true)
-            if first == null then first = fresh
-            discard(parent.insertBefore(fresh, ref))
-            // SMIL animations only start on a node this pass actually inserted; a reused one is already running, and
-            // restarting it every paint would snap a chart transition back to its beginning.
-            fresh match
-                case element: dom.Element => beginAnimationsSync(element)
-                case _                    => ()
-        }
-        first
-    end insertLogicalClone
-
-    /** Reconcile the live logical run `[fromStart, fromEnd)` of `parent` (null meaning the end of the parent) toward
-      * `[toStart, toEnd)`, which lives in a detached fragment, keeping the identity of every node that lines up.
-      */
-    private def morphNodeRun(
-        parent: dom.Element,
-        fromStart: dom.Node,
-        fromEnd: dom.Node,
-        toStart: dom.Node,
-        toEnd: dom.Node
-    )(using Frame): Unit =
-        wrapInIncomingRange(parent, fromStart, fromEnd, toStart, toEnd) match
-            case Present((liveClose, close)) => morphNodeRun(parent, fromStart, liveClose, toStart.nextSibling, close)
-            case Absent                      => morphKeyedRun(parent, fromStart, fromEnd, toStart, toEnd)
-    end morphNodeRun
-
-    /** Wraps a bare live run in the one range the incoming run consists of, answering the live close marker it put after
-      * the run and the incoming one, or `Absent` when the runs are not that pair.
-      *
-      * A mount paints its placeholder bare into its slot, and its content arrives inside a range of its own. Taken as an
-      * element against a span, that pair is replaced whole, and with it every node of a placeholder built like its
-      * content and everything hanging off those nodes: focus, the reader's scroll anchor, an editor attached to one.
-      * Wrapping the live run in the incoming range and reconciling the range's content against it gives the same markup
-      * and keeps those nodes. A run holding a range of its own does not qualify: that one is reconciled pair by pair.
-      */
-    private def wrapInIncomingRange(
-        parent: dom.Element,
-        fromStart: dom.Node,
-        fromEnd: dom.Node,
-        toStart: dom.Node,
-        toEnd: dom.Node
-    ): Maybe[(dom.Node, dom.Node)] =
-        if toStart == null || fromStart == null || (fromStart eq fromEnd) then Absent
-        else
-            DomReactiveRegions.startMarkerId(toStart)
-                .flatMap(id => spanClose(toStart, id))
-                .filter(close => (close.nextSibling eq toEnd) && holdsNoRange(fromStart, fromEnd))
-                .map { close =>
-                    discard(parent.insertBefore(document.importNode(toStart, false), fromStart))
-                    (parent.insertBefore(document.importNode(close, false), fromEnd), close)
-                }
-
-    /** Whether the live run `[start, end)` holds no range marker at its own level. */
-    private def holdsNoRange(start: dom.Node, end: dom.Node): Boolean =
-        var scan = start
-        var none = true
-        while none && scan != null && !(scan eq end) do
-            if DomReactiveRegions.startMarkerId(scan).nonEmpty then none = false
-            scan = scan.nextSibling
-        none
-    end holdsNoRange
-
-    /** Reconcile the live logical run `[fromStart, fromEnd)` of `parent` toward `[toStart, toEnd)`.
-      *
-      * A two-ended keyed pass runs first, then a single cursor over whatever it could not settle. The cursor alone
-      * can only insert IN FRONT of itself, so a key it finds behind itself has to be dragged forward past every
-      * sibling in between: swapping two rows of a thousand costs 997 moves and a full relayout. Matching both ends
-      * first relocates only the children that actually changed place, two for that swap and none for a removal in
-      * the middle.
-      */
-    private def morphKeyedRun(
-        parent: dom.Element,
-        fromStart: dom.Node,
-        fromEnd: dom.Node,
-        toStart: dom.Node,
-        toEnd: dom.Node
-    )(using Frame): Unit =
-        val fromNodes = js.Array[dom.Node]()
-        val fromKeys  = js.Array[String]()
-        val toNodes   = js.Array[dom.Node]()
-        val toKeys    = js.Array[String]()
-        collectLogical(fromStart, fromEnd, fromNodes, fromKeys)
-        collectLogical(toStart, toEnd, toNodes, toKeys)
-
-        var fromKeyed: js.Dictionary[dom.Node] = null
-        var toKeyed: js.Dictionary[Boolean]    = null
-        var i                                  = 0
-        while i < fromKeys.length do
-            if fromKeys(i) != null then
-                if fromKeyed == null then fromKeyed = js.Dictionary.empty[dom.Node]
-                fromKeyed(fromKeys(i)) = fromNodes(i)
-            i += 1
-        end while
-        i = 0
-        while i < toKeys.length do
-            if toKeys(i) != null then
-                if toKeyed == null then toKeyed = js.Dictionary.empty[Boolean]
-                toKeyed(toKeys(i)) = true
-            i += 1
-        end while
-
-        // Invariant: the children still to place are exactly fromNodes[head..tail], a contiguous DOM run ending
-        // immediately before `tailBoundary`. Only run boundaries are ever moved, and only out to a boundary, so the
-        // run stays contiguous and the snapshot stays valid.
-        var head         = 0
-        var tail         = fromNodes.length - 1
-        var toHead       = 0
-        var toTail       = toNodes.length - 1
-        var tailBoundary = fromEnd
-        var scanning     = true
-        while scanning && head <= tail && toHead <= toTail do
-            // Unkeyed at either end: positional reconciliation is the cursor's job, so hand over.
-            if fromKeys(head) == null || fromKeys(tail) == null || toKeys(toHead) == null || toKeys(toTail) == null
-            then scanning = false
-            else if fromKeys(head) == toKeys(toHead) then
-                discard(patchLogical(parent, fromNodes(head), toNodes(toHead)))
-                head += 1
-                toHead += 1
-            else if fromKeys(tail) == toKeys(toTail) then
-                tailBoundary = patchLogical(parent, fromNodes(tail), toNodes(toTail))
-                tail -= 1
-                toTail -= 1
-            else if fromKeys(head) == toKeys(toTail) then
-                // The run's head belongs at its tail. A single remaining child already sits there.
-                if head != tail then moveLogicalBefore(parent, fromNodes(head), tailBoundary)
-                tailBoundary = patchLogical(parent, fromNodes(head), toNodes(toTail))
-                head += 1
-                toTail -= 1
-            else if fromKeys(tail) == toKeys(toHead) then
-                if tail != head then moveLogicalBefore(parent, fromNodes(tail), fromNodes(head))
-                discard(patchLogical(parent, fromNodes(tail), toNodes(toHead)))
-                tail -= 1
-                toHead += 1
-            else scanning = false
-            end if
-        end while
-
-        // Hand the unresolved middle to the cursor. The dictionaries stay whole: keys are unique among siblings, so
-        // a key consumed at an end cannot be asked for again from the middle.
-        val cursorFrom  = if head <= tail then fromNodes(head) else tailBoundary
-        val cursorToEnd = if toTail + 1 < toNodes.length then toNodes(toTail + 1) else toEnd
-        val cursorTo    = if toHead <= toTail then toNodes(toHead) else cursorToEnd
-        morphRangeCursor(parent, cursorFrom, tailBoundary, cursorTo, cursorToEnd, fromKeyed, toKeyed)
-    end morphKeyedRun
-
-    /** Snapshot the logical children of `[start, end)` into `nodes` and their keys into `keys`, null where unkeyed.
-      * One pass: the two-ended walk reads keys four times per step, and finding a span's close marker is not free.
-      */
-    private def collectLogical(
-        start: dom.Node,
-        end: dom.Node,
-        nodes: js.Array[dom.Node],
-        keys: js.Array[String]
-    ): Unit =
-        var scan = start
-        while scan != null && !(scan eq end) do
-            discard(nodes.push(scan))
-            discard(keys.push(logicalKey(scan).getOrElse(null)))
-            scan = logicalNext(scan)
-        end while
-    end collectLogical
-
-    /** Single-cursor reconciliation of whatever the two-ended pass left over: a keyed child is pulled to the cursor
-      * by key, an unkeyed one morphs positionally against the first compatible live child.
-      */
-    private def morphRangeCursor(
-        parent: dom.Element,
-        fromStart: dom.Node,
-        fromEnd: dom.Node,
-        toStart: dom.Node,
-        toEnd: dom.Node,
-        fromKeyed: js.Dictionary[dom.Node],
-        toKeyed: js.Dictionary[Boolean]
-    )(using Frame): Unit =
-        var curFrom = fromStart
-        var curTo   = toStart
-        while curTo != null && !(curTo eq toEnd) do
-            val toNext = logicalNext(curTo)
-            val toKey  = logicalKey(curTo).getOrElse(null)
-            if toKey != null then
-                val match_ = if fromKeyed != null then fromKeyed.get(toKey).orNull else null
-                if match_ != null then
-                    if match_ ne curFrom then moveLogicalBefore(parent, match_, curFrom)
-                    else curFrom = logicalNext(curFrom)
-                    discard(patchLogical(parent, match_, curTo))
-                else discard(insertLogicalClone(parent, curTo, curFrom))
-                end if
-            else
-                var handled = false
-                var loop    = true
-                while loop && curFrom != null && !(curFrom eq fromEnd) do
-                    val fromNext = logicalNext(curFrom)
-                    val fromKey  = logicalKey(curFrom).getOrElse(null)
-                    if fromKey != null then
-                        // A keyed live child at an unkeyed slot: keep it if the payload reuses it elsewhere (its
-                        // own slot moves it into place), else it is stale and goes.
-                        if toKeyed == null || !toKeyed.contains(fromKey) then removeLogical(parent, curFrom)
-                        curFrom = fromNext
-                    else if morphCompatible(curFrom, curTo) then
-                        morphNode(curFrom, curTo)
-                        curFrom = fromNext
-                        handled = true
-                        loop = false
-                    else
-                        removeLogical(parent, curFrom)
-                        curFrom = fromNext
-                    end if
-                end while
-                if !handled then discard(insertLogicalClone(parent, curTo, curFrom))
-            end if
-            curTo = toNext
-        end while
-        while curFrom != null && !(curFrom eq fromEnd) do
-            val fromNext = logicalNext(curFrom)
-            removeLogical(parent, curFrom)
-            curFrom = fromNext
-        end while
-    end morphRangeCursor
-
-    /** Reconcile a list region against a row order rather than a rendered document.
-      *
-      * The payload holds only the rows that changed; every other row is named by key and stays where it is. That
-      * is the whole point: a retained row costs one string comparison here, where a whole-list repaint pays a
-      * render, a parse and a reconciliation for it. The walk itself is the same two-ended keyed pass
-      * [[morphNodeRun]] uses, with the row order standing in for the `to` side.
-      *
-      * Answers `false`, having changed nothing, when the rows are not individually addressable: a row that paints
-      * as several roots or as none has no single key naming its DOM, and a live range that disagrees with the
-      * region about which rows are on screen cannot be matched either. The caller then repaints the whole list,
-      * which needs no such structure because it diffs whole documents.
-      */
-    private def applyListPatch(
-        target: DomReactiveRegions.MorphTarget,
-        scope: DomReactiveRegions.PatchScope,
-        path: Seq[String],
-        rows: Seq[ListRow]
-    )(using Frame): Boolean =
-        val parent   = target.parent.asInstanceOf[dom.Element]
         val pathAttr = path.mkString(".")
+        val keys     = js.Array[String]()
+        val changed  = js.Array[Boolean]()
+        rows.foreach { row =>
+            discard(keys.push(if pathAttr.isEmpty then row.key else s"$pathAttr.${row.key}"))
+            discard(changed.push(row.changed))
+        }
+        val scriptTarget = js.Dynamic.literal(
+            parent = target.parent,
+            start = target.start,
+            end = target.end,
+            fragment = target.fragment,
+            scalaTarget = target.asInstanceOf[js.Any]
+        )
+        val scriptScope = js.Dynamic.literal(
+            retire = js.Any.fromFunction1((first: dom.Node) => scope.retire(first)),
+            placed = js.Any.fromFunction2((first: dom.Node, until: dom.Node) => scope.placed(first, until))
+        )
+        morphScript.applyList(scriptTarget, scriptScope, keys, changed).asInstanceOf[Boolean]
+    end listPatch
 
-        val parsedKeyed      = js.Dictionary.empty[dom.Node]
-        var parsedCount      = 0
-        var parsed: dom.Node = target.fragment.firstChild
-        while parsed != null do
-            logicalKey(parsed).foreach(key => parsedKeyed(key) = parsed)
-            parsedCount += 1
-            parsed = logicalNext(parsed)
-        end while
+    /** What a list patch reads before anything moves. Focus spans the whole region, not just the disturbed rows: a retained row keeps its DOM,
+      * but moving it is a remove and an insert, which blurs whatever it holds, so a pure reorder is the case that would drop the caret.
+      */
+    private def listBefore(target: DomReactiveRegions.MorphTarget, disturbed: Seq[dom.Element], repainted: Seq[dom.Element]): ListState =
+        val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(target.oldElements, el))
+        val (selectionStart, selectionEnd) = active.map(readSelection).getOrElse((Absent, Absent))
+        new ListState(
+            active.flatMap(focusLocator(target.oldElements, _)),
+            selectionStart,
+            selectionEnd,
+            enterPaths(repainted),
+            focusAutoPaths(repainted),
+            prepareLeaveGhosts(disturbed, leavePaths(target.newElements))
+        )
+    end listBefore
 
-        val fromNodes = js.Array[dom.Node]()
-        val fromKeys  = js.Array[String]()
-        collectLogical(target.start.nextSibling, target.end, fromNodes, fromKeys)
-        val fromKeyed = js.Dictionary.empty[dom.Node]
-        var i         = 0
-        while i < fromKeys.length do
-            if fromKeys(i) != null then fromKeyed(fromKeys(i)) = fromNodes(i)
-            i += 1
-        end while
-
-        val toKeys       = js.Array[String]()
-        val toNodes      = js.Array[dom.Node]()
-        val changedCount = rows.count(_.changed)
-        var addressable  = parsedCount == changedCount && parsedKeyed.size == changedCount
-        i = 0
-        while addressable && i < rows.length do
-            val row  = rows(i)
-            val key  = if pathAttr.isEmpty then row.key else s"$pathAttr.${row.key}"
-            val node = if row.changed then parsedKeyed.get(key).orNull else null
-            addressable = if row.changed then node != null else fromKeyed.contains(key)
-            discard(toKeys.push(key))
-            discard(toNodes.push(node))
-            i += 1
-        end while
-        if !addressable then false
-        else
-            // A retained row is bit-identical before and after, so it can contribute nothing to the enter, leave
-            // or focus-auto sets: only the rows leaving and the rows being repainted are read. Scanning the rest
-            // would be one whole-subtree query per row per set, for entries nothing can match.
-            val targetKeys = js.Dictionary.empty[Boolean]
-            i = 0
-            while i < toKeys.length do
-                targetKeys(toKeys(i)) = true
-                i += 1
-            end while
-            val leaving = js.Array[dom.Node]()
-            i = 0
-            while i < fromKeys.length do
-                if fromKeys(i) == null || !targetKeys.contains(fromKeys(i)) then discard(leaving.push(fromNodes(i)))
-                i += 1
-            end while
-            val repainted = js.Array[dom.Node]()
-            i = 0
-            while i < toKeys.length do
-                if toNodes(i) != null then
-                    val live = fromKeyed.get(toKeys(i)).orNull
-                    if live != null then discard(repainted.push(live))
-                i += 1
-            end while
-
-            // Told before anything moves: the morph may drop markers, and a dropped marker's id is unreadable after.
-            i = 0
-            while i < leaving.length do
-                scope.retire(leaving(i))
-                i += 1
-            end while
-            i = 0
-            while i < repainted.length do
-                scope.retire(repainted(i))
-                i += 1
-            end while
-
-            // Focus spans the WHOLE region, not just the disturbed rows: a retained row keeps its DOM, but MOVING
-            // it is a remove and an insert, which blurs whatever it holds. A pure reorder disturbs no row at all
-            // and is precisely the case that would drop the caret if this were scoped to the disturbed ones.
-            val active = Maybe(document.activeElement)
-                .filter(el => (el ne document.body) && containsAny(target.oldElements, el))
-            val locator                        = active.flatMap(focusLocator(target.oldElements, _))
-            val (selectionStart, selectionEnd) = active.map(readSelection).getOrElse((Absent, Absent))
-            val disturbed                      = logicalElementsOf(leaving) ++ logicalElementsOf(repainted)
-            val survivors                      = leavePaths(target.newElements)
-            val oldEnter                       = enterPaths(logicalElementsOf(repainted))
-            val oldFocusAuto                   = focusAutoPaths(logicalElementsOf(repainted))
-            val ghosts                         = prepareLeaveGhosts(disturbed, survivors)
-
-            val touched = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
-
-            /** Patches a row in place or replaces it, and answers the node that now starts it. */
-            def place(from: dom.Node, index: Int): dom.Node =
-                val to = toNodes(index)
-                if to == null then from
-                else
-                    // Where the result will stand: a patch may replace `from` outright, so the run is bracketed by
-                    // its neighbours rather than named by a node that might not survive.
-                    val before = from.previousSibling
-                    val until  = logicalNext(from)
-                    val at     = patchLogical(parent, from, to)
-                    scope.placed(if before == null then parent.firstChild else before.nextSibling, until)
-                    if at ne from then logicalElementsOf(js.Array(at)).foreach(touched += _)
-                    else
-                        from match
-                            case element: dom.Element => touched += element
-                            case _                    => ()
-                    end if
-                    at
-                end if
-            end place
-
-            var head                   = 0
-            var tail                   = fromNodes.length - 1
-            var toHead                 = 0
-            var toTail                 = toKeys.length - 1
-            var tailBoundary: dom.Node = target.end
-            var scanning               = true
-            while scanning && head <= tail && toHead <= toTail do
-                if fromKeys(head) == null || fromKeys(tail) == null then scanning = false
-                else if fromKeys(head) == toKeys(toHead) then
-                    discard(place(fromNodes(head), toHead))
-                    head += 1
-                    toHead += 1
-                else if fromKeys(tail) == toKeys(toTail) then
-                    tailBoundary = place(fromNodes(tail), toTail)
-                    tail -= 1
-                    toTail -= 1
-                else if fromKeys(head) == toKeys(toTail) then
-                    if head != tail then moveLogicalBefore(parent, fromNodes(head), tailBoundary)
-                    tailBoundary = place(fromNodes(head), toTail)
-                    head += 1
-                    toTail -= 1
-                else if fromKeys(tail) == toKeys(toHead) then
-                    if tail != head then moveLogicalBefore(parent, fromNodes(tail), fromNodes(head))
-                    discard(place(fromNodes(tail), toHead))
-                    tail -= 1
-                    toHead += 1
-                else scanning = false
-                end if
-            end while
-
-            // The unresolved middle, by key: every remaining row either names a live node, which moves into place,
-            // or is new, which is cloned in. Rows the order no longer names are removed at the end.
-            var cursor: dom.Node = if head <= tail then fromNodes(head) else tailBoundary
-            var index            = toHead
-            while index <= toTail do
-                val key  = toKeys(index)
-                val live = fromKeyed.get(key).orNull
-                if live != null then
-                    if live ne cursor then moveLogicalBefore(parent, live, cursor)
-                    else cursor = logicalNext(cursor)
-                    discard(place(live, index))
-                else
-                    toNodes(index) match
-                        case null => ()
-                        case node =>
-                            val before   = cursor.previousSibling
-                            val inserted = insertLogicalClone(parent, node, cursor)
-                            scope.placed(if before == null then parent.firstChild else before.nextSibling, cursor)
-                            logicalElementsOf(js.Array(inserted)).foreach(touched += _)
-                end if
-                index += 1
-            end while
-            i = 0
-            while i < fromKeys.length do
-                val key = fromKeys(i)
-                if key == null || !targetKeys.contains(key) then
-                    if document.contains(fromNodes(i)) then removeLogical(parent, fromNodes(i))
-                i += 1
-            end while
-
-            val live = elementsBetweenLive(target)
-            live.foreach(applyJsPropsSync)
-            locator.flatMap(resolveFocus(live, _)).foreach { element =>
-                focusNoScroll(element)
-                (selectionStart, selectionEnd) match
-                    case (Present(start), Present(end)) => setSelection(element, start, end)
-                    case _                              => ()
-            }
-            seedEnter(touched.toSeq, oldEnter)
-            seedFocusAuto(touched.toSeq, oldFocusAuto)
-            touched.foreach(adoptPortals)
-            retireOrphanTwins()
-            spawnGhosts(ghosts)
-            sweepFocusAuto()
-            sweepScrollAuto()
-            sweepFilled()
-            true
-        end if
-    end applyListPatch
-
-    /** The elements of a set of logical children, each span contributing the elements it brackets. */
-    private def logicalElementsOf(nodes: js.Array[dom.Node]): Seq[dom.Element] =
-        val out = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
-        var i   = 0
-        while i < nodes.length do
-            eachSpanNode(nodes(i)) {
-                case element: dom.Element => out += element
-                case _                    => ()
-            }
-            i += 1
-        end while
-        out.toSeq
-    end logicalElementsOf
+    /** What a list patch does once the rows stand: the properties, focus and caret, enter and focus seeds, portals, ghosts, sweeps. */
+    private def listAfter(state: ListState, target: DomReactiveRegions.MorphTarget, touched: Seq[dom.Element]): Unit =
+        val live = elementsBetweenLive(target)
+        live.foreach(applyJsPropsSync)
+        state.locator.flatMap(resolveFocus(live, _)).foreach { element =>
+            focusNoScroll(element)
+            (state.selectionStart, state.selectionEnd) match
+                case (Present(start), Present(end)) => setSelection(element, start, end)
+                case _                              => ()
+        }
+        seedEnter(touched, state.oldEnter)
+        seedFocusAuto(touched, state.oldFocusAuto)
+        touched.foreach(adoptPortals)
+        retireOrphanTwins()
+        spawnGhosts(state.ghosts)
+        sweepFocusAuto()
+        sweepScrollAuto()
+        sweepFilled()
+    end listAfter
 
     private def elementsBetweenLive(target: DomReactiveRegions.MorphTarget): Seq[dom.Element] =
         val out            = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
@@ -714,72 +171,6 @@ private[kyo] object DomBackend:
         end while
         out.toSeq
     end elementsBetweenLive
-
-    private def moveLogicalBefore(parent: dom.Element, node: dom.Node, ref: dom.Node): Unit =
-        eachSpanNode(node)(current => discard(parent.insertBefore(current, ref)))
-
-    private def hasFlag(flags: String, flag: String): Boolean =
-        flags.nonEmpty && flags.split(' ').exists(_ == flag)
-
-    private def flagKey(flags: String): Maybe[String] =
-        if flags.isEmpty then Absent
-        else Maybe.fromOption(flags.split(' ').find(_.startsWith("k=")).map(_.substring(2)))
-
-    /** The flag section a live marker carries once it has adopted the slot: `m`, and the key it adopted. */
-    private def adoptedFlags(key: Maybe[String]): String =
-        key match
-            case Present(value) => s" m k=$value"
-            case Absent         => " m"
-
-    /** Reconcile one matched pair of logical children.
-      *
-      * Two spans of the same id are the same region still sitting here, so the pass recurses into their contents and
-      * never touches the live markers: the registry stays keyed by the nodes it already holds. Any other mismatch,
-      * including a span against a plain node, is replaced whole, markers and all. Answers the node that starts the
-      * slot afterwards: `fromNode` when it was reconciled in place, the first node of its replacement otherwise.
-      */
-    private def patchLogical(parent: dom.Element, fromNode: dom.Node, toNode: dom.Node)(using Frame): dom.Node =
-        val fromSpan = DomReactiveRegions.startMarkerId(fromNode).flatMap(id => spanClose(fromNode, id).map((id, _)))
-        val toSpan   = DomReactiveRegions.startMarkerId(toNode).flatMap(id => spanClose(toNode, id).map((id, _)))
-        (fromSpan, toSpan) match
-            case (Present((fromId, fromClose)), Present((toId, toClose))) if fromId == toId =>
-                val liveFlags     = DomReactiveRegions.markerFlags(fromNode)
-                val incomingFlags = DomReactiveRegions.markerFlags(toNode)
-                val incomingSlot  = hasFlag(incomingFlags, "s")
-                // A mount that already owns this slot repaints its own content, so the span is opaque and its live
-                // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
-                // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
-                // is what makes that safe. A differing key means a different instance, which falls through to the
-                // morph and resets the slot.
-                //
-                // A NAMED slot is opaque from the first pass, not from the second. `m` says the client adopted the
-                // span; `s` with the same key says the same thing one beat earlier, because the render that emitted
-                // the slot named the instance that owns it. Waiting for `m` would cost one destructive morph per slot,
-                // and the damage would not stay in the DOM: the regions inside the discarded subtree leave the
-                // registry with it, the instance republishes asynchronously, and a subscription that emits in between
-                // dies on an unknown range and never paints again. An UNNAMED slot waits for `m`: without a key there
-                // is nothing to tell one instance from the next, and a keyless mount is rebuilt by every enclosing
-                // emission by design.
-                val namedSlot = flagKey(incomingFlags).isDefined && flagKey(liveFlags) == flagKey(incomingFlags)
-                val ownsSlot  = hasFlag(liveFlags, "m") || (namedSlot && hasFlag(liveFlags, "s"))
-                if ownsSlot && incomingSlot && flagKey(liveFlags) == flagKey(incomingFlags) then ()
-                else
-                    morphNodeRun(parent, fromNode.nextSibling, fromClose, toNode.nextSibling, toClose)
-                    if incomingSlot then
-                        fromNode.asInstanceOf[dom.Comment].data =
-                            DomReactiveRegions.openMarkerData(fromId, adoptedFlags(flagKey(incomingFlags)))
-                end if
-                fromNode
-            case (Absent, Absent) if morphPortalPair(fromNode, toNode) => fromNode
-            case (Absent, Absent) if morphCompatible(fromNode, toNode) =>
-                morphNode(fromNode, toNode)
-                fromNode
-            case _ =>
-                val replacement = insertLogicalClone(parent, toNode, fromNode)
-                removeLogical(parent, fromNode)
-                replacement
-        end match
-    end patchLogical
 
     /** What one browser mount owns, so that tearing one mount down leaves another one on the page delivering.
       *
@@ -879,17 +270,10 @@ private[kyo] object DomBackend:
         end closeAll
     end Attachments
 
-    /** The attribute names on `el` the imperative id-addressed channel owns (see [[markOwned]]), read in place: `Absent` for the
-      * element it owns nothing on, which is nearly every one a morph visits.
-      */
-    private def ownedAttrs(el: dom.Element): Maybe[js.Dictionary[Boolean]] =
-        val d = el.asInstanceOf[js.Dynamic]
-        if js.isUndefined(d.__kyoOwn) then Absent else Present(d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]])
-
     /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
       * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
       * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
-      * ever grows) and `morphAttrs` shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
+      * ever grows) and [[MorphScript]] shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
       */
     private def markOwned(el: dom.Element, name: String): Unit =
         val d   = el.asInstanceOf[js.Dynamic]
@@ -1005,6 +389,7 @@ private[kyo] object DomBackend:
         val session     = new LocalSession
         val attachments = new Attachments(container)
         for
+            _       <- Sync.defer(discard(morphScript))
             _       <- DomStyleSheet.injectBase()
             root    <- ReactiveUI.normalize(ui, Seq.empty)
             html    <- HtmlRenderer.render(ui, Seq.empty)
@@ -1451,7 +836,7 @@ private[kyo] object DomBackend:
                             // A closed backend paints nothing, so there is nothing to subscribe again.
                             if !isOpen then true
                             else
-                                regions.withRegionFragment(regionId, changed)(applyListPatch(_, _, path, rows)).flatMap {
+                                regions.withRegionFragment(regionId, changed)(listPatch(_, _, path, rows)).flatMap {
                                     applied =>
                                         if applied then
                                             Sync.defer { regions.forgetFingerprint(regionId); attachments.sweep() }
@@ -1539,7 +924,7 @@ private[kyo] object DomBackend:
           * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
           */
         private def tryMorphRange(target: DomReactiveRegions.MorphTarget)(using Frame): Boolean =
-            morphNodeRun(
+            morphRun(
                 target.parent.asInstanceOf[dom.Element],
                 target.start.nextSibling,
                 target.end,

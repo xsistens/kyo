@@ -14,7 +14,7 @@ package kyo.internal
 private[kyo] object MorphScript:
 
     val js: String =
-        """          |// ---- range morph (twin of morphNode and its neighbours in DomBackend; keep the two in lockstep) ----
+        """          |// ---- range morph ----
           |// Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node
           |// identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
           |// DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays
@@ -38,7 +38,7 @@ private[kyo] object MorphScript:
           |}
           |// Give back every JS property a previous render set and the incoming element no longer carries. applyJsProps
           |// removes the data-kyo-prop-* attribute once applied, so the attribute walk cannot see a property leave; the
-          |// value before the first assignment waits in __kyoProps. Twin of restoreJsProps in DomBackend.
+          |// value before the first assignment waits in __kyoProps.
           |function __kyoRestoreProps(from,to){var ps=from.__kyoProps;if(!ps)return;
           |  for(var n in ps){if(!to.hasAttribute("data-kyo-prop-"+n)){from[n]=ps[n].base;delete ps[n];}}
           |}
@@ -46,7 +46,7 @@ private[kyo] object MorphScript:
           |  var tag=from.tagName;
           |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
           |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
-          |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
+          |  // the client-set value, so reconciling would clobber it.
           |  var own=from.__kyoOwn||{};
           |  // Read before the walk moves the attribute: whether the previous render had the toggle on.
           |  var tg=tag==="INPUT"?"checked":(tag==="OPTION"?"selected":null);
@@ -63,20 +63,20 @@ private[kyo] object MorphScript:
           |  // A textarea carries its value as content, never as a value attribute, so the walk above cannot reach its
           |  // property: mirror the content instead, under the same focus rule. Only a content that moved is a value
           |  // write; an unbound textarea renders the same content on every pass and keeps what the user typed. The
-          |  // children are not morphed yet, so `from` still holds the previous content. Twin of morphAttrs in DomBackend.
+          |  // children are not morphed yet, so `from` still holds the previous content.
           |  if(!activeInput&&tag==="TEXTAREA"&&from.textContent!==to.textContent)h.syncField(from,"value",to.textContent);
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
           |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // A checkbox, a radio and an option show their PROPERTY once toggled by the reader, so a render that
           |  // turns the control on or off writes it. A box the render binds (data-kyo-bound) shows the render's state
           |  // on every pass, so a repaint takes back a tick the app did not accept. A free one is written only on a
-          |  // change: it renders no attribute when off, and a repaint must keep its tick. Twin of morphAttrs in DomBackend.
+          |  // change: it renders no attribute when off, and a repaint must keep its tick.
           |  if(tg){var on=to.hasAttribute(tg);if(to.hasAttribute("data-kyo-bound")?from[tg]!==on:on!==wasOn)from[tg]=on;}
           |  __kyoRestoreProps(from,to);
           |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
           |  // A bound field says so as the unfocused path reads it (an input's value attribute, a textarea's moved
-          |  // content); an unbound field carries neither and keeps what the reader typed. Twin of morphAttrs.
+          |  // content); an unbound field carries neither and keeps what the reader typed.
           |  if(activeInput){var v=tag==="TEXTAREA"?(from.textContent!==to.textContent?to.textContent:null):to.getAttribute("value");
           |    if(v!==null&&from.value!==v)from.value=v;}
           |}
@@ -86,7 +86,7 @@ private[kyo] object MorphScript:
           |// A portal element does not live in the range: the first sweep moved it under <body> and left an inert slot
           |// behind. The payload still carries it inline, so reconcile the twin where it actually lives and step over
           |// the live slot. Re-inserting it here would hand __kyoAdoptPortals a second copy, which retires the twin and
-          |// takes everything hanging off it along. Twin of morphPortalPair in DomBackend.
+          |// takes everything hanging off it along.
           |function __kyoMorphPortalPair(from,to){
           |  if(from.nodeType!==1||to.nodeType!==1)return false;
           |  var p=to.getAttribute("data-kyo-path");

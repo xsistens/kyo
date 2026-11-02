@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.UI.foreachKeyed
 import kyo.internal.DomBackend
 import kyo.internal.DomReactiveRegions
 import kyo.internal.HtmlRenderer
@@ -330,5 +331,45 @@ class DomBackendMorphParityTest extends kyo.test.Test[Any]:
         Seq("b" -> "", "a" -> ""),
         _ => discard(el("f").focus())
     )(o => o.active == "f" && o.retained.contains("f"))
+
+    "a repaint and a list patch of a mounted page go through the script" in {
+        val script = DomBackend.morphScript
+        val run    = script.run
+        val apply  = script.applyList
+        var runs   = 0
+        var lists  = 0
+        script.run = scalajs.Any.fromFunction5((a: scalajs.Any, b: scalajs.Any, c: scalajs.Any, d: scalajs.Any, e: scalajs.Any) =>
+            runs += 1
+            run(a, b, c, d, e)
+        )
+        script.applyList = scalajs.Any.fromFunction4((a: scalajs.Any, b: scalajs.Any, c: scalajs.Any, d: scalajs.Any) =>
+            lists += 1
+            apply(a, b, c, d)
+        )
+        val ready = new DomTestEnv.MountReady
+        for
+            tick <- Signal.initRef(0)
+            rows <- Signal.initRef(Chunk("a", "b"))
+            ui = UI.div(
+                UI.div.id("sp-tick")(tick.map(n => UI.span(s"t:$n"): UI)),
+                UI.ul(rows.foreachKeyed(identity)(k => UI.li(k).id(s"sp-$k"))).id("sp-list")
+            )
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("sp-tick") != null), 5.seconds)
+            _     <- tick.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-tick").textContent == "t:1"), 5.seconds)
+            _     <- rows.set(Chunk("b", "a"))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("sp-list").textContent == "ba"), 5.seconds)
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+            _     <- Sync.defer {
+                script.run = run
+                script.applyList = apply
+            }
+        yield
+            assert(runs >= 1, "the repaint did not go through the script")
+            assert(lists >= 1, "the list patch did not go through the script")
+        end for
+    }
 
 end DomBackendMorphParityTest
