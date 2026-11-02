@@ -1,10 +1,9 @@
 package kyo.internal
 
+import EventDispatch.*
 import ReactiveUI.*
 import kyo.*
-import kyo.Svg
 import kyo.UI.*
-import kyo.kernel.ContextEffect
 
 private[kyo] object DragSessions:
 
