@@ -1263,12 +1263,15 @@ object Signal:
                 if changed() then ()
                 else
                     watch()
+                    // A write landing while `watch` registers completes a promise this read has yet to take, and only this check sees it. That
+                    // window lies between two atomics, so only a race reaches it and no test pins it.
                     if changed() then
                         completeDiscard(Result.unit)
                         (): Unit < Async
                     else
                         Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
-                            // Winning the completion runs `unwatch` here through `onComplete`; losing it, the writer's may still run.
+                            // Winning the completion runs `unwatch` here through `onComplete`; losing it, the writer's may still run. Which
+                            // of the two it is lies between two atomics, so only a race tells them apart and no test pins it.
                             if error.isDefined && !complete(Result.unit) then unwatch()
                         }(Async.useResult(this)(_ => ()))
                     end if
@@ -1284,7 +1287,8 @@ object Signal:
                     loop(i + 1)
             loop(0)
             watched = promises
-            // A change may have completed this while the loop ran, and its `onComplete` may have read the count before this write.
+            // A change may have completed this while the loop ran, and its `onComplete` may have read the count before this write: a
+            // window between two atomics, which only a race reaches and no test pins.
             watchedCount = size
             if done() then unwatch()
         end watch
@@ -1637,7 +1641,8 @@ object Signal:
                     add()
                     // The version is read before the value, and the pump measures every later write against it: a write landing
                     // after this delivery (from another thread, or from the sink itself) completes a promise nobody may be
-                    // registered on, so the version is all that records it.
+                    // registered on, so the version is all that records it. The sink's own write is pinned by a test; another
+                    // thread's lands between two atomics, which only a race reaches.
                     val seen = versionRef.get()
                     deliverTo(sub)
                     pump(seen)
@@ -1666,7 +1671,9 @@ object Signal:
                         if subs.compareAndSet(cur, Chunk.empty) then
                             val a = armed.getAndSet(null)
                             if a ne null then discard(a.promise.remove(a))
-                            // Dispatching first: a write may have completed the promise after its waiter was removed here.
+                            // Dispatching first: a write may have completed the promise after its waiter was removed here. Between the
+                            // drop and this read nothing runs on this stack, so only another thread's subscribe reaches this, and no test
+                            // pins it.
                             if liveSubs.get() > 0 then pump(Stale)
                         else releaseIfIdle()
                     end if
@@ -1708,7 +1715,8 @@ object Signal:
                             if versionRef.get() != v0 then since = v0
                             else
                                 // Claiming the slot first makes the arm that wins it the only one that registers. A lost CAS means
-                                // another pump armed, on this promise or an older one whose completion pumps again.
+                                // another pump armed, on this promise or an older one whose completion pumps again. Two pumps meet here
+                                // only from two threads, between two atomics, so only a race reaches this and no test pins it.
                                 val a = new Arm(p)
                                 if armed.compareAndSet(null, a) then
                                     p.onComplete(a)

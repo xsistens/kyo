@@ -236,30 +236,34 @@ class SignalOnChangeTest extends kyo.test.Test[Any]:
                         _ <- assertEventually(seen.get.map(_.lastMaybe == Present((1, 0))))
                     yield ()
                 }
-                closed <- seen.get
-                _      <- a.set(2)
-                _      <- Async.sleep(50.millis)
-                result <- seen.get
-                _      <- assertEventually(a.waiters.map(_ == 0))
-            yield assert(result == closed)
+                closed  <- seen.get
+                waiting <- Kyo.zip(a.waiters, b.waiters)
+                _       <- a.set(2)
+                result  <- seen.get
+            yield assert(waiting == (0, 0) && result == closed)
         }
 
         "a raw signal honours the baseline and stops when the scope closes" in {
-            for
-                ref         <- Signal.initRef(0)
-                (seen, rec) <- recorder[Int]
-                _           <- Scope.run {
-                    for
-                        _ <- raw(ref).onChange(Present(0))(rec)
-                        _ <- ref.set(1)
-                        _ <- assertEventually(seen.get.map(_ == Chunk(1)))
-                    yield ()
-                }
-                _      <- ref.set(2)
-                _      <- Async.sleep(50.millis)
-                result <- seen.get
-                _      <- assertEventually(ref.waiters.map(_ == 0))
-            yield assert(result == Chunk(1))
+            // Under virtual time no repair tick moves the waiter count: a fiber that outlives the Scope holds its waiter for good.
+            Clock.withTimeControl { _ =>
+                for
+                    ref         <- Signal.initRef(0)
+                    (seen, rec) <- recorder[Int]
+                    _           <- Scope.run {
+                        for
+                            _ <- raw(ref).onChange(Present(0))(rec)
+                            _ <- assertEventually(ref.waiters.map(_ == 1))
+                            _ <- ref.set(1)
+                            _ <- assertEventually(seen.get.map(_ == Chunk(1)))
+                            _ <- assertEventually(ref.waiters.map(_ == 1))
+                        yield ()
+                    }
+                    // The fiber is gone once the Scope closes; the repairing loop's race lets go of its arms a moment after.
+                    _      <- assertEventually(ref.waiters.map(_ == 0))
+                    _      <- ref.set(2)
+                    result <- seen.get
+                yield assert(result == Chunk(1))
+            }
         }
 
         "a failing callback is logged and the fiber keeps observing" in {
