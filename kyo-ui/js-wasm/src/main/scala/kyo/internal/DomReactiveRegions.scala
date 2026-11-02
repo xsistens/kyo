@@ -838,9 +838,12 @@ private[kyo] object DomReactiveRegions:
 
     /** Runs `change` over `subtree` and keeps the registry of the mount holding `owner` true to what it leaves (see
       * [[DomReactiveRegions.rewrite]]). Without an open registry holding `owner` it only runs `change`.
+      *
+      * The newest registry that holds it: a mount writes its container's whole content, so what stands there is the last one's. An older
+      * registry over the same container can still be open, since a mount's result comes before the last finalizers of its scope.
       */
     private[kyo] def rewriting[N <: dom.Node](owner: dom.Node, subtree: dom.Node)(change: => Maybe[N])(using Frame): Maybe[N] =
-        opened.find(registry => registry.root.contains(owner)) match
+        opened.findLast(registry => registry.root.contains(owner)) match
             case Some(registry) => registry.rewrite(subtree)(change)
             case None           => change
 

@@ -1540,6 +1540,85 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // A mount's result can come before its scope's last finalizers, so a new mount into the same container can run while the old
+    // registry is still open: its root holds every node of the new mount. A finalizer of the old mount that waits on a gate holds that
+    // window open for as long as the test needs it, and everything the new mount does in it has to land in the new registry.
+    "a mount right after an interrupted one into the same container keeps its own registry true while the old one is still open" in {
+        Scope.run {
+            for
+                gate <- Promise.init[Unit, Any]
+                _    <- Scope.ensure(gate.completeUnitDiscard)
+                old      = UI.div(UI.mounted(Scope.ensure(gate.get).andThen(UI.span("old").id("rm-old"))))
+                oldReady = new DomTestEnv.MountReady
+                oldFiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(old, oldReady)))
+                _        <- assertEventually(Sync.defer(oldReady.installed && text("rm-old") == "old"), 5.seconds)
+                oldRegions = oldReady.regions.get
+                _    <- oldFiber.interrupt
+                _    <- oldFiber.getResult
+                tick <- Signal.initRef(0)
+                mode <- Signal.initRef(true)
+                a    <- Signal.initRef(0)
+                b    <- Signal.initRef(0)
+                rows <- Signal.initRef(Chunk("x", "y", "z"))
+                fresh = UI.div(
+                    UI.div.id("rm-tick")(tick.map(n => UI.span(s"t:$n"): UI)),
+                    UI.ul(rows.foreachKeyed(identity)(k => UI.li(k).id(s"rm-$k"))).id("rm-list"),
+                    mode.map(m =>
+                        UI.div.id("rm-panel").portal(true)(
+                            if m then UI.div(a.map(i => UI.span(s"a:$i").id("rm-a"): UI))
+                            else UI.p(UI.span("x"), b.map(i => UI.span(s"b:$i").id("rm-b"): UI))
+                        ): UI
+                    )
+                )
+                ready = new DomTestEnv.MountReady
+                fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(fresh, ready)))
+                _     <- Scope.ensure(fiber.interrupt.unit)
+                _     <- assertEventually(Sync.defer(ready.installed && text("rm-a") == "a:0"), 5.seconds)
+                openAtMount = DomReactiveRegions.isOpen(oldRegions)
+                // A region of the new mount repaints.
+                _ <- tick.set(1)
+                _ <- assertEventually(Sync.defer(text("rm-tick") == "t:1"), 5.seconds)
+                // A range patch of the new mount's list.
+                _ <- rows.set(Chunk("z", "x", "w"))
+                _ <- assertEventually(Sync.defer(dom.document.getElementById("rm-list").textContent == "zxw"), 5.seconds)
+                // A portal twin is reconciled outside the range around its slot, so this write goes through DomReactiveRegions.rewriting.
+                _ <- mode.set(false)
+                _ <- assertEventually(Sync.defer(text("rm-b") == "b:0"), 5.seconds)
+                twinRange = firstRangeUnder("rm-panel")
+                registeredInWindow <- ready.regions.get.contains(twinRange)
+                openAfterRewrite = DomReactiveRegions.isOpen(oldRegions)
+                leftInWindow <- stranded(ready)
+                _ = assert(openAtMount, "the old registry had closed before the new mount: the window was not hit")
+                _ = assert(openAfterRewrite, "the old registry had closed before the rewrite: the window was not hit")
+                _ = assert(twinRange.nonEmpty, "no range under the portal twin")
+                _ = assert(registeredInWindow, s"the new mount's registry does not hold the twin's range $twinRange")
+                _ = assert(leftInWindow == 0, s"ranges of the new registry that left the page, in the window: $leftInWindow")
+                // The region inside the twin keeps updating, which it can only through the new mount's registry.
+                _ <- b.set(1)
+                _ <- assertEventually(Sync.defer(text("rm-b") == "b:1"), 5.seconds)
+                // The window ends; nothing the new mount holds went with the old registry.
+                _               <- gate.completeUnitDiscard
+                _               <- assertEventually(Sync.defer(!DomReactiveRegions.isOpen(oldRegions)), 5.seconds)
+                _               <- b.set(2)
+                _               <- assertEventually(Sync.defer(text("rm-b") == "b:2"), 5.seconds)
+                _               <- tick.set(2)
+                _               <- assertEventually(Sync.defer(text("rm-tick") == "t:2"), 5.seconds)
+                _               <- rows.set(Chunk("w"))
+                _               <- assertEventually(Sync.defer(dom.document.getElementById("rm-list").textContent == "w"), 5.seconds)
+                registeredAfter <- ready.regions.get.contains(twinRange)
+                leftAfter       <- stranded(ready)
+                stillOpen = DomReactiveRegions.isOpen(ready.regions.get)
+                _ <- fiber.interrupt
+                _ <- fiber.getResult
+                _ <- assertEventually(Sync.defer(!DomReactiveRegions.isOpen(ready.regions.get)), 5.seconds)
+            yield assert(
+                registeredAfter && leftAfter == 0 && stillOpen,
+                s"after the window: registered=$registeredAfter left=$leftAfter open=$stillOpen"
+            )
+            end for
+        }
+    }
+
     "a closed mount leaves no range registry of its own open" in {
         for
             show  <- Signal.initRef(true)
