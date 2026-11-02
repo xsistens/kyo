@@ -188,7 +188,7 @@ final case class CheckBox private (
             if isMixed then List(GlyphSvg(Icons.minus, "p-checkbox-icon"))
             else if isChecked then List(GlyphSvg(Icons.check, "p-checkbox-icon"))
             else Nil
-        val boxDiv = div.cssClass("p-checkbox-box")(icon.map(toChild)*)
+        val boxDiv = div.cssClass("p-checkbox-box")(UI.children(icon)*)
 
         var root = div.cssClass("p-checkbox").cssClass("p-component")
         if isChecked && !isMixed then root = root.cssClass("p-checkbox-checked")
@@ -202,9 +202,9 @@ final case class CheckBox private (
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
         if isDisplayOnly then root = root.cssClass("p-uic-display-only")
 
-        val control: UI = root(List[UI](box, boxDiv).map(toChild)*)
+        val control: UI = root(UI.children(List[UI](box, boxDiv))*)
         labelText match
-            case Present(t) => label.cssClass("p-uic-control-label")(List[UI](control, span(t)).map(toChild)*)
+            case Present(t) => label.cssClass("p-uic-control-label")(UI.children(List[UI](control, span(t)))*)
             case Absent     => control
     end body
 end CheckBox

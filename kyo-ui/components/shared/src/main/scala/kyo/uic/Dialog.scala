@@ -243,7 +243,7 @@ final case class Dialog private (
                     else
                         val severityIcon: List[UI] = severityV.toList.map { s =>
                             span.cssClass("p-uic-dialog-severity-icon")(
-                                toChild(GlyphSvg(severityGlyph(s), "p-icon"))
+                                GlyphSvg(severityGlyph(s), "p-icon")
                             )
                         }
                         val closeShell = button
@@ -258,17 +258,17 @@ final case class Dialog private (
                             .aria("label", "Close")
                         val closeBtn: UI =
                             (if fixed then closeShell.aria("disabled", "true") else closeShell.onClick(close)) (
-                                toChild(GlyphSvg(Icons.times, "p-icon"))
+                                GlyphSvg(Icons.times, "p-icon")
                             )
-                        val actions: UI = div.cssClass("p-dialog-header-actions")(toChild(closeBtn))
+                        val actions: UI = div.cssClass("p-dialog-header-actions")(closeBtn)
                         var hdr         = div.cssClass("p-dialog-header")
                         drag.foreach { (down, move) =>
                             hdr = hdr.cssClass("p-uic-dialog-draggable-header").onPointerDown(down).onPointerMove(move)
                         }
-                        List(hdr(((severityIcon ++ titleChildren) :+ actions).map(toChild)*))
+                        List(hdr(UI.children((severityIcon ++ titleChildren) :+ actions)*))
 
-                val contentUI: List[UI] = List(div.cssClass("p-dialog-content")(kids.map(toChild)*))
-                val footerUI: List[UI]  = footerV.toList.map(f => div.cssClass("p-dialog-footer")(toChild(f)))
+                val contentUI: List[UI] = List(div.cssClass("p-dialog-content")(UI.children(kids)*))
+                val footerUI: List[UI]  = footerV.toList.map(f => div.cssClass("p-dialog-footer")(f))
 
                 // Builds the whole box element. `animate` adds the open scale (dropped on
                 // the draggable/resizable path, where the box re-renders per drag frame, so
@@ -318,7 +318,7 @@ final case class Dialog private (
                     pos.foreach((x, y) => sty = sty.translate(x.px, y.px))
                     size.foreach((w, h) => sty = sty.width(w.px).height(h.px))
                     if pos.isDefined || size.isDefined then box = box.style(sty)
-                    box(inner.map(toChild)*)
+                    box(UI.children(inner)*)
                 end buildBox
 
                 // Enter/leave: the mask fades in via a transient from-state

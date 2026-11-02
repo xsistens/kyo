@@ -230,7 +230,7 @@ final case class Accordion[K] private (
             case Reading.Live(sig) =>
                 given CanEqual[Chunk[AccordionPanel[K]], Chunk[AccordionPanel[K]]] = CanEqual.derived
                 List(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(row))
-        div.cssClass("p-accordion").cssClass("p-component")(rows.map(toChild)*)
+        div.cssClass("p-accordion").cssClass("p-component")(UI.children(rows)*)
     end wired
 
     /** A panel id as it appears in a DOM id: its text behind its length, so the ids below stay distinct for any two
@@ -305,8 +305,8 @@ final case class Accordion[K] private (
             header = header.preventScrollKeys.onKeyDown(headerMove(base, p.id, focus))
         end if
         val headerEl: UI = header(
-            toChild(headerSlot),
-            toChild(active.render(a => GlyphSvg(if a then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon")))
+            headerSlot,
+            active.render(a => GlyphSvg(if a then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon"))
         )
 
         // Content is ALWAYS present: the grid 0fr row hides a collapsed panel.
@@ -314,16 +314,16 @@ final case class Accordion[K] private (
             div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId(base, p.id))
                 .cssClass("p-uic-collapsed", active.map(!_))(
                     div.cssClass("p-accordioncontent-wrapper")(
-                        div.cssClass("p-accordioncontent-content")(toChild(p.content))
+                        div.cssClass("p-accordioncontent-content")(p.content)
                     )
                 )
 
-        shell(toChild(headerEl), toChild(contentEl))
+        shell(headerEl, contentEl)
     end renderAnimatedPanel
 
     private def body(open: Set[K])(using Frame): UI =
         div.cssClass("p-accordion").cssClass("p-component")(
-            panelList.map(p => toChild(renderPanel(p, open.contains(p.id))))*
+            UI.children(panelList.map(p => renderPanel(p, open.contains(p.id))))*
         )
 
     private def renderPanel(p: AccordionPanel[K], active: Boolean)(using Frame): UI =
@@ -346,8 +346,8 @@ final case class Accordion[K] private (
         else if interactive then header = header.onClick(toggle(p.id))
         else header = header.aria("disabled", "true")
         val headerEl: UI = header(
-            toChild(headerSlot),
-            toChild(GlyphSvg(if active then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon"))
+            headerSlot,
+            GlyphSvg(if active then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon")
         )
 
         val contentEl: List[UI] =
@@ -355,13 +355,13 @@ final case class Accordion[K] private (
                 List(
                     div.cssClass("p-accordioncontent").role("region")(
                         div.cssClass("p-accordioncontent-wrapper")(
-                            div.cssClass("p-accordioncontent-content")(toChild(p.content))
+                            div.cssClass("p-accordioncontent-content")(p.content)
                         )
                     )
                 )
             else Nil
 
-        shell((headerEl :: contentEl).map(toChild)*)
+        shell(UI.children(headerEl :: contentEl)*)
     end renderPanel
 
     private def interactive: Boolean = !fixed

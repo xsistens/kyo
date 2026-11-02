@@ -293,9 +293,9 @@ final case class MegaMenu private (
                             yield ()
                         val act: Maybe[UI.Action] =
                             if subs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
-                        row(toChild(MenuRender.itemContent("megamenu", it, act, Absent, roving = true)))
+                        row(MenuRender.itemContent("megamenu", it, act, Absent, roving = true))
                 }
-                ul.cssClass("p-megamenu-submenu").role("menu")((heading :: rows).map(toChild)*)
+                ul.cssClass("p-megamenu-submenu").role("menu")(UI.children(heading :: rows)*)
             }
         end columnGroups
 
@@ -331,7 +331,7 @@ final case class MegaMenu private (
                             if orientationV == Orientation.Vertical then OverlayAnchor.RightStart
                             else OverlayAnchor.BottomStart
                         val cols: List[UI] = it.columnsV.zipWithIndex.map { (groups, c) =>
-                            div.cssClass(colClass(it.columnsV.size))(columnGroups(i, c, groups).map(toChild)*)
+                            div.cssClass(colClass(it.columnsV.size))(UI.children(columnGroups(i, c, groups))*)
                         }
                         List(
                             Overlay.gated(s.close(p))
@@ -340,11 +340,11 @@ final case class MegaMenu private (
                                 .animate(false)
                                 .seedFocus(false)
                                 .panelClass("p-megamenu-overlay")
-                                .apply(div.cssClass("p-megamenu-grid")(cols.map(toChild)*))
+                                .apply(div.cssClass("p-megamenu-grid")(UI.children(cols)*))
                                 .renderOpen
                         )
                     case _ => Nil
-                row((content :: panel).map(toChild)*)
+                row(UI.children(content :: panel)*)
             else
                 var row = li.cssClass("p-megamenu-item").role("menuitem")
                 if focus == p then
@@ -361,25 +361,25 @@ final case class MegaMenu private (
                     yield ()
                 val act: Maybe[UI.Action] =
                     if subs.isDefined && !it.disabledFlag then Present(activate) else Absent
-                row(toChild(MenuRender.itemContent("megamenu", plain, act, Absent, roving = true)))
+                row(MenuRender.itemContent("megamenu", plain, act, Absent, roving = true))
             end if
         }
 
-        val startUI: List[UI] = startV.toList.map(u => div.cssClass("p-megamenu-start")(toChild(u)))
-        val endUI: List[UI]   = endV.toList.map(u => div.cssClass("p-megamenu-end")(toChild(u)))
+        val startUI: List[UI] = startV.toList.map(u => div.cssClass("p-megamenu-start")(u))
+        val endUI: List[UI]   = endV.toList.map(u => div.cssClass("p-megamenu-end")(u))
         var list              = ul.cssClass("p-megamenu-root-list").role("menubar")
         // The bar is one tab stop from the first render; its keys are wired once the mount has a focus to move.
         list = list.tabIndex(0)
         if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
         if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
-        val listUI: UI = list(rowUIs.map(toChild)*)
+        val listUI: UI = list(UI.children(rowUIs)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div
             .cssClass("p-megamenu")
             .cssClass("p-component")
             .cssClass(s"p-megamenu-${orientationV.token}")
         idV.foreach(v => root = root.id(v))
-        root(((startUI :+ listUI) ++ endUI).map(toChild)*)
+        root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end MegaMenu
 

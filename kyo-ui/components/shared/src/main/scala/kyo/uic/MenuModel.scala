@@ -567,7 +567,7 @@ private[uic] object MenuRender:
         val subIcon: List[UI] =
             submenuIcon.toList.map(g => GlyphSvg(g, s"p-$prefix-submenu-icon", "p-icon"))
         div.cssClass(s"p-$prefix-item-content")(
-            toChild(link(((icon :+ label) ++ subIcon).map(toChild)*))
+            link(UI.children((icon :+ label) ++ subIcon)*)
         )
     end itemContent
 end MenuRender

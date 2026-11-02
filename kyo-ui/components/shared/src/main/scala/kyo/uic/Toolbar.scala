@@ -40,9 +40,9 @@ final case class Toolbar private (
         end match
         accessibleNameRefV.foreach(r => bar = bar.aria("labelledby", r))
         bar(
-            div.cssClass("p-toolbar-start")(startKids.map(toChild)*),
-            div.cssClass("p-toolbar-center")(centerKids.map(toChild)*),
-            div.cssClass("p-toolbar-end")(endKids.map(toChild)*)
+            div.cssClass("p-toolbar-start")(UI.children(startKids)*),
+            div.cssClass("p-toolbar-center")(UI.children(centerKids)*),
+            div.cssClass("p-toolbar-end")(UI.children(endKids)*)
         )
     end render
 end Toolbar

@@ -362,7 +362,7 @@ final case class InputNumber private (
                 .aria("hidden", "true")
             if !interactive then b = b.disabled(true)
             else b = b.onClick(spin(dir))
-            b(toChild(GlyphSvg(glyph, "p-icon")))
+            b(GlyphSvg(glyph, "p-icon"))
         end spinButton
 
         val inc = spinButton(+1, "p-inputnumber-increment-button", Icons.angleUp)
@@ -373,7 +373,7 @@ final case class InputNumber private (
             else
                 buttonLayoutV match
                     case InputNumberButtonLayout.Stacked =>
-                        List(span.cssClass("p-inputnumber-button-group")(toChild(inc), toChild(dec)))
+                        List(span.cssClass("p-inputnumber-button-group")(inc, dec))
                     case InputNumberButtonLayout.Horizontal | InputNumberButtonLayout.Vertical =>
                         List(inc, dec) // visual order via the sheet's `order` rules
 
@@ -395,7 +395,7 @@ final case class InputNumber private (
         if fluidFlag then el = el.cssClass("p-inputnumber-fluid")
         el = validity.markClass(el)
 
-        el((pre ++ ((in: UI) :: buttons) ++ post).map(toChild)*)
+        el(UI.children(pre ++ ((in: UI) :: buttons) ++ post)*)
     end body
 end InputNumber
 

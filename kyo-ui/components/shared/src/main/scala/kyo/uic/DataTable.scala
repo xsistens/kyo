@@ -2917,11 +2917,10 @@ final case class DataTable[A] private (
             val w  = requested.fold(w0)(r => w0.copy(order = w0.order.copy(requested = r)))
             laid.tableContainer(inner, live, w, flags)(v => drawnAt(laid, flags, requested)(v))
         }
-        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
-        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
+        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(h))
+        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(f))
         rootElement(order, navOn)(
-            (List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot ++ sourceRun)
-                .map(toChild)*
+            UI.children((List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot ++ sourceRun))*
         )
     end renderWith
 
@@ -3063,8 +3062,8 @@ final case class DataTable[A] private (
                 case Present(sig) => Reading.Live(inner.signal.combineLatest(sig).map((v, in) => specsOf(drawnOnce(v), Present(in))))
                 case Absent       => inner.map(v => specsOf(drawnOnce(v), Absent))
             specs match
-                case Reading.Fixed(ss) => group(ss.map(renderTr).map(toChild)*)
-                case Reading.Live(sig) => group(toChild(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr)))
+                case Reading.Fixed(ss) => group(UI.children(ss.map(renderTr))*)
+                case Reading.Live(sig) => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
             end match
         end rowList
 
@@ -3093,7 +3092,7 @@ final case class DataTable[A] private (
                     else
                         var cell = th.cssClass("p-datatable-header-cell")
                         if depth > 1 then cell = cell.rowspan(depth)
-                        List(cell(toChild(part(_.selectAll))))
+                        List(cell(part(_.selectAll)))
                 (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freezeLive(cell, head.widths, _.leadAt(i)))
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
@@ -3107,7 +3106,7 @@ final case class DataTable[A] private (
                     List(freezeLive(cell, head.widths, _.trailAt(0)))
             rows.zipWithIndex.map { (cells, i) =>
                 val ths = cells.map(sp => headerSpanCell(sp, head, flags, interactive, size, w0.order, w0.filter))
-                tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
+                tr(UI.children(if i == 0 then leading ++ ths ++ trailing else ths)*)
             }
         end headRows
 
@@ -3124,7 +3123,7 @@ final case class DataTable[A] private (
                 val cells = leafPaths.zipWithIndex.map((entry, i) =>
                     freezeLive(filterCell(entry._1, entry._2, w0.filter, head).asInstanceOf[Ast.Th], head.widths, _.at(i))
                 )
-                List(tr((leading ++ cells ++ trailing).map(toChild)*))
+                List(tr(UI.children(leading ++ cells ++ trailing)*))
             end if
         end filterRowUI
 
@@ -3151,8 +3150,8 @@ final case class DataTable[A] private (
                             case Reading.Live(sig) => Reading.Live(sig.combineLatest(r).map((v, top) => drawnOnce(v).windowSpecs(top)))
                     case Absent => inner.map(v => drawnOnce(v).windowSpecs(0.0))
                 window match
-                    case Reading.Fixed(ss) => group(ss.map(renderTr).map(toChild)*)
-                    case Reading.Live(sig) => group(toChild(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr)))
+                    case Reading.Fixed(ss) => group(UI.children(ss.map(renderTr))*)
+                    case Reading.Live(sig) => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
                 end match
             end if
         end tbodyEl
@@ -3223,9 +3222,9 @@ final case class DataTable[A] private (
         if frozenRowsOn && size.idPrefix.nonEmpty then headEl = headEl.id(headId(size.idPrefix))
 
         val tableEl: UI = tbl(
-            ((if hasWidths then List(part(_.colgroup)) else Nil) ++ List[UI](headEl((headRows ++ filterRowUI).map(toChild)*)) ++
+            UI.children((if hasWidths then List(part(_.colgroup)) else Nil) ++ List[UI](headEl(UI.children(headRows ++ filterRowUI)*)) ++
                 frozenBody ++ List[UI](tbodyEl) ++
-                (if leafCols.exists(_.hasFooter) then List(part(_.foot)) else Nil)).map(toChild)*
+                (if leafCols.exists(_.hasFooter) then List(part(_.foot)) else Nil))*
         )
 
         var container = div.cssClass("p-datatable-table-container")
@@ -3235,7 +3234,7 @@ final case class DataTable[A] private (
         // both directions.
         if !windowOn then
             scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
-            container(toChild(tableEl))
+            container(tableEl)
         else
             // Prime's own nesting for a virtually scrolled table, which the extracted
             // sheet names beside the plain one: the scroller sits between the
@@ -3257,7 +3256,7 @@ final case class DataTable[A] private (
                     ): Unit < Async
                 }
             }
-            container(toChild(vs(toChild(tableEl))))
+            container(vs(tableEl))
         end if
     end tableContainer
 
@@ -3856,8 +3855,8 @@ final case class DataTable[A] private (
                 val trailingTds: List[UI] = trailTerms.indices.toList.map(i => freeze(td, frozen.trailAt(i)))
                 val footTds: List[UI]     =
                     leafCols.zipWithIndex.map((c, i) => freeze(footerCell(c, sorted), frozen.at(i)))
-                val footRow: UI = tr((leadingTds ++ footTds ++ trailingTds).map(toChild)*)
-                List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
+                val footRow: UI = tr(UI.children(leadingTds ++ footTds ++ trailingTds)*)
+                List(tfoot.cssClass("p-datatable-tfoot")(footRow))
 
         DataTable.Drawn[A](
             // Three of the cards read the rows (a repeated rowKey, a frozen group taller than the
@@ -3906,7 +3905,7 @@ final case class DataTable[A] private (
             div
                 .cssClass("p-datatable-mask")
                 .cssClass("p-overlay-mask")(
-                    toChild(ProgressSpinner().size(Size.Small).accessibleName("Loading").render)
+                    ProgressSpinner().size(Size.Small).accessibleName("Loading").render
                 )
         // A windowed table says what it is waiting for per ROW, in the slots the window
         // leaves for the rows that have not arrived. A mask over the whole of it would
@@ -3939,9 +3938,9 @@ final case class DataTable[A] private (
         end match
         val content: List[UI] = (c.footerTextV, c.footerF) match
             case (Present(t), _) => List(span.cssClass("p-datatable-column-footer")(t))
-            case (_, Present(f)) => List(span.cssClass("p-datatable-column-footer")(toChild(f(inFilter))))
+            case (_, Present(f)) => List(span.cssClass("p-datatable-column-footer")(f(inFilter)))
             case _               => Nil
-        cell(content.map(toChild)*)
+        cell(UI.children(content)*)
     end footerCell
 
     /** The loud card rendered above the table when per-row IDENTITY is in use but
@@ -4672,7 +4671,7 @@ final case class DataTable[A] private (
                 // A group moves as one, since its columns are its columns wherever it goes.
                 val built = cell(
                     div.cssClass("p-datatable-column-header-content")(
-                        toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
+                        span.cssClass("p-datatable-column-title")(sp.node.label)
                     )
                 )
                 freezeLive(
@@ -4713,7 +4712,7 @@ final case class DataTable[A] private (
                     if columnFiltersSlot.exists(_.writable.isEmpty) then filter.typedOf(path) else Absent
                 given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
                 val typed: Reading[Maybe[String]]            = typedRef.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.Live(_))
-                cell(toChild(spec.and(open).and(typed).render { case ((held, isOpen), kept) =>
+                cell(spec.and(open).and(typed).render { case ((held, isOpen), kept) =>
                     // The filter as the reader sees it: the field, its validity and the mode menu all read this one, so a
                     // mode picked before the owner caught up carries what the reader typed.
                     val cur = kept.fold(held)(q => ColumnFilter(q, held.mode))
@@ -4732,9 +4731,9 @@ final case class DataTable[A] private (
                         )
                         typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
                     end if
-                    val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
-                    div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter, isOpen)).map(toChild)*)
-                }))
+                    val element = div.cssClass("p-datatable-filter-element-container")(input)
+                    div.cssClass("p-datatable-inline-filter")(UI.children(element :: modeMenu(path, c, cf, cur, filter, isOpen))*)
+                })
         end match
     end filterCell
 
@@ -4798,7 +4797,7 @@ final case class DataTable[A] private (
         openRef: SignalRef[Boolean]
     )(using Frame): UI =
         ul.cssClass("p-datatable-filter-constraint-list")(
-            cf.modes.map { m =>
+            UI.children(cf.modes.map { m =>
                 var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
                 if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
                 // A fixed filter's list is read-only: it is the one place that names the mode the column filters by, so it
@@ -4810,7 +4809,7 @@ final case class DataTable[A] private (
                     // without this a reader could reach every one of them and pick none.
                     item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
                 end if
-            }.map(toChild)*
+            })*
         )
 
     /** Prime's menu display: the funnel that sits at the end of a header cell, and the
@@ -4862,7 +4861,7 @@ final case class DataTable[A] private (
                                     // [[Reading]]): opening writes the draft and the open state together, and applying writes
                                     // the filter and closes. It is the only region above the menu: the header around it
                                     // follows the sort, the widths and the drag through channels.
-                                    toChild(Reading.Live(openRef).and(Reading.Live(draft)).and(spec).render { case ((open, d), cur) =>
+                                    Reading.Live(openRef).and(Reading.Live(draft)).and(spec).render { case ((open, d), cur) =>
                                         Overlay(openRef)
                                             .matchWidth(false)
                                             .panelClass("p-datatable-filter-overlay-popover")
@@ -4872,13 +4871,13 @@ final case class DataTable[A] private (
                                                 filterMenu(path, c, cf, if filtersFixed then cur else d, draft, openRef)
                                             )
                                             .renderGated(open, Present(filterPanelId(filter.idPrefix, path)))
-                                    })
+                                    }
                                 )
                             )
                         case _ =>
-                            List(span.cssClass("p-datatable-popover-filter")(toChild(spec.render(cur =>
+                            List(span.cssClass("p-datatable-popover-filter")(spec.render(cur =>
                                 trigger(cur, Absent, Absent).render
-                            ))))
+                            )))
                     end match
             end match
         end if
@@ -4923,9 +4922,7 @@ final case class DataTable[A] private (
                 .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
-                    toChild(
-                        (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
-                    )
+                    (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
                 )
             val remove: List[UI] =
                 if fixed || d.rules.sizeIs < 2 then Nil
@@ -4940,7 +4937,7 @@ final case class DataTable[A] private (
                             .onClick(draft.set(d.copy(rules = d.rules.patch(i, Nil, 1))))
                             .render
                     )
-            div.cssClass("p-datatable-filter-rule")(((modes :: input :: Nil) ++ remove).map(toChild)*)
+            div.cssClass("p-datatable-filter-rule")(UI.children((modes :: input :: Nil) ++ remove)*)
         }
 
         val add: UI =
@@ -4954,17 +4951,15 @@ final case class DataTable[A] private (
 
         val bar: UI =
             div.cssClass("p-datatable-filter-buttonbar")(
-                toChild(
-                    Button("Clear")
-                        .variant(ButtonVariant.Outlined)
-                        .size(Size.Small)
-                        .onClick(clearFilter(path, cf, draft, openRef))
-                        .render
-                ),
-                toChild(Button("Apply").size(Size.Small).onClick(applyFilter(path, d, draft, openRef)).render)
+                Button("Clear")
+                    .variant(ButtonVariant.Outlined)
+                    .size(Size.Small)
+                    .onClick(clearFilter(path, cf, draft, openRef))
+                    .render,
+                Button("Apply").size(Size.Small).onClick(applyFilter(path, d, draft, openRef)).render
             )
 
-        val list = div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*)
+        val list = div.cssClass("p-datatable-filter-rule-list")(UI.children(rules)*)
         UI.fragment((operator ++ (if fixed then List(list) else List(list, add, bar)))*)
     end filterMenu
 
@@ -5067,7 +5062,7 @@ final case class DataTable[A] private (
                     case Present(w) => col.style(_.width(w.px))
                     case Absent     => col
             }
-            List(colgroup((leading ++ cells ++ trailing).map(toChild)*))
+            List(colgroup(UI.children(leading ++ cells ++ trailing)*))
         end if
     end colGroup
 
@@ -5241,15 +5236,15 @@ final case class DataTable[A] private (
 
         val content: UI =
             div.cssClass("p-datatable-column-header-content")(
-                ((span.cssClass("p-datatable-column-title")(c.headerV): UI) ::
-                    sortMarks :: filterFunnel(path, c, filter, live)).map(toChild)*
+                UI.children((span.cssClass("p-datatable-column-title")(c.headerV): UI) ::
+                    sortMarks :: filterFunnel(path, c, filter, live))*
             )
         val grip: List[UI] =
             if index < 0 then Nil
             else if resizeModeV == ColumnResizeMode.Expand then
                 List(live.widths.render(w => UI.fragment(resizer(index, size.copy(widths = w))*)))
             else resizer(index, size)
-        val built = cell((content :: grip).map(toChild)*)
+        val built = cell(UI.children(content :: grip)*)
         freezeLive(
             if index < 0 then built else reorderCell(built, path, index, index + 1, size, order, sortable, live),
             live.widths,
@@ -5440,12 +5435,12 @@ final case class DataTable[A] private (
                     .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
                 // Fixed open groups show their toggle, a button that says it opens or closes nothing.
                 b = if groupsFixed then b.aria("disabled", "true") else b.onClick(toggleGroup(path))
-                List(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
+                List(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
         val content: UI = level.headerF match
             case Present(f) => f(path, rows)
             case Absent     => stringToUI(path.key)
         tr.cssClass("p-datatable-row-group-header")(
-            toChild(td.colspan(math.max(colCount, 1))((toggle :+ content).map(toChild)*))
+            td.colspan(math.max(colCount, 1))(UI.children(toggle :+ content)*)
         )
     end groupHeaderRow
 
@@ -5481,7 +5476,7 @@ final case class DataTable[A] private (
                         .onPointerMove(e => dragRowMove(e, move))
                         .onPointerUp(_ => endRowMove(move))
                 end if
-                List(freeze(cell(toChild(GlyphSvg(Icons.bars))), frozen.leadAt(handleSlot)))
+                List(freeze(cell(GlyphSvg(Icons.bars)), frozen.leadAt(handleSlot)))
 
         val expanderTd: List[UI] =
             if !expanderColumn then Nil
@@ -5494,7 +5489,7 @@ final case class DataTable[A] private (
                     .aria("label", if isExp then "Row Collapse" else "Row Expand")
                 // A fixed expansion shows its toggle, a button that says it opens or closes nothing.
                 b = if expansionFixed then b.aria("disabled", "true") else b.onClick(toggleExpand(id))
-                val cell = td(b(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon"))))
+                val cell = td(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
                 List(freeze(cell, frozen.leadAt(expanderSlot)))
 
         // Checkbox selection reuses Prime's checkbox anatomy (as Tree does).
@@ -5506,7 +5501,7 @@ final case class DataTable[A] private (
                 if canSelect && !selectionFixed then cb = cb.onClick(toggleSelect(id))
                 else cb = cb.cssClass("p-disabled")
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
-                val cell           = td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))
+                val cell           = td(cb(div.cssClass("p-checkbox-box")(UI.children(icon)*)))
                 List(freeze(cell, frozen.leadAt(checkboxSlot)))
 
         val dataTds: List[UI] = leafPaths.zipWithIndex.flatMap { (entry, i) =>
@@ -5574,11 +5569,11 @@ final case class DataTable[A] private (
                 end if
                 if editing && edit.errorAt(here).isDefined then cell = cell.cssClass("p-invalid")
                 val content: HtmlChildVal =
-                    if editing then toChild(editorCell(here, a, c, nav, edit))
+                    if editing then editorCell(here, a, c, nav, edit)
                     else
                         c.bodyF match
-                            case Present(f) => toChild(f(a))
-                            case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
+                            case Present(f) => f(a)
+                            case Absent     => stringToUI(c.textF.map(_(a)).getOrElse(""))
                 List(freeze(cell(content), frozen.at(i)))
             end if
         }
@@ -5629,7 +5624,7 @@ final case class DataTable[A] private (
                         )
                     else
                         List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id, a, edit)))
-                List(freeze(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*), frozen.trailAt(0)))
+                List(freeze(td.cssClass("p-uic-dt-editor")(UI.children(buttons)*), frozen.trailAt(0)))
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
         // A windowed row is placed by counting rows, so it says how tall it is rather than
@@ -5708,12 +5703,12 @@ final case class DataTable[A] private (
         end match
         if move.live && move.idPrefix.nonEmpty then row = row.id(DataTable.rowId(move.idPrefix, move.base + index))
         rowClassF.foreach(f => f(a).foreach(cls => if cls.nonEmpty then row = row.cssClass(cls)))
-        row((handleTd ++ expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
+        row(UI.children(handleTd ++ expanderTd ++ checkboxTd ++ dataTds ++ editorTd)*)
     end dataRow
 
     private def emptyRow(colCount: Int)(using Frame): UI =
         tr.cssClass("p-datatable-empty-message")(
-            toChild(EmptyContent.render(emptyContentV, "No records found")(c => td.colspan(math.max(colCount, 1))(c)))
+            EmptyContent.render(emptyContentV, "No records found")(c => td.colspan(math.max(colCount, 1))(c))
         )
 
     /** One spacer row, which is what holds the height of the rows that are not drawn.
@@ -5736,12 +5731,12 @@ final case class DataTable[A] private (
         // declared the skeleton is exactly one line (`1lh`), so the row is as tall as a row of text.
         val line                           = if spec.height.isDefined then "1rem" else "1lh"
         def slot(f: Maybe[FrozenSlot]): UI =
-            freeze(td(toChild(Skeleton().height(line).render)), f)
+            freeze(td(Skeleton().height(line).render), f)
         val leading  = (0 until spec.lead).toList.map(i => slot(spec.frozen.leadAt(i)))
         val cells    = (0 until spec.cells).toList.map(i => slot(spec.frozen.at(i)))
         val trailing = (0 until spec.trail).toList.map(i => slot(spec.frozen.trailAt(i)))
         val row      = spec.height.fold(tr)(h => tr.style(_.height(h.px)))
-        row((leading ++ cells ++ trailing).map(toChild)*)
+        row(UI.children(leading ++ cells ++ trailing)*)
     end slotRow
 
     /** A row standing in for a row on its way. Under [[loadingRow]] it holds the caller's row and
@@ -5753,7 +5748,7 @@ final case class DataTable[A] private (
         val row  = spec.height.fold(tr)(h => tr.style(_.height(h.px))).cssClass("p-uic-datatable-loading-row")
         val cell = td.colspan(math.max(spec.colCount, 1))
         loadingContentV match
-            case Present(LoadingContent.Rows(f)) => row(toChild(cell(toChild(f(spec.at, spec.run)))))
+            case Present(LoadingContent.Rows(f)) => row(cell(f(spec.at, spec.run)))
             case content                         =>
                 // One invisible line makes the row as tall as a row of text; the content lies over the run.
                 val line: UI       = span.cssClass("p-uic-datatable-loading-line").aria("hidden", "true")("\u00a0")
@@ -5766,7 +5761,7 @@ final case class DataTable[A] private (
                                     .style(_.height(Length.Calc(s"${spec.run} * 100%")))(inner)
                             ).toList
                         )
-                row.cssClass("p-uic-datatable-loading-over")(toChild(cell((line :: over).map(toChild)*)))
+                row.cssClass("p-uic-datatable-loading-over")(cell(UI.children(line :: over)*))
         end match
     end loadingRow
 
@@ -5779,7 +5774,7 @@ final case class DataTable[A] private (
         expansionF match
             case Present(f) =>
                 tr.cssClass("p-datatable-row-expansion")(
-                    td.colspan(math.max(spec.colCount, 1))(toChild(f(spec.a)))
+                    td.colspan(math.max(spec.colCount, 1))(f(spec.a))
                 )
             case Absent => tr.cssClass("p-datatable-row-expansion")(td.colspan(math.max(spec.colCount, 1)))
 
@@ -5817,7 +5812,7 @@ final case class DataTable[A] private (
                 groupHeaderRow(g.level, g.path, g.rows, g.colCount, g.collapsible, g.open)
             case g: RowSpec.GroupFoot[A] =>
                 tr.cssClass("p-datatable-row-group-footer")(
-                    toChild(td.colspan(math.max(g.colCount, 1))(toChild(g.render(g.path, g.rows))))
+                    td.colspan(math.max(g.colCount, 1))(g.render(g.path, g.rows))
                 )
             case s: RowSpec.Spacer[A] =>
                 var pad = padRow(s.px)
@@ -5924,7 +5919,7 @@ final case class DataTable[A] private (
                     case Present(e) =>
                         fragment(
                             ed.editor(params),
-                            div.cssClass("p-uic-dt-cell-error")(toChild(translatorV.translate(e).render(stringToUI)))
+                            div.cssClass("p-uic-dt-cell-error")(translatorV.translate(e).render(stringToUI))
                         )
                 end match
             case _ =>

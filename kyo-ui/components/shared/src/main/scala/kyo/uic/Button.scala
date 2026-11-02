@@ -297,7 +297,7 @@ final case class Button private (
         // handler, e.g. form.submit → focus-first-invalid); only apply when not natively disabled.
         if !effDisabled then
             BoolValue.const(ariaDisabledV).foreach(ad => if ad then el = el.aria("disabled", "true").cssClass("p-uic-aria-disabled"))
-        el(contentChildren.map(toChild)*)
+        el(UI.children(contentChildren)*)
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its
@@ -343,7 +343,7 @@ final case class Button private (
             el = el.href(Href.Path(h))
             onClickEff.foreach(e => el = el.onClick(e))
         end if
-        el(contentChildren.map(toChild)*)
+        el(UI.children(contentChildren)*)
     end renderAnchor
 
     private def contentChildren(using Frame): List[UI] =

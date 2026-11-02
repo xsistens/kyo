@@ -75,7 +75,7 @@ final case class Inplace private (
                     case _                               => ()
             }
         end if
-        d(displayV.toList.map(toChild)*)
+        d(UI.children(displayV.toList)*)
     end displaySide
 
     private def contentSide(using Frame): UI =
@@ -89,8 +89,8 @@ final case class Inplace private (
                     .jsProp("type", "button")
                     .aria("label", "Close")
                 val pressable = if fixed then b.aria("disabled", "true") else b.onClick(ask(false))
-                List(pressable(toChild(GlyphSvg(Icons.times, "p-button-icon"))))
-        div.cssClass("p-inplace-content")((contentV.toList ++ closeBtn).map(toChild)*)
+                List(pressable(GlyphSvg(Icons.times, "p-button-icon")))
+        div.cssClass("p-inplace-content")(UI.children(contentV.toList ++ closeBtn)*)
     end contentSide
 
     private[uic] def render(using Frame): UI =
@@ -118,8 +118,8 @@ final case class Inplace private (
     private def drawn(using Frame): UI =
         val root = div.cssClass("p-inplace").cssClass("p-component").aria("live", "polite")
         activeSlot match
-            case Present(slot) => root(toChild(Reading.of(slot).render(a => if a then contentSide else displaySide)))
-            case Absent        => root(toChild(displaySide))
+            case Present(slot) => root(Reading.of(slot).render(a => if a then contentSide else displaySide))
+            case Absent        => root(displaySide)
     end drawn
 end Inplace
 

@@ -39,7 +39,7 @@ final case class Title private (
             .role("heading")
             .aria("level", levelV.token.stripPrefix("H"))
         if !wrapFlag then el = el.cssClass("p-uic-title--nowrap")
-        el(kids.map(toChild)*)
+        el(UI.children(kids)*)
     end render
 end Title
 

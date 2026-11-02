@@ -267,7 +267,7 @@ final case class Password private (
                         case _                               => ()
                 }
             end if
-            t(toChild(GlyphSvg(if isRevealed then Icons.eyeSlash else Icons.eye, "p-icon")))
+            t(GlyphSvg(if isRevealed then Icons.eyeSlash else Icons.eye, "p-icon"))
         }
 
         // === wrapper root =======================================================
@@ -281,7 +281,7 @@ final case class Password private (
             case Present(ReactiveVariable(r)) if !feedbackFlag => el.cssClass("p-inputwrapper-filled", r.map(_.nonEmpty))
             case _                                             => el.cssClass("p-inputwrapper-filled", current.nonEmpty)
         if fluidFlag then el = el.cssClass("p-password-fluid")
-        val root = el(((in: UI) :: toggle).map(toChild)*)
+        val root = el(UI.children((in: UI) :: toggle)*)
 
         // === inline strength meter (see the class doc for the deviation) ========
         val meter: List[UI] =

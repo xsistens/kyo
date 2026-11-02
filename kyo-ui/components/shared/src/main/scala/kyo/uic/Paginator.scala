@@ -281,7 +281,7 @@ final case class Paginator private (
         var root = div.cssClass("p-paginator").cssClass("p-component")
         hostClassesV.foreach(c => root = root.cssClass(c))
         val children: List[UI] = cards(layout) ++ unheard(layout) ++ layout.flatMap(elementUI)
-        root.role("navigation")(children.map(toChild)*)
+        root.role("navigation")(UI.children(children)*)
     end renderLive
 
     /** What the parts that follow the page are drawn from: the page clamped into the page count the rows and the total
@@ -299,7 +299,7 @@ final case class Paginator private (
         if isDisabled then b = b.cssClass("p-disabled").disabled(true)
         else if pageFixed then b = b.aria("disabled", "true")
         else b = b.onClick(activate(target))
-        b(toChild(GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon")))
+        b(GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon"))
     end navButton
 
     private def pageLinks(v: View)(using Frame): UI =
@@ -316,7 +316,7 @@ final case class Paginator private (
             else b = b.onClick(activate(pi))
             b((pi + 1).toString)
         }
-        span.cssClass("p-paginator-pages")(buttons.map(toChild)*)
+        span.cssClass("p-paginator-pages")(UI.children(buttons)*)
     end pageLinks
 
     private def report(v: View)(using Frame): List[UI] = reportTemplateV.toList.map { t =>
@@ -334,18 +334,16 @@ final case class Paginator private (
 
     private def jtpField(v: View)(using Frame): UI =
         span.cssClass("p-paginator-jtp-input")(
-            toChild(
-                if pageFixed then Input().value((v.cur + 1).toString).accessibleName("Jump to page").readonly(true).render
-                else
-                    Input()
-                        .value((v.cur + 1).toString)
-                        .accessibleName("Jump to page")
-                        .onChange { s =>
-                            val target = s.trim.toIntOption.map(_ - 1).getOrElse(v.cur)
-                            activate(View.clamp(target, v.pages))
-                        }
-                        .render
-            )
+            if pageFixed then Input().value((v.cur + 1).toString).accessibleName("Jump to page").readonly(true).render
+            else
+                Input()
+                    .value((v.cur + 1).toString)
+                    .accessibleName("Jump to page")
+                    .onChange { s =>
+                        val target = s.trim.toIntOption.map(_ - 1).getOrElse(v.cur)
+                        activate(View.clamp(target, v.pages))
+                    }
+                    .render
         )
 
     /** Elements a template names with nothing behind them, and the one switch a

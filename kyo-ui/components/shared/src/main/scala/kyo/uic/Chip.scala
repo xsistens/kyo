@@ -102,9 +102,9 @@ final case class Chip private (
                     }
                 }
                 if isolateRemoveFlag then btn = btn.stopPropagation(true)
-                List(btn(toChild(GlyphSvg(removeIconV.getOrElse(Icons.timesCircle)))))
+                List(btn(GlyphSvg(removeIconV.getOrElse(Icons.timesCircle))))
 
-        el((lead ++ labelChild ++ kids ++ removeChild).map(toChild)*)
+        el(UI.children(lead ++ labelChild ++ kids ++ removeChild)*)
     end render
 end Chip
 

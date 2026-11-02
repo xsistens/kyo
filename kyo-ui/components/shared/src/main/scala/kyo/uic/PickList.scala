@@ -282,10 +282,10 @@ final case class PickList[A] private (
 
         def reorderRail(cls: String, col: Col, off: Boolean): UI =
             div.cssClass("p-picklist-controls").cssClass(cls)(
-                toChild(moveButton(Icons.angleUp, "Move Up", off, col.itemsFixed, reorder(col, ListReorder.moveUp))),
-                toChild(moveButton(Icons.angleDoubleUp, "Move Top", off, col.itemsFixed, reorder(col, ListReorder.moveTop))),
-                toChild(moveButton(Icons.angleDown, "Move Down", off, col.itemsFixed, reorder(col, ListReorder.moveDown))),
-                toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", off, col.itemsFixed, reorder(col, ListReorder.moveBottom)))
+                moveButton(Icons.angleUp, "Move Up", off, col.itemsFixed, reorder(col, ListReorder.moveUp)),
+                moveButton(Icons.angleDoubleUp, "Move Top", off, col.itemsFixed, reorder(col, ListReorder.moveTop)),
+                moveButton(Icons.angleDown, "Move Down", off, col.itemsFixed, reorder(col, ListReorder.moveDown)),
+                moveButton(Icons.angleDoubleDown, "Move Bottom", off, col.itemsFixed, reorder(col, ListReorder.moveBottom))
             )
 
         def column(
@@ -315,23 +315,23 @@ final case class PickList[A] private (
                 )
             }
             div.cssClass("p-picklist-list-container").cssClass(cls)(
-                toChild(lb.resolved(sel, "", cursor.map(_.highlight), focused))
+                lb.resolved(sel, "", cursor.map(_.highlight), focused)
             )
         end column
 
         // A transfer changes both columns, so either being fixed holds it.
         val transferFixed = sourceCol.itemsFixed || targetCol.itemsFixed
         val transfer: UI  = div.cssClass("p-picklist-controls").cssClass("p-picklist-transfer-controls")(
-            toChild(moveButton(Icons.angleRight, "Move to Target", srcMoveOff, transferFixed, transferSelected(sourceCol, targetCol))),
-            toChild(moveButton(
+            moveButton(Icons.angleRight, "Move to Target", srcMoveOff, transferFixed, transferSelected(sourceCol, targetCol)),
+            moveButton(
                 Icons.angleDoubleRight,
                 "Move All to Target",
                 src.isEmpty,
                 transferFixed,
                 transferAll(sourceCol, targetCol)
-            )),
-            toChild(moveButton(Icons.angleLeft, "Move to Source", tgtMoveOff, transferFixed, transferSelected(targetCol, sourceCol))),
-            toChild(moveButton(Icons.angleDoubleLeft, "Move All to Source", tgt.isEmpty, transferFixed, transferAll(targetCol, sourceCol)))
+            ),
+            moveButton(Icons.angleLeft, "Move to Source", tgtMoveOff, transferFixed, transferSelected(targetCol, sourceCol)),
+            moveButton(Icons.angleDoubleLeft, "Move All to Source", tgt.isEmpty, transferFixed, transferAll(targetCol, sourceCol))
         )
 
         val sourceRail: List[UI] =
@@ -367,7 +367,7 @@ final case class PickList[A] private (
                     )
                 ) ++ targetRail
 
-        div.cssClass("p-picklist").cssClass("p-component")((unheard ++ parts).map(toChild)*)
+        div.cssClass("p-picklist").cssClass("p-component")(UI.children(unheard ++ parts)*)
     end body
 
     /** Bindings made one way that nothing hears: every transfer, move or click is painted away again. Disabled columns

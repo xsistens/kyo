@@ -169,10 +169,10 @@ final case class OrderList[A] private (
         end moveButton
 
         val controls: UI = div.cssClass("p-orderlist-controls")(
-            toChild(moveButton(Icons.angleUp, "Move Up", ListReorder.moveUp)),
-            toChild(moveButton(Icons.angleDoubleUp, "Move Top", ListReorder.moveTop)),
-            toChild(moveButton(Icons.angleDown, "Move Down", ListReorder.moveDown)),
-            toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", ListReorder.moveBottom))
+            moveButton(Icons.angleUp, "Move Up", ListReorder.moveUp),
+            moveButton(Icons.angleDoubleUp, "Move Top", ListReorder.moveTop),
+            moveButton(Icons.angleDown, "Move Down", ListReorder.moveDown),
+            moveButton(Icons.angleDoubleDown, "Move Bottom", ListReorder.moveBottom)
         )
 
         // The embedded Listbox renders through `resolved`: this render already
@@ -202,7 +202,7 @@ final case class OrderList[A] private (
         }
         val listUI: UI = lb.resolved(sel, "", cursor.map(_.highlight), focused)
 
-        div.cssClass("p-orderlist").cssClass("p-component")((unheard :+ controls :+ listUI).map(toChild)*)
+        div.cssClass("p-orderlist").cssClass("p-component")(UI.children(unheard :+ controls :+ listUI)*)
     end body
 
     /** Bindings made one way that nothing hears: every move or click is painted away again. A disabled list takes no move

@@ -156,7 +156,7 @@ final case class ToggleSwitch private (
             GlyphSvg(if isChecked then on else off, "p-uic-toggleswitch-handle-icon")
         }
         val slider = div.cssClass("p-toggleswitch-slider")(
-            toChild(div.cssClass("p-toggleswitch-handle")(handleContent.map(toChild)*): UI)
+            div.cssClass("p-toggleswitch-handle")(UI.children(handleContent)*): UI
         )
 
         var root = div.cssClass("p-toggleswitch").cssClass("p-component")
@@ -168,7 +168,7 @@ final case class ToggleSwitch private (
             case Present(TextValue.Dyn(s))   => root.title(s)
             case Absent                      => root
 
-        root(List[UI](box, slider).map(toChild)*)
+        root(UI.children(List[UI](box, slider))*)
     end body
 end ToggleSwitch
 

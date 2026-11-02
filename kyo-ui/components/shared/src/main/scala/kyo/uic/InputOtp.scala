@@ -220,7 +220,7 @@ final case class InputOtp private (
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        el(cells.map(toChild)*)
+        el(UI.children(cells)*)
     end body
 end InputOtp
 

@@ -45,9 +45,9 @@ private[uic] object LoadingContent:
       */
     def over(c: LoadingContent, count: Int)(wrap: HtmlChildVal => UI)(using Frame): Maybe[UI] =
         c match
-            case Text(TextValue.Const(t)) => Present(wrap(toChild(stringToUI(t))))
-            case Text(TextValue.Dyn(s))   => Present(wrap(toChild(signalStringToUI(s))))
-            case Ui(u)                    => Present(wrap(toChild(u)))
-            case Counted(f)               => Present(wrap(toChild(f(count))))
+            case Text(TextValue.Const(t)) => Present(wrap(stringToUI(t)))
+            case Text(TextValue.Dyn(s))   => Present(wrap(signalStringToUI(s)))
+            case Ui(u)                    => Present(wrap(u))
+            case Counted(f)               => Present(wrap(f(count)))
             case Rows(_)                  => Absent
 end LoadingContent

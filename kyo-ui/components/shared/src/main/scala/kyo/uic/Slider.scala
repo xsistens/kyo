@@ -202,7 +202,7 @@ final case class Slider private (
             .cssClass("p-component")
             .cssClass(if horizontal then "p-slider-horizontal" else "p-slider-vertical")
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
-        validity.mark(el)(toChild(range), toChild(handle), toChild(in: UI))
+        validity.mark(el)(range, handle, in: UI)
     end body
 end Slider
 
