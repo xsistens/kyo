@@ -194,6 +194,13 @@ object UI:
       */
     def fragment[C <: UI](cs: C*)(using Frame): Fragment[C] = Fragment[C](Chunk.from(cs))
 
+    /** The children in `xs` for a container's argument list: `div(UI.children(rows)*)`. An implicit conversion does not reach into a splat,
+      * so a list needs this. The tree gets no extra level, unlike `fragment`, so the paths of the rows stay what they would be as literal
+      * children. The same check as a literal child, on the list's static element type: a list of SVG nodes does not fit an HTML container,
+      * and a `List[UI]` passes whatever it holds.
+      */
+    def children[C <: UI](xs: Seq[C])(using AsHtmlChild[C]): Seq[HtmlChildVal] = xs.map(new HtmlChildVal(_))
+
     /** Inline HTML passthrough: emits `html` verbatim into the rendered output without any escaping.
       *
       * This is the framework's single deliberate escape hatch for trusted HTML content that cannot be expressed through the normal `UI`
