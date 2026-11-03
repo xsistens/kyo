@@ -32,8 +32,7 @@ final case class SplitButton private (
     disabledFlag: Boolean = false,
     dropdownIconV: Maybe[IconGlyph] = Absent,
     entriesV: List[MenuItemLiveEntry] = Nil,
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     onClickEff: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = SplitButton
@@ -80,10 +79,10 @@ final case class SplitButton private (
       * reachable, changes nothing. Unbound, the button keeps the state itself, starting closed. A signal nothing hears
       * is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): SplitButton = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): SplitButton = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the menu visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): SplitButton = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): SplitButton = copy(openSlot = openSlot.hear(f))
 
     /** Runs `action` when the PRIMARY segment is pressed. */
     def onClick(action: => UI.Action)(using Frame): SplitButton =
@@ -92,52 +91,38 @@ final case class SplitButton private (
     private[uic] def render(using Frame): UI =
         // The panel visibility + keyboard highlight live in signals allocated by
         // this effectful mount; static projections render the same closed anatomy.
-        val stat: UI = body(openSlot.flatMap(_.const).getOrElse(false), Absent, Absent, "")
+        val stat: UI = body(openSlot.binding.flatMap(_.const).getOrElse(false), Absent, "")
         val button   = UI.mounted {
             for
                 // Unbound, the button keeps the menu state itself, starting closed.
-                open <- openSlot match
-                    case Present(slot) => Kyo.lift(slot)
-                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
+                open <- openSlot.owned(false)
                 hi   <- Anchored.init(-1)
                 cmds <- UI.commands
                 base <- cmds.freshId
-            yield copy(openSlot = Present(open)).wiredOver(open, hi, base)
+            yield copy(openSlot = open).wiredOver(hi, base)
         }.placeholder(stat)
         // A signal nobody hears: every toggle and pick the reader makes is painted away again.
-        if !ReactiveValue.deaf(openSlot, onOpenF) then button
-        else
-            fragment(
-                Diagnostics.card(
-                    "SplitButton",
-                    "the menu is bound open one way and nothing hears a toggle or a pick, so the reader cannot change it; " +
-                        "add onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                button
-            )
-        end if
+        Diagnostics.before(button)("SplitButton")(Diagnostic.unheard(openSlot, SplitButton.openName))
     end render
 
     /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
-        copy(openSlot = Present(ReactiveValue[Boolean](open))).wiredOver(ReactiveValue[Boolean](open), hi, base)
+        copy(openSlot = openSlot.bind(open)).wiredOver(hi, base)
 
     /** The subscription tree over the menu state however it is bound. */
-    private def wiredOver(open: ReactiveValue[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
+    private def wiredOver(hi: Anchored[Int], base: String)(using Frame): UI =
         // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
         // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
         // nested in this one would repaint what it closed over.
         // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
-        MenuRender.readRooted(entriesV).and(Reading.of(open)).and(hi.reading).render { case ((Rooted(roots, items), o), h) =>
+        MenuRender.readRooted(entriesV).and(openSlot.reading(false)).and(hi.reading).render { case ((Rooted(roots, items), o), h) =>
             val hv = hi.view(h, roots)(using Menu.rowRebase)
-            body(o, Present(open), Present(hv), base, items, hv.value)
+            body(o, Present(hv), base, items, hv.value)
         }
     end wiredOver
 
     private def body(
         isOpen: Boolean,
-        open: Maybe[ReactiveValue[Boolean]],
         hi: Maybe[Anchored.View[Int]],
         base: String,
         items: List[MenuItem] = Nil,
@@ -159,10 +144,10 @@ final case class SplitButton private (
         if fluidFlag then primary = primary.fluid(true)
         onClickEff.foreach(e => primary = primary.onClick(e))
 
-        // The placeholder has no state to change (`open` Absent): the toggle is then a no-op.
-        val toggle: UI.Action = if open.isDefined then ReactiveValue.update(openSlot, !_, onOpenF) else ()
+        // The placeholder has no state to change (`hi` Absent): the toggle is then a no-op.
+        val toggle: UI.Action = if hi.isDefined then openSlot.update(!_) else ()
         // A constant nobody hears is fixed: the dropdown stays a tab stop and says it changes nothing.
-        val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+        val fixed = openSlot.fixed
 
         var dropdown = styled(Button())
             .icon(dropdownIconV.getOrElse(Icons.chevronDown))
@@ -173,13 +158,13 @@ final case class SplitButton private (
         if fixed then dropdown = dropdown.ariaDisabled(true)
         else if !disabledFlag then dropdown = dropdown.onClick(toggle)
 
-        val panel: List[UI] = (open, hi) match
-            case (Present(slot), Present(hiRef)) =>
+        val panel: List[UI] = (openSlot.bound, hi) match
+            case (Present(bound), Present(hiRef)) =>
                 // The hosted menu announces its highlighted row off an id of its own, minted
                 // from this button's, since nothing outside knows the panel is there to name it. It
                 // closes through this button's binding, so its close is heard where this button's is.
-                val menu = Menu().rows(items).popup(slot.bound)
-                List(onOpenF.fold(menu)(f => menu.onPopupChange(f)).hosted(h, hiRef, s"$base-menu", isOpen))
+                val menu = Menu().rows(items).popup(bound)
+                List(openSlot.hearer.fold(menu)(f => menu.onPopupChange(f)).hosted(h, hiRef, s"$base-menu", isOpen))
             case _ => Nil
 
         var el = div.cssClass("p-splitbutton").cssClass("p-component")
@@ -198,4 +183,6 @@ object SplitButton:
 
     /** An empty split button; add an icon and items via the setters. */
     def apply(): SplitButton = new SplitButton()
+
+    private val openName = Slot.Name("SplitButton", "the menu", "a toggle or a pick", "onOpenChange")
 end SplitButton

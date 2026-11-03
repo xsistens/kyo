@@ -313,6 +313,21 @@ class SlotTest extends UicTest:
             end for
         }
 
+        // A component that mints its state beside its ids holds it in that one mount: a slot of its own around it would be a
+        // mount inside a mount for every instance. Each row is such a component, with its slots unbound and its feature on.
+        "what mints in a mount it already has adds no mount" - {
+            // A popup's panel sits under the mount its overlay places it from as well, which is the second.
+            val inOneMount: Seq[(String, Frame ?=> UI, String, Int)] = Seq(
+                ("SpeedDial", uic.SpeedDial().items(uic.MenuItem("a")).render, "p-speeddial", 1),
+                ("SplitButton", uic.SplitButton("a").items(uic.MenuItem("b")).render, "p-splitbutton", 1),
+                ("Menu", uic.Menu().popup().items(uic.MenuItem("a")).render, "p-menu-list", 2),
+                ("TieredMenu", uic.TieredMenu().popup().items(uic.MenuItem("a")).render, "p-tieredmenu-root-list", 2)
+            )
+            inOneMount.foreach { (name, ui, cls, mounts) =>
+                s"$name" in mountsAbove(ui, cls).map(n => assert(n == mounts, s"$name is under $n mounts"))
+            }
+        }
+
         "mapNative maps a value and a signal" in {
             for
                 ref <- Signal.initRef(2)
