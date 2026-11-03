@@ -73,25 +73,11 @@ private[uic] object Diagnostics:
     /** The loud inline card. `component` names the component, `advice` the setter to reach for; the offending keys are
       * listed so the data problem is findable.
       */
-    def card(component: String, advice: String, keys: Seq[String])(using Frame): UI =
+    private def card(component: String, advice: String, keys: Seq[String])(using Frame): UI =
         val listed = if keys.isEmpty then "" else keys.take(5).mkString(" (", ", ", if keys.sizeIs > 5 then ", ...)" else ")")
         div
             .cssClass("p-uic-key-error")
             .role("alert")(s"$component: $advice$listed")
     end card
 
-    /** The card for a typed binding that holds a value no option carries. */
-    def unknown(component: String, labels: Seq[String])(using Frame): UI =
-        card(component, Diagnostic.unknown(labels).advice, labels)
-
-    /** The card for a value a reader edits, bound one way with nobody to hear the edit: every change is put back. `setter`
-      * names the binding, `events` the events that would hear it.
-      */
-    def unheard(component: String, setter: String, events: String)(using Frame): UI =
-        card(
-            component,
-            s"$setter is bound one way and nothing hears a change, so the reader cannot change it; add $events, or bind a SignalRef",
-            Nil
-        )
-    end unheard
 end Diagnostics
