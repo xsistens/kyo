@@ -1346,6 +1346,157 @@ class StreamCoreExtensionsTest extends kyo.test.Test[Any]:
             end for
         }
 
+        // A consumer interrupted while the operator runs leaves no element fiber parked. The interrupt races the hand-off
+        // of fibers to the consumer and the spawning of new ones, so one run rarely lands in a window and each scenario
+        // repeats under contention. A fiber that was not interrupted stays parked on the gate and never counts as released,
+        // which the leaf timeout reports.
+        "interrupting the consumer stops every element fiber" - {
+            type Operator = (Stream[Int, Any], Int => Int < Async) => Any < Async
+
+            val operators = Seq[(String, Operator)](
+                ("mapPar", (s, f) => s.mapPar(64)(f).run),
+                ("mapParUnordered", (s, f) => s.mapParUnordered(64)(f).run),
+                ("mapChunkPar", (s, f) => s.mapChunkPar(64)(c => Kyo.foreach(c)(f)).run),
+                ("mapChunkParUnordered", (s, f) => s.mapChunkParUnordered(64)(c => Kyo.foreach(c)(f)).run),
+                ("mapParUnordered with an unbounded buffer", (s, f) => s.mapParUnordered(64, Int.MaxValue)(f).run)
+            )
+
+            def source(elements: Int): Stream[Int, Any] =
+                Stream.init(Chunk.from(1 to elements)).rechunk(1)
+
+            // Elements for which free(v) holds finish at once, and the rest park until the leaf is done with them.
+            def stopsEveryFiber(elements: Int, waitFor: Int, free: Int => Boolean)(operator: Operator)(using
+                kyo.test.AssertScope,
+                Frame
+            ) =
+                Async.foreachDiscard(Chunk.from(1 to 3000), 32) { _ =>
+                    for
+                        started  <- Latch.init(waitFor)
+                        acquired <- AtomicInt.init(0)
+                        released <- AtomicInt.init(0)
+                        gate     <- Latch.init(1)
+                        consumer <- Fiber.initUnscoped {
+                            operator(
+                                source(elements),
+                                v =>
+                                    if free(v) then started.release.andThen(v)
+                                    else
+                                        // The bracket pairs the counts: no interrupt lands between acquiring and owing the release.
+                                        Sync.acquireReleaseWith(acquired.incrementAndGet)((_, _) => released.incrementAndGet) { _ =>
+                                            started.release.andThen(gate.await).andThen(v)
+                                        }
+                            )
+                        }
+                        _ <- started.await
+                        _ <- consumer.interrupt
+                        _ <- consumer.getResult
+                        _ <- Sync.ensure(gate.release) {
+                            assertEventually(acquired.get.map(a => released.get.map(_ == a)))
+                        }
+                    yield ()
+                }.andThen(succeed)
+
+            operators.foreach { (name, operator) =>
+                name - {
+                    "with every element fiber parked" in {
+                        stopsEveryFiber(4, 4, _ => false)(operator)
+                    }
+
+                    // New fibers keep being spawned as the interrupt lands.
+                    "with spawns racing the interrupt" in {
+                        stopsEveryFiber(32, 1, _ => false)(operator)
+                    }
+
+                    // Joins finish as the interrupt lands, with parked fibers behind them.
+                    "with earlier element fibers finishing" in {
+                        stopsEveryFiber(8, 8, _ <= 4)(operator)
+                    }
+                }
+            }
+        }
+
+        "ElementFibers" - {
+            "close interrupts fibers recorded before it and spawned after it" in {
+                for
+                    gate   <- Latch.init(1)
+                    fibers <- Sync.defer(new StreamCoreExtensions.ElementFibers)
+                    before <- fibers.spawn(gate.await.andThen(1))
+                    _      <- fibers.close
+                    after  <- fibers.spawn(gate.await.andThen(2))
+                    first  <- before.getResult
+                    second <- after.getResult
+                    _      <- gate.release
+                yield assert(first.isPanic && second.isPanic)
+                end for
+            }
+
+            "a finished join drops its own fiber wherever it is, and close stops the rest" in {
+                import AllowUnsafe.embrace.danger
+                for
+                    gate   <- Latch.init(1)
+                    fibers <- Sync.defer(new StreamCoreExtensions.ElementFibers)
+                    parked <- fibers.spawn(gate.await.andThen(1))
+                    second <- fibers.spawn(2)
+                    _      <- second.get
+                    _      <- Sync.defer(fibers.joined(second))
+                    held   <- Sync.defer(fibers.held)
+                    _      <- fibers.close
+                    result <- parked.getResult
+                    _      <- gate.release
+                yield
+                    assert(held == 1)
+                    assert(result.isPanic)
+                end for
+            }
+        }
+
+        // A consumer that stops early leaves nothing parked. The first element waits until the others hold their
+        // resources, so the stop is always observed with exactly three parked fibers.
+        "stopping the consumer early stops every element fiber" - {
+            def stops(run: (Stream[Int, Any], Int => Int < Async) => Any < Async)(using kyo.test.AssertScope, Frame) =
+                for
+                    started  <- Latch.init(3)
+                    released <- AtomicInt.init(0)
+                    gate     <- Latch.init(1)
+                    _        <- run(
+                        Stream.init(Chunk.from(1 to 4)).rechunk(1),
+                        v =>
+                            if v == 1 then started.await.andThen(v)
+                            else
+                                Sync.ensure(released.incrementAndGet.unit):
+                                    started.release.andThen(gate.await).andThen(v)
+                    )
+                    _ <- Sync.ensure(gate.release)(assertEventually(released.get.map(_ == 3)))
+                yield succeed
+
+            "mapPar" in stops((s, f) => s.mapPar(8)(f).take(1).run)
+            "mapParUnordered" in stops((s, f) => s.mapParUnordered(8)(f).take(1).run)
+            "mapChunkPar" in stops((s, f) => s.mapChunkPar(8)(c => Kyo.foreach(c)(f)).take(1).run)
+            "mapChunkParUnordered" in stops((s, f) => s.mapChunkParUnordered(8)(c => Kyo.foreach(c)(f)).take(1).run)
+        }
+
+        // Stopping the elements belongs to the consumer's exit, not the source's: a source ending on Closed ends the stream, and
+        // the element in the consumer's hand when that happens is not interrupted into a panic. Whether the consumer has taken
+        // the fiber by then depends on the run, so the scenario repeats.
+        "a source failing with Closed never ends in a panic" in {
+            Kyo.foreachDiscard(Chunk.from(1 to 500)) { _ =>
+                for
+                    started <- Latch.init(1)
+                    gate    <- Latch.init(1)
+                    source: Stream[Int, Abort[Closed] & Async] = Stream(
+                        Emit.valueWith(Chunk(1))(started.await.andThen(Abort.fail(Closed("source", summon[Frame]))))
+                    )
+                    fiber <- Fiber.initUnscoped {
+                        source.mapPar(8)(v => started.release.andThen(gate.await).andThen(v)).run
+                    }
+                    _      <- started.await
+                    _      <- gate.release
+                    result <- fiber.getResult
+                yield assert(!result.isPanic, s"$result")
+                end for
+            }.andThen(succeed)
+        }
+
         "the rest of a public peel cannot be forked" in {
             typeCheckFailure(
                 """
