@@ -58,12 +58,15 @@ class OrganizationChartTest extends ReactiveValueContract:
         toggles(t).map(_.headOption.getOrElse(throw new AssertionError("no toggle")))
 
     // The toggle is a button and nothing else, so a fixed one is a tab stop that says it changes nothing.
-    holds(new SlotCase[uic.OrganizationChart[String], Set[String]](
-        name = "expanded",
+    private def expandedCase(
+        name: String,
+        hear: (uic.OrganizationChart[String], Set[String] => UI.Action) => Frame ?=> uic.OrganizationChart[String]
+    ) = new SlotCase[uic.OrganizationChart[String], Set[String]](
+        name = name,
         // `expanded()` turns the toggles on over subtrees the chart keeps itself, starting fully open.
         bare = Present(org.expanded()),
         bind = org.expanded(_),
-        hear = (o, f) => o.onExpandedChange(f),
+        hear = hear,
         event = "onExpandedChange",
         render = _.render,
         start = Set("ceo"),
@@ -71,18 +74,24 @@ class OrganizationChartTest extends ReactiveValueContract:
         control = toggle(_),
         shows = toggle(_).map(t => if t.attrs.ariaAttrs.get("expanded").contains("true") then Set("ceo") else Set.empty),
         ready = Present(toggles(_).map(_.exists(declaresClick)))
-    ))
+    )
+
+    holds(expandedCase("expanded", (o, f) => o.onExpandedChange(f)))
+    heardBy(expandedCase("expanded, heard by onNodeToggle", (o, f) => o.onNodeToggle(_ => f(Set.empty))))
 
     private val idsByLabel = Map("CEO" -> "ceo", "CTO" -> "cto")
 
     private def single(using Frame) = org.selectionMode(uic.SelectionMode.Single)
 
     // A node box has no role, so a fixed selection has no words to say it in: it is fixed because no node takes a click.
-    holds(new SlotCase[uic.OrganizationChart[String], Set[String]](
-        name = "selection",
+    private def selectionCase(
+        name: String,
+        hear: (uic.OrganizationChart[String], Set[String] => UI.Action) => Frame ?=> uic.OrganizationChart[String]
+    ) = new SlotCase[uic.OrganizationChart[String], Set[String]](
+        name = name,
         bare = Present(single),
         bind = single.selection(_),
-        hear = (o, f) => o.onSelectionChange(f),
+        hear = hear,
         event = "onSelectionChange",
         render = _.render,
         start = Set.empty,
@@ -91,7 +100,10 @@ class OrganizationChartTest extends ReactiveValueContract:
         shows = elementsWithClass(_, "p-organizationchart-node-selected").map(_.map(n => idsByLabel(textOf(n))).toSet),
         isFixed = Present(nodes(_).map(ns => ns.nonEmpty && ns.forall(n => !declaresClick(n)))),
         ready = Present(nodes(_).map(_.exists(declaresClick)))
-    ))
+    )
+
+    holds(selectionCase("selection", (o, f) => o.onSelectionChange(f)))
+    heardBy(selectionCase("selection, heard by onNodeClick", (o, f) => o.onNodeClick(k => f(Set(k)))))
 
     // ---- the node cursor ----
     //
