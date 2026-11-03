@@ -253,7 +253,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     end drive
 
     /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
-    private def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
+    private[uic] def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
         Abort.run[Unit](Retry[Unit](Schedule.fixed(10.millis).maxDuration(within))(
             cond.map(ok => if ok then Kyo.unit else Abort.fail(()))
         )).map(_.isSuccess)
