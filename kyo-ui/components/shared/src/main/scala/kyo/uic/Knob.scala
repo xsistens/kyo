@@ -150,7 +150,7 @@ final case class Knob private (
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is painted away again.
         if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue
-        then fragment(field, KeyDiagnostics.unheard("Knob", "value", "onChange"))
+        then fragment(field, Diagnostics.unheard("Knob", "value", "onChange"))
         else field
     end renderLive
 

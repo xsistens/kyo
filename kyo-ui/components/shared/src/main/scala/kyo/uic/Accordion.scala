@@ -206,7 +206,7 @@ final case class Accordion[K] private (
         if !(ReactiveValue.deaf(singleSlot, heard) || ReactiveValue.deaf(multiSlot, heard)) then drawn
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "Accordion",
                     "the open panels are bound one way and nothing hears a click, so the reader cannot change them; add " +
                         "onValueChange, or bind a SignalRef",

@@ -104,7 +104,7 @@ final case class Inplace private (
             // A signal nobody hears: every side the reader asks for is painted away again.
             case _ if ReactiveValue.deaf(activeSlot, heard) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "Inplace",
                         "the active side is bound one way and nothing hears the reader ask for the other; add " +
                             "onActiveChange, or bind a SignalRef",

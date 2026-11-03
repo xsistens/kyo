@@ -239,7 +239,7 @@ final case class CascadeSelect[A] private (
         if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "CascadeSelect",
                     "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
                         "onOpenChange, or bind a SignalRef",
@@ -339,7 +339,7 @@ final case class CascadeSelect[A] private (
         val unknownCard: List[UI] =
             held match
                 case Present(a) if !leaves.exists(l => key(l) == current) && !loading =>
-                    List(KeyDiagnostics.unknown("CascadeSelect", Seq(labelF(a))))
+                    List(Diagnostics.unknown("CascadeSelect", Seq(labelF(a))))
                 case _ => Nil
 
         def closeAll: UI.Action =
@@ -520,7 +520,7 @@ final case class CascadeSelect[A] private (
     private def unheardCard(using Frame): List[UI] =
         if disabledFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "CascadeSelect",
                 "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange or " +
                     "onPick, or bind a SignalRef",

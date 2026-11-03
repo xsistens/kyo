@@ -3944,7 +3944,7 @@ final case class DataTable[A] private (
     end footerCell
 
     /** The loud card rendered above the table when per-row IDENTITY is in use but
-      * [[rowKey]] is unset (see [[KeyDiagnostics]]).
+      * [[rowKey]] is unset (see [[Diagnostics]]).
       *
       * The fallback key is the row's position, and position is not an identity: it
       * is stable under sorting and filtering (both are computed over the original
@@ -3960,7 +3960,7 @@ final case class DataTable[A] private (
         val unset =
             if rowKeyF.isDefined || !usesIdentity then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "selection, expansion or onRowClick is bound but rowKey is unset, so rows are keyed by position " +
                         "and a data change re-associates that state with the wrong record; set rowKey",
@@ -3974,10 +3974,10 @@ final case class DataTable[A] private (
         val repeated =
             if rowKeyF.isEmpty then Nil
             else
-                KeyDiagnostics.duplicates(shown.map(keyOf)) match
+                Diagnostics.duplicates(shown.map(keyOf)) match
                     case Nil  => Nil
                     case dups =>
-                        List(KeyDiagnostics.card(
+                        List(Diagnostics.card(
                             "DataTable",
                             "rowKey repeats over the rows on the screen, so the rows sharing a key share their " +
                                 "selection and expansion, and the body renders every row again on every change; " +
@@ -3988,7 +3988,7 @@ final case class DataTable[A] private (
     end rowKeyCard
 
     /** The loud cards for the ways a column tree and a sort spec mislead at render time
-      * rather than at compile time (see [[KeyDiagnostics]]).
+      * rather than at compile time (see [[Diagnostics]]).
       *
       * A group holding no column occupies nothing, so it disappears from the header
       * instead of reporting itself. A spec entry that matches no sortable column does
@@ -4003,7 +4003,7 @@ final case class DataTable[A] private (
         val sortable                         = allPaths.collect { case (p, c) if canSortBy(c) => p }
         val unknown                          = if sortSlot.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
         val ambiguous                        =
-            if sortSlot.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
+            if sortSlot.isEmpty then Nil else Diagnostics.duplicates(sortable.map(show))
         // A column asked to be sortable with nothing to sort by: the flag decides whether the
         // reader may change the spec, and an ordering is what a change would act on.
         // Not in a prepared table: there the flag is the whole declaration, and the
@@ -4017,7 +4017,7 @@ final case class DataTable[A] private (
         val emptyCard =
             if empties.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "a headerGroup holds no column, so it renders nothing; give it columns or drop it",
                     empties
@@ -4025,7 +4025,7 @@ final case class DataTable[A] private (
         val unknownCard =
             if unknown.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the sort spec names a column this table cannot sort; a path is the group labels around " +
                         "the column followed by its header, and the column needs " +
@@ -4036,7 +4036,7 @@ final case class DataTable[A] private (
         val ambiguousCard =
             if ambiguous.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "two sortable columns share a path, so no spec can tell them apart; rename one or put " +
                         "them under different headerGroups",
@@ -4045,7 +4045,7 @@ final case class DataTable[A] private (
         val noOrderingCard =
             if noOrdering.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "sortable(true) on a column with no ordering has nothing to sort by; add sortBy, or drop " +
                         "the flag",
@@ -4054,7 +4054,7 @@ final case class DataTable[A] private (
         val unheardCard =
             if sortable.isEmpty || !ReactiveValue.deaf(sortSlot, onSortF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the sort is bound one way and nothing hears a header press, so the reader cannot change it; add " +
                         "onSortChange, or bind a SignalRef",
@@ -4077,7 +4077,7 @@ final case class DataTable[A] private (
         val nothing    =
             if columnFiltersSlot.isEmpty || filterable then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "columnFilters is bound but no column can be filtered, so the filter row has nothing to hold; " +
                         "add Column.filterBy",
@@ -4092,7 +4092,7 @@ final case class DataTable[A] private (
         val unknownCard =
             if unknown.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the column filters name a column this table cannot filter; a path is the group labels around " +
                         "the column followed by its header, and the column needs a filterBy",
@@ -4107,7 +4107,7 @@ final case class DataTable[A] private (
         val crowdedCard =
             if crowded.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "a filter row is one input per column and these filters carry several conditions, of which it " +
                         "shows the first; use filterDisplay(FilterDisplay.Menu), which is where several belong",
@@ -4116,7 +4116,7 @@ final case class DataTable[A] private (
         val unheard =
             if !filterable || !ReactiveValue.deaf(columnFiltersSlot, onColumnFiltersF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the column filters are bound one way and nothing hears what the reader types or applies, so the " +
                         "reader cannot change them; add onColumnFiltersChange, or bind a SignalRef",
@@ -4141,7 +4141,7 @@ final case class DataTable[A] private (
         val pinned =
             if !widthsOn || resizable then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "columnWidths is bound but no boundary is draggable, so nothing can ever write into it; a " +
                         "boundary needs a resizable column on both sides of it, and the last column has none",
@@ -4156,7 +4156,7 @@ final case class DataTable[A] private (
         val unknownCard =
             if unknown.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the column widths name a column this table does not have; a path is the group labels around " +
                         "the column followed by its header",
@@ -4166,7 +4166,7 @@ final case class DataTable[A] private (
         val expandCard =
             if unsized.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "an expanding table states its own width, which is the sum of its columns, so every column " +
                         "needs one; these have none and the table resizes to fit instead",
@@ -4175,7 +4175,7 @@ final case class DataTable[A] private (
         val unheard =
             if !resizeOn || !ReactiveValue.deaf(columnWidthsSlot, onColumnWidthsF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the column widths are bound one way and nothing hears a drag, so the reader cannot change them; add " +
                         "onColumnWidthsChange, or bind a SignalRef",
@@ -4195,7 +4195,7 @@ final case class DataTable[A] private (
             val nothing =
                 if reorderable then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "columnOrder is bound but no column may be dragged, so nothing can ever write into it; a move " +
                             "needs two columns willing to trade places",
@@ -4205,7 +4205,7 @@ final case class DataTable[A] private (
             val strangers =
                 if unknown.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "the column order names a column this table does not have; a path is the group labels around " +
                             "the column followed by its header",
@@ -4222,7 +4222,7 @@ final case class DataTable[A] private (
             val torn =
                 if split.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "the column order asks for a header group's columns apart, and a group is one cell; they are " +
                             "rendered together where the first of them was asked for",
@@ -4231,7 +4231,7 @@ final case class DataTable[A] private (
             val unheard =
                 if !reorderOn || !ReactiveValue.deaf(columnOrderSlot, onColumnOrderF) then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "the column order is bound one way and nothing hears a drop, so the reader cannot change it; add " +
                             "onColumnOrderChange, or bind a SignalRef",
@@ -4261,7 +4261,7 @@ final case class DataTable[A] private (
         val bound = (if sourceV.isDefined then List("source") else Nil) ++ rowsForm.toList
         if bound.size < 2 then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "DataTable",
                 "the rows are bound twice and only one binding is read; keep the one the table should show",
                 bound
@@ -4284,14 +4284,14 @@ final case class DataTable[A] private (
                     "a SignalRef")
         val unheard = rows ++ groups
         if unheard.isEmpty then Nil
-        else List(KeyDiagnostics.card("DataTable", "a binding the reader cannot move", unheard))
+        else List(Diagnostics.card("DataTable", "a binding the reader cannot move", unheard))
     end expansionCards
 
     private def selectionCards(using Frame): List[UI] =
         val limited =
             if selectableF.isEmpty || selectionModeV != SelectionMode.None then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "selectableWhen limits a selection this table does not have; set selectionMode to give it one",
                     Nil
@@ -4307,7 +4307,7 @@ final case class DataTable[A] private (
         val clash =
             if !cellsOn || claimed.sizeIs < 2 then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "a click on a cell can mean one thing, and this table binds more than one; cell editing keeps " +
                         "the click, then row selection, and cell selection is off while either is bound",
@@ -4318,7 +4318,7 @@ final case class DataTable[A] private (
                 selectionModeV == SelectionMode.Multiple
             then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "cell selection needs selectionMode Single or Multiple to say what a click means; Checkbox and " +
                         "Radio are about a column of the table, which a cell is not in",
@@ -4334,7 +4334,7 @@ final case class DataTable[A] private (
         val unwritable =
             if !oneWay || !noOutlet || selectionModeV != SelectionMode.Checkbox then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "selection is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
                         "click, so onRowClick is no outlet for it; bind onSelectionChange, or a SignalRef",
@@ -4343,7 +4343,7 @@ final case class DataTable[A] private (
         val inert =
             if !oneWay || !noOutlet || !rowClickSelects || onRowClickF.isDefined then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "selection is bound one way with no onSelectionChange and no onRowClick, so a row click has " +
                         "nowhere to go; the rows offer the pointer that says they can be picked and then do nothing",
@@ -4354,7 +4354,7 @@ final case class DataTable[A] private (
         val keyOnly =
             if !oneWay || !metaKeyFlag || !noOutlet || onRowClickF.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "metaKeySelection resolves a click into a new selection, and onRowClick reports the row clicked, which " +
                         "cannot express a range or a replacement; a one-way selection needs onSelectionChange",
@@ -4363,7 +4363,7 @@ final case class DataTable[A] private (
         val contextDeaf =
             if !ReactiveValue.deaf(contextTyped, onRowContextF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the context menu row is bound one way and nothing hears a right-click, so the browser's own menu " +
                         "opens over the rows; add onContextMenuRowChange, or bind a SignalRef",
@@ -4372,7 +4372,7 @@ final case class DataTable[A] private (
         val cellsDeaf =
             if !cellSelectOn || !ReactiveValue.deaf(cellsTyped, onCellsF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the selected cells are bound one way and nothing hears a click, so the reader cannot pick one; add " +
                         "onSelectedCellsChange, or bind a SignalRef",
@@ -4381,7 +4381,7 @@ final case class DataTable[A] private (
         val anchorDeaf =
             if !rangeOn || !ReactiveValue.deaf(anchorSlot, onAnchorF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the selection anchor is bound one way and nothing hears a click move it, so every range starts " +
                         "where the signal says; add onSelectionAnchorChange, or bind a SignalRef",
@@ -4394,7 +4394,7 @@ final case class DataTable[A] private (
     private def scrollCards(using Frame): List[UI] =
         if !flexScrollFlag || scrollHeightV.isEmpty then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "DataTable",
                 "flexScroll takes the viewport's height from the parent and scrollHeight states one; the stated " +
                     "length is what the table scrolls, so drop one of the two",
@@ -4412,7 +4412,7 @@ final case class DataTable[A] private (
     ): List[UI] =
         if !handleColumn || movesFixed then Nil
         else if movesDeaf then
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "DataTable",
                 "the rows are bound one way and nothing hears a row drag, so a drop reaches nobody; add " +
                     "onRowsChange, or bind a SignalRef",
@@ -4422,7 +4422,7 @@ final case class DataTable[A] private (
             val owners = rowOrderOwners(sort, query, specs)
             if owners.isEmpty then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the rows are on the screen in an order the list does not hold, so a drop cannot land where " +
                         "the reader let go; the grips are not offered while that is true",
@@ -4444,7 +4444,7 @@ final case class DataTable[A] private (
             val geometry =
                 if viewportPx.isDefined then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "scrollRows works out how many rows fit from the scroll height, so it needs one, in px; " +
                             "the table renders every row instead",
@@ -4454,7 +4454,7 @@ final case class DataTable[A] private (
             val uneven =
                 if viewportPx.isEmpty || unevenRows.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "a windowed body places its rows by counting them, so every row has to be the same height, " +
                             "and these render rows of their own; the table renders every row instead",
@@ -4463,7 +4463,7 @@ final case class DataTable[A] private (
             val paginated =
                 if !windowOn || sourceV.isDefined || pageSizeV.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "a windowed table scrolls instead of paginating, so the page list is not rendered and the " +
                             "page size goes unread; drop one of the two",
@@ -4472,7 +4472,7 @@ final case class DataTable[A] private (
             val navigable =
                 if !windowOn || !cellNavV.getOrElse(leafCols.exists(_.isEditable)) then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "the keyboard cursor addresses cells by their position among the rendered rows, and a " +
                             "windowed body renders a window; navigation is off while the rows are windowed",
@@ -4495,7 +4495,7 @@ final case class DataTable[A] private (
             val loose =
                 if scrollingOn then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "frozen rows hold against the edge of a scroll container, and this table has none; " +
                             "give it a scrollHeight or drop frozenRows",
@@ -4506,7 +4506,7 @@ final case class DataTable[A] private (
             val both  =
                 if twice.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "a frozen row is in the body as well, so the table renders one record twice and cannot tell " +
                             "the two apart; frozen rows are a list of their own",
@@ -4528,7 +4528,7 @@ final case class DataTable[A] private (
             val overCard =
                 if over.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "a lazily loaded table was given more rows than one page holds, so the paginator and the " +
                             "rows disagree about where the page ends; hand it the page paginate was told the size of",
@@ -4537,7 +4537,7 @@ final case class DataTable[A] private (
             val pastCard =
                 if past.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "DataTable",
                         "a lazily loaded table was given more rows than the total it says exist; the total counts " +
                             "every row the query matched, not the ones on this page",
@@ -4557,7 +4557,7 @@ final case class DataTable[A] private (
         else
             def card(text: String, paths: List[List[String]]): List[UI] =
                 if paths.isEmpty then Nil
-                else List(KeyDiagnostics.card("DataTable", text, paths.map(_.mkString(" / ")).sorted))
+                else List(Diagnostics.card("DataTable", text, paths.map(_.mkString(" / ")).sorted))
             card(
                 "a frozen column has no width, so how far from the edge it holds cannot be worked out; give it " +
                     "Column.width, or a width through the bound columnWidths",
@@ -4580,7 +4580,7 @@ final case class DataTable[A] private (
         val nothing  =
             if !bound || editable then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "an editing state is bound but no column is editable, so nothing can be edited; add " +
                         "Column.editable",
@@ -4592,7 +4592,7 @@ final case class DataTable[A] private (
         val nowhere =
             if !editable || !editsDeaf then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "a column is editable but the rows are bound one way and nothing hears an edit, so a commit " +
                         "reaches nobody; add onRowsChange, or bind a SignalRef",
@@ -4601,7 +4601,7 @@ final case class DataTable[A] private (
         val both =
             if !(rowEditOn && cellEditOn) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "editingRows and editingCell are both bound; a table edits by row or by cell, not both, so " +
                         "bind one",
@@ -4610,7 +4610,7 @@ final case class DataTable[A] private (
         val editRowsDeaf =
             if !ReactiveValue.deaf(editingRowsTyped, onEditingRowsF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the editing rows are bound one way and nothing hears a row editor button, so the reader cannot " +
                         "open a row; add onEditingRowsChange, or bind a SignalRef",
@@ -4619,7 +4619,7 @@ final case class DataTable[A] private (
         val cellDeaf =
             if !ReactiveValue.deaf(editingCellTyped, onEditingCellF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "DataTable",
                     "the editing cell is bound one way and nothing hears a click, so the reader cannot open an editor; " +
                         "add onEditingCellChange, or bind a SignalRef",

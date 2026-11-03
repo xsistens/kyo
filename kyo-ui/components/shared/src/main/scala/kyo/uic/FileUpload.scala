@@ -131,7 +131,7 @@ final case class FileUpload private (
         filesSlot match
             case Present(_) if ReactiveValue.deaf(filesSlot, onChangeF) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "FileUpload",
                         "the files are bound one way and nothing hears a pick, so the reader's choice reaches nobody; add " +
                             "onChange, or bind a SignalRef",

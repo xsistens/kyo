@@ -114,7 +114,7 @@ final case class TextArea private (
         val built    = body(validity)
         val unheard  = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
-        if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard("TextArea", "value", "onInput or onChange"))
+        if unheard then fragment(validity.follow(built), Diagnostics.unheard("TextArea", "value", "onInput or onChange"))
         else validity.follow(built)
     end render
 

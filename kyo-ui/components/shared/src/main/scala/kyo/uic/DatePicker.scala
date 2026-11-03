@@ -281,7 +281,7 @@ final case class DatePicker[A] private (
             if unheard.isEmpty then renderLive
             else
                 fragment(
-                    (unheard.map(advice => KeyDiagnostics.card("DatePicker", advice + ", or bind a SignalRef", Nil)) :+ renderLive)*
+                    (unheard.map(advice => Diagnostics.card("DatePicker", advice + ", or bind a SignalRef", Nil)) :+ renderLive)*
                 )
             end if
         end if

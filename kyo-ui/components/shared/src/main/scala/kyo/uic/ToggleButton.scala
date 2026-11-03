@@ -128,7 +128,7 @@ final case class ToggleButton private (
             case _ => drawn(validity))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val deaf = checkedBinding.exists(b => b.dyn.isDefined && b.writable.isEmpty) && !ReactiveValue.heard(checkedBinding, onChangeF)
-        if deaf && !readonlyFlag && !disabledFlag then fragment(field, KeyDiagnostics.unheard("ToggleButton", "checked", "onChange"))
+        if deaf && !readonlyFlag && !disabledFlag then fragment(field, Diagnostics.unheard("ToggleButton", "checked", "onChange"))
         else field
     end render
 
