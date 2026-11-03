@@ -321,7 +321,33 @@ class SlotTest extends UicTest:
                 ("SpeedDial", uic.SpeedDial().items(uic.MenuItem("a")).render, "p-speeddial", 1),
                 ("SplitButton", uic.SplitButton("a").items(uic.MenuItem("b")).render, "p-splitbutton", 1),
                 ("Menu", uic.Menu().popup().items(uic.MenuItem("a")).render, "p-menu-list", 2),
-                ("TieredMenu", uic.TieredMenu().popup().items(uic.MenuItem("a")).render, "p-tieredmenu-root-list", 2)
+                ("TieredMenu", uic.TieredMenu().popup().items(uic.MenuItem("a")).render, "p-tieredmenu-root-list", 2),
+                ("Select", uic.Select[String]().options(Seq("a"))(identity).render, "p-select", 1),
+                ("MultiSelect", uic.MultiSelect[String]().options(Seq("a"))(identity).render, "p-multiselect", 1),
+                (
+                    "CascadeSelect",
+                    uic.CascadeSelect[String]().options(Seq.empty[uic.CascadeItem[String]])(identity).render,
+                    "p-cascadeselect",
+                    1
+                ),
+                ("TreeSelect", uic.TreeSelect[String]().render, "p-treeselect", 1),
+                ("DatePicker", uic.DatePicker[java.time.LocalDate]().render, "p-datepicker", 1),
+                ("Listbox", uic.Listbox[String]().selectionMode(uic.SelectionMode.Single).render, "p-listbox", 1),
+                ("Tabs", uic.Tabs[String]().tab("a", "a")(UI.empty).render, "p-tabs", 1),
+                ("Accordion", uic.Accordion[String]().panel("a", "a")(UI.empty).render, "p-accordion", 1),
+                ("Stepper", uic.Stepper[String]().render, "p-stepper", 1),
+                ("Galleria", uic.Galleria().render, "p-galleria", 1),
+                ("Tree", uic.Tree[String]().selectionMode(uic.SelectionMode.Single).render, "p-tree", 1),
+                ("TreeTable", uic.TreeTable[String]().selectionMode(uic.SelectionMode.Single).render, "p-treetable", 1),
+                (
+                    "OrganizationChart",
+                    uic.OrganizationChart[String]().expanded().selectionMode(uic.SelectionMode.Single).render,
+                    "p-organizationchart",
+                    1
+                ),
+                ("OrderList", uic.OrderList[String]().items(Seq("a"))(identity).render, "p-orderlist", 1),
+                ("PickList", uic.PickList[String]().render, "p-picklist", 1),
+                ("Paginator", uic.Paginator().render, "p-paginator", 1)
             )
             inOneMount.foreach { (name, ui, cls, mounts) =>
                 s"$name" in mountsAbove(ui, cls).map(n => assert(n == mounts, s"$name is under $n mounts"))
