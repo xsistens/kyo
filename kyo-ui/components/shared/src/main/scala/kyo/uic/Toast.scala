@@ -26,8 +26,7 @@ import kyo.UI.*
   * Env/Layer service whose `render` region stacks queued messages.
   */
 final case class Toast private (
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     durationMs: Int = 3000,
     positionV: OverlayPosition = OverlayPosition.TopRight,
     severityV: Severity = Severity.Info,
@@ -44,12 +43,12 @@ final case class Toast private (
       * reachable and inert. Unbound, the toast keeps the state itself and starts open, so it shows until the reader
       * closes it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Toast = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): Toast = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Toast = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Toast = copy(openSlot = openSlot.hear(f))
 
     /** Auto-dismiss duration in milliseconds (emitted as `data-uic-duration`;
       * Prime's `life`).
@@ -88,35 +87,17 @@ final case class Toast private (
     private def severityIcon: IconGlyph = Toast.severityIcon(severityV)
 
     private[uic] def render(using Frame): UI =
-        openSlot match
-            // Unbound, the toast keeps its visibility itself and starts open. Before the mount runs it draws from a
-            // signal, so the static page does not call its close button fixed.
-            case Absent =>
-                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
-                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
-                )
-            // A signal nobody hears, on a toast the reader can close: every close is painted away again. A toast with no
-            // close button has nothing to hear.
-            case _ if closableFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
-                fragment(
-                    Diagnostics.card(
-                        "Toast",
-                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
-                            "onOpenChange, or bind a SignalRef",
-                        Nil
-                    ),
-                    drawn
-                )
-            case _ => drawn
-    end render
+        // Unbound, the toast keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so the
+        // static page does not call its close button fixed. A toast with no close button has nothing to hear.
+        Slot.draw(if closableFlag then openSlot else openSlot.quieted, Toast.openName, start = true)(s => copy(openSlot = s).drawn)
 
     private def drawn(using Frame): UI =
-        openSlot match
+        openSlot.binding match
             case Absent        => UI.empty
             case Present(slot) =>
                 // A constant nobody hears is fixed: the toast stays, and its close button closes nothing.
-                val fixed            = ReactiveValue.fixed(openSlot, onOpenF)
-                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                val fixed            = openSlot.fixed
+                val close: UI.Action = openSlot.change(false)
                 // Shown while the binding says so: a constant needs no region, a signal is one boundary.
                 def shown(ui: => UI): UI = slot.const match
                     case Present(v) => if v then ui else UI.empty
@@ -169,6 +150,8 @@ end Toast
 
 object Toast:
     def apply(): Toast = new Toast()
+
+    private val openName = Slot.Name("Toast", "the visibility", "a close", "onOpenChange")
 
     /** The `.p-toast-message-<token>` suffix (Prime's toast vocabulary; `Danger`
       * maps to `error`, `Primary`/`Help` fall back to the `info` skin), shared
