@@ -101,7 +101,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   of its own, and `Slot.draw` that with the placeholder drawn over `slot.standIn(start)` and the card in front, for a container.
   `Slot.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
   state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
-  the component a key. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
+  the component a key. So a component that draws itself again for `disabled` reads that signal below the mount that holds its state,
+  never around it (`SlotCase.disable` holds the fields that do). A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
   and keeps nothing of its own, and so does a paginator a table or a view embeds. A hearer turns `contextMenuRow` on as well
   (decided 2026-10-31): unbound with an `onContextMenuRowChange` the table keeps the row itself and marks it, and unbound with
   nothing hearing the rows leave the browser its own menu.

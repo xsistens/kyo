@@ -39,7 +39,8 @@ class KnobTest extends ReactiveValueContract:
             handled(c.attrs.onPointerDown.getOrElse(throw new AssertionError("the box takes no pointer"))(top)),
         answers = _.attrs.onPointerDown.nonEmpty,
         fixedOn = Present(dial(_)),
-        saysFixed = readonlyDial
+        saysFixed = readonlyDial,
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     holds(new SlotCase[uic.Knob, Double](
@@ -55,7 +56,8 @@ class KnobTest extends ReactiveValueContract:
         shows = announced(_),
         gesture = (c: UI.Ast.Element) => press(c, UI.Keyboard.ArrowUp),
         answers = _.attrs.onKeyDown.nonEmpty,
-        saysFixed = readonlyDial
+        saysFixed = readonlyDial,
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     "a value bound one way says nothing where it reaches somebody or nobody can turn it: a ref, disabled" in {

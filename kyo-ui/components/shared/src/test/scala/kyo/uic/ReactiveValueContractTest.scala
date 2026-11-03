@@ -82,6 +82,10 @@ abstract class ReactiveValueContract extends UicTest:
       *   for a gesture the component works out from geometry it measures (a column dragged across the header, a boundary
       *   moved): where the elements it measures sit, by id, which the headless page answers its measures with
       *   ([[UicTest.layout]]). Empty, the page has no layout.
+      * @param disable
+      *   for a component that draws itself again when `disabled` changes: the component with its `disabled` following the
+      *   signal. What the reader did has to outlast that, wherever the state is kept, so the mount that keeps it sits above the
+      *   region. Absent, the component has no such region: a channel-only field has nothing that could fail.
       */
     final class SlotCase[C, A](
         val name: String,
@@ -106,7 +110,8 @@ abstract class ReactiveValueContract extends UicTest:
         val keptNatively: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
         val after: Seq[UI => Frame ?=> Any < Async] = Nil,
         val mountDraws: Boolean = false,
-        val layout: Map[String, UI.Rect] = Map.empty
+        val layout: Map[String, UI.Rect] = Map.empty,
+        val disable: Maybe[(C, Signal[Boolean]) => Frame ?=> C] = Absent
     )(using val equal: CanEqual[A, A]):
 
         /** `v` run on a page laid out as [[layout]] says. */
@@ -365,6 +370,42 @@ abstract class ReactiveValueContract extends UicTest:
         end match
     end changes
 
+    /** Whether `next`, asked for on `build`, is still shown after `disabled` went through `flips`, each written once what
+      * follows it has settled, so no value is overtaken by the next. A region around the state would end the mount that holds
+      * it with the first flip.
+      */
+    private def keptThrough[C, A](s: SlotCase[C, A], disable: (C, Signal[Boolean]) => Frame ?=> C, build: Frame ?=> C, flips: Seq[Boolean])(
+        using
+        Frame,
+        kyo.test.AssertScope
+    ): Boolean < Async =
+        import s.equal
+        val shown: UI => Boolean < Sync = t =>
+            Abort.run[AssertionError](Abort.catching[AssertionError](s.shows(t))).map(_.toMaybe.exists(_ == s.next))
+        Signal.initRef(false).map { gate =>
+            val turns = flips.map(v => (_: UI) => setSettled(gate, v): Any < Async)
+            publishedAfterReady(s.render(disable(build, gate)), t => s.wired(t), until = shown, reads = Seq(gate))((s.steps ++ turns)*)
+                .map(_.nonEmpty)
+        }
+    end keptThrough
+
+    /** Registers the cases for a `disabled` signal over state the component keeps: what the reader did stays on screen while
+      * it is on, and is still there when it goes off.
+      */
+    private def holdsThroughDisabled[C, A](s: SlotCase[C, A]): Unit =
+        s.disable.foreach { disable =>
+            def starts(from: String, build: Frame ?=> C): Unit =
+                s"${s.name}: $from, a disabled signal going on leaves on screen what the reader did" in s.laidOut {
+                    keptThrough(s, disable, build, Seq(true)).map(kept => assert(kept, s"${s.next} is gone while disabled"))
+                }
+                s"${s.name}: $from, a disabled signal going on and off keeps what the reader did" in s.laidOut {
+                    keptThrough(s, disable, build, Seq(true, false)).map(kept => assert(kept, s"${s.next} is lost after disabled went off"))
+                }
+            end starts
+            if s.bare.isDefined then starts("unbound", s.bare.get)
+            if s.startText.isDefined && s.keptNatively.isEmpty then starts("from a constant", s.bind(s.start))
+        }
+
     /** Registers the cases of rule A for `s`: all six, or the four of them a slot with no unbound form has. */
     def holds[C, A](s: SlotCase[C, A]): Unit =
         import s.equal
@@ -452,6 +493,7 @@ abstract class ReactiveValueContract extends UicTest:
                 }
         end match
 
+        holdsThroughDisabled(s)
         heardBy(s)
     end holds
 

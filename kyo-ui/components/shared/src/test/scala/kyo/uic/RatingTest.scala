@@ -54,6 +54,7 @@ class RatingTest extends ReactiveValueContract:
     private def named(t: UI)(using Frame): Boolean < Sync = radios(t).map(rs => rs.size == 5 && rs.forall(_.name.isDefined))
 
     holds(new SlotCase[uic.Rating, Int](
+        disable = Present((c, on) => c.disabled(on)),
         name = "value",
         bare = Present(uic.Rating()),
         bind = uic.Rating().value(_),
