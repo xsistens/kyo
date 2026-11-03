@@ -68,6 +68,13 @@ private[uic] object ReactiveValue:
       */
     sealed trait Dyn[A] extends ReactiveValue[A]:
         def v: Signal[A]
+
+        /** With [[get]], what makes this its own name-based match result, so `case Dyn(sig)` allocates nothing. `false` as a type: a
+          * `Boolean` here, or a `Maybe.Ops` from `unapply`, makes the extractor refutable and every `Const | Dyn` match inexhaustive.
+          */
+        def isEmpty: false = false
+        def get: Signal[A] = v
+
         private[uic] def const: Maybe[A]       = Absent
         private[uic] def dyn: Maybe[Signal[A]] = Present(v)
     end Dyn
@@ -77,7 +84,7 @@ private[uic] object ReactiveValue:
         def apply[A](v: Signal[A]): Dyn[A] = OneWay(v)
 
         /** The backing signal of any reactive value (one- or two-way). */
-        def unapply[A](d: Dyn[A]): Some[Signal[A]] = Some(d.v)
+        def unapply[A](d: Dyn[A]): Dyn[A] = d
 
         final private case class OneWay[A](v: Signal[A]) extends Dyn[A]
     end Dyn
