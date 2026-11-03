@@ -283,7 +283,7 @@ class AutoCompleteTest extends ReactiveValueContract:
 
     // Typing reaches onInput; a pick and a clear reach other events, which hear them here so that the card a one-way text
     // draws for every edit nobody hears says nothing about the edit this slot is not.
-    private val valueSlot = new Slot[uic.AutoComplete[String], String](
+    private val valueSlot = new SlotCase[uic.AutoComplete[String], String](
         name = "value",
         bare = Present(plain),
         bind = plain.value(_),
@@ -308,7 +308,7 @@ class AutoCompleteTest extends ReactiveValueContract:
     blurs(valueSlot, (c, f) => c.onBlur(f))
 
     // The clear button, which a text drawn with nothing in it has no use for, so the slot starts from a text.
-    heardBy(new Slot[uic.AutoComplete[String], String](
+    heardBy(new SlotCase[uic.AutoComplete[String], String](
         name = "value cleared",
         bare = Present(plain.showClear(true)),
         bind = plain.showClear(true).value(_),

@@ -554,7 +554,7 @@ class MultiSelectTest extends ReactiveValueContract:
     private def named(t: UI)(using Frame): Set[Fruit] < Sync =
         elementWithClass(t, "p-multiselect-label").map(l => fruit.filter(f => textOf(l).contains(f.name)).toSet)
 
-    holds(new Slot[uic.MultiSelect[Fruit], Set[Fruit]](
+    holds(new SlotCase[uic.MultiSelect[Fruit], Set[Fruit]](
         name = "selection",
         bare = Present(multi),
         bind = multi.selection(_),
@@ -575,7 +575,7 @@ class MultiSelectTest extends ReactiveValueContract:
         )
     ))
 
-    holds(new Slot[uic.MultiSelect[Fruit], Boolean](
+    holds(new SlotCase[uic.MultiSelect[Fruit], Boolean](
         name = "open",
         bare = Present(multi),
         bind = multi.open(_),
@@ -601,7 +601,7 @@ class MultiSelectTest extends ReactiveValueContract:
 
     // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
     // owner decides.
-    heardBy(new Slot[uic.MultiSelect[Fruit], Boolean](
+    heardBy(new SlotCase[uic.MultiSelect[Fruit], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = multi.open(_),
@@ -637,7 +637,7 @@ class MultiSelectTest extends ReactiveValueContract:
 
     // The query is a text the field keeps itself, unbound and from a constant, since it draws the panel from it. Its input
     // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
-    holds(new Slot[uic.MultiSelect[Fruit], String](
+    holds(new SlotCase[uic.MultiSelect[Fruit], String](
         name = "filterQuery",
         bare = Present(multi.open(true).filterable(true)),
         bind = multi.open(true).filterQuery(_),

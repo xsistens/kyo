@@ -53,7 +53,7 @@ class RatingTest extends ReactiveValueContract:
     /** The radios grouped by the name the mount mints, which is when the tree the reader clicks in is the one it meets. */
     private def named(t: UI)(using Frame): Boolean < Sync = radios(t).map(rs => rs.size == 5 && rs.forall(_.name.isDefined))
 
-    holds(new Slot[uic.Rating, Int](
+    holds(new SlotCase[uic.Rating, Int](
         name = "value",
         bare = Present(uic.Rating()),
         bind = uic.Rating().value(_),
@@ -71,7 +71,7 @@ class RatingTest extends ReactiveValueContract:
 
     // The form layer's `Double` binding reports through the same `onChange(Int)`: the slot is held with that report read
     // as the `Double` it is. Unbound there is one state, the `Int` slot's, so this slot has no unbound form of its own.
-    holds(new Slot[uic.Rating, Double](
+    holds(new SlotCase[uic.Rating, Double](
         name = "value as a Double",
         bare = Absent,
         bind = uic.Rating().value(_),

@@ -65,7 +65,7 @@ class DataViewTest extends ReactiveValueContract:
             case None        => throw new AssertionError("no rows shown"))
 
     // The page is the paginator's argument, so it has no unbound form; the embedded paginator's next-page button moves it.
-    holds(new Slot[uic.DataView[Int], Int](
+    holds(new SlotCase[uic.DataView[Int], Int](
         name = "page",
         bare = Absent,
         bind = paged.paginate(10)(_),

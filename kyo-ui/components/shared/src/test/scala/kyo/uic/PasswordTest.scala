@@ -49,7 +49,7 @@ class PasswordTest extends ReactiveValueContract:
 
     // With the meter on, the field draws the meter from its text, so the text is the field's to keep: unbound or from a
     // constant it keeps the text itself, and the meter judges what the reader typed.
-    private val feedbackSlot = new Slot[uic.Password, String](
+    private val feedbackSlot = new SlotCase[uic.Password, String](
         name = "value with feedback",
         bare = Present(uic.Password().feedback(true)),
         bind = uic.Password().feedback(true).value(_),

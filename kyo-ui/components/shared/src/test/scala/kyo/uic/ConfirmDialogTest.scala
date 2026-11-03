@@ -15,7 +15,7 @@ class ConfirmDialogTest extends ReactiveValueContract:
     private def closers(t: UI)(using Frame) = elementsWithClass(t, "p-dialog-close-button")
     private def dialogs(t: UI)(using Frame) = elementsWithClass(t, "p-confirmdialog")
 
-    holds(new Slot[ConfirmDialog, Boolean](
+    holds(new SlotCase[ConfirmDialog, Boolean](
         name = "open",
         bare = Present(confirm),
         bind = confirm.open(_),

@@ -319,7 +319,7 @@ class CascadeSelectTest extends ReactiveValueContract:
         hear: (uic.CascadeSelect[String], Maybe[String] => UI.Action) => Frame ?=> uic.CascadeSelect[String],
         event: String
     ) =
-        new Slot[uic.CascadeSelect[String], Maybe[String]](
+        new SlotCase[uic.CascadeSelect[String], Maybe[String]](
             name = name,
             bare = Present(cascade),
             bind = v => cascade.selection(v),
@@ -345,7 +345,7 @@ class CascadeSelectTest extends ReactiveValueContract:
         hear: (uic.CascadeSelect[String], String => UI.Action) => Frame ?=> uic.CascadeSelect[String],
         event: String
     ) =
-        new Slot[uic.CascadeSelect[String], String](
+        new SlotCase[uic.CascadeSelect[String], String](
             name = name,
             // A field over the leaf itself always holds one: unbound, a cascade holds `Maybe`.
             bare = Absent,
@@ -380,7 +380,7 @@ class CascadeSelectTest extends ReactiveValueContract:
         end for
     }
 
-    holds(new Slot[uic.CascadeSelect[String], Boolean](
+    holds(new SlotCase[uic.CascadeSelect[String], Boolean](
         name = "open",
         bare = Present(cascade),
         bind = cascade.open(_),
@@ -402,7 +402,7 @@ class CascadeSelectTest extends ReactiveValueContract:
 
     // A chain open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and
     // the owner decides.
-    heardBy(new Slot[uic.CascadeSelect[String], Boolean](
+    heardBy(new SlotCase[uic.CascadeSelect[String], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = cascade.open(_),

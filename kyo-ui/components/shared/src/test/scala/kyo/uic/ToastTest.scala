@@ -11,7 +11,7 @@ class ToastTest extends ReactiveValueContract:
 
     private def toast(using Frame) = uic.Toast().summary("Saved").closable(true)
 
-    holds(new Slot[Toast, Boolean](
+    holds(new SlotCase[Toast, Boolean](
         name = "open",
         bare = Present(toast),
         bind = toast.open(_),

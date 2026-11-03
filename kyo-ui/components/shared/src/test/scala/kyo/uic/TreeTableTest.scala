@@ -330,7 +330,7 @@ class TreeTableTest extends ReactiveValueContract:
 
     // A sort is said by aria-sort, and a column header has no readonly state for it: a fixed sort is one no header changes,
     // by a press or by a key, on headers that stay the tab stops they are when the sort is live.
-    holds(new Slot[uic.TreeTable[Row], List[uic.SortKey]](
+    holds(new SlotCase[uic.TreeTable[Row], List[uic.SortKey]](
         name = "sort",
         bare = Present(table),
         bind = table.sort(_),
@@ -353,7 +353,7 @@ class TreeTableTest extends ReactiveValueContract:
 
     // The toggler is hidden from the tab order and a treegrid has no readonly state for its expansion, so a fixed expansion
     // says nothing beyond each row's aria-expanded: it is fixed because no toggler answers.
-    holds(new Slot[uic.TreeTable[Row], Set[Row]](
+    holds(new SlotCase[uic.TreeTable[Row], Set[Row]](
         name = "expanded",
         bare = Present(parentTable),
         bind = parentTable.expanded(_),
@@ -377,7 +377,7 @@ class TreeTableTest extends ReactiveValueContract:
 
     // A row's aria-selected says the selection, and a treegrid's readonly state is about its cells: a fixed selection is
     // one no row takes as a pick, the selectable class and the press gone with it.
-    holds(new Slot[uic.TreeTable[Row], Set[Row]](
+    holds(new SlotCase[uic.TreeTable[Row], Set[Row]](
         name = "selection",
         bare = Present(single),
         bind = single.selection(_),

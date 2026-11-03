@@ -51,7 +51,7 @@ class TieredMenuTest extends ReactiveValueContract:
 
     // A popup closes on a pick, an outside click or Escape: the rows are the control a gesture uses, and a fixed popup
     // is one nothing outside dismisses, since a pick still runs the item's own action.
-    holds(new Slot[TieredMenu, Boolean](
+    holds(new SlotCase[TieredMenu, Boolean](
         name = "popup",
         bare = Present(tiered.popup()),
         bind = tiered.popup(_),

@@ -896,7 +896,7 @@ class SelectTest extends ReactiveValueContract:
         hear: (uic.Select[Fruit], Maybe[Fruit] => UI.Action) => Frame ?=> uic.Select[Fruit],
         event: String
     ) =
-        new Slot[uic.Select[Fruit], Maybe[Fruit]](
+        new SlotCase[uic.Select[Fruit], Maybe[Fruit]](
             name = name,
             bare = Present(bare),
             bind = v => bare.selection(v),
@@ -918,7 +918,7 @@ class SelectTest extends ReactiveValueContract:
     heardBy(maybeSlot("selection over Maybe, heard by onPick", (s, f) => s.onPick(a => f(Present(a))), "onPick"))
 
     private def valueSlot(name: String, hear: (uic.Select[Fruit], Fruit => UI.Action) => Frame ?=> uic.Select[Fruit], event: String) =
-        new Slot[uic.Select[Fruit], Fruit](
+        new SlotCase[uic.Select[Fruit], Fruit](
             name = name,
             // A field over the option itself always holds one: unbound, a select holds `Maybe`.
             bare = Absent,
@@ -960,7 +960,7 @@ class SelectTest extends ReactiveValueContract:
         yield assert(field.attrs.tabIndex.contains(0), "a reader can still land on it")
     }
 
-    holds(new Slot[uic.Select[Fruit], Boolean](
+    holds(new SlotCase[uic.Select[Fruit], Boolean](
         name = "open",
         bare = Present(bare),
         bind = bare.open(_),
@@ -982,7 +982,7 @@ class SelectTest extends ReactiveValueContract:
 
     // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
     // owner decides.
-    heardBy(new Slot[uic.Select[Fruit], Boolean](
+    heardBy(new SlotCase[uic.Select[Fruit], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = bare.open(_),
@@ -1017,7 +1017,7 @@ class SelectTest extends ReactiveValueContract:
 
     // The query is a text the select keeps itself, unbound and from a constant, since it draws the panel from it. Its field
     // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
-    holds(new Slot[uic.Select[Fruit], String](
+    holds(new SlotCase[uic.Select[Fruit], String](
         name = "filterQuery",
         bare = Present(bare.open(true).filterable(true)),
         bind = bare.open(true).filterQuery(_),

@@ -19,7 +19,7 @@ class SliderTest extends ReactiveValueContract:
             case Present(UI.Bound.Follow(sig)) => sig.current
             case other                         => throw new AssertionError(s"the range input is bound as $other"))
 
-    holds(new Slot[uic.Slider, Double](
+    holds(new SlotCase[uic.Slider, Double](
         name = "value",
         bare = Present(uic.Slider()),
         bind = uic.Slider().value(_),
