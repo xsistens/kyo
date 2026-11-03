@@ -1305,4 +1305,25 @@ class DatePickerTest extends ReactiveValueContract:
         after = Seq(pickNinth(_))
     ))
 
+    // A reader who cannot act has nothing to hear: a disabled or readonly picker draws inert, so nothing it holds moves.
+    "a picker the reader cannot act on says nothing about a slot bound one way" in {
+        for
+            value <- Signal.initRef(Maybe.empty[LocalDate])
+            open  <- Signal.initRef(false)
+            month <- Signal.initRef(july26)
+            view  <- Signal.initRef(DatePickerView.Date)
+            bound = Seq(
+                ("value", (p: uic.DatePicker[LocalDate]) => p.value(value.readOnly)),
+                ("open", (p: uic.DatePicker[LocalDate]) => p.open(open.readOnly)),
+                ("month", (p: uic.DatePicker[LocalDate]) => p.month(month.readOnly)),
+                ("view", (p: uic.DatePicker[LocalDate]) => p.currentView(view.readOnly))
+            )
+            cases = bound.flatMap((name, b) =>
+                Seq((s"disabled, $name", b(picker.disabled(true))), (s"readonly, $name", b(picker.readonly(true))))
+            )
+            said <- Kyo.foreach(cases)((name, c) => elementsWithClass(c.render, UicTest.cardClass).map(cs => (name, cs.map(textOf))))
+        yield said.foreach((name, cards) => assert(cards.isEmpty, s"$name: $cards"))
+        end for
+    }
+
 end DatePickerTest

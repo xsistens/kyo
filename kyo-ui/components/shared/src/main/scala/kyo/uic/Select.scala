@@ -408,12 +408,12 @@ final case class Select[A] private (
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
             val unheard =
-                (if ReactiveValue.deaf(openSlot, onOpenF) then
+                (if interactive && ReactiveValue.deaf(openSlot, onOpenF) then
                      List(
                          "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add onOpenChange"
                      )
                  else Nil) ++
-                    (if ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
+                    (if interactive && ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
                          List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
                      else Nil)
             if unheard.isEmpty then renderLive

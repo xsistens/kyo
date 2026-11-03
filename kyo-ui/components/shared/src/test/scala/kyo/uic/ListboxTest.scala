@@ -200,4 +200,12 @@ class ListboxTest extends ReactiveValueContract:
         yield assert(shown == Chunk("Apple", "Pineapple"), s"the list starts filtered: $shown")
     }
 
+    // A reader who cannot act has nothing to hear: a disabled list takes no query.
+    "a disabled list says nothing about a query bound one way" in {
+        for
+            query <- Signal.initRef("")
+            said  <- elementsWithClass(fruit.disabled(true).filterQuery(query.readOnly).render, UicTest.cardClass)
+        yield assert(said.isEmpty, s"${said.map(textOf)}")
+    }
+
 end ListboxTest
