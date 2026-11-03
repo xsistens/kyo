@@ -25,7 +25,7 @@ end InputType
   * optional `invalidMessage(String)` row below the field.
   */
 final case class Input private (
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     placeholderText: Maybe[TextValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[BoolValue] = Absent,
@@ -42,7 +42,6 @@ final case class Input private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     accDescV: Maybe[TextValue] = Absent,
-    onInputF: Maybe[String => UI.Action] = Absent,
     onChangeF: Maybe[String => UI.Action] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent,
     inputFilterV: Maybe[String] = Absent,
@@ -50,7 +49,7 @@ final case class Input private (
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     focusAutoFlag: Boolean = false,
-    unheardAsV: (String, String) = ("Input", "onInput or onChange"),
+    unheardAsV: Slot.Name = Input.valueName("Input", "onInput or onChange"),
     filledUpV: Maybe[(String, String)] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Input
@@ -63,7 +62,7 @@ final case class Input private (
     /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose
       * own events are what hear it ([[InputMask]]).
       */
-    private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = (component, events))
+    private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = Input.valueName(component, events))
 
     /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
       * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
@@ -93,7 +92,7 @@ final case class Input private (
       * [[onChange]], so the app writes its own state and the field follows; with neither, a card says the reader cannot
       * change it. A constant is the starting text, which the reader edits freely. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Input = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): Input = copy(valueSlot = valueSlot.bind(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = copy(placeholderText = v)
 
@@ -138,8 +137,8 @@ final case class Input private (
 
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = copy(accDescV = v)
 
-    def onInput(f: String => UI.Action)(using Frame): Input  = copy(onInputF = Present(Callback.of(f)))
-    def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)))
+    def onInput(f: String => UI.Action)(using Frame): Input  = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo)
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it, which kyo-ui's blur carries (its two-parameter `onBlur`): what the reader typed,
@@ -213,10 +212,9 @@ final case class Input private (
                     _.onChange(_),
                     validity
                 )
-        val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
-            !readonlyFlag.constTrue && !disabledFlag.constTrue
-        if unheard then fragment(validity.follow(built), Diagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
-        else validity.follow(built)
+        Diagnostics.after(validity.follow(built))(unheardAsV.component)(
+            Diagnostic.unheard(valueSlot, unheardAsV, on = !readonlyFlag.constTrue && !disabledFlag.constTrue)
+        )
     end render
 
     /** Applies the shared attribute chain to a concrete kyo text-input factory. The
@@ -252,7 +250,7 @@ final case class Input private (
         filledUpV.foreach((cls, closest) => b = b.filledClass(cls, closest))
         // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
         // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
-        valueBinding.foreach(slot => b = b.value(slot.bound))
+        valueSlot.bound.foreach(v => b = b.value(v))
         // A constant placeholder joins the attribute chain via the concrete factory's
         // String setter; a reactive one uses kyo-ui's placeholder patch channel (in-place
         // setAttribute, no re-render), declared on the shared TextInput bound.
@@ -274,7 +272,7 @@ final case class Input private (
             case Present(TextValue.Const(v)) => b.aria("description", v)
             case Present(TextValue.Dyn(s))   => b.aria("description", s)
             case Absent                      => b
-        b = onInputF.map(f => setOnInput(b, f)).getOrElse(b)
+        b = valueSlot.hearer.map(f => setOnInput(b, f)).getOrElse(b)
         b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
         b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
@@ -298,6 +296,8 @@ end Input
 
 object Input:
     def apply(): Input = new Input()
+
+    private[uic] def valueName(component: String, events: String) = Slot.Name(component, "value", "a change", events)
 
     /** Maps this library's filter string onto kyo's typed [[kyo.UI.InputFilter]]. `"int"` is
       * `Digits` (digits only; kyo's set carries no sign character), `"decimal"` is `Decimal`,
