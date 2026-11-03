@@ -22,20 +22,20 @@ class EntriesTest extends UicTest:
     /** The rows a host keeps as entries, resolved the way its render resolves them. */
     private def rows(es: List[uic.MenuItemLiveEntry])(using Frame): List[uic.MenuItem] =
         uic.MenuItemScope.reading(es) match
-            case uic.Reading.Fixed(items) => items
-            case _                        => throw new AssertionError("entries without a signal were read as live")
+            case uic.ReactiveValue.Const(items) => items
+            case _                              => throw new AssertionError("entries without a signal were read as live")
 
     /** The entries a structural component reads, which hold no signal and so read as fixed. */
-    private def fixed[A](r: uic.Reading[List[A]]): List[A] =
+    private def fixed[A](r: uic.ReactiveValue[List[A]]): List[A] =
         r match
-            case uic.Reading.Fixed(as) => as
-            case _                     => throw new AssertionError("entries without a signal were read as live")
+            case uic.ReactiveValue.Const(as) => as
+            case _                           => throw new AssertionError("entries without a signal were read as live")
 
     /** The rows a listbox keeps as sources, resolved the way its region resolves them. */
     private def options(lb: uic.Listbox[String])(using Frame): List[uic.OptionItem[uic.ListItem[String]]] =
         uic.OptionItem.reading(lb.optionSources) match
-            case uic.Reading.Fixed(rows) => rows
-            case _                       => throw new AssertionError("sources without a signal were read as live")
+            case uic.ReactiveValue.Const(rows) => rows
+            case _                             => throw new AssertionError("sources without a signal were read as live")
 
     "menu items: every host of MenuItem, and the nested items of an item and a group" in {
         val direct = List(uic.MenuItem("Update").icon(uic.Icons.refresh), uic.MenuItem.separator, uic.MenuItem("Homepage").url("/"))
@@ -78,7 +78,7 @@ class EntriesTest extends UicTest:
         val item  = uic.MegaMenuItem("Products").column(_.group("Laptops").items(_.item("Pro")))
         assert(item == uic.MegaMenuItem("Products").column(group))
         assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).entriesV) ==
-            uic.Reading.Fixed(List(uic.MegaMenuItem("Products"))))
+            uic.ReactiveValue.Const(List(uic.MegaMenuItem("Products"))))
     }
 
     "breadcrumb crumbs" in {
@@ -105,7 +105,7 @@ class EntriesTest extends UicTest:
         val direct = List(uic.TreeNode("Documents", "docs", children = List(uic.TreeNode("CV", "cv"))))
         assert(fixed(uic.Tree[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).entries) == direct)
         assert(uic.TreeSelect[String]().nodes(_.node("Documents", "docs", children = Seq(_.node("CV", "cv")))).roots ==
-            uic.Reading.Fixed(direct))
+            uic.ReactiveValue.Const(direct))
     }
 
     "tree table nodes" in {
