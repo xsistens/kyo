@@ -32,8 +32,7 @@ import kyo.UI.*
   * expectation inside popover content that must escape it.
   */
 final case class Popover private (
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     dismissableV: Boolean = true,
@@ -50,10 +49,10 @@ final case class Popover private (
       * Unbound, the popover keeps the state itself: closed with a [[trigger]] to open it, open without one, so it shows
       * until the reader dismisses it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Popover = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): Popover = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = copy(openSlot = openSlot.hear(f))
 
     /** The control that opens the popover: a click on it asks for the other state, and it says the popover's state to
       * the reader (that it opens a dialog, whether the dialog is open, and that it changes nothing where the state is
@@ -92,21 +91,15 @@ final case class Popover private (
     def apply(cs: UI*): Popover = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        openSlot match
-            // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise.
-            case Absent =>
-                val start = triggerV.isEmpty
-                // Before the mount runs it draws from a signal standing in for that state, which is nobody's mistake.
-                ReactiveValue.owned(start)(own => copy(openSlot = Present(own)).drawn(quiet = false))(
-                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(start)))).drawn(quiet = true)
-                )
-            case _ => drawn(quiet = false)
+        // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise. Before the mount
+        // runs it draws from a stand-in for that state, which is nobody's mistake.
+        val start = triggerV.isEmpty
+        Slot.owning(openSlot, start)(s => copy(openSlot = s).drawn)(copy(openSlot = openSlot.standIn(start)).drawn)
     end render
 
-    private def drawn(quiet: Boolean)(using Frame): UI =
+    private def drawn(using Frame): UI =
         val flipped = anchorV == OverlayAnchor.TopStart || anchorV == OverlayAnchor.TopEnd
-        val bound   = openSlot.fold[Boolean | Signal[Boolean]](false)(_.bound)
-        var overlay = Overlay(bound)
+        var overlay = Overlay.withOpen(openSlot)
             .reportedAs("Popover")
             .anchor(anchorV)
             .portal(portalV)
@@ -117,17 +110,15 @@ final case class Popover private (
             .seedFocus(seedFocusV)
             .panelClass("p-popover")
             .panelClass("p-component")
-        onOpenF.foreach(f => overlay = overlay.onOpenChange(f))
-        if quiet then overlay = overlay.quiet
         if flipped then overlay = overlay.panelClass("p-popover-flipped")
         val panel: UI =
             overlay(div.cssClass("p-popover-content")(UI.children(kids)*)).render
         triggerV match
             case Present(t) =>
                 // A constant nobody hears is fixed: the trigger stays, says so, and toggles nothing.
-                val fixed                    = ReactiveValue.fixed(openSlot, onOpenF)
-                val expanded                 = PopupTrigger.expanded(openSlot)
-                val toggle: Maybe[UI.Action] = if fixed then Absent else Present(ReactiveValue.update(openSlot, !_, onOpenF))
+                val fixed                    = openSlot.fixed
+                val expanded                 = PopupTrigger.expanded(openSlot.binding)
+                val toggle: Maybe[UI.Action] = if fixed then Absent else Present(openSlot.update(!_))
                 val control                  = PopupTrigger.stamped(t, "dialog", expanded, fixed, toggle)
                 // The wrapper takes the click, which reaches it from the control, so a handler the page put on its own
                 // control still runs.
@@ -144,7 +135,7 @@ end Popover
 
 object Popover:
     /** A popover over the visibility `open` (see [[Popover.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(openSlot = Present(ReactiveValue(open)))
+    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(openSlot = Slot().bind(open))
 
     /** An unbound popover: it keeps its visibility itself (see [[Popover.open]]). */
     def apply(): Popover = new Popover()

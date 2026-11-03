@@ -68,8 +68,7 @@ end DrawerPosition
   * deferred too: the mask always renders.
   */
 final case class Drawer private (
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     positionV: DrawerPosition = DrawerPosition.Left,
     headerText: Maybe[TextValue] = Absent,
     headerContent: Maybe[UI] = Absent,
@@ -90,12 +89,12 @@ final case class Drawer private (
       * reachable and inert. Unbound, the drawer keeps the state itself and starts open, so it shows until the reader
       * closes it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Drawer = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): Drawer = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Drawer = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Drawer = copy(openSlot = openSlot.hear(f))
 
     /** Which edge the panel docks to (default [[DrawerPosition.Left]], as in Prime). */
     def position(v: DrawerPosition): Drawer = copy(positionV = v)
@@ -138,35 +137,18 @@ final case class Drawer private (
     def apply(cs: UI*): Drawer = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        openSlot match
-            // Unbound, the drawer keeps its visibility itself and starts open. Before the mount runs it draws from a
-            // signal, so the static page does not call its close button fixed.
-            case Absent =>
-                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
-                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
-                )
-            // A signal nobody hears: every close the reader asks for is painted away again.
-            case _ if ReactiveValue.deaf(openSlot, onOpenF) =>
-                fragment(
-                    Diagnostics.card(
-                        "Drawer",
-                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
-                            "onOpenChange, or bind a SignalRef",
-                        Nil
-                    ),
-                    drawn
-                )
-            case _ => drawn
-    end render
+        // Unbound, the drawer keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so
+        // the static page does not call its close button fixed.
+        Slot.draw(openSlot, Drawer.openName, start = true)(s => copy(openSlot = s).drawn)
 
     private def drawn(using Frame): UI =
-        openSlot match
+        openSlot.binding match
             case Absent        => UI.empty
             case Present(slot) =>
                 // A constant nobody hears is fixed: the drawer stays, and no close path is wired.
-                val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+                val fixed = openSlot.fixed
                 // Every internal close path funnels through here: a two-way binding is written, then the close reported.
-                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                val close: UI.Action = openSlot.change(false)
                 // Shown while the binding says so: a constant needs no region, a signal is one boundary.
                 def shown(ui: => UI): UI = slot.const match
                     case Present(v) => if v then ui else UI.empty
@@ -261,3 +243,6 @@ end Drawer
 
 object Drawer:
     def apply(): Drawer = new Drawer()
+
+    private val openName = Slot.Name("Drawer", "the visibility", "a close", "onOpenChange")
+end Drawer
