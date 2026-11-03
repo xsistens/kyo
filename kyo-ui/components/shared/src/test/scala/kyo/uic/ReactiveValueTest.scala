@@ -72,7 +72,7 @@ class ReactiveValueTest extends UicTest:
             ref <- Signal.initRef(5.0)
             sig = ref.map(_ * 2)
         yield
-            def bindingOf(s: uic.Slider): String = s.valueBinding match
+            def bindingOf(s: uic.Slider): String = s.valueSlot.binding match
                 case Present(ReactiveVariable(_))    => "two-way"
                 case Present(ReactiveValue.Dyn(_))   => "one-way"
                 case Present(ReactiveValue.Const(_)) => "const"

@@ -30,7 +30,7 @@ import scala.annotation.targetName
   * rather than approximated.
   */
 final case class Slider private (
-    valueBinding: Maybe[ReactiveValue[Double]] = Absent,
+    valueSlot: Slot[Double] = Slot(),
     minV: Double = 0.0,
     maxV: Double = 100.0,
     stepV: Double = 1.0,
@@ -42,7 +42,6 @@ final case class Slider private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => UI.Action] = Absent,
     onBlurF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
@@ -65,7 +64,7 @@ final case class Slider private (
       * the better answer when the value is computed rather than user-edited.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Slider = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: Double | Signal[Double]): Slider = copy(valueSlot = valueSlot.bind(v))
 
     /** Lower bound (Prime default 0). */
     def min(v: Double): Slider = copy(minV = v)
@@ -103,7 +102,7 @@ final case class Slider private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => UI.Action)(using Frame): Slider = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Double => UI.Action)(using Frame): Slider = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss with the slider's current value; unlike onChange it fires even
       * when the handle was not moved. The validation layer's Blur trigger.
@@ -117,33 +116,22 @@ final case class Slider private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
-        if ReactiveValue.fixed(valueBinding, onChangeF) && !readonlyFlag then copy(readonlyFlag = true).render
-        else if valueBinding.isEmpty then ReactiveValue.owned(minV)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
-        else renderLive
+        if valueSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
+        else Slot.owning(valueSlot, start = minV)(s => copy(valueSlot = s).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is put back.
-        if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue then
-            fragment(field, Diagnostics.unheard("Slider", "value", "onChange"))
-        else field
+        Diagnostics.after(field)("Slider")(Diagnostic.unheard(valueSlot, Slider.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
 
+    // Bound one way the native thumb follows the signal, so kyo-ui puts back a drag the owner does not take; the visual layer is
+    // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        valueBinding match
-            case Present(ReactiveVariable(ref)) => ref.render(v => body(v, Present(ref), validity, clamp(v)))
-            // Bound one way the native thumb follows the signal, so kyo-ui puts back a drag the owner does not take; the visual layer
-            // is drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
-            case Present(ReactiveValue.Dyn(sig))                        => sig.render(v => body(v, Absent, validity, sig.map(clamp)))
-            case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
-                body(v, Absent, validity, Signal.initConst(clamp(v)))
-            case Present(ReactiveValue.Const(v)) => body(v, Absent, validity, clamp(v))
-            case Absent                          => body(minV, Absent, validity, clamp(minV))
+        Slot.drawField(valueSlot, unbound = minV)(f => body(f.value, validity, Slot.mapNative[Double, Double](f.native)(clamp)))
 
-    private def body(raw: Double, ref: Maybe[SignalRef[Double]], validity: FieldValidity, native: Double | Signal[Double])(using
-        Frame
-    ): UI =
+    private def body(raw: Double, validity: FieldValidity, native: Double | Signal[Double])(using Frame): UI =
         val value = clamp(raw)
         val pct   =
             if maxV <= minV then 0.0
@@ -174,27 +162,14 @@ final case class Slider private (
         if disabledFlag.constTrue then in = in.disabled(true)
         else if readonlyFlag then in = in.aria("readonly", "true").preventActivation
         else
-            in = in.onChange { d =>
-                val next             = clamp(d)
-                val write: UI.Action = ref match
-                    case Present(r) => r.set(next)
-                    case Absent     => ()
-                val fire: UI.Action = onChangeF match
-                    case Present(f) => f(next)
-                    case Absent     => ()
-                for
-                    _ <- write
-                    r <- fire
-                yield r
-                end for
-            }
+            in = in.onChange(d => valueSlot.change(clamp(d)))
         end if
         // Blur fires even without a drag: the validation layer's Blur trigger. Reads the
         // ref LIVE where there is one, so it reports the value at blur time.
         onBlurF.foreach { f =>
-            in = in.onBlur(ref match
+            in = in.onBlur(valueSlot.writable match
                 case Present(r) => r.use(v => f(clamp(v)))
-                case Absent     => f(value))
+                case _          => f(value))
         }
 
         var el = div
@@ -208,3 +183,6 @@ end Slider
 
 object Slider:
     def apply(): Slider = new Slider()
+
+    private val valueName = Slot.Name("Slider", "value", "a change", "onChange")
+end Slider
