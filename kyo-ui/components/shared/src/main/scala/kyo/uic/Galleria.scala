@@ -85,15 +85,14 @@ final case class Galleria private (
     // The images `body` draws, resolved from `itemSources` by the render.
     itemList: List[GalleriaItem] = Nil,
     itemSources: List[GalleriaItemLiveEntry] = Nil,
-    activeSlot: Maybe[ReactiveValue[Int]] = Absent,
+    activeSlot: Slot[Int] = Slot(),
     itemTemplateF: Maybe[GalleriaItem => UI] = Absent,
     thumbnailTemplateF: Maybe[GalleriaItem => UI] = Absent,
     circularFlag: Boolean = false,
     showThumbnailsFlag: Boolean = true,
     showIndicatorsFlag: Boolean = false,
     showItemNavigatorsFlag: Boolean = false,
-    showThumbnailNavigatorsFlag: Boolean = true,
-    onActiveIndexF: Maybe[Int => UI.Action] = Absent
+    showThumbnailNavigatorsFlag: Boolean = true
 ) extends Node:
     type Self = Galleria
 
@@ -111,7 +110,7 @@ final case class Galleria private (
       * thumbnails and dots reachable and inert. Unbound, the gallery keeps the index itself, starting on the first image.
       * A signal nothing hears is reported in a card.
       */
-    def activeIndex(v: Int | Signal[Int]): Galleria = copy(activeSlot = Present(ReactiveValue(v)))
+    def activeIndex(v: Int | Signal[Int]): Galleria = copy(activeSlot = activeSlot.bind(v))
 
     /** Custom preview content, replacing the default full-width `img`. */
     def itemTemplate(f: GalleriaItem => UI): Galleria = copy(itemTemplateF = Present(f))
@@ -141,10 +140,10 @@ final case class Galleria private (
     def showThumbnailNavigators(v: Boolean): Galleria = copy(showThumbnailNavigatorsFlag = v)
 
     /** Fired with the index the reader asks for after any navigation, after a two-way [[activeIndex]] is written. */
-    def onActiveIndexChange(f: Int => UI.Action)(using Frame): Galleria = copy(onActiveIndexF = Present(Callback.of(f)))
+    def onActiveIndexChange(f: Int => UI.Action)(using Frame): Galleria = copy(activeSlot = activeSlot.hear(f))
 
     /** A constant nobody hears is fixed: the gallery stays on that image, and nothing navigates. */
-    private def fixed: Boolean = ReactiveValue.fixed(activeSlot, onActiveIndexF)
+    private def fixed: Boolean = activeSlot.fixed
 
     private[uic] def render(using Frame): UI =
         val gallery = UI.mounted {
@@ -152,24 +151,11 @@ final case class Galleria private (
                 cmds <- UI.commands
                 base <- cmds.freshId
                 // Unbound, the gallery keeps the active image itself, starting on the first.
-                self <-
-                    if activeSlot.isEmpty then Signal.initRef(0).map(r => copy(activeSlot = Present(ReactiveValue[Int](r))))
-                    else Kyo.lift(this)
+                self <- activeSlot.owned(0).map(s => copy(activeSlot = s))
             yield self.shown(base, id => cmds.focusId(id))
         }.placeholder(shown("", _ => ()))
         // An index bound one way that nothing hears: every navigation is painted away again.
-        if !ReactiveValue.deaf(activeSlot, onActiveIndexF) then gallery
-        else
-            fragment(
-                Diagnostics.card(
-                    "Galleria",
-                    "the active image is bound one way and nothing hears a navigation, so the reader cannot change it; add " +
-                        "onActiveIndexChange, or bind a SignalRef",
-                    Nil
-                ),
-                gallery
-            )
-        end if
+        Diagnostics.before(gallery)("Galleria")(Diagnostic.unheard(activeSlot, Galleria.activeName))
     end render
 
     /** The rendered gallery. An empty `base` is the placeholder a golden render and an SSG page
@@ -178,7 +164,7 @@ final case class Galleria private (
       */
     private def shown(base: String, focus: String => UI.Action)(using Frame): UI =
         // The images and the active index are ONE region (see [[Reading]]): a list that shrinks moves the clamp too.
-        entries.and(activeSlot.fold(Reading.Fixed(0))(Reading.of(_))).render((items, i) => copy(itemList = items).body(i, base, focus))
+        entries.and(activeSlot.reading(0)).render((items, i) => copy(itemList = items).body(i, base, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI = shown(base, focus)
@@ -400,9 +386,10 @@ final case class Galleria private (
             if n == 0 then 0
             else if circularFlag then ((target % n) + n) % n
             else math.min(math.max(target, 0), n - 1)
-        ReactiveValue.change(activeSlot, next, onActiveIndexF)
+        activeSlot.change(next)
     end setActive
 end Galleria
 
 object Galleria:
-    def apply(): Galleria = new Galleria()
+    private val activeName = Slot.Name("Galleria", "the active image", "a navigation", "onActiveIndexChange")
+    def apply(): Galleria  = new Galleria()
