@@ -157,14 +157,14 @@ class SlotTest extends UicTest:
         "reading stands in for nothing bound, follows a signal and a ref, and stays fixed over a constant" in {
             Signal.initRef(7).map { ref =>
                 Slot[Int]().reading(1) match
-                    case Reading.Fixed(v) => assert(v == 1)
-                    case other            => throw new AssertionError(s"nothing bound reads as $other")
+                    case ReactiveValue.Const(v) => assert(v == 1)
+                    case other                  => throw new AssertionError(s"nothing bound reads as $other")
                 Slot[Int]().bind(2).reading(1) match
-                    case Reading.Fixed(v) => assert(v == 2)
-                    case other            => throw new AssertionError(s"a constant reads as $other")
+                    case ReactiveValue.Const(v) => assert(v == 2)
+                    case other                  => throw new AssertionError(s"a constant reads as $other")
                 Slot[Int]().bind(ref).reading(1) match
-                    case Reading.Live(sig) => sig.current.map(v => assert(v == 7))
-                    case other             => throw new AssertionError(s"a ref reads as $other")
+                    case ReactiveValue.Dyn(sig) => sig.current.map(v => assert(v == 7))
+                    case other                  => throw new AssertionError(s"a ref reads as $other")
             }
         }
 
