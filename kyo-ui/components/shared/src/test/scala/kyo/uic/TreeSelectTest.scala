@@ -354,4 +354,12 @@ class TreeSelectTest extends ReactiveValueContract:
         end for
     }
 
+    // A reader who cannot act has nothing to hear: a disabled field does not open.
+    "a disabled field says nothing about a panel bound one way" in {
+        for
+            open <- Signal.initRef(false)
+            said <- elementsWithClass(treeSelect.disabled(true).open(open.readOnly).render, UicTest.cardClass)
+        yield assert(said.isEmpty, s"${said.map(textOf)}")
+    }
+
 end TreeSelectTest

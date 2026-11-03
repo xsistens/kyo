@@ -674,6 +674,20 @@ class MultiSelectTest extends ReactiveValueContract:
         yield assert(rows.size == 1 && textOf(rows.head).contains("Cherry"), s"the panel starts filtered: ${rows.map(textOf)}")
     }
 
+    // A reader who cannot act has nothing to hear: a disabled field neither opens nor takes a query.
+    "a disabled field says nothing about a panel or a query bound one way" in {
+        for
+            open  <- Signal.initRef(false)
+            query <- Signal.initRef("")
+            cases = Seq(
+                ("open", multi.disabled(true).open(open.readOnly)),
+                ("query", multi.disabled(true).filterQuery(query.readOnly))
+            )
+            said <- Kyo.foreach(cases)((name, c) => elementsWithClass(c.render, UicTest.cardClass).map(cs => (name, cs.map(textOf))))
+        yield said.foreach((name, cards) => assert(cards.isEmpty, s"$name: $cards"))
+        end for
+    }
+
 end MultiSelectTest
 
 object MultiSelectTest:

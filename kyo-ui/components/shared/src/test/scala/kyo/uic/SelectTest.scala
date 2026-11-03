@@ -1056,6 +1056,22 @@ class SelectTest extends ReactiveValueContract:
         yield assert(rows == Chunk("Cherry"), s"the panel starts filtered: $rows")
     }
 
+    // A reader who cannot act has nothing to hear: a disabled or readonly field neither opens nor takes a query.
+    "a field the reader cannot act on says nothing about a panel or a query bound one way" in {
+        for
+            open  <- Signal.initRef(false)
+            query <- Signal.initRef("")
+            cases = Seq(
+                ("disabled, open", bare.disabled(true).open(open.readOnly)),
+                ("disabled, query", bare.disabled(true).filterQuery(query.readOnly)),
+                ("readonly, open", bare.readonly(true).open(open.readOnly)),
+                ("readonly, query", bare.readonly(true).filterQuery(query.readOnly))
+            )
+            said <- Kyo.foreach(cases)((name, c) => elementsWithClass(c.render, UicTest.cardClass).map(cs => (name, cs.map(textOf))))
+        yield said.foreach((name, cards) => assert(cards.isEmpty, s"$name: $cards"))
+        end for
+    }
+
 end SelectTest
 
 object SelectTest:

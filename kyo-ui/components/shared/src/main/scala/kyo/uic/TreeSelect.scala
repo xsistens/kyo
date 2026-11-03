@@ -234,7 +234,7 @@ final case class TreeSelect[K] private (
 
     private[uic] def render(using Frame): UI =
         // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
-        if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
+        if disabledFlag || !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
         else
             fragment(
                 Diagnostics.card(
