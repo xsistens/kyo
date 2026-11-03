@@ -1100,6 +1100,7 @@ private[kyo] object ReactiveUI:
                         rui
                     )))
                     .andThen(step(value, group))
+                    .andThen(BoundaryHold.duringPass.use(_(rui.path)))
                     .andThen(group.started)
             }
 
