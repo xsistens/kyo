@@ -1,7 +1,6 @@
 package kyo.uic
 
 import kyo.*
-import kyo.UI.*
 
 /** Const-or-reactive carrier for a component's text slot: either a constant `String` or a
   * `Signal[String]` that tracks a downstream reactive source (a locale-driven `I18n.t` leaf).
@@ -22,18 +21,6 @@ private[uic] type TextValue = ReactiveValue[String]
 private[uic] object TextValue:
     export ReactiveValue.Const
     export ReactiveValue.Dyn
-
-    /** Resolve a possibly-reactive text slot INSIDE a subscription: a `Dyn` slot re-renders `rebuild`
-      * with the current `String` on every emission; a `Const`/`Absent` slot builds once. The plain-text
-      * analogue of [[BoolValue.reactive]], for text WOVEN with other build-time state (a mounted
-      * select's placeholder fused with the selection label), where the in-place attribute channel does
-      * not apply because the text also drives sibling classes.
-      */
-    def reactive(tv: Maybe[TextValue])(rebuild: Maybe[String] => UI)(using Frame): UI =
-        tv match
-            case Present(Dyn(sig)) => sig.render(v => rebuild(Present(v)))
-            case Present(Const(v)) => rebuild(Present(v))
-            case Absent            => rebuild(Absent)
 end TextValue
 
 extension (tv: TextValue)

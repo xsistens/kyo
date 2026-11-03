@@ -37,7 +37,7 @@ final case class MenuItem private (
       * on the click that opened it.
       *
       * Resolved by the host BEFORE it builds rows, through
-      * [[MenuRender.resolveDisabled]], so everything downstream (the navigable index
+      * [[MenuRender.readDisabled]], so everything downstream (the navigable index
       * set, `MenuNav.skip`, the `.p-disabled` class, whether an activate effect is
       * attached) stays a pure function of a plain `Boolean` and reads it through
       * `constTrue`. A host that forgets to resolve reads `false`, which is the same
@@ -66,7 +66,7 @@ final case class MenuItem private (
       * position survives the navigation that a `Routes.current.render { … }` around the whole
       * strip would have thrown away.
       *
-      * That is also why this needs none of [[MenuRender.resolveDisabled]]'s machinery, which
+      * That is also why this needs none of [[MenuRender.readDisabled]]'s machinery, which
       * `disabled` does need: being current changes nothing structural (not the navigable index
       * set, not `MenuNav.skip`, not whether an activate effect is attached), so there is nothing
       * downstream that must read it as a plain `Boolean`.
@@ -92,7 +92,7 @@ final case class MenuItem private (
     /** Package-internal: hosts (MegaMenu) carry an already-deferred effect over. */
     private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = copy(actionV = eff)
 
-    /** Package-internal: [[MenuRender.resolveDisabled]] pins the resolved slot back in.
+    /** Package-internal: [[MenuRender.readDisabled]] pins the resolved slot back in.
       * A writer rather than `copy`, because the constructor is private and `MenuRender`
       * is not this class.
       */
@@ -375,12 +375,6 @@ private[uic] object MenuRender:
         end match
     end pinDisabled
 
-    /** Resolves every reactive `disabled` in the tree before the host builds rows, and
-      * hands `f` a list whose slots are all `Const`: [[readDisabled]] rendered on its own.
-      */
-    def resolveDisabled(items: List[MenuItem])(f: List[MenuItem] => UI)(using Frame): UI =
-        readDisabled(items).render(f)
-
     /** Every reactive `disabled` in the tree as ONE [[Reading]] of the items, each slot pinned to `Const`, for a host that
       * reads it beside its own state in one region.
       *
@@ -431,16 +425,12 @@ private[uic] object MenuRender:
             })
     end pinned
 
-    /** [[resolveDisabled]] for MegaMenu, whose leaves sit two containers deeper:
+    /** [[readDisabled]] for MegaMenu, whose leaves sit two containers deeper:
       * `MegaMenuItem.columnsV : List[List[MenuGroup]]`, each group holding the
       * `MenuItem`s. The root rows carry their own plain-`Boolean` `disabled` and are
       * untouched; only the leaves have the reactive slot. Paths are
       * `[root, column, group, item]`.
       */
-    def resolveMegaDisabled(items: List[MegaMenuItem])(f: List[MegaMenuItem] => UI)(using Frame): UI =
-        readMegaDisabled(items).render(f)
-
-    /** [[readDisabled]] for MegaMenu's leaves (see [[resolveMegaDisabled]]). */
     def readMegaDisabled(items: List[MegaMenuItem])(using Frame): Reading[List[MegaMenuItem]] =
         val dyns =
             for
