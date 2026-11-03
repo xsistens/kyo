@@ -98,7 +98,7 @@ class OverlayTest extends ReactiveValueContract:
                     case _                              => Kyo.unit
                 }
                 exchange = new kyo.internal.RecordingExchange(beforePaint = (_, _) => Abort.run[Closed](painted.put(())).unit)
-                ui       = UI.div(Reading.Live(open).and(Reading.Live(hi)).render { (o, h) =>
+                ui       = UI.div(ReactiveValue.Dyn(open).and(ReactiveValue.Dyn(hi)).render { (o, h) =>
                     overlay(open)(UI.button.id("opt").onClick(picks.incrementAndGet)(s"row $h")).renderGated(o, Present("host-panel"))
                 })
                 html <- HtmlRenderer.render(ui, Seq.empty)
