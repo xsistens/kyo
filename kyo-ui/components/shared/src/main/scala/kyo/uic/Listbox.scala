@@ -161,8 +161,7 @@ final case class Listbox[K] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     selectedRef: Maybe[SetBinding[K]] = Absent,
-    filterQuerySlot: Maybe[ReactiveValue[String]] = Absent,
-    onFilterQueryF: Maybe[String => UI.Action] = Absent,
+    filterQuerySlot: Slot[String] = Slot(),
     filterableV: Maybe[BoolValue] = Absent,
     onItemClickF: Maybe[K => UI.Action] = Absent,
     templateF: Maybe[ListItem[K] => UI] = Absent,
@@ -269,10 +268,10 @@ final case class Listbox[K] private (
       * typing, a plain `Signal` filters the list and typing is only reported and painted back, a constant is the starting
       * text. Turns the header filter on unless [[filterable]] says otherwise. A signal nothing hears is reported in a card.
       */
-    def filterQuery(v: String | Signal[String]): Listbox[K] = copy(filterQuerySlot = Present(ReactiveValue(v)))
+    def filterQuery(v: String | Signal[String]): Listbox[K] = copy(filterQuerySlot = filterQuerySlot.bind(v))
 
     /** Fired with the query the reader types. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): Listbox[K] = copy(onFilterQueryF = Present(Callback.of(f)))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): Listbox[K] = copy(filterQuerySlot = filterQuerySlot.hear(f))
 
     /** Fired with the id of the row clicked or picked by key, after the selection write. */
     def onItemClick(f: K => UI.Action)(using Frame): Listbox[K] = copy(onItemClickF = Present(Callback.of(f)))
@@ -314,7 +313,7 @@ final case class Listbox[K] private (
     private given CanEqual[K, K]                     = CanEqual.derived
     private given CanEqual[ListItem[K], ListItem[K]] = CanEqual.derived
 
-    private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQuerySlot.isDefined))
+    private def filterOn: BoolValue = filterableV.getOrElse(BoolValue.Const(filterQuerySlot.binding.isDefined))
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
@@ -338,7 +337,7 @@ final case class Listbox[K] private (
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
-            copy(optionsV = opts).body(sel, query, Absent, hi, idV, focused)(validity)
+            copy(optionsV = opts).body(sel, query, Slot(), hi, idV, focused)(validity)
         ))
     end resolved
 
@@ -360,7 +359,7 @@ final case class Listbox[K] private (
     private def renderQuery(validity: FieldValidity)(using Frame): UI =
         // A switch that may turn on (a signal, or `true`) needs a query to filter by; only a constant `false` does not.
         // A constant query is the starting text, kept here like an unbound one.
-        val ownsQuery = filterQuerySlot.forall(_.const.isDefined) && !filterOn.const.exists(on => !on)
+        val ownsQuery = filterQuerySlot.binding.forall(_.const.isDefined) && !filterOn.const.exists(on => !on)
         val list      = UI.mounted {
             for
                 cmds <- UI.commands
@@ -369,47 +368,44 @@ final case class Listbox[K] private (
                 // something a reader has to opt into to be told which option is highlighted.
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 hi   <- Signal.initRef(-1)
-                q    <-
-                    if ownsQuery then
-                        Signal.initRef(filterQuerySlot.flatMap(_.const).getOrElse("")).map(r =>
-                            Present(ReactiveValue[String](r)): Maybe[ReactiveValue[String]]
-                        )
-                    else Kyo.lift(filterQuerySlot)
+                q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
                 own <-
                     if selectedRef.isEmpty && selectionModeV != SelectionMode.None then Signal.initRef(Set.empty[K]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
                 self = own.fold(this)(r => copy(selectedRef = Present(SetBinding.of(ReactiveValue(r)))))
             yield self.subscribed(q, Present(hi), Present(base), validity)
-        }.placeholder(subscribed(filterQuerySlot.filter(_.const.isEmpty), Absent, Absent, validity))
+        }.placeholder(subscribed(
+            if filterQuerySlot.binding.exists(_.const.isDefined) then Slot() else filterQuerySlot,
+            Absent,
+            Absent,
+            validity
+        ))
         // A selection bound one way that nothing hears: every click is painted away again.
-        val deaf    = selectionModeV != SelectionMode.None && !disabledFlag && selectedRef.exists(_.deaf(onChangeF.orElse(onItemClickF)))
-        val unheard =
-            (if deaf then List("the selection is bound one way and nothing hears a click, so the reader cannot change it; add onChange")
-             else Nil) ++
-                (if !disabledFlag && ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
-                     List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
-                 else Nil)
-        if unheard.isEmpty then list
-        else fragment((unheard.map(a => Diagnostics.card("Listbox", a + ", or bind a SignalRef", Nil)) :+ list)*)
-        end if
+        Diagnostics.before(list)("Listbox")(
+            Diagnostic(
+                selectionModeV != SelectionMode.None && !disabledFlag && selectedRef.exists(_.deaf(onChangeF.orElse(onItemClickF))),
+                Listbox.selectionName.advice
+            ),
+            Diagnostic.unheard(filterQuerySlot, Listbox.queryName, on = !disabledFlag)
+        )
     end renderQuery
 
     /** The selection/query subscriptions around one [[body]] render. */
     private def subscribed(
-        qRef: Maybe[ReactiveValue[String]],
+        q: Slot[String],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         validity: FieldValidity
     )(using Frame): UI =
         // The selection, the query and the highlight are read as ONE region (see [[Reading]]): a row click writes the
         // highlight and the selection, and a nested region would repaint the values it closed over.
-        val shown = shownQuery(qRef)
+        val shown = shownQuery(q)
         val sel   = selectedRef.fold(Reading.Fixed(Set.empty[K]))(s => Reading.Live(s.signal))
         val query = shown.fold(Reading.Fixed(""))(Reading.Live(_))
         val hi    = hiRef.fold(Reading.Fixed(-1))(Reading.Live(_))
-        validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, q), h), opts) =>
-            copy(optionsV = opts).body(s, q, if shown.isDefined then qRef else Absent, hiRef, idBase, h)(validity)
+        validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, qv), h), opts) =>
+            copy(optionsV = opts).body(s, qv, if shown.isDefined then q else Slot(), hiRef, idBase, h)(validity)
         })
     end subscribed
 
@@ -417,8 +413,8 @@ final case class Listbox[K] private (
       * subscribe where the switch is a constant `false`. A signal switch is folded in here rather than read in a region
       * of its own, so switching it over an empty query emits nothing and repaints nothing.
       */
-    private def shownQuery(qRef: Maybe[ReactiveValue[String]])(using Frame): Maybe[Signal[String]] =
-        qRef.flatMap { qv =>
+    private def shownQuery(slot: Slot[String])(using Frame): Maybe[Signal[String]] =
+        slot.binding.flatMap { qv =>
             val q = qv.signal
             filterOn match
                 case BoolValue.Dyn(on)     => Present(q.combineLatest(on).map((typed, isOn) => if isOn then typed else ""))
@@ -430,7 +426,7 @@ final case class Listbox[K] private (
     private def body(
         sel: Set[K],
         query: String,
-        qRef: Maybe[ReactiveValue[String]],
+        qSlot: Slot[String],
         hiRef: Maybe[SignalRef[Int]],
         idBase: Maybe[String],
         hi: Int = -1
@@ -552,9 +548,9 @@ final case class Listbox[K] private (
             // the mount allocates it: the header still renders, it just does not filter yet.
             // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
             // types, and kyo-ui puts it back to the owner's query (see [[Select.filterQuery]]).
-            qRef.foreach { q =>
-                field = field.value(q.bound)
-                field = field.onInput(text => ReactiveValue.change(Present(q), text, onFilterQueryF))
+            qSlot.bound.foreach { v =>
+                field = field.value(v)
+                field = field.onInput(text => qSlot.change(text))
             }
             div.cssClass("p-listbox-header")(field)
         end header
@@ -648,6 +644,9 @@ final case class Listbox[K] private (
 end Listbox
 
 object Listbox:
+    private val selectionName = Slot.Name("Listbox", "the selection", "a click", "onChange")
+    private val queryName     = Slot.Name("Listbox", "the filter query", "the reader type", "onFilterQueryChange")
+
     def apply[K](): Listbox[K] = new Listbox[K]()
 
     /** One chord a host claims, carrying the effect it answers with.
