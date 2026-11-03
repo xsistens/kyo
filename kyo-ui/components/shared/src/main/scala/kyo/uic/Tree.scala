@@ -242,7 +242,7 @@ final case class Tree[K] private (
         }.placeholder(subscribed(Absent))
 
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
-    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = withUnheard(subscribed(Present((hi, base))))
+    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))
 
     /** The roots, the expansion, the selection and the highlight around one [[body]] render, read as ONE region (see
       * [[Reading]]): a key writes the highlight, the expansion and the selection together, and a nested region would
