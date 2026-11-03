@@ -270,7 +270,7 @@ class PickListTest extends ReactiveValueContract:
             src <- Signal.initRef(Seq("a"))
             off <- elementsWithClass(
                 uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(Seq.empty[String]).disabled(true).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
         yield assert(off.isEmpty, s"nobody can change them: ${off.map(textOf)}")
     }
@@ -317,7 +317,7 @@ class PickListTest extends ReactiveValueContract:
 
     // An unbound column starts empty, so no gesture reaches one; the target's unbound case is where a column of the
     // list's own shows. A reorder in the source rail moves the selected row, held at `a`.
-    holds(new Slot[uic.PickList[String], Seq[String]](
+    holds(new SlotCase[uic.PickList[String], Seq[String]](
         name = "sourceItems",
         bare = Absent,
         bind = uic.PickList[String]().sourceItems(_)(identity).sourceSelection(Set("a")),
@@ -336,7 +336,7 @@ class PickListTest extends ReactiveValueContract:
         uic.PickList[String]().sourceItems(Seq("a", "b"))(identity).onSourceItemsChange(_ => ())
             .sourceSelection(Set("a")).onSourceSelectionChange(_ => ())
 
-    holds(new Slot[uic.PickList[String], Seq[String]](
+    holds(new SlotCase[uic.PickList[String], Seq[String]](
         name = "targetItems",
         bare = Present(toTransfer),
         bind = toTransfer.targetItems(_),
@@ -357,7 +357,7 @@ class PickListTest extends ReactiveValueContract:
         bind: (uic.PickList[String], Set[String] | Signal[Set[String]]) => Frame ?=> uic.PickList[String],
         hear: (uic.PickList[String], Set[String] => UI.Action) => Frame ?=> uic.PickList[String],
         event: String
-    )(using Frame) = new Slot[uic.PickList[String], Set[String]](
+    )(using Frame) = new SlotCase[uic.PickList[String], Set[String]](
         name = name,
         bare = Present(base),
         bind = bind(base, _),

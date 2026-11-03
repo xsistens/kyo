@@ -138,11 +138,10 @@ final case class Tabs[K] private (
     // The tabs the header strip draws, resolved from `tabSources` by the render.
     tabList: List[Tab[K]] = Nil,
     tabSources: List[TabLiveEntry[K]] = Nil,
-    selectedBinding: Maybe[ReactiveValue[K]] = Absent,
-    onSelectedF: Maybe[K => UI.Action] = Absent,
+    // Over `Maybe[K]`, since the strip's own state may start with no tab to name: a live list can be empty at mount.
+    selectedSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
     idV: Maybe[String] = Absent,
-    lazyPanelsFlag: Boolean = false,
-    fixedFlag: Boolean = false
+    lazyPanelsFlag: Boolean = false
 ) extends Node, HasElementId:
     type Self = Tabs[K]
 
@@ -178,10 +177,18 @@ final case class Tabs[K] private (
       * The two-way choice is made on the RUNTIME class, so ascribing a ref as
       * `Signal[K]` does not opt out; pass `ref.readOnly` for that.
       */
-    def selected(v: K | Signal[K]): Tabs[K] = copy(selectedBinding = Present(ReactiveValue(v)))
+    def selected(v: K | Signal[K]): Tabs[K] =
+        // The setter takes no Frame, and a public signature does not change for this. Nothing here runs: a Frame only names
+        // where a signal was built.
+        given Frame = Frame.internal
+        copy(selectedSlot = selectedSlot.bind(v match
+            case r: SignalRef[K] @unchecked => r.zoom(Maybe(_))((old, m) => m.getOrElse(old))
+            case s: Signal[K] @unchecked    => s.map(Maybe(_))
+            case k: K @unchecked            => Maybe(k)))
+    end selected
 
     /** Fired with the id of the tab the reader picks, after a two-way [[selected]] is written. */
-    def onSelectedChange(f: K => UI.Action)(using Frame): Tabs[K] = copy(onSelectedF = Present(Callback.of(f)))
+    def onSelectedChange(f: K => UI.Action)(using Frame): Tabs[K] = copy(selectedSlot = selectedSlot.hear(_.fold[UI.Action](())(f)))
 
     /** Renders the active panel alone, and builds a panel again each time its tab is chosen
       * (PrimeVue's `lazy`). Off by default: every panel is rendered once and a switch only
@@ -198,19 +205,15 @@ final case class Tabs[K] private (
     private[uic] def elementId: Maybe[String] = idV
 
     private[uic] def render(using Frame): UI =
-        // A constant nobody hears is fixed: the strip shows that tab and switches to no other.
-        if ReactiveValue.fixed(selectedBinding, onSelectedF) && !fixedFlag then copy(fixedFlag = true).render
+        val strip = renderLive
+        // A signal nobody hears: every tab the reader picks is painted away again. A url header is heard by the navigation it
+        // starts, so only a header without one makes the strip deaf. The card reads the list, so it is drawn over it.
+        if !selectedSlot.deaf then strip
         else
-            val strip = renderLive
-            // A signal nobody hears: every tab the reader picks is painted away again. A url header is heard by the
-            // navigation it starts, so only a header without one makes the strip deaf.
-            if !ReactiveValue.deaf(selectedBinding, onSelectedF) then strip
-            else
-                val card = entries.render(ts =>
-                    if ts.exists(_.urlV.isEmpty) then KeyDiagnostics.unheard("Tabs", "selected", "onSelectedChange") else fragment()
-                )
-                fragment(card, strip)
-            end if
+            val card = entries.render(ts =>
+                fragment(Diagnostics.cards("Tabs")(Diagnostic.unheard(selectedSlot, Tabs.selectedName, on = ts.exists(_.urlV.isEmpty)))*)
+            )
+            fragment(card, strip)
         end if
     end render
 
@@ -226,12 +229,7 @@ final case class Tabs[K] private (
                 val first: Maybe[K] < Sync = entries match
                     case Reading.Fixed(ts) => Maybe.fromOption(ts.headOption.map(_.id))
                     case Reading.Live(sig) => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.id)))
-                val self: Tabs[K] < Sync =
-                    if selectedBinding.isDefined then this
-                    else
-                        first.map(_.fold(Kyo.lift(this))(id =>
-                            Signal.initRef(id).map(r => copy(selectedBinding = Present(ReactiveValue(r))))
-                        ))
+                val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => copy(selectedSlot = s))
                 base.map(b => self.map(_.wired(b, id => cmds.focusId(id))))
             }
         }
@@ -264,11 +262,6 @@ final case class Tabs[K] private (
         act match
             case Reading.Live(sig) => el.hidden(sig.map(a => !a.contains(id)))
             case Reading.Fixed(a)  => if a.contains(id) then el else el.hidden(true)
-
-    /** The ref to write back to; `Absent` unless the binding is two-way. */
-    private def selectedRef: Maybe[SignalRef[K]] = selectedBinding match
-        case Present(ReactiveVariable(ref)) => Present(ref)
-        case _                              => Absent
 
     /** Moves focus to the header `step` lands on, and to nothing else.
       *
@@ -319,12 +312,12 @@ final case class Tabs[K] private (
             // on any anchor that declares one (DomBackend, "the handler, not the href,
             // drives the action"), which also takes the middle-click and the
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
-            if (t.urlV.isEmpty || onSelectedF.isDefined) && !fixedFlag then
+            if (t.urlV.isEmpty || selectedSlot.hearer.isDefined) && !selectedSlot.fixed then
                 out = out.onClick(select(t.id, write = t.urlV.isEmpty))
             // A fixed strip keeps every header a stop the arrows reach, and an inactive one says it switches nothing: a
             // tab has no readonly state, so it says it the way a radio does. A url header still navigates, so it says
             // nothing.
-            else if fixedFlag && !isActive && t.urlV.isEmpty then out = out.aria("disabled", "true")
+            else if selectedSlot.fixed && !isActive && t.urlV.isEmpty then out = out.aria("disabled", "true")
             end if
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
@@ -355,7 +348,7 @@ final case class Tabs[K] private (
             for h <- headerId(base, t); pid <- panelId(base, t) do el = el.id(pid).aria("labelledby", h)
             el
         end panel
-        val listed     = entries.and(Reading.optional(selectedBinding))
+        val listed     = entries.and(selectedSlot.reading(Absent))
         val act        = listed.map((ts, sel) => resolveIn(ts, sel))
         val panels: UI =
             if lazyPanelsFlag then
@@ -438,19 +431,13 @@ final case class Tabs[K] private (
       * so anything derived from it, still held the old one.
       */
     private def select(id: K, write: Boolean)(using Frame): UI.Action =
-        val setActive: UI.Action = selectedRef match
-            case Present(ref) if write => ref.set(id)
-            case _                     => ()
-        val fireSelect: UI.Action = onSelectedF match
-            case Present(f) => f(id)
-            case Absent     => ()
-        for
-            _ <- setActive
-            r <- fireSelect
-        yield r
-        end for
+        if write then selectedSlot.change(Present(id))
+        else selectedSlot.hearer.fold[UI.Action](())(f => f(Present(id)))
     end select
 end Tabs
 
 object Tabs:
     def apply[K](): Tabs[K] = new Tabs[K]()
+
+    private val selectedName = Slot.Name("Tabs", "selected", "a change", "onSelectedChange")
+end Tabs

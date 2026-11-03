@@ -45,7 +45,7 @@ final case class AutoComplete[A] private (
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
     itemTemplateF: Maybe[A => UI] = Absent,
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     filterF: Maybe[(A, String) => Boolean] = Absent,
     minQueryLengthV: Int = 1,
     emptyContentV: Maybe[EmptyContent] = Absent,
@@ -66,7 +66,6 @@ final case class AutoComplete[A] private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     onInputF: Maybe[String => UI.Action] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
     onSelectF: Maybe[A => UI.Action] = Absent,
     stampFilledFlag: Boolean = false,
     idV: Maybe[String] = Absent,
@@ -128,7 +127,7 @@ final case class AutoComplete[A] private (
       * a constant, the field keeps the text itself, so the suggestions follow what the reader types, a pick shows its
       * label and the clear button empties it. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): AutoComplete[A] = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): AutoComplete[A] = copy(valueSlot = valueSlot.bind(v))
 
     /** How a suggestion matches the typed text, as `(option, text) => Boolean` with the text as typed. [[Filter]]
       * holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` suggests an option by either text, and
@@ -202,7 +201,7 @@ final case class AutoComplete[A] private (
     /** Fired when the field commits (blur/Enter) or an option is picked, with the
       * committed text (a pick commits the option's label).
       */
-    def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(valueSlot = valueSlot.hear(f))
 
     /** Fired with the picked option after its label is written into the ref. */
     def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = copy(onSelectF = Present(Callback.of(f)))
@@ -287,14 +286,10 @@ final case class AutoComplete[A] private (
     end fieldKey
 
     private[uic] def render(using Frame): UI =
-        valueBinding match
-            case Present(ReactiveValue.Dyn(_)) => drawn
-            // Unbound or started from a constant, the text is the field's own: the suggestions filter by it, a pick writes
-            // its label into it and a clear empties it, and a field drawn with a constant would be given the constant back
-            // by the render that typing's open causes. A ref the field keeps for as long as it is shown holds it.
-            case other if interactive =>
-                ReactiveValue.owned(other.flatMap(_.const).getOrElse(""))(own => copy(valueBinding = Present(own)).drawn)(stat)
-            case _ => drawn
+        // Unbound or started from a constant, the text is the field's own: the suggestions filter by it, a pick writes its
+        // label into it and a clear empties it, and a field drawn with a constant would be given the constant back by the
+        // render that typing's open causes. A ref the field keeps for as long as it is shown holds it.
+        Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(interactive))(s => copy(valueSlot = s).drawn)(stat)
 
     /** The closed anatomy over the text as bound, with nothing wired: what a static projection shows. */
     private def stat(using Frame): UI =
@@ -320,18 +315,12 @@ final case class AutoComplete[A] private (
                     all  <- Signal.initRef(false)
                 yield wired(open, hi, all, Present(base), id => cmds.focusId(id))
             }.placeholder(stat)
-            val missing = unheardEdits
-            if missing.isEmpty then field
-            else
-                fragment(
-                    field,
-                    KeyDiagnostics.card(
-                        "AutoComplete",
-                        "value is bound one way and an edit reaches nobody, so the reader cannot make it; add the event, or bind a SignalRef",
-                        missing
-                    )
+            Diagnostics.after(field)("AutoComplete")(
+                Diagnostic.naming(
+                    "value is bound one way and an edit reaches nobody, so the reader cannot make it; add the event, or bind a SignalRef",
+                    unheardEdits
                 )
-            end if
+            )
         end if
     end drawn
 
@@ -341,11 +330,11 @@ final case class AutoComplete[A] private (
       * (the starting text, which stays in the field) and an unbound field.
       */
     private def unheardEdits: List[String] =
-        if !valueBinding.exists(v => v.dyn.isDefined && v.writable.isEmpty) then Nil
+        if !valueSlot.binding.exists(v => v.dyn.isDefined && v.writable.isEmpty) then Nil
         else
             (if onInputF.isEmpty then List("typing: add onInput") else Nil) ++
-                (if onChangeF.isEmpty && onSelectF.isEmpty then List("a pick: add onChange or onSelect") else Nil) ++
-                (if showClearFlag && onChangeF.isEmpty then List("a clear: add onChange") else Nil)
+                (if valueSlot.hearer.isEmpty && onSelectF.isEmpty then List("a pick: add onChange or onSelect") else Nil) ++
+                (if showClearFlag && valueSlot.hearer.isEmpty then List("a clear: add onChange") else Nil)
 
     /** The subscription tree the mount publishes: the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as placeholders,
@@ -373,10 +362,7 @@ final case class AutoComplete[A] private (
       * panel's state as ONE region (see [[Reading]]).
       */
     private def text(using Frame): Reading[String] =
-        valueBinding match
-            case Present(ReactiveValue.Dyn(sig)) => Reading.Live(sig)
-            case Present(ReactiveValue.Const(v)) => Reading.Fixed(v)
-            case Absent                          => Reading.Fixed("")
+        valueSlot.reading("")
 
     /** How a suggestion matches the typed text: [[filter]], else the start of any word of the label. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.startsWithPerTerm(labelF))
@@ -400,11 +386,11 @@ final case class AutoComplete[A] private (
         // Writes the picked label, fires onSelect/onChange, closes the panel.
         def pick(a: A)(s: State): UI.Action =
             val text                  = labelF(a)
-            val setValue: UI.Action   = valueBinding.flatMap(_.writable).fold[UI.Action](())(_.set(text))
+            val setValue: UI.Action   = valueSlot.writable.fold[UI.Action](())(_.set(text))
             val fireSelect: UI.Action = onSelectF match
                 case Present(f) => f(a)
                 case Absent     => ()
-            val fireChange: UI.Action = onChangeF match
+            val fireChange: UI.Action = valueSlot.hearer match
                 case Present(f) => f(text)
                 case Absent     => ()
             for
@@ -433,10 +419,7 @@ final case class AutoComplete[A] private (
         if variantV == FieldVariant.Filled then f = f.cssClass("p-variant-filled")
         f = validity.mark(f)
         // A two-way ref is kyo-ui's own binding, a one-way signal is followed in place, a constant is the starting text.
-        valueBinding match
-            case Present(slot) => f = f.value(slot.bound)
-            case Absent        => ()
-        end match
+        valueSlot.bound.foreach(v => f = f.value(v))
         f = placeholderText match
             case Present(TextValue.Const(v)) => f.placeholder(v)
             case Present(TextValue.Dyn(sig)) => f.placeholder(sig)
@@ -485,7 +468,7 @@ final case class AutoComplete[A] private (
             // caller's) ref holds, since kyo-ui writes it on every keystroke; a one-way text reports the field's.
             onBlurF.foreach(g => f = f.onBlur((_, text) => g(text)))
         }
-        val field: UI = onChangeF.map(g => f.onChange(g)).getOrElse(f)
+        val field: UI = valueSlot.hearer.map(g => f.onChange(g)).getOrElse(f)
 
         // === in-field affordances ================================================
         def loaderSpan: UI =
@@ -498,14 +481,14 @@ final case class AutoComplete[A] private (
             case Present(BoolValue.Const(false)) => Nil
             case Absent                          => Nil
 
-        val clear: List[UI] = valueBinding match
+        val clear: List[UI] = valueSlot.binding match
             case Present(ReactiveValue.Dyn(_)) if showClearFlag && interactive && query.nonEmpty =>
                 List(
                     button
                         .cssClass("p-autocomplete-clear-icon")
                         .jsProp("type", "button")
                         .aria("label", "Clear")
-                        .onClick(ReactiveValue.change(valueBinding, "", onChangeF))(GlyphSvg(Icons.times, "p-icon"))
+                        .onClick(valueSlot.change(""))(GlyphSvg(Icons.times, "p-icon"))
                 )
             case _ => Nil
 

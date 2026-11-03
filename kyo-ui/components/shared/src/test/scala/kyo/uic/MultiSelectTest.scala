@@ -218,9 +218,9 @@ class MultiSelectTest extends ReactiveValueContract:
     "a selection a constant somebody hears, a ref holds, or a disabled field shows draws no card" in {
         for
             held   <- Signal.initRef(Set.empty[Fruit])
-            heard  <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
-            twoWay <- elementsWithClass(multi.selection(held).render, "p-uic-key-error")
-            off    <- elementsWithClass(multi.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+            heard  <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-diagnostic"))
+            twoWay <- elementsWithClass(multi.selection(held).render, "p-uic-diagnostic")
+            off    <- elementsWithClass(multi.selection(held.readOnly).disabled(true).render, "p-uic-diagnostic")
         yield assert(
             heard.isEmpty && twoWay.isEmpty && off.isEmpty,
             s"somebody hears, or nobody can pick: ${(heard ++ twoWay ++ off).map(textOf)}"
@@ -554,7 +554,7 @@ class MultiSelectTest extends ReactiveValueContract:
     private def named(t: UI)(using Frame): Set[Fruit] < Sync =
         elementWithClass(t, "p-multiselect-label").map(l => fruit.filter(f => textOf(l).contains(f.name)).toSet)
 
-    holds(new Slot[uic.MultiSelect[Fruit], Set[Fruit]](
+    holds(new SlotCase[uic.MultiSelect[Fruit], Set[Fruit]](
         name = "selection",
         bare = Present(multi),
         bind = multi.selection(_),
@@ -575,7 +575,7 @@ class MultiSelectTest extends ReactiveValueContract:
         )
     ))
 
-    holds(new Slot[uic.MultiSelect[Fruit], Boolean](
+    holds(new SlotCase[uic.MultiSelect[Fruit], Boolean](
         name = "open",
         bare = Present(multi),
         bind = multi.open(_),
@@ -601,7 +601,7 @@ class MultiSelectTest extends ReactiveValueContract:
 
     // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
     // owner decides.
-    heardBy(new Slot[uic.MultiSelect[Fruit], Boolean](
+    heardBy(new SlotCase[uic.MultiSelect[Fruit], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = multi.open(_),
@@ -637,7 +637,7 @@ class MultiSelectTest extends ReactiveValueContract:
 
     // The query is a text the field keeps itself, unbound and from a constant, since it draws the panel from it. Its input
     // is in the panel, which only the mount draws open: the panel is held open here, so the query is the slot under test.
-    holds(new Slot[uic.MultiSelect[Fruit], String](
+    holds(new SlotCase[uic.MultiSelect[Fruit], String](
         name = "filterQuery",
         bare = Present(multi.open(true).filterable(true)),
         bind = multi.open(true).filterQuery(_),
@@ -672,6 +672,20 @@ class MultiSelectTest extends ReactiveValueContract:
             t    <- mounted(multi.open(true).filterQuery("ch").render)
             rows <- elementsWithClass(t, "p-multiselect-option")
         yield assert(rows.size == 1 && textOf(rows.head).contains("Cherry"), s"the panel starts filtered: ${rows.map(textOf)}")
+    }
+
+    // A reader who cannot act has nothing to hear: a disabled field neither opens nor takes a query.
+    "a disabled field says nothing about a panel or a query bound one way" in {
+        for
+            open  <- Signal.initRef(false)
+            query <- Signal.initRef("")
+            cases = Seq(
+                ("open", multi.disabled(true).open(open.readOnly)),
+                ("query", multi.disabled(true).filterQuery(query.readOnly))
+            )
+            said <- Kyo.foreach(cases)((name, c) => elementsWithClass(c.render, UicTest.cardClass).map(cs => (name, cs.map(textOf))))
+        yield said.foreach((name, cards) => assert(cards.isEmpty, s"$name: $cards"))
+        end for
     }
 
 end MultiSelectTest

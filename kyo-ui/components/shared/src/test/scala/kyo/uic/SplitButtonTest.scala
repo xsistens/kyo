@@ -96,7 +96,7 @@ class SplitButtonTest extends ReactiveValueContract:
     private def mounted(ui: UI)(using Frame, kyo.test.AssertScope): UI < Async =
         mountedWhen(ui)(t => dropdowns(t).map(_.nonEmpty))
 
-    holds(new Slot[SplitButton, Boolean](
+    holds(new SlotCase[SplitButton, Boolean](
         name = "open",
         bare = Present(split),
         bind = split.open(_),

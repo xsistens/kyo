@@ -52,8 +52,7 @@ end PopupAccessibleRole
   * region, root first; the box must therefore stand down).
   */
 final case class Dialog private (
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     headerText: Maybe[TextValue] = Absent,
     headerContent: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
@@ -71,7 +70,6 @@ final case class Dialog private (
     accessibleDescriptionRefV: Maybe[String] = Absent,
     accessibleRoleV: PopupAccessibleRole = PopupAccessibleRole.Dialog,
     boxClassesV: List[String] = Nil,
-    quietFlag: Boolean = false,
     kids: List[UI] = Nil
 ) extends Node, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Dialog
@@ -83,12 +81,12 @@ final case class Dialog private (
       * the way an HTML `dialog` with `open` does, so it shows until the reader closes it. A signal nothing hears is
       * reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Dialog = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): Dialog = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Dialog = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Dialog = copy(openSlot = openSlot.hear(f))
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
@@ -162,10 +160,10 @@ final case class Dialog private (
       */
     private[uic] def boxClass(cls: String): Dialog = copy(boxClassesV = boxClassesV :+ cls)
 
-    /** Package-internal: a host that reports its own binding mistakes (ConfirmDialog, whose choices are heard apart)
-      * keeps the dialog from reporting the same binding a second time.
+    /** Package-internal: the slot of a host that embeds this dialog, as the host wants it heard. A host that reports its own
+      * binding mistakes (ConfirmDialog, whose choices are heard apart) hands it over quieted.
       */
-    private[uic] def quiet: Dialog = copy(quietFlag = true)
+    private[uic] def withOpen(slot: Slot[Boolean]): Dialog = copy(openSlot = slot)
 
     /** Adds content children. */
     def apply(cs: UI*): Dialog = copy(kids = kids ++ cs)
@@ -191,35 +189,18 @@ final case class Dialog private (
         case _                => Icons.infoCircle
 
     private[uic] def render(using Frame): UI =
-        openSlot match
-            // Unbound, the dialog keeps its visibility itself and starts open. Before the mount runs it draws from a
-            // signal, so the static page does not call its close button fixed.
-            case Absent =>
-                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
-                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
-                )
-            // A signal nobody hears: every close the reader asks for is painted away again.
-            case _ if !quietFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
-                fragment(
-                    KeyDiagnostics.card(
-                        "Dialog",
-                        "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
-                            "onOpenChange, or bind a SignalRef",
-                        Nil
-                    ),
-                    drawn
-                )
-            case _ => drawn
-    end render
+        // Unbound, the dialog keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in,
+        // so the static page does not call its close button fixed.
+        Slot.draw(openSlot, Dialog.openName, start = true)(s => copy(openSlot = s).drawn)
 
     private def drawn(using Frame): UI =
-        openSlot match
+        openSlot.binding match
             case Absent        => UI.empty
             case Present(slot) =>
                 // A constant nobody hears is fixed: the dialog stays, and no close path is wired.
-                val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+                val fixed = openSlot.fixed
                 // Every internal close path funnels through here: a two-way binding is written, then the close reported.
-                val close: UI.Action = ReactiveValue.change(openSlot, false, onOpenF)
+                val close: UI.Action = openSlot.change(false)
                 // Shown while the binding says so: a constant needs no region, a signal is one boundary.
                 def shown(ui: => UI): UI = slot.const match
                     case Present(v) => if v then ui else UI.empty
@@ -412,4 +393,6 @@ object Dialog:
     /** Minimum box dimensions (px) while resizing. */
     private[uic] val MinW = 200.0
     private[uic] val MinH = 120.0
+
+    private val openName = Slot.Name("Dialog", "the visibility", "a close", "onOpenChange")
 end Dialog

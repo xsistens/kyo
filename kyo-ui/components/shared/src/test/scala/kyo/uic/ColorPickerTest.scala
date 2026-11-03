@@ -221,7 +221,7 @@ class ColorPickerTest extends ReactiveValueContract:
     // The colour is held to rule A as a text field's value is, a constant being the colour it starts from: the picker draws
     // it entirely itself, so unbound or started from a constant it keeps the colour, and Home on the plane (no saturation
     // left) is the gesture.
-    holds(new Slot[uic.ColorPicker, String](
+    holds(new SlotCase[uic.ColorPicker, String](
         name = "value",
         bare = Present(uic.ColorPicker().inline(true)),
         bind = uic.ColorPicker().inline(true).value(_),
@@ -251,7 +251,7 @@ class ColorPickerTest extends ReactiveValueContract:
     }
 
     "a color bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
-        def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(red)
             twoWay <- errors(uic.ColorPicker().inline(true).value(held))

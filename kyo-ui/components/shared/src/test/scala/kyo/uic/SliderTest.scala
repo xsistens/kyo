@@ -19,7 +19,7 @@ class SliderTest extends ReactiveValueContract:
             case Present(UI.Bound.Follow(sig)) => sig.current
             case other                         => throw new AssertionError(s"the range input is bound as $other"))
 
-    holds(new Slot[uic.Slider, Double](
+    holds(new SlotCase[uic.Slider, Double](
         name = "value",
         bare = Present(uic.Slider()),
         bind = uic.Slider().value(_),
@@ -72,7 +72,7 @@ class SliderTest extends ReactiveValueContract:
     }
 
     "a value bound one way says nothing where it reaches somebody or nobody can move it: a ref, disabled" in {
-        def errors(c: uic.Slider): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.Slider): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(20.0)
             twoWay <- errors(uic.Slider().value(held))

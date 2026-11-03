@@ -166,7 +166,7 @@ class PaginatorTest extends ReactiveValueContract:
             p     <- page.get
             sr    <- seenRows.get
             sp    <- seenPage.get
-            cards <- elementsWithClass(pag.render, "p-uic-key-error")
+            cards <- elementsWithClass(pag.render, "p-uic-diagnostic")
         yield
             assert(r == 10 && p == 3, s"the signals still hold rows $r, page $p")
             assert(sr == 20 && sp == 1, s"reported rows $sr, page $sp")
@@ -179,7 +179,7 @@ class PaginatorTest extends ReactiveValueContract:
     private def next(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-next")
 
     // Ten rows over 120 records is twelve pages; the next-page button goes from the first to the second.
-    holds(new Slot[uic.Paginator, Int](
+    holds(new SlotCase[uic.Paginator, Int](
         name = "page",
         bare = Present(uic.Paginator().totalRecords(120).rows(10)),
         bind = uic.Paginator().totalRecords(120).rows(10).page(_),
@@ -207,7 +207,7 @@ class PaginatorTest extends ReactiveValueContract:
         )
 
     // The page count follows the rows, so the page stays where it is: a pick of 20 rows on the first page reports no page.
-    holds(new Slot[uic.Paginator, Int](
+    holds(new SlotCase[uic.Paginator, Int](
         name = "rows",
         bare = Present(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20))),
         bind = uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).rows(_),
@@ -237,7 +237,7 @@ class PaginatorTest extends ReactiveValueContract:
         val fixed = uic.Paginator().totalRecords(120).rows(10).page(2).template(PaginatorElement.JumpToPageDropdown).render
         for
             d    <- elementWithClass(fixed, "p-paginator-jtp-dropdown")
-            card <- elementsWithClass(fixed, "p-uic-key-error")
+            card <- elementsWithClass(fixed, "p-uic-diagnostic")
         yield
             assert(!d.attrs.cssClasses.contains("p-disabled"), "a fixed page is not a disabled one")
             assert(readOnly(d) && d.attrs.tabIndex.contains(0) && !opens(d), s"reachable and inert: ${d.attrs.ariaAttrs}")

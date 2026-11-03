@@ -69,7 +69,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `value` keeps what was typed. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
   from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
-  (`ReactiveValue.owned`), and its handlers read the value live, since a keystroke can land before the render of the one
+  (`Slot.owningFrom`), and its handlers read the value live, since a keystroke can land before the render of the one
   before it. `ReactiveValueContract.nativeText` and the `startText`/`keptNatively` slot fields hold them to it. A text
   field's `onBlur` reports the text kyo-ui's blur carries (kyo-ui's two-parameter `onBlur((e, text) => ...)`, read off the field as focus leaves it), never
   its binding: unbound or from a constant the binding does not have the reader's text at all. `ReactiveValueContract.blurs`
@@ -77,28 +77,45 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   reading what is held: InputOtp's code (a cell carries one character), ColorPicker's colour, DatePicker's parsed value,
   InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
   bound to a number), since a commit with no ref writes nowhere and only the field holds what the reader typed.
-- **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) reports
-  every change the reader asks for.** It takes `A | Signal[A]` like any slot, and the component goes through
-  `ReactiveValue.change` (a new value) or `ReactiveValue.update` (a step from the value shown): a two-way binding is
-  written first, atomically for a step, then the `on<Slot>Change` callback hears the new value, whatever the binding
-  (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the pickers keep their family's
-  `onChange`). A SIGNAL nothing hears is a card (`ReactiveValue.deaf`): the state lives somewhere else and the reader's
-  change reaches nobody. An older per-item event (`onRowClick`, `onNodeToggle`, `onItemClick`) counts as hearing it.
-  `restore` writes only two-way slots. A host that embeds a component hands a slot on as it was bound
-  (`ReactiveValue.bound`), never as a ref it made up.
+- **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) is a `Slot[A]`**
+  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `copy(xSlot = xSlot.bind(v))` and
+  `copy(xSlot = xSlot.hear(f))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
+  and reports every change the reader asks for: the component goes through `slot.change` (a new value) or `slot.update` (a step
+  from the value shown), where a two-way binding is written first, atomically for a step, then the `on<Slot>Change` callback hears
+  the new value, whatever the binding (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the
+  pickers keep their family's `onChange`). A SIGNAL nothing hears is a card (`slot.deaf`): the state lives somewhere else and the
+  reader's change reaches nobody. One hearer, not a list: a second `onChange` replaces the first. An event that carries another
+  value or fires at another moment (`onRowClick`, `onNodeToggle`, `onItemClick`, a text field's `onChange` beside its `onInput`)
+  keeps its own field and calls `slot.heardToo` at its setter, so it counts as hearing the slot. `quieted` is for a host that
+  reports the mistake itself, or a stand-in nobody bound. `restore` writes only two-way slots. A host that embeds a component hands
+  a slot on as it was bound (`slot.bound`, or the package-internal `withOpen(slot)` where the host's hearer goes along), never as
+  a ref it made up. DataTable and the choice types (`SingleChoice`, `MultiChoice`, `SetBinding`, `DatePicker.Binding`) still read
+  the `ReactiveValue` functions `Slot` delegates to, since their hearer's type or their write is not the binding's.
 - **Every slot the reader changes: a CONSTANT nothing hears is fixed, and an UNBOUND slot is the component's own**
-  (decided 2026-10-28, for every component). A constant nobody hears (`ReactiveValue.fixed`) is not a mistake but a value meant to stay: the
+  (decided 2026-10-28, for every component). A constant nobody hears (`slot.fixed`) is not a mistake but a value meant to stay: the
   component draws it read-only, reachable and readable with nothing to change, the way `readonly` does, and says
   nothing. A slot nobody bound keeps what the reader does in state the component owns for as long as its mount instance
-  lives (`ReactiveValue.owned`, or a ref the component's existing mount allocates), the way an HTML control nobody binds
-  keeps its tick. A region around it that re-renders ends the instance and starts the state over, which a native control
-  under a morph would not do; a parent that repaints and has to keep it binds the slot or gives the component a key. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
-  and keeps nothing of its own, and so does a paginator a table or a view embeds. In a DataTable, binding
-  `columnWidths`, `columnOrder` or `expandedGroups` is still what turns the drag or the collapsible group ON; unbound,
-  those stay off rather than becoming the table's own. Each has a setter with no argument (`columnWidths()`) that turns
-  the feature on with the state kept by the table, for a page that would only hand over a ref nobody reads. A hearer
-  turns `contextMenuRow` on as well (decided 2026-10-31): unbound with an `onContextMenuRowChange` the table keeps the
-  row itself and marks it, and unbound with nothing hearing the rows leave the browser its own menu.
+  lives, the way an HTML control nobody binds keeps its tick. There are four forms, smallest first: `slot.owned(start)` inside a mount
+  the component already has (beside its ids and highlights: a mount around it would be a mount inside a mount for every instance,
+  which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Slot.owning` a mount
+  of its own, and `Slot.draw` that with the placeholder drawn over `slot.standIn(start)` and the card in front, for a container.
+  `Slot.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
+  state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
+  the component a key. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
+  and keeps nothing of its own, and so does a paginator a table or a view embeds. A hearer turns `contextMenuRow` on as well
+  (decided 2026-10-31): unbound with an `onContextMenuRowChange` the table keeps the row itself and marks it, and unbound with
+  nothing hearing the rows leave the browser its own menu.
+- **A feature that may be off has a switch, and the switch decides alone** (decided 2026-11-02). `toggleable` on Panel and Fieldset,
+  `expandable` on OrganizationChart, `resizableColumns`, `reorderableColumns`, `collapsibleGroups`, `cellSelection`, `rowEditing` and
+  `cellEditing` on DataTable each take `Boolean | Signal[Boolean]`, the rule `filterable` set for the pickers: with no switch a binding
+  turns the feature on, and set, it alone decides. Own state is minted whenever a switch is present and not constant false
+  (`BoolValue.mayTurnOn`, `on` in `Slot.owning` and `Slot.draw`), so it survives the switch going off and on. Off over the component's
+  own state means not applied, never cleared. Off over a caller's binding depends on what is left: widths, an order, groups and a chart's
+  subtrees keep the layout and lose only the affordance, as a fixed constant does; cell selection and editing have no layout to keep and
+  read no binding at all; Panel and Fieldset are plain. A signal switch is read inside the mount, never around it. In a DataTable
+  `switched` reads every signal switch as one region and `pinned` hands the table constants, so its predicates stay plain `Boolean`s;
+  it sits below the mounts, because a mount keyed by the table's id would freeze a tree published around it. `Menu.popup()` and
+  `TieredMenu.popup()` are the last setters with no argument: `popup` is both the mode and the open state there until the two are split.
 - **A two-valued state has ONE event that carries the value, never a pair** (decided 2026-10-28): `onOpenChange(Boolean)`,
   `onCollapsedChange(Boolean)`, `onActiveChange(Boolean)`, not `onOpen`/`onClose`, since the two are never both. Events
   that carry something else stay (ConfirmDialog's `onAccept`/`onReject` are a choice, and each hears its own path).
@@ -135,6 +152,22 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   exactly like a working one until someone clicks it. `DataTable` reports the two shapes that have
   no outlet: a `Checkbox` column, whose boxes are not row clicks and so cannot fall back to
   `onRowClick`, and a `Single`/`Multiple` selection with no `onRowClick` bound at all.
+
+## Diagnostics: what a component says on the page
+
+A mistake a type cannot catch and nothing crashes on is said in a card (`Diagnostics.scala`, `.p-uic-diagnostic`). A `Diagnostic` is one
+thing that may hold: `Diagnostic(when, advice, keys)`, `Diagnostic.naming(advice, keys)` that fires when there is something to name, and
+`Diagnostic.unheard(slot, name, on)` for a slot nobody hears. `Slot.Name` holds the one template of that last sentence, in the component's
+companion, so a rename is one string.
+
+- **One card per slot, and where it goes follows the component.** A container draws it in front (`Diagnostics.before`, `Slot.draw`). A
+  field draws it behind, with the message row between (`Diagnostics.after`). A table or a list draws it inside its root, as children
+  (`Diagnostics.cards`), and a card that reads what a region reads is built in that region. With nothing to say `before` and `after` are
+  the very `ui`, no fragment, so the bytes stay.
+- **`on` says the reader can act at all.** A disabled or readonly control has nothing to hear: pass `on = interactive`. Under a signal
+  switch the card comes and goes in a region of its own (`Diagnostics.cardsWhile`, `beforeWhile`).
+- **A `Diagnostic`'s arguments are evaluated whether it fires or not.** A key that is costly to work out stays behind a plain `if` around
+  `Diagnostics.cards`.
 
 ## Shared slots live in traits, not in every component
 
@@ -247,13 +280,13 @@ There is no public setter that takes the key a component compares by. Rules:
 - **A single choice binds one way too.** `SingleChoice` holds a `ReactiveValue`: a `ReactiveVariable` is written, a
   `Dyn` or `Const` is only shown, and a pick against it is judged against the value shown and reported, never written,
   so the app writes its own state (a route). Forms are unaffected: `bind` passes the field's ref, which is two-way.
-- **A value no option carries is a data error**, named in a `.p-uic-key-error` card
-  (`KeyDiagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
+- **A value no option carries is a data error**, named in a `.p-uic-diagnostic` card
+  (`Diagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.
 - **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
   `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]` (whatever its rules refine to).
-- **An internal host** that renders inside its own subscription (`Paginator`, `CellEditor`, the DataTable
-  filter menu) passes the held option with `current(Maybe[A])` and reads `onChange`; it never reaches for keys.
+- **An internal host** that renders inside its own subscription (the DataTable filter menu) passes the held
+  option with `current(Maybe[A])` and reads `onChange`; it never reaches for keys.
 - **A model carrying its own id takes the id's type**: `Listbox[K]` / `ListItem[K]`, `Tree[K]` / `TreeNode[K]`,
   `TreeSelect[K]`, `OrganizationChart[K]`, `Accordion[K]`, `Tabs[K]`, `Stepper[K]`. There `K` IS the identity,
   so sets compare by `K`'s `equals`, and a `private given CanEqual[K, K] = CanEqual.derived` says so where a
@@ -817,7 +850,7 @@ rebuild replaced the textarea a reader was typing into at the very keystroke tha
 
 - **Place `follow` outside the control's own value and open regions**, inside a mount where there is
   one (the static HTML keeps the row inside the mount's host). The exception is a field with a trailing
-  sibling: the pickers' `.p-uic-key-error` card follows the field, and the row belongs between the two,
+  sibling: the pickers' `.p-uic-diagnostic` card follows the field, and the row belongs between the two,
   so there `follow` wraps the field alone inside the body. The row region is then rebuilt with an open
   or highlight change, the field still never by its validity. `FieldValidityTest` sweeps every control:
   no validity region above the root, the channels on exactly the elements the constant render marks,

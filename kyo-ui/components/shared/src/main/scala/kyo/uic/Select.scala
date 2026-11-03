@@ -39,7 +39,7 @@ import scala.annotation.targetName
   * `optionsWithNone` adds a labelled none row to a select over `Maybe`;
   * `itemTemplate` draws the rows and the chosen value; `loading` says the options
   * are still arriving, and without it a held option no row carries is named in a
-  * `.p-uic-key-error` card. `open(ref)`
+  * `.p-uic-diagnostic` card. `open(ref)`
   * optionally exposes the panel visibility (it is self-managed otherwise). The interaction
   * state (open/highlight/filter query) lives in signals allocated by an
   * effectful `UI.mounted` region; static projections (SSG, the SSR page HTML)
@@ -61,13 +61,11 @@ final case class Select[A] private (
     optionDisabledF: Maybe[A => Boolean] = Absent,
     choice: Maybe[SingleChoice[A]] = Absent,
     itemTemplateF: Maybe[A => UI] = Absent,
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     placeholderV: Maybe[TextValue] = Absent,
     filterableV: Maybe[BoolValue] = Absent,
     filterF: Maybe[(A, String) => Boolean] = Absent,
-    filterQuerySlot: Maybe[ReactiveValue[String]] = Absent,
-    onFilterQueryF: Maybe[String => UI.Action] = Absent,
+    filterQuerySlot: Slot[String] = Slot(),
     showClearFlag: Boolean = false,
     checkmarkFlag: Boolean = false,
     emptyContentV: Maybe[EmptyContent] = Absent,
@@ -152,7 +150,7 @@ final case class Select[A] private (
       * unique. When they are not, two options share one key and a pick applies to
       * the wrong one, a failure that appears only with the data that triggers it,
       * so it survives development and shows up in production. The panel therefore
-      * renders a loud `.p-uic-key-error` card whenever the derived keys collide,
+      * renders a loud `.p-uic-diagnostic` card whenever the derived keys collide,
       * naming the offending keys.
       */
     def optionKey(f: A => String): Select[A] = copy(keyF = Present(f))
@@ -209,13 +207,13 @@ final case class Select[A] private (
       * nothing beyond `aria-expanded`. Unbound, the select keeps the state itself, starting closed. A signal nothing hears
       * is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Select[A] = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): Select[A] = copy(openSlot = openSlot.bind(v))
 
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
-    private def openFixedOpen: Boolean = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
+    private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = copy(openSlot = openSlot.hear(f))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = copy(placeholderV = v)
 
@@ -245,10 +243,10 @@ final case class Select[A] private (
       * signal nothing hears is reported in a card. Server-driven option lists bind this and re-`options` on emission; the
       * matching binding on [[Listbox.filterQuery]] takes the same shape.
       */
-    def filterQuery(v: String | Signal[String]): Select[A] = copy(filterQuerySlot = Present(ReactiveValue(v)))
+    def filterQuery(v: String | Signal[String]): Select[A] = copy(filterQuerySlot = filterQuerySlot.bind(v))
 
     /** Fired with the query the reader types, and with the empty query a new open starts from. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): Select[A] = copy(onFilterQueryF = Present(Callback.of(f)))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): Select[A] = copy(filterQuerySlot = filterQuerySlot.hear(f))
 
     /** Renders the clear affordance on the trigger while an option is chosen: it writes `Absent` into a `selection` over
       * `Maybe[A]` and fires `onChange(Absent)`. A `selection` over `A` cannot hold none, so it draws nothing there.
@@ -273,7 +271,7 @@ final case class Select[A] private (
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no option row
       * carries yet is shown from the value itself rather than reported. Without it, such an option is a mistake the field
-      * names in a `.p-uic-key-error` card, since a typed value that matches no option can only mean the data and the
+      * names in a `.p-uic-diagnostic` card, since a typed value that matches no option can only mean the data and the
       * binding disagree. A `Signal[Boolean]` follows the load.
       */
     def loading(v: Boolean | Signal[Boolean]): Select[A] = copy(loadingV = Present(ReactiveValue(v)))
@@ -349,7 +347,7 @@ final case class Select[A] private (
       * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
     private def filterOn: BoolValue =
-        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.isDefined))
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.binding.isDefined))
 
     /** How an option matches the query: [[filter]], else a contains on the label projection. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
@@ -366,8 +364,8 @@ final case class Select[A] private (
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
       */
-    private def freshQuery(q: ReactiveValue[String])(using Frame): UI.Action =
-        val fresh: UI.Action = ReactiveValue.change(Present(q), "", onFilterQueryF)
+    private def freshQuery(q: Slot[String])(using Frame): UI.Action =
+        val fresh: UI.Action = q.change("")
         filterOn match
             case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then fresh else (): UI.Action)
             case BoolValue.Const(true) => fresh
@@ -379,11 +377,11 @@ final case class Select[A] private (
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
-        open: ReactiveValue[Boolean],
+        open: Slot[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
-        q: ReactiveValue[String],
+        q: Slot[String],
         qV: String,
         /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
           * is not subscribed, and the trigger's role follows the switch itself.
@@ -397,28 +395,20 @@ final case class Select[A] private (
         idBase: Maybe[String]
     ):
         /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-        def setOpen(v: Boolean)(using Frame): UI.Action = ReactiveValue.change(Present(open), v, onOpenF)
+        def setOpen(v: Boolean)(using Frame): UI.Action = open.change(v)
     end State
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only, reachable and readable with no panel to open. A panel fixed
         // closed is the same: nothing the reader does may open it.
-        val openFixedShut = ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
-        if (choice.exists(_.fixed(onChangeF.orElse(onPickF))) || openFixedShut) && !readonlyFlag then copy(readonlyFlag = true).render
+        if (choice.exists(_.fixed(onChangeF.orElse(onPickF))) || openSlot.fixedAt(false)) && !readonlyFlag then
+            copy(readonlyFlag = true).render
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
-            val unheard =
-                (if ReactiveValue.deaf(openSlot, onOpenF) then
-                     List(
-                         "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add onOpenChange"
-                     )
-                 else Nil) ++
-                    (if ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
-                         List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
-                     else Nil)
-            if unheard.isEmpty then renderLive
-            else fragment((unheard.map(a => KeyDiagnostics.card("Select", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
-            end if
+            Diagnostics.before(renderLive)("Select")(
+                Diagnostic.unheard(openSlot, Select.openName, on = interactive),
+                Diagnostic.unheard(filterQuerySlot, Select.queryName, on = interactive)
+            )
         end if
     end render
 
@@ -437,23 +427,17 @@ final case class Select[A] private (
                 cmds <- UI.commands
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the select keeps the panel state itself, starting closed.
-                open <- openSlot match
-                    case Present(slot) => Kyo.lift(slot)
-                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
-                hi <- Signal.initRef(-1)
-                // Same shape as `open` above: an app-owned query ref takes over the
-                // slot the component would otherwise allocate for itself.
-                // A constant query is the starting text, kept here like an unbound one.
-                q <- filterQuerySlot match
-                    case Present(slot) if slot.const.isEmpty => Kyo.lift(slot)
-                    case Present(slot)                       => Signal.initRef(slot.const.getOrElse("")).map(r => ReactiveValue[String](r))
-                    case Absent                              => Signal.initRef("").map(r => ReactiveValue[String](r))
+                open <- openSlot.owned(false)
+                hi   <- Signal.initRef(-1)
+                // An app-owned query takes over the slot the component would otherwise allocate for itself; a constant query
+                // is the starting text, kept here like an unbound one.
+                q <- filterQuerySlot.ownedFrom("")
                 // Unbound, and with no host supplying what it holds, the field keeps what the reader picks itself.
                 own <-
                     if choice.isEmpty && currentV.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
+            yield self.copy(openSlot = open).wiredOver(hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -464,22 +448,20 @@ final case class Select[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
-        val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base)
+        copy(openSlot = openSlot.bind(open)).wiredOver(hi, filterQuerySlot.bind(q), base)
     end wired
 
     /** [[wired]] over the panel and query state however they are bound. */
     private def wiredOver(
-        open: ReactiveValue[Boolean],
         hi: SignalRef[Int],
-        q: ReactiveValue[String],
+        q: Slot[String],
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q))
+        val panel    = Reading.Live(openFiltering(openSlot.reading(false).signal)).and(Reading.Live(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -517,11 +499,10 @@ final case class Select[A] private (
         // The chosen option drawn by the template, where there is one and an option is chosen.
         val selDrawn: Maybe[UI] = shownOpt.flatMap(a => itemTemplateF.map(_(a)))
         // A held option no row carries, once the options are said to be complete.
-        val unknownCard: List[UI] =
+        val strays: Seq[String] =
             held match
-                case Present(a) if selIdx < 0 && !loading =>
-                    List(KeyDiagnostics.unknown("Select", Seq(labelF(a))))
-                case _ => Nil
+                case Present(a) if selIdx < 0 && !loading => Seq(labelF(a))
+                case _                                    => Nil
 
         /** Where an opening key lands: the selected option, or the first one a highlight may sit
           * on where nothing is selected. Opening has to land ON an option, or the arrow that
@@ -689,22 +670,13 @@ final case class Select[A] private (
         end if
 
         val field = validity.follow(el(UI.children((labelUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
-        val cards = unknownCard ++ unheardCard
-        if cards.isEmpty then field else fragment((field :: cards)*)
+        // A selection bound one way that nothing hears: every pick is painted away again. A disabled field takes no pick,
+        // so it has nothing to say.
+        Diagnostics.after(field)("Select")(
+            Diagnostic.unknown(strays),
+            Diagnostic(interactive && choice.exists(_.deaf(onChangeF.orElse(onPickF))), Select.selectionName.advice)
+        )
     end bodyStatic
-
-    /** A selection bound one way that nothing hears: every pick is painted away again. A disabled field takes no pick,
-      * so it has nothing to say.
-      */
-    private def unheardCard(using Frame): List[UI] =
-        if disabledFlag || readonlyFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
-        else
-            List(KeyDiagnostics.card(
-                "Select",
-                "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange or " +
-                    "onPick, or bind a SignalRef",
-                Nil
-            ))
 
     /** Writes `next` through the binding, then fires `onChange` and `onPick` where the write changed what the field holds
       * ([[SingleChoice.report]]). An unbound field (a host supplying `current`) has nothing to write and reports the pick as
@@ -855,12 +827,12 @@ final case class Select[A] private (
                     .aria("expanded", "true")
                 // Two way, the field writes the query itself; one way it follows what the owner holds and reports what the reader
                 // types, and kyo-ui puts it back to the owner's query.
-                filterEl = filterEl.value(s.q.bound)
+                s.q.bound.foreach(v => filterEl = filterEl.value(v))
                 filterEl = filterEl
                     // Typing re-filters; highlight the first match (Prime behavior).
                     .onInput(text =>
                         s.hi.set(0)
-                            .andThen(ReactiveValue.change(Present(s.q), text, onFilterQueryF))
+                            .andThen(s.q.change(text))
                     )
                     // The header is where focus goes and therefore where the option keyboard lives:
                     // the arrows move the highlight, the caret keeps Space and the printable keys,
@@ -885,7 +857,7 @@ final case class Select[A] private (
                 )
             else Nil
 
-        Overlay.hosted(s.open, onOpenF)
+        Overlay.hosted(s.open)
             .portal(portalFlag)
             .scroll(scrollV)
             .panelClass("p-select-overlay")
@@ -900,23 +872,23 @@ final case class Select[A] private (
 
     /** The loud card shown at the top of the panel when the option keys collide, so
       * a duplicate-label data set cannot silently select the wrong row (see
-      * [[KeyDiagnostics]]). Empty in the healthy case, which is every existing
+      * [[Diagnostics]]). Empty in the healthy case, which is every existing
       * render.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = KeyDiagnostics.duplicates(items.map(key))
-        if dups.isEmpty then Nil
-        else
-            List(KeyDiagnostics.card(
-                "Select",
-                if keyF.isEmpty then
-                    "option labels are not unique and optionKey is unset, so picks apply to the wrong option; set optionKey"
-                else "optionKey is not unique across the options, so picks apply to the wrong option",
-                dups
-            ))
-        end if
+        Diagnostics.cards("Select")(Diagnostic.naming(
+            if keyF.isEmpty then
+                "option labels are not unique and optionKey is unset, so picks apply to the wrong option; set optionKey"
+            else "optionKey is not unique across the options, so picks apply to the wrong option",
+            Diagnostics.duplicates(items.map(key))
+        )).toList
     end keyCollisionCard
 end Select
 
 object Select:
+    private val openName      = Slot.Name("Select", "the panel", "an open or a close", "onOpenChange")
+    private val queryName     = Slot.Name("Select", "the filter query", "the reader type", "onFilterQueryChange")
+    private val selectionName = Slot.Name("Select", "the selection", "a pick", "onChange or onPick")
+
     def apply[A](): Select[A] = new Select[A](Nil, _.toString)
+end Select

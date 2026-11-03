@@ -70,7 +70,7 @@ final case class Carousel[A] private (
     itemList: List[A] = Nil,
     itemSources: List[List[A] | Signal[Seq[A]]] = Nil,
     templateF: Maybe[A => UI] = Absent,
-    pageSlot: Maybe[ReactiveValue[Int]] = Absent,
+    pageSlot: Slot[Int] = Slot(),
     numVisibleV: Int = 1,
     numScrollV: Int = 1,
     circularFlag: Boolean = false,
@@ -78,9 +78,7 @@ final case class Carousel[A] private (
     verticalHeightV: Maybe[String] = Absent,
     showItemNavigatorsFlag: Boolean = true,
     showIndicatorsFlag: Boolean = true,
-    autoplayMsV: Int = 0,
-    onPageChangeF: Maybe[Int => UI.Action] = Absent,
-    fixedFlag: Boolean = false
+    autoplayMsV: Int = 0
 ) extends Node:
     type Self = Carousel[A]
 
@@ -115,7 +113,7 @@ final case class Carousel[A] private (
       * card, and a constant nobody hears is fixed: its navigators and dots stay reachable, turn nothing and say so.
       * Unbound, the carousel keeps the page itself, starting on the first.
       */
-    def page(v: Int | Signal[Int]): Carousel[A] = copy(pageSlot = Present(ReactiveValue[Int](v)))
+    def page(v: Int | Signal[Int]): Carousel[A] = copy(pageSlot = pageSlot.bind(v))
 
     /** Items shown per page (default 1). */
     def numVisible(v: Int): Carousel[A] = copy(numVisibleV = math.max(1, v))
@@ -157,48 +155,37 @@ final case class Carousel[A] private (
     def autoplay(intervalMs: Int): Carousel[A] = copy(autoplayMsV = math.max(0, intervalMs))
 
     /** Fired with the page a turn (nav, indicator, swipe, autoplay) asks for, after a two-way [[page]] is written. */
-    def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = copy(onPageChangeF = Present(Callback.of(f)))
+    def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = copy(pageSlot = pageSlot.hear(f))
 
     /** Prime's page count over `n` items: one page per `numScroll` step over the overhang. */
     private def pagesOf(n: Int): Int = Carousel.pageCount(numScrollV, numVisibleV, n)
 
     private[uic] def render(using Frame): UI =
-        pageSlot match
-            // Unbound, the carousel keeps the page the reader turns to itself, starting on the first.
-            case Absent =>
-                ReactiveValue.owned(0)(own => copy(pageSlot = Present(own)).render)(entries.render(as => copy(itemList = as).body(0)))
-            // A constant nobody hears is fixed: drawn on its page, turned by nothing.
-            case Present(slot) if ReactiveValue.fixed(pageSlot, onPageChangeF) =>
-                entries.render(as => copy(itemList = as, fixedFlag = true).body(slot.const.getOrElse(0)))
-            case Present(slot) =>
-                val r: Signal[Int] = slot.dyn.getOrElse(Signal.initConst(slot.const.getOrElse(0)))
-                // The stable strip needs a session id (bindStyleById target, and the base every item and dot id
-                // derives from) and a swipe start-x ref, both minted once in the mount. The autoplay fiber is spawned
-                // here too, so its Scope is this mount, which cancels it on unmount.
-                val carousel = UI.mounted {
-                    for
-                        cmds     <- UI.commands
-                        stripId  <- cmds.freshId
-                        startPos <- Signal.initRef(0.0)
-                        _        <- autoplayLoop(r)
-                    yield fragment(
-                        slideTrigger(cmds, stripId, r),
-                        interactive(r, stripId, startPos, id => cmds.focusId(id))
-                    )
-                }.placeholder(shown(r).render((as, p) => copy(itemList = as).body(p)))
-                // A signal nobody hears: every turn the reader takes is painted away again.
-                if !ReactiveValue.deaf(pageSlot, onPageChangeF) then carousel
-                else
-                    fragment(
-                        KeyDiagnostics.card(
-                            "Carousel",
-                            "the page is bound one way and nothing hears a turn, so the reader cannot change it; add " +
-                                "onPageChange, or bind a SignalRef",
-                            Nil
-                        ),
-                        carousel
-                    )
-                end if
+        // Unbound, the carousel keeps the page the reader turns to itself, starting on the first.
+        Slot.owning(pageSlot, start = 0)(s => copy(pageSlot = s).turning)(entries.render(as => copy(itemList = as).body(0)))
+
+    private def turning(using Frame): UI =
+        // A constant nobody hears is fixed: drawn on its page, turned by nothing.
+        if pageSlot.fixed then entries.render(as => copy(itemList = as).body(pageSlot.binding.flatMap(_.const).getOrElse(0)))
+        else
+            val r: Signal[Int] = pageSlot.reading(0).signal
+            // The stable strip needs a session id (bindStyleById target, and the base every item and dot id derives from) and a
+            // swipe start-x ref, both minted once in the mount. The autoplay fiber is spawned here too, so its Scope is this
+            // mount, which cancels it on unmount.
+            val carousel = UI.mounted {
+                for
+                    cmds     <- UI.commands
+                    stripId  <- cmds.freshId
+                    startPos <- Signal.initRef(0.0)
+                    _        <- autoplayLoop(r)
+                yield fragment(
+                    slideTrigger(cmds, stripId, r),
+                    interactive(r, stripId, startPos, id => cmds.focusId(id))
+                )
+            }.placeholder(shown(r).render((as, p) => copy(itemList = as).body(p)))
+            // A signal nobody hears: every turn the reader takes is painted away again.
+            Diagnostics.before(carousel)("Carousel")(Diagnostic.unheard(pageSlot, Carousel.pageName))
+    end turning
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
       * cancels it on unmount, so it never leaks and never busy-blocks: it sleeps
@@ -451,7 +438,7 @@ final case class Carousel[A] private (
             .disabled(off)
             .extraClass(cls)
         // A fixed carousel shows its navigators, turns nothing with them, and says so: a tab stop with aria-disabled.
-        (if fixedFlag then b.ariaDisabled(true) else b.onClick(setPage(target, pages))).render
+        (if pageSlot.fixed then b.ariaDisabled(true) else b.onClick(setPage(target, pages))).render
     end navButton
 
     /** One id per indicator dot, derived from the strip's own minted id. */
@@ -477,7 +464,7 @@ final case class Carousel[A] private (
                     .tabIndex(if i == page then 0 else -1)
                 if i == page then btn = btn.aria("current", "page")
                 // A fixed carousel's dots turn nothing, and the ones off the page say so; the current one names the page.
-                if !fixedFlag then btn = btn.onClick(setPage(i, pages))
+                if !pageSlot.fixed then btn = btn.onClick(setPage(i, pages))
                 else if i != page then btn = btn.aria("disabled", "true")
                 if ids.isDefinedAt(i) then
                     btn = btn.id(ids(i)).onKeyDown { e =>
@@ -514,10 +501,11 @@ final case class Carousel[A] private (
     end setPage
 
     /** Writes a two-way page and fires `onPageChange` (the shared write). */
-    private def advance(next: Int)(using Frame): UI.Action = ReactiveValue.change(pageSlot, next, onPageChangeF)
+    private def advance(next: Int)(using Frame): UI.Action = pageSlot.change(next)
 end Carousel
 
 object Carousel:
+    private val pageName        = Slot.Name("Carousel", "the page", "a turn", "onPageChange")
     def apply[A](): Carousel[A] = new Carousel[A]()
 
     /** Drag distance (px) past which a swipe turns the page. */

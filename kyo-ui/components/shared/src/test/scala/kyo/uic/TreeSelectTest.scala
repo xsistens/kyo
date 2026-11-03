@@ -253,7 +253,7 @@ class TreeSelectTest extends ReactiveValueContract:
     private def named(t: UI)(using Frame): Set[String] < Sync =
         elementWithClass(t, "p-treeselect-label").map(l => textOf(l).split(", ").toSet.flatMap(idsByLabel.get))
 
-    holds(new Slot[uic.TreeSelect[String], Set[String]](
+    holds(new SlotCase[uic.TreeSelect[String], Set[String]](
         name = "selection",
         bare = Present(treeSelect),
         bind = treeSelect.selection(_),
@@ -270,7 +270,7 @@ class TreeSelectTest extends ReactiveValueContract:
         after = Seq(t => clickBubbling(t)(saying("p-tree-node-label", "build.sbt")))
     ))
 
-    holds(new Slot[uic.TreeSelect[String], Boolean](
+    holds(new SlotCase[uic.TreeSelect[String], Boolean](
         name = "open",
         bare = Present(treeSelect),
         bind = treeSelect.open(_),
@@ -300,7 +300,7 @@ class TreeSelectTest extends ReactiveValueContract:
     // slot under test. The toggle is what a pointer opens a branch with. A tree has no readonly state for its expansion and
     // its toggles are hidden from assistive tech, so a fixed expansion says nothing beyond each branch's aria-expanded: it
     // is fixed because no toggle answers (the tree's keys ignore a fixed expansion too, Tree.toggleNodeLive's guard).
-    holds(new Slot[uic.TreeSelect[String], Set[String]](
+    holds(new SlotCase[uic.TreeSelect[String], Set[String]](
         name = "expanded",
         bare = Present(treeSelect.open(true)),
         bind = treeSelect.open(true).expanded(_),
@@ -320,7 +320,7 @@ class TreeSelectTest extends ReactiveValueContract:
 
     // A panel open by a constant somebody hears, bound one way or to a ref still closes on a click: the reader asks, and the
     // owner decides.
-    heardBy(new Slot[uic.TreeSelect[String], Boolean](
+    heardBy(new SlotCase[uic.TreeSelect[String], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = treeSelect.open(_),
@@ -352,6 +352,14 @@ class TreeSelectTest extends ReactiveValueContract:
             assert(tr.attrs.ariaAttrs.get("expanded").contains("true"), "and says the tree is open")
             assert(!readOnly(tr), "the selection is still the reader's, so the field is not read-only")
         end for
+    }
+
+    // A reader who cannot act has nothing to hear: a disabled field does not open.
+    "a disabled field says nothing about a panel bound one way" in {
+        for
+            open <- Signal.initRef(false)
+            said <- elementsWithClass(treeSelect.disabled(true).open(open.readOnly).render, UicTest.cardClass)
+        yield assert(said.isEmpty, s"${said.map(textOf)}")
     }
 
 end TreeSelectTest

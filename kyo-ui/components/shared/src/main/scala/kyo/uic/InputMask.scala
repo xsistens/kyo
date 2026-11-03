@@ -24,7 +24,7 @@ import kyo.*
   */
 final case class InputMask private (
     maskV: String,
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     placeholderText: Maybe[TextValue] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[BoolValue] = Absent,
@@ -36,7 +36,6 @@ final case class InputMask private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent,
     onCompleteF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
@@ -50,7 +49,7 @@ final case class InputMask private (
       * neither, a card says the reader cannot change it. A constant (already formatted, or raw; the client re-masks on
       * edit) is the starting text. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): InputMask = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): InputMask = copy(valueSlot = valueSlot.bind(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = copy(placeholderText = v)
 
@@ -86,7 +85,7 @@ final case class InputMask private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputMask = copy(accNameV = v)
 
     /** Fired with the MASKED value on every change (native change commit). */
-    def onChange(f: String => UI.Action)(using Frame): InputMask = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): InputMask = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss with the MASKED text the field holds as focus leaves it
       * (what the reader typed, also unbound or from a constant). Unlike onChange it
@@ -128,10 +127,10 @@ final case class InputMask private (
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
             case Absent                      => ()
         end match
-        valueBinding.foreach(v => in = in.value(v.bound))
-        if onChangeF.isDefined || onCompleteF.isDefined then
+        valueSlot.bound.foreach(v => in = in.value(v))
+        if valueSlot.hearer.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
-                val fireChange: UI.Action = onChangeF match
+                val fireChange: UI.Action = valueSlot.hearer match
                     case Present(f) => f(masked)
                     case Absent     => ()
                 val fireComplete: UI.Action = onCompleteF match

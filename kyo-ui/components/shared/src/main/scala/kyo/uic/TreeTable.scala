@@ -72,12 +72,9 @@ final case class TreeTable[A] private (
     nodeSources: List[TreeTableNodeLiveEntry[A]] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[Column[A, AnyTable]] = Nil,
-    expandedTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
-    selectedTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
-    onExpandedF: Maybe[Set[A] => UI.Action] = Absent,
-    onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
-    sortSlot: Maybe[ReactiveValue[List[SortKey]]] = Absent,
-    onSortF: Maybe[List[SortKey] => UI.Action] = Absent,
+    expandedSlot: Slot[Set[A]] = Slot[Set[A]](),
+    selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
+    sortSlot: Slot[List[SortKey]] = Slot[List[SortKey]](),
     selectionModeV: SelectionMode = SelectionMode.None,
     metaKeyFlag: Boolean = false,
     removableSortFlag: Boolean = true,
@@ -130,10 +127,10 @@ final case class TreeTable[A] private (
       * is how expansion held in a route or a parent is changed there. A one-way binding with neither
       * [[onExpandedChange]] nor [[onNodeToggle]] is reported in a card.
       */
-    def expanded(v: Set[A] | Signal[Set[A]]): TreeTable[A] = copy(expandedTyped = Present(ReactiveValue[Set[A]](v)))
+    def expanded(v: Set[A] | Signal[Set[A]]): TreeTable[A] = copy(expandedSlot = expandedSlot.bind(v))
 
     /** Fired with the rows open after a toggle, after a two-way [[expanded]] is written, and before [[onNodeToggle]]. */
-    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = copy(onExpandedF = Present(Callback.of(f)))
+    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = copy(expandedSlot = expandedSlot.hear(f))
 
     /** The chosen rows, matched by [[rowKey]].
       *
@@ -141,12 +138,12 @@ final case class TreeTable[A] private (
       * hears it. A plain `Signal` or a constant binds one way: the table marks those rows and only reports the set a
       * press asks for. A one-way binding with neither [[onSelectionChange]] nor [[onRowClick]] is reported in a card.
       */
-    def selection(v: Set[A] | Signal[Set[A]]): TreeTable[A] = copy(selectedTyped = Present(ReactiveValue[Set[A]](v)))
+    def selection(v: Set[A] | Signal[Set[A]]): TreeTable[A] = copy(selectedSlot = selectedSlot.bind(v))
 
     /** Fired with the rows chosen after a row press, after a two-way [[selection]] is written, and before
       * [[onRowClick]]. Unlike [[onRowClick]] it carries what the press made of the selection, modifiers included.
       */
-    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = copy(onSelectionF = Present(Callback.of(f)))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = copy(selectedSlot = selectedSlot.hear(f))
 
     /** The ordered sort spec (applied per sibling level): [[SortKey]] entries, the first
       * sorting one being the primary key. Presses follow the DataTable contract, plain for
@@ -158,10 +155,10 @@ final case class TreeTable[A] private (
       * fixed: each sortable header stays a tab stop that says its sort and answers no press or key. Unbound, the table
       * keeps the sort itself.
       */
-    def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = copy(sortSlot = Present(ReactiveValue[List[SortKey]](v)))
+    def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = copy(sortSlot = sortSlot.bind(v))
 
     /** Fired with the spec a header press asks for, after a two-way [[sort]] is written. */
-    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): TreeTable[A] = copy(onSortF = Present(Callback.of(f)))
+    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): TreeTable[A] = copy(sortSlot = sortSlot.hear(f))
 
     /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
       * and descending, which is Prime's default.
@@ -195,10 +192,12 @@ final case class TreeTable[A] private (
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = copy(emptyContentV = v)
 
     /** Fired with the row after a toggler press (after the expansion write). */
-    def onNodeToggle(f: A => UI.Action)(using Frame): TreeTable[A] = copy(onNodeToggleF = Present(Callback.of(f)))
+    def onNodeToggle(f: A => UI.Action)(using Frame): TreeTable[A] =
+        copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo)
 
     /** Fired with the row after a row click (after the selection write). */
-    def onRowClick(f: A => UI.Action)(using Frame): TreeTable[A] = copy(onRowClickF = Present(Callback.of(f)))
+    def onRowClick(f: A => UI.Action)(using Frame): TreeTable[A] =
+        copy(onRowClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo)
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeTable[A] = copy(accNameV = v)
 
@@ -233,31 +232,24 @@ final case class TreeTable[A] private (
     /** Applies `f` to a row set's keys and hands on the rows they name, the rows already held kept as the caller wrote
       * them: written if `slot` binds two way, then reported to `report`.
       */
-    private def updateRows(slot: Maybe[ReactiveValue[Set[A]]], report: Maybe[Set[A] => UI.Action])(
-        f: Set[String] => Set[String]
-    )(using Frame): UI.Action =
-        ReactiveValue.update(
-            slot,
-            prev =>
-                val now   = f(prev.map(keyFor))
-                val kept  = prev.filter(a => now.contains(keyFor(a)))
-                val known = kept.map(keyFor)
-                kept ++ now.filterNot(known.contains).flatMap(k => rowFor(k).toList)
-            ,
-            report
+    private def updateRows(slot: Slot[Set[A]])(f: Set[String] => Set[String])(using Frame): UI.Action =
+        slot.update(prev =>
+            val now   = f(prev.map(keyFor))
+            val kept  = prev.filter(a => now.contains(keyFor(a)))
+            val known = kept.map(keyFor)
+            kept ++ now.filterNot(known.contains).flatMap(k => rowFor(k).toList)
         )
 
     private def rowInteractive: Boolean = (selectionModeV != SelectionMode.None && !selectionFixed) || onRowClickF.isDefined
 
     /** A constant sort nobody hears is fixed: the rows show it, and no header offers to change it. */
-    private def sortFixed: Boolean = ReactiveValue.fixed(sortSlot, onSortF)
+    private def sortFixed: Boolean = sortSlot.fixed
 
     /** A constant expansion nobody hears is fixed: the rows show it, and no toggle opens or closes one. */
-    private def expansionFixed: Boolean = ReactiveValue.fixed(expandedTyped, onExpandedF.orElse(onNodeToggleF))
+    private def expansionFixed: Boolean = expandedSlot.fixed
 
     /** A constant selection nobody hears is fixed: the rows show it, and no press or key picks one. */
-    private def selectionFixed: Boolean =
-        selectionModeV != SelectionMode.None && ReactiveValue.fixed(selectedTyped, onSelectionF.orElse(onRowClickF))
+    private def selectionFixed: Boolean = selectionModeV != SelectionMode.None && selectedSlot.fixed
 
     private[uic] def render(using Frame): UI =
         UI.mounted {
@@ -266,17 +258,10 @@ final case class TreeTable[A] private (
                 base   <- cmds.freshId
                 cursor <- Signal.initRef(Absent: Maybe[String])
                 // Unbound, the table keeps the sort, the open rows and, where it selects, the picked ones itself.
-                sort <-
-                    if sortSlot.isEmpty then Signal.initRef(List.empty[SortKey]).map(r => Maybe(ReactiveValue[List[SortKey]](r)))
-                    else Kyo.lift(sortSlot)
-                exp <-
-                    if expandedTyped.isEmpty then Signal.initRef(Set.empty[A]).map(r => Maybe(ReactiveValue[Set[A]](r)))
-                    else Kyo.lift(expandedTyped)
-                sel <-
-                    if selectedTyped.isEmpty && selectionModeV != SelectionMode.None then
-                        Signal.initRef(Set.empty[A]).map(r => Maybe(ReactiveValue[Set[A]](r)))
-                    else Kyo.lift(selectedTyped)
-                self = copy(sortSlot = sort, expandedTyped = exp, selectedTyped = sel)
+                sort <- sortSlot.owned(List.empty[SortKey])
+                exp  <- expandedSlot.owned(Set.empty[A])
+                sel  <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[A]) else Kyo.lift(selectedSlot)
+                self = copy(sortSlot = sort, expandedSlot = exp, selectedSlot = sel)
             yield self.buildAll(base, Present(cursor), id => cmds.focusId(id))
         }.placeholder(buildAll("", Absent, _ => ()))
 
@@ -307,9 +292,9 @@ final case class TreeTable[A] private (
         val sortable = Reading.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig))))
         // The bound rows are matched to keys inside the region, against the roots it read: without a [[rowKey]] a row's
         // key is its place in the tree, which a live list moves.
-        val exp    = expandedTyped.fold(Reading.Fixed(Set.empty[A]))(Reading.of(_))
-        val sel    = selectedTyped.fold(Reading.Fixed(Set.empty[A]))(Reading.of(_))
-        val sort   = sortSlot.fold(Reading.Fixed(List.empty[SortKey]))(Reading.of(_))
+        val exp    = expandedSlot.reading(Set.empty[A])
+        val sel    = selectedSlot.reading(Set.empty[A])
+        val sort   = sortSlot.reading(List.empty[SortKey])
         val cursor = Reading.orElse(cursorRef, Absent: Maybe[String])
         entries.and(visible).and(sortable).and(exp).and(sel).and(sort).and(cursor).render {
             case ((((((ns, vis), flags), e), s), so), cu) =>
@@ -347,7 +332,7 @@ final case class TreeTable[A] private (
         // The paths whose headers the reader can actually click; the rest of the spec is
         // the caller's to keep, so no click may clear it.
         val interactive: Set[List[String]] =
-            if sortSlot.isEmpty then Set.empty
+            if sortSlot.binding.isEmpty then Set.empty
             else
                 cols.collect {
                     case c if c.isSortable(flags.getOrElse(c.headerV, c.sortableConst)) => List(c.headerV)
@@ -429,24 +414,11 @@ final case class TreeTable[A] private (
       */
     private def unheard(using Frame): List[UI] =
         val sortable = cols.filter(c => c.isSortable(c.sortableConst)).map(_.headerV)
-        val sort     =
-            if sortable.isEmpty || !ReactiveValue.deaf(sortSlot, onSortF) then Nil
-            else
-                List(KeyDiagnostics.card(
-                    "TreeTable",
-                    "the sort is bound one way and nothing hears a header press, so the reader cannot change it; add " +
-                        "onSortChange, or bind a SignalRef",
-                    sortable
-                ))
-        val expansion =
-            if !ReactiveValue.deaf(expandedTyped, onExpandedF.orElse(onNodeToggleF)) then Nil
-            else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef")
-        val selection =
-            if selectionModeV == SelectionMode.None || !ReactiveValue.deaf(selectedTyped, onSelectionF.orElse(onRowClickF))
-            then Nil
-            else List("selection is bound one way and nothing hears a row press: add onSelectionChange, or bind a SignalRef")
-        val rows = expansion ++ selection
-        sort ++ (if rows.isEmpty then Nil else List(KeyDiagnostics.card("TreeTable", "a binding the reader cannot move", rows)))
+        Diagnostics.cards("TreeTable")(
+            Diagnostic(sortSlot.deaf && sortable.nonEmpty, TreeTable.sortName.advice, sortable),
+            Diagnostic.unheard(expandedSlot, TreeTable.expandedName),
+            Diagnostic.unheard(selectedSlot, TreeTable.selectionName, on = selectionModeV != SelectionMode.None)
+        ).toList
     end unheard
 
     /** Applies the sort spec to one sibling list (stable, back-to-front: the
@@ -540,12 +512,9 @@ final case class TreeTable[A] private (
         Frame
     ): UI.Action =
         val multi = e.modifiers.ctrl || e.modifiers.meta
-        ReactiveValue.update(
-            sortSlot,
-            cur =>
-                if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
-                else SortKey.plain(cur, path, removableSortFlag, interactive.contains),
-            onSortF
+        sortSlot.update(cur =>
+            if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
+            else SortKey.plain(cur, path, removableSortFlag, interactive.contains)
         )
     end toggleSort
 
@@ -729,7 +698,7 @@ final case class TreeTable[A] private (
       * "open" cannot close a row that a re-render opened underneath it.
       */
     private def setExpanded(id: String, open: Boolean)(using Frame): UI.Action =
-        updateRows(expandedTyped, onExpandedF)(cur => if open then cur + id else cur - id).andThen(fireRow(onNodeToggleF, id))
+        updateRows(expandedSlot)(cur => if open then cur + id else cur - id).andThen(fireRow(onNodeToggleF, id))
     end setExpanded
 
     /** A toggler press flips the row in the bound `expanded` set, then fires
@@ -739,7 +708,7 @@ final case class TreeTable[A] private (
         // A fixed expansion takes no toggle, from the keys either.
         if expansionFixed then ()
         else
-            updateRows(expandedTyped, onExpandedF)(cur => if cur.contains(id) then cur - id else cur + id)
+            updateRows(expandedSlot)(cur => if cur.contains(id) then cur - id else cur + id)
                 .andThen(fireRow(onNodeToggleF, id))
     end toggleNode
 
@@ -753,10 +722,14 @@ final case class TreeTable[A] private (
     private def activate(id: String, meta: Boolean = false)(using Frame): UI.Action =
         val write: UI.Action =
             if selectionModeV == SelectionMode.None || selectionFixed then ()
-            else updateRows(selectedTyped, onSelectionF)(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
+            else updateRows(selectedSlot)(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
         write.andThen(fireRow(onRowClickF, id))
     end activate
 end TreeTable
 
 object TreeTable:
+    private val sortName         = Slot.Name("TreeTable", "the sort", "a header press", "onSortChange")
+    private val expandedName     = Slot.Name("TreeTable", "expanded", "a toggle", "onExpandedChange")
+    private val selectionName    = Slot.Name("TreeTable", "selection", "a row press", "onSelectionChange")
     def apply[A](): TreeTable[A] = new TreeTable[A]()
+end TreeTable

@@ -41,9 +41,8 @@ end PanelAccessibleRole
 final case class Panel private (
     headerText: Maybe[TextValue] = Absent,
     headerUIV: Maybe[UI] = Absent,
-    collapsedSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onCollapsedF: Maybe[Boolean => UI.Action] = Absent,
-    toggleableFlag: Boolean = false,
+    collapsedSlot: Slot[Boolean] = Slot(),
+    toggleableV: Maybe[BoolValue] = Absent,
     headerLevelV: TitleLevel = TitleLevel.H2,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleRoleV: PanelAccessibleRole = PanelAccessibleRole.Region,
@@ -61,21 +60,24 @@ final case class Panel private (
     /** Custom header slot (wins over the `header(String)` title). */
     def header(u: UI): Panel = copy(headerUIV = Present(u))
 
-    /** Renders the toggle button (`.p-panel-toggleable`); pair with [[collapsed]]
-      * to bind the collapse state. Default false: a plain fixed panel.
+    /** Renders the toggle button (`.p-panel-toggleable`). Set, it decides alone, and a signal switches the button and the
+      * collapse in place. Without it a binding of [[collapsed]] turns them on, and an unbound panel is plain.
+      *
+      * On and unbound, the panel keeps the collapse state itself. Under a signal it holds the state while the switch is off,
+      * when the panel is plain and its content shows, and comes back to it.
       */
-    def toggleable(v: Boolean): Panel = copy(toggleableFlag = v)
+    def toggleable(v: Boolean | Signal[Boolean]): Panel = copy(toggleableV = Present(ReactiveValue(v)))
 
-    /** Binds the collapse state (only effective with `toggleable(true)`). A `SignalRef` binds two way: a press of the
+    /** Binds the collapse state, which turns the toggle on unless [[toggleable]] says otherwise. A `SignalRef` binds two way: a press of the
       * toggle writes it, then [[onCollapsedChange]] hears the new state. A plain `Signal` binds one way: the panel
       * follows it and only reports a press. A constant nobody hears is fixed: the panel keeps it and the toggle,
       * still reachable, changes nothing. Unbound, a toggleable panel keeps the state itself, starting expanded. A
       * signal nothing hears is reported in a card.
       */
-    def collapsed(v: Boolean | Signal[Boolean]): Panel = copy(collapsedSlot = Present(ReactiveValue(v)))
+    def collapsed(v: Boolean | Signal[Boolean]): Panel = copy(collapsedSlot = collapsedSlot.bind(v))
 
     /** Fired with the new collapse state after a press of the toggle, after a two-way [[collapsed]] is written. */
-    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Panel = copy(onCollapsedF = Present(Callback.of(f)))
+    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Panel = copy(collapsedSlot = collapsedSlot.hear(f))
 
     /** Heading level of the header title (rendered as `aria-level`, default H2). */
     def headerLevel(v: TitleLevel): Panel = copy(headerLevelV = v)
@@ -98,29 +100,19 @@ final case class Panel private (
     private[uic] def elementId: Maybe[String] = idV
 
     private[uic] def render(using Frame): UI =
-        collapsedSlot match
-            // Unbound, a toggleable panel keeps its collapse state itself, starting expanded.
-            case Absent if toggleableFlag =>
-                ReactiveValue.owned(false)(own => copy(collapsedSlot = Present(own)).body)(
-                    copy(collapsedSlot = Present(ReactiveValue[Boolean](Signal.initConst(false)))).body
-                )
-            // A signal nobody hears: every press the reader makes is painted away again.
-            case _ if toggleableFlag && ReactiveValue.deaf(collapsedSlot, onCollapsedF) =>
-                fragment(
-                    KeyDiagnostics.card(
-                        "Panel",
-                        "the collapse state is bound one way and nothing hears a press, so the reader cannot change it; " +
-                            "add onCollapsedChange, or bind a SignalRef",
-                        Nil
-                    ),
-                    body
-                )
-            case _ => body
+        // Unbound, a toggleable panel keeps its collapse state itself, starting expanded.
+        Slot.draw(collapsedSlot, Panel.collapsedName, start = false, on = toggleOn)(s => copy(collapsedSlot = s).body)
+
+    /** The switch as this panel reads it: set, it decides alone; unset, a binding of [[collapsed]] turns the toggle on. */
+    private def toggleOn: BoolValue = toggleableV.getOrElse(ReactiveValue.Const(collapsedSlot.binding.isDefined))
 
     private def body(using Frame): UI =
         var shell = div.cssClass("p-panel").cssClass("p-component").role(accessibleRoleV.roleToken)
         idV.foreach(v => shell = shell.id(v))
-        if toggleableFlag then shell = shell.cssClass("p-panel-toggleable")
+        val on = toggleOn
+        on match
+            case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-panel-toggleable")
+            case ReactiveValue.Dyn(sig) => shell = shell.cssClass("p-panel-toggleable", sig)
         accessibleNameV match
             case Present(TextValue.Const(n)) => shell = shell.aria("label", n)
             case Present(TextValue.Dyn(s))   => shell = shell.aria("label", s)
@@ -141,42 +133,43 @@ final case class Panel private (
             case (Absent, Present(TextValue.Dyn(s)))   => List(titleShell(s))
             case _                                     => Nil
 
-        val toggleSlot: Maybe[ReactiveValue[Boolean]] = if toggleableFlag then collapsedSlot else Absent
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
-        val fixed = ReactiveValue.fixed(collapsedSlot, onCollapsedF)
+        val fixed = collapsedSlot.fixed
 
-        val actions: List[UI] = toggleSlot match
-            case Present(slot) =>
-                // The whole button re-renders on toggle so the plus/minus glyph and
-                // aria-expanded track the state (a DIFFERENT element from the content,
-                // so replacing it never resets the content's collapse transition).
-                List(
-                    div.cssClass("p-panel-header-actions")(
-                        Reading.of(slot).render { c =>
-                            var b = button
-                                .cssClass("p-panel-toggle-button")
-                                .cssClass("p-button")
-                                .cssClass("p-component")
-                                .cssClass("p-button-icon-only")
-                                .cssClass("p-button-rounded")
-                                .cssClass("p-button-text")
-                                .cssClass("p-button-secondary")
-                                .jsProp("type", "button")
-                                .aria("expanded", (!c).toString)
-                                .aria("label", "Toggle")
-                            b =
-                                if fixed then b.aria("disabled", "true")
-                                else b.onClick(ReactiveValue.update(collapsedSlot, !_, onCollapsedF))
-                            // The toggle is Panel's own button, so it is not reachable by
-                            // wrapping the panel: the wrapper is not that button. It takes
-                            // its id from the panel's, per the derivation HasElementId
-                            // describes.
-                            idV.foreach(base => b = b.id(s"$base-toggle"))
-                            b(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon"))
-                        }
-                    )
-                )
-            case Absent => Nil
+        // The whole button re-renders on toggle so the plus/minus glyph and aria-expanded track the state (a DIFFERENT element
+        // from the content, so replacing it never resets the content's collapse transition).
+        def toggleButton(c: Boolean): UI =
+            var b = button
+                .cssClass("p-panel-toggle-button")
+                .cssClass("p-button")
+                .cssClass("p-component")
+                .cssClass("p-button-icon-only")
+                .cssClass("p-button-rounded")
+                .cssClass("p-button-text")
+                .cssClass("p-button-secondary")
+                .jsProp("type", "button")
+                .aria("expanded", (!c).toString)
+                .aria("label", "Toggle")
+            b =
+                if fixed then b.aria("disabled", "true")
+                else b.onClick(collapsedSlot.update(!_))
+            // The toggle is Panel's own button, so it is not reachable by
+            // wrapping the panel: the wrapper is not that button. It takes
+            // its id from the panel's, per the derivation HasElementId
+            // describes.
+            idV.foreach(base => b = b.id(s"$base-toggle"))
+            b(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon"))
+        end toggleButton
+
+        val collapse          = collapsedSlot.reading(false)
+        val actions: List[UI] = on match
+            case ReactiveValue.Const(false) => Nil
+            case ReactiveValue.Const(true)  => List(div.cssClass("p-panel-header-actions")(collapse.render(toggleButton)))
+            case ReactiveValue.Dyn(sig)     =>
+                // The switch and the collapse are read as ONE region: the actions come and go with the switch.
+                List(Reading.Live(sig).and(collapse).render((isOn, c) =>
+                    if isOn then div.cssClass("p-panel-header-actions")(toggleButton(c)) else UI.empty
+                ))
 
         val headerUI: List[UI] =
             if titleSlot.isEmpty && actions.isEmpty then Nil
@@ -189,9 +182,12 @@ final case class Panel private (
             div.cssClass("p-panel-content-container")(
                 div.cssClass("p-panel-content-wrapper")(UI.children(contentInner)*)
             )
-        val container: UI = toggleSlot match
-            case Present(slot) => Reading.of(slot).render(collapseContainer(_, contentInner))
-            case Absent        => containerBase
+        val container: UI = on match
+            case ReactiveValue.Const(false) => containerBase
+            case ReactiveValue.Const(true)  => collapse.render(collapseContainer(_, contentInner))
+            case ReactiveValue.Dyn(sig)     =>
+                // Off the panel is plain and its content shows; the collapse state is held, not applied.
+                Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c, contentInner) else containerBase)
 
         shell(UI.children(headerUI :+ container)*)
     end body
@@ -210,3 +206,6 @@ end Panel
 
 object Panel:
     def apply(): Panel = new Panel()
+
+    private val collapsedName = Slot.Name("Panel", "the collapse state", "a press", "onCollapsedChange")
+end Panel

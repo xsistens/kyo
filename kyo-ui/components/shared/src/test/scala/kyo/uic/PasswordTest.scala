@@ -49,7 +49,7 @@ class PasswordTest extends ReactiveValueContract:
 
     // With the meter on, the field draws the meter from its text, so the text is the field's to keep: unbound or from a
     // constant it keeps the text itself, and the meter judges what the reader typed.
-    private val feedbackSlot = new Slot[uic.Password, String](
+    private val feedbackSlot = new SlotCase[uic.Password, String](
         name = "value with feedback",
         bare = Present(uic.Password().feedback(true)),
         bind = uic.Password().feedback(true).value(_),
@@ -134,7 +134,7 @@ class PasswordTest extends ReactiveValueContract:
     }
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can edit it: a ref, readonly, disabled" in {
-        def errors(c: uic.Password): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.Password): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef("a")
             twoWay <- errors(uic.Password().value(held))

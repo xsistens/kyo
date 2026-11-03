@@ -161,7 +161,7 @@ class SelectButtonTest extends ReactiveValueContract:
         options(t).map(os => os.zip(sizes).collect { case (o, s) if o.attrs.ariaAttrs.get("pressed").contains("true") => s }.toSet)
 
     // A button is the control, and each one says it presses nothing once the set is fixed.
-    holds(new Slot[uic.MultiSelectButton[String], Set[String]](
+    holds(new SlotCase[uic.MultiSelectButton[String], Set[String]](
         name = "selection, several",
         bare = Present(group.multiple),
         bind = group.multiple.selection(_),
@@ -284,7 +284,7 @@ class SelectButtonTest extends ReactiveValueContract:
         hear: (uic.SelectButton[Size], Maybe[Size] => UI.Action) => Frame ?=> uic.SelectButton[Size],
         event: String
     ) =
-        new Slot[uic.SelectButton[Size], Maybe[Size]](
+        new SlotCase[uic.SelectButton[Size], Maybe[Size]](
             name = name,
             bare = Present(typed),
             bind = v => typed.selection(v),
@@ -308,7 +308,7 @@ class SelectButtonTest extends ReactiveValueContract:
         hear: (uic.SelectButton[Size], Size => UI.Action) => Frame ?=> uic.SelectButton[Size],
         event: String
     ) =
-        new Slot[uic.SelectButton[Size], Size](
+        new SlotCase[uic.SelectButton[Size], Size](
             name = name,
             // A group over the option itself always holds one: unbound, a group holds `Maybe`.
             bare = Absent,
@@ -332,7 +332,7 @@ class SelectButtonTest extends ReactiveValueContract:
     ))
 
     "a single choice a ref holds, or one a disabled group shows, draws no card" in {
-        def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-key-error")
+        def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(Size.M)
             twoWay <- errors(typed.selection(held))
@@ -344,7 +344,7 @@ class SelectButtonTest extends ReactiveValueContract:
     "several choices bound one way stay quiet while the group is disabled" in {
         for
             held <- Signal.initRef(Set("Small"))
-            off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+            off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-diagnostic")
         yield assert(off.isEmpty, s"nobody can pick: ${off.map(textOf)}")
     }
 

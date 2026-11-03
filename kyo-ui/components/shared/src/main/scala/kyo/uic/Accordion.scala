@@ -112,10 +112,8 @@ final case class Accordion[K] private (
     // The panels `body` draws, resolved from `panelSources` by the render.
     panelList: List[AccordionPanel[K]] = Nil,
     panelSources: List[AccordionPanelLiveEntry[K]] = Nil,
-    singleSlot: Maybe[ReactiveValue[Maybe[K]]] = Absent,
-    multiSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
-    onValueF: Maybe[Maybe[K] => UI.Action] = Absent,
-    onValuesF: Maybe[Set[K] => UI.Action] = Absent,
+    singleSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
+    multiSlot: Slot[Set[K]] = Slot[Set[K]](),
     onToggleF: Maybe[K => UI.Action] = Absent
 ) extends Node:
     type Self = Accordion[K]
@@ -143,33 +141,30 @@ final case class Accordion[K] private (
       * reachable and inert. Unbound, the accordion keeps the open panel itself, starting with all closed. A signal nothing
       * hears is reported in a card; [[onToggle]] hears it too.
       */
-    def value(v: Maybe[K] | Signal[Maybe[K]]): Accordion[K] = copy(singleSlot = Present(ReactiveValue(v)), multiSlot = Absent)
+    def value(v: Maybe[K] | Signal[Maybe[K]]): Accordion[K] =
+        copy(singleSlot = singleSlot.bind(v), multiSlot = multiSlot.copy(binding = Absent))
 
     /** The same accordion in MULTIPLE mode (Prime's `multiple`): a [[MultipleAccordion]] over the set of open ids, which
       * header clicks toggle membership of. Bound like the single value. The single value and its event do not carry over.
       */
     @targetName("valueMultiple")
     def value(v: Set[K] | Signal[Set[K]]): MultipleAccordion[K] =
-        MultipleAccordion(copy(singleSlot = Absent, onValueF = Absent, multiSlot = Present(ReactiveValue(v))))
+        MultipleAccordion(copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v)))
 
     /** Fired with the panel now open (`Absent` once all are closed) after a header click, after a two-way [[value]] is
       * written and before [[onToggle]].
       */
-    def onValueChange(f: Maybe[K] => UI.Action)(using Frame): Accordion[K] = copy(onValueF = Present(Callback.of(f)))
+    def onValueChange(f: Maybe[K] => UI.Action)(using Frame): Accordion[K] = copy(singleSlot = singleSlot.hear(f))
 
     /** Package-internal: the event [[MultipleAccordion]] sets. */
-    private[uic] def withValuesChange(f: Set[K] => UI.Action)(using Frame): Accordion[K] = copy(onValuesF = Present(Callback.of(f)))
-
-    /** Whether anything hears a click: the mode's own value event, or [[onToggle]]. */
-    private def heard: Maybe[Unit] =
-        val valueEvent = if multiSlot.isDefined then onValuesF.isDefined else onValueF.isDefined
-        if valueEvent || onToggleF.isDefined then Present(()) else Absent
+    private[uic] def withValuesChange(f: Set[K] => UI.Action)(using Frame): Accordion[K] = copy(multiSlot = multiSlot.hear(f))
 
     /** A constant nobody hears is fixed: the open panels stay, and every header is inert. */
-    private def fixed: Boolean = ReactiveValue.fixed(singleSlot, heard) || ReactiveValue.fixed(multiSlot, heard)
+    private def fixed: Boolean = singleSlot.fixed || multiSlot.fixed
 
     /** Fired with the panel id after a header click (after the value write). */
-    def onToggle(f: K => UI.Action)(using Frame): Accordion[K] = copy(onToggleF = Present(Callback.of(f)))
+    def onToggle(f: K => UI.Action)(using Frame): Accordion[K] =
+        copy(onToggleF = Present(Callback.of(f)), singleSlot = singleSlot.heardToo, multiSlot = multiSlot.heardToo)
 
     /** The panels as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): Reading[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
@@ -179,10 +174,10 @@ final case class Accordion[K] private (
       */
     private def openIds(using Frame): Reading[Set[K]] =
         given CanEqual[Set[K], Set[K]] = CanEqual.derived
-        (singleSlot, multiSlot) match
-            case (Present(v), _)      => Reading.of(v).map(_.toList.toSet)
-            case (Absent, Present(v)) => Reading.of(v)
-            case _                    => Reading.Fixed(Set.empty)
+        (singleSlot.binding, multiSlot.binding) match
+            case (Present(v), _) => Reading.of(v).map(_.toList.toSet)
+            case (_, Present(v)) => Reading.of(v)
+            case _               => Reading.Fixed(Set.empty)
         end match
     end openIds
 
@@ -197,24 +192,12 @@ final case class Accordion[K] private (
                         base <- cmds.freshId
                         // Unbound, the accordion keeps the open panel itself, in single mode, starting with all closed.
                         self <-
-                            if singleSlot.isEmpty && multiSlot.isEmpty then
-                                Signal.initRef(Maybe.empty[K]).map(r => copy(singleSlot = Present(ReactiveValue[Maybe[K]](r))))
+                            if multiSlot.binding.isEmpty then singleSlot.owned(Maybe.empty[K]).map(s => copy(singleSlot = s))
                             else Kyo.lift(this)
                     yield self.wired(base, id => cmds.focusId(id))
                 }.placeholder(still)
         // A value bound one way that nothing hears: every click is painted away again.
-        if !(ReactiveValue.deaf(singleSlot, heard) || ReactiveValue.deaf(multiSlot, heard)) then drawn
-        else
-            fragment(
-                KeyDiagnostics.card(
-                    "Accordion",
-                    "the open panels are bound one way and nothing hears a click, so the reader cannot change them; add " +
-                        "onValueChange, or bind a SignalRef",
-                    Nil
-                ),
-                drawn
-            )
-        end if
+        Diagnostics.before(drawn)("Accordion")(Diagnostic(singleSlot.deaf || multiSlot.deaf, Accordion.valueName.advice))
     end render
 
     /** The animated body the mount publishes, and the seam the golden tests render: built ONCE, each panel toggling its
@@ -370,10 +353,9 @@ final case class Accordion[K] private (
       * value, reported to the mode's value event, then `onToggle`.
       */
     private def toggle(id: K)(using Frame): UI.Action =
-        val write: UI.Action = (singleSlot, multiSlot) match
-            case (Present(_), _)      => ReactiveValue.update(singleSlot, cur => if cur.contains(id) then Absent else Present(id), onValueF)
-            case (Absent, Present(_)) => ReactiveValue.update(multiSlot, cur => if cur.contains(id) then cur - id else cur + id, onValuesF)
-            case _                    => ()
+        val write: UI.Action =
+            if singleSlot.binding.isDefined then singleSlot.update(cur => if cur.contains(id) then Absent else Present(id))
+            else multiSlot.update(cur => if cur.contains(id) then cur - id else cur + id)
         val fire: UI.Action = onToggleF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -386,6 +368,7 @@ final case class Accordion[K] private (
 end Accordion
 
 object Accordion:
+    private val valueName        = Slot.Name("Accordion", "the open panels", "a click", "onValueChange")
     def apply[K](): Accordion[K] = new Accordion[K]()
 end Accordion
 

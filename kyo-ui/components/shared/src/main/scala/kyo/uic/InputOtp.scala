@@ -25,7 +25,7 @@ import kyo.UI.*
   * Shift-Tab and the pointer always work.
   */
 final case class InputOtp private (
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     lengthV: Int = 4,
     integerOnlyFlag: Boolean = false,
     maskFlag: Boolean = false,
@@ -37,7 +37,6 @@ final case class InputOtp private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, HasAccessibleName:
@@ -55,7 +54,7 @@ final case class InputOtp private (
       * constant is the starting code. Unbound or from a constant, the field keeps the code itself, so a cell edit writes
       * there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): InputOtp = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): InputOtp = copy(valueSlot = valueSlot.bind(v))
 
     /** Number of cells (Prime default 4). */
     def length(n: Int): InputOtp = copy(lengthV = math.max(1, n))
@@ -92,7 +91,7 @@ final case class InputOtp private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = copy(accNameV = v)
 
     /** Fired with the FULL code after a cell write-back. */
-    def onChange(f: String => UI.Action)(using Frame): InputOtp = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): InputOtp = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss (native `blur`) with the field's current value; unlike
       * `onChange` it fires even when the value was not edited. The form-validation
@@ -108,7 +107,7 @@ final case class InputOtp private (
 
     private def renderResolved(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field    = valueBinding match
+        val field    = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) if interactive =>
                 // Auto-advance needs the session Commands and stable per-cell ids: mint
                 // them ONCE in a mounted effect, then the reactive body reads the same
@@ -124,19 +123,13 @@ final case class InputOtp private (
             case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
             // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code
             // the reader asks for is the one they hold, which a ref the field keeps for as long as it is shown remembers.
-            case Present(ReactiveValue.Const(v)) if interactive => owned(v, validity)
-            case Absent if interactive                          => owned("", validity)
-            case Present(ReactiveValue.Const(v))                => validity.follow(body(v, Absent, _ => (), validity))
-            case Absent                                         => validity.follow(body("", Absent, _ => (), validity))
-        val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
-        if unheard then fragment(field, KeyDiagnostics.unheard("InputOtp", "value", "onChange")) else field
+            case other if interactive =>
+                Slot.owningFrom(valueSlot, unbound = "")(s => copy(valueSlot = s).renderResolved)(
+                    validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
+                )
+            case other => validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
+        Diagnostics.after(field)("InputOtp")(Diagnostic.unheard(valueSlot, InputOtp.valueName, on = interactive))
     end renderResolved
-
-    /** The field over a code it keeps itself, starting at `initial`, drawn as a two-way binding of it. */
-    private def owned(initial: String, validity: FieldValidity)(using Frame): UI =
-        ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).renderResolved)(
-            validity.follow(body(initial, Absent, _ => (), validity))
-        )
 
     /** The advancing subscription the mount publishes: the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
@@ -153,10 +146,10 @@ final case class InputOtp private (
       */
     private def writeCell(i: Int, raw: String, drawn: String)(using Frame): UI.Action =
         val accepted = (if integerOnlyFlag then raw.filter(_.isDigit) else raw).takeRight(1)
-        valueBinding.fold[String < Sync](drawn)(_.current).map { current =>
+        valueSlot.current(drawn).map { current =>
             val padded = current.padTo(lengthV, ' ').take(lengthV)
             val next   = padded.updated(i, if accepted.isEmpty then ' ' else accepted.head).mkString.reverse.dropWhile(_ == ' ').reverse
-            ReactiveValue.change(valueBinding, next, onChangeF)
+            valueSlot.change(next)
         }
     end writeCell
 
@@ -169,9 +162,9 @@ final case class InputOtp private (
         val cells: List[UI] = (0 until lengthV).toList.map { i =>
             def at(code: String): String = code.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
             // Bound one way the cell follows its position of the code, in place; otherwise it shows what this render read.
-            val ch: String | Signal[String] = valueBinding match
-                case Present(ReactiveValue.Dyn(sig)) if valueBinding.exists(_.writable.isEmpty) => sig.map(at)
-                case _                                                                          => at(current)
+            val ch: String | Signal[String] = valueSlot.binding match
+                case Present(ReactiveValue.Dyn(sig)) if valueSlot.writable.isEmpty => sig.map(at)
+                case _                                                             => at(current)
             var cell = Input()
                 .extraClass("p-inputotp-input")
                 .inputType(if maskFlag then InputType.Password else InputType.Text)
@@ -200,7 +193,7 @@ final case class InputOtp private (
                     // A cell's native blur carries only its OWN character, so the full
                     // code is read from the binding instead (the fallback covers the
                     // unbound projection).
-                    cell = cell.onBlur(_ => valueBinding.fold(f(current))(_.current.map(f)))
+                    cell = cell.onBlur(_ => valueSlot.current(current).map(f))
                 }
             end if
             cell.render
@@ -218,3 +211,6 @@ end InputOtp
 
 object InputOtp:
     def apply(): InputOtp = new InputOtp()
+
+    private val valueName = Slot.Name("InputOtp", "value", "a change", "onChange")
+end InputOtp

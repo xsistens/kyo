@@ -106,7 +106,7 @@ class GalleriaTest extends ReactiveValueContract:
                 case i  => i
         )
 
-    holds(new Slot[uic.Galleria, Int](
+    holds(new SlotCase[uic.Galleria, Int](
         name = "activeIndex",
         bare = Present(stepping),
         bind = stepping.activeIndex(_),

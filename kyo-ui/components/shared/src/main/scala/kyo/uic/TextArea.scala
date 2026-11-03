@@ -11,7 +11,7 @@ import kyo.UI.*
   * all inherited. The `value` binding is [[Input]]'s: a `SignalRef` two-way, any other signal one way.
   */
 final case class TextArea private (
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     placeholderText: Maybe[TextValue] = Absent,
     rowsV: Maybe[Int] = Absent,
     disabledFlag: Maybe[BoolValue] = Absent,
@@ -28,7 +28,6 @@ final case class TextArea private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onInputF: Maybe[String => UI.Action] = Absent,
     onChangeF: Maybe[String => UI.Action] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent,
     extraClassesV: List[String] = Nil,
@@ -52,7 +51,7 @@ final case class TextArea private (
       * [[onChange]]; with neither, a card says the reader cannot change it. A constant is the starting text, which the
       * reader edits freely. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): TextArea = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): TextArea = copy(valueSlot = valueSlot.bind(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = copy(placeholderText = v)
 
@@ -100,8 +99,8 @@ final case class TextArea private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TextArea = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): TextArea = copy(accNameRefV = v)
 
-    def onInput(f: String => UI.Action)(using Frame): TextArea  = copy(onInputF = Present(Callback.of(f)))
-    def onChange(f: String => UI.Action)(using Frame): TextArea = copy(onChangeF = Present(Callback.of(f)))
+    def onInput(f: String => UI.Action)(using Frame): TextArea  = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: String => UI.Action)(using Frame): TextArea = copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo)
 
     /** Fires on focus loss with the text the field holds as focus leaves it (what
       * the reader typed, also unbound or from a constant); unlike onChange it fires
@@ -111,11 +110,9 @@ final case class TextArea private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val built    = body(validity)
-        val unheard  = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
-            !readonlyFlag.constTrue && !disabledFlag.constTrue
-        if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard("TextArea", "value", "onInput or onChange"))
-        else validity.follow(built)
+        Diagnostics.after(validity.follow(body(validity)))("TextArea")(
+            Diagnostic.unheard(valueSlot, TextArea.valueName, on = !readonlyFlag.constTrue && !disabledFlag.constTrue)
+        )
     end render
 
     private def body(validity: FieldValidity)(using Frame): UI =
@@ -135,7 +132,7 @@ final case class TextArea private (
         b = b.filledClass("p-filled")
         // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
         // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
-        valueBinding.foreach(slot => b = b.value(slot.bound))
+        valueSlot.bound.foreach(v => b = b.value(v))
         b = placeholderText match
             case Present(TextValue.Const(v)) => b.placeholder(v)
             case Present(TextValue.Dyn(sig)) => b.placeholder(sig)
@@ -154,7 +151,7 @@ final case class TextArea private (
             case Present(TextValue.Dyn(s))   => b.aria("label", s)
             case Absent                      => b
         b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
-        b = onInputF.map(f => b.onInput(f)).getOrElse(b)
+        b = valueSlot.hearer.map(f => b.onInput(f)).getOrElse(b)
         b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
         b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
@@ -164,3 +161,6 @@ end TextArea
 
 object TextArea:
     def apply(): TextArea = new TextArea()
+
+    private val valueName = Slot.Name("TextArea", "value", "a change", "onInput or onChange")
+end TextArea

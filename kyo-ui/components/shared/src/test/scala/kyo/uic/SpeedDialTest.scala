@@ -223,7 +223,7 @@ class SpeedDialTest extends ReactiveValueContract:
 
     private def toggles(t: UI)(using Frame) = elementsWithClass(t, "p-speeddial-button")
 
-    holds(new Slot[SpeedDial, Boolean](
+    holds(new SlotCase[SpeedDial, Boolean](
         name = "open",
         bare = Present(dial()),
         bind = dial().open(_),

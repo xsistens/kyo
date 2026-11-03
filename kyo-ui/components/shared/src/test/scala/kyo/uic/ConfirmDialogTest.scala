@@ -15,7 +15,7 @@ class ConfirmDialogTest extends ReactiveValueContract:
     private def closers(t: UI)(using Frame) = elementsWithClass(t, "p-dialog-close-button")
     private def dialogs(t: UI)(using Frame) = elementsWithClass(t, "p-confirmdialog")
 
-    holds(new Slot[ConfirmDialog, Boolean](
+    holds(new SlotCase[ConfirmDialog, Boolean](
         name = "open",
         bare = Present(confirm),
         bind = confirm.open(_),
@@ -66,8 +66,8 @@ class ConfirmDialogTest extends ReactiveValueContract:
             _        <- click(r)
             h        <- held.get
             s        <- seen.get
-            deaf     <- elementsWithClass(confirm.open(held.readOnly).render, "p-uic-key-error")
-            halfDeaf <- elementsWithClass(confirm.open(held.readOnly).onAccept(()).render, "p-uic-key-error")
+            deaf     <- elementsWithClass(confirm.open(held.readOnly).render, "p-uic-diagnostic")
+            halfDeaf <- elementsWithClass(confirm.open(held.readOnly).onAccept(()).render, "p-uic-diagnostic")
         yield
             assert(h && s == List("open false", "reject"), s"held $h, heard $s")
             assert(deaf.nonEmpty && deaf.map(textOf).mkString.contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")

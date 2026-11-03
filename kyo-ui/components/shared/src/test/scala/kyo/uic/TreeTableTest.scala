@@ -109,7 +109,7 @@ class TreeTableTest extends ReactiveValueContract:
             byOld <- elementsWithClass(
                 parentTable.expanded(e.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                     .selection(s.readOnly).onRowClick(_ => ()).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
             live = parentTable.expanded(Set.empty[Row]).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                 .selection(Set.empty[Row]).onRowClick(_ => ()).render
@@ -330,7 +330,7 @@ class TreeTableTest extends ReactiveValueContract:
 
     // A sort is said by aria-sort, and a column header has no readonly state for it: a fixed sort is one no header changes,
     // by a press or by a key, on headers that stay the tab stops they are when the sort is live.
-    holds(new Slot[uic.TreeTable[Row], List[uic.SortKey]](
+    holds(new SlotCase[uic.TreeTable[Row], List[uic.SortKey]](
         name = "sort",
         bare = Present(table),
         bind = table.sort(_),
@@ -353,20 +353,24 @@ class TreeTableTest extends ReactiveValueContract:
 
     // The toggler is hidden from the tab order and a treegrid has no readonly state for its expansion, so a fixed expansion
     // says nothing beyond each row's aria-expanded: it is fixed because no toggler answers.
-    holds(new Slot[uic.TreeTable[Row], Set[Row]](
-        name = "expanded",
-        bare = Present(parentTable),
-        bind = parentTable.expanded(_),
-        hear = (t, f) => t.onExpandedChange(f),
-        event = "onExpandedChange",
-        render = _.render,
-        start = Set.empty,
-        next = Set(r1),
-        control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
-        shows = names(_).map(ns => if ns.exists(_.contains("Kay")) then Set(r1) else Set.empty),
-        isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
-        ready = Present(toggles(_).map(_.exists(declaresClick)))
-    ))
+    private def expandedCase(name: String, hear: (uic.TreeTable[Row], Set[Row] => UI.Action) => Frame ?=> uic.TreeTable[Row]) =
+        new SlotCase[uic.TreeTable[Row], Set[Row]](
+            name = name,
+            bare = Present(parentTable),
+            bind = parentTable.expanded(_),
+            hear = hear,
+            event = "onExpandedChange",
+            render = _.render,
+            start = Set.empty,
+            next = Set(r1),
+            control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+            shows = names(_).map(ns => if ns.exists(_.contains("Kay")) then Set(r1) else Set.empty),
+            isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
+            ready = Present(toggles(_).map(_.exists(declaresClick)))
+        )
+
+    holds(expandedCase("expanded", (t, f) => t.onExpandedChange(f)))
+    heardBy(expandedCase("expanded, heard by onNodeToggle", (t, f) => t.onNodeToggle(r => f(Set(r)))))
 
     /** The body rows, found by their level: a fixed selection takes the selectable class away. */
     private def bodyRows(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elements(t).map(_.filter(_.attrs.ariaAttrs.contains("level")))
@@ -377,21 +381,25 @@ class TreeTableTest extends ReactiveValueContract:
 
     // A row's aria-selected says the selection, and a treegrid's readonly state is about its cells: a fixed selection is
     // one no row takes as a pick, the selectable class and the press gone with it.
-    holds(new Slot[uic.TreeTable[Row], Set[Row]](
-        name = "selection",
-        bare = Present(single),
-        bind = single.selection(_),
-        hear = (t, f) => t.onSelectionChange(f),
-        event = "onSelectionChange",
-        render = _.render,
-        start = Set.empty,
-        next = Set(r1),
-        control = bodyRows(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
-        shows = elementsWithClass(_, "p-treetable-row-selected").map(_.map(r => byName(textOf(r))).toSet),
-        isFixed = Present(bodyRows(_).map(rs =>
-            rs.nonEmpty && rs.forall(r => !declaresClick(r) && !r.attrs.cssClasses.contains("p-treetable-selectable-row"))
-        )),
-        ready = Present(elementsWithClass(_, "p-treetable-selectable-row").map(_.exists(declaresClick)))
-    ))
+    private def selectionCase(name: String, hear: (uic.TreeTable[Row], Set[Row] => UI.Action) => Frame ?=> uic.TreeTable[Row]) =
+        new SlotCase[uic.TreeTable[Row], Set[Row]](
+            name = name,
+            bare = Present(single),
+            bind = single.selection(_),
+            hear = hear,
+            event = "onSelectionChange",
+            render = _.render,
+            start = Set.empty,
+            next = Set(r1),
+            control = bodyRows(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
+            shows = elementsWithClass(_, "p-treetable-row-selected").map(_.map(r => byName(textOf(r))).toSet),
+            isFixed = Present(bodyRows(_).map(rs =>
+                rs.nonEmpty && rs.forall(r => !declaresClick(r) && !r.attrs.cssClasses.contains("p-treetable-selectable-row"))
+            )),
+            ready = Present(elementsWithClass(_, "p-treetable-selectable-row").map(_.exists(declaresClick)))
+        )
+
+    holds(selectionCase("selection", (t, f) => t.onSelectionChange(f)))
+    heardBy(selectionCase("selection, heard by onRowClick", (t, f) => t.onRowClick(r => f(Set(r)))))
 
 end TreeTableTest

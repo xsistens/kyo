@@ -33,7 +33,7 @@ class FileUploadTest extends ReactiveValueContract:
         yield in.attrs.onFileSelect.isEmpty && root.attrs.dataAttrs.contains("kyo-inert") &&
             choose.attrs.ariaAttrs.get("disabled").contains("true")
 
-    holds(new Slot[uic.FileUpload, Seq[UI.FilePayload]](
+    holds(new SlotCase[uic.FileUpload, Seq[UI.FilePayload]](
         name = "value",
         bare = Present(uic.FileUpload()),
         bind = uic.FileUpload().value(_),
@@ -53,5 +53,30 @@ class FileUploadTest extends ReactiveValueContract:
         // Unbound, the label the pick names lives in the mount; the page as first rendered takes no pick.
         ready = Present(elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty)))
     ))
+
+    "unbound, a blur after a pick reports the files picked" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Seq[UI.FilePayload]])
+            t    <- readyTree(uic.FileUpload().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(
+                elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty))
+            )
+            in  <- inputOf(t)
+            _   <- handled(in.attrs.onFileSelect.getOrElse(throw new AssertionError("the input takes no pick"))(Seq(report)))
+            _   <- handled(in.attrs.onBlur.getOrElse(throw new AssertionError("the input declares no blur")))
+            got <- seen.get
+        yield assert(got == Chunk(Seq(report)), s"reported $got")
+    }
+
+    "unbound, a blur before any pick reports no files" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Seq[UI.FilePayload]])
+            t    <- readyTree(uic.FileUpload().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(
+                elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty))
+            )
+            in  <- inputOf(t)
+            _   <- handled(in.attrs.onBlur.getOrElse(throw new AssertionError("the input declares no blur")))
+            got <- seen.get
+        yield assert(got == Chunk(Seq.empty[UI.FilePayload]), s"reported $got")
+    }
 
 end FileUploadTest

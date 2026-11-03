@@ -57,8 +57,7 @@ final case class DataView[A] private (
     headerV: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
     pageSizeV: Maybe[Int] = Absent,
-    pageSlot: Maybe[ReactiveValue[Int]] = Absent,
-    onPageF: Maybe[Int => UI.Action] = Absent,
+    pageSlot: Slot[Int] = Slot(),
     emptyContentV: Maybe[EmptyContent] = Absent,
     loadingV: Maybe[BoolValue] = Absent
 ) extends Node, HasEmptyContent:
@@ -116,10 +115,15 @@ final case class DataView[A] private (
       * shows that page and hands the reader's pick to [[onPageChange]] without writing.
       */
     def paginate(size: Int)(page: Int | Signal[Int]): DataView[A] =
-        copy(pageSizeV = Present(math.max(1, size)), pageSlot = Present(ReactiveValue[Int](page)))
+        copy(pageSizeV = Present(math.max(1, size)), pageSlot = pageSlot.bind(page))
+
+    /** Slices the items into pages of `size` with the page the view's own, starting on the first: [[paginate]] for a page
+      * nobody else reads. [[onPageChange]] still hears every pick.
+      */
+    def paginate(size: Int): DataView[A] = copy(pageSizeV = Present(math.max(1, size)))
 
     /** Fired with the page the reader asked for, after a two-way [[paginate]] page is written. */
-    def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = copy(onPageF = Present(Callback.of(f)))
+    def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = copy(pageSlot = pageSlot.hear(f))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataView[A] = copy(emptyContentV = v)
 
@@ -132,13 +136,17 @@ final case class DataView[A] private (
 
     private given CanEqual[Chunk[A], Chunk[A]] = CanEqual.derived
 
+    private[uic] def render(using Frame): UI =
+        // Paginated with nothing bound, the page is the view's own.
+        Slot.owning(pageSlot, start = 0, on = ReactiveValue.Const(pageSizeV.isDefined))(s => copy(pageSlot = s).drawn)(drawn)
+
     /** Only the rows follow the page and the items. The header, the footer and the paginator are built once: each may
       * hold a control with a mount of its own (a sort SelectButton in the header, the paginator's dropdowns), and a
       * region around it would start that mount again on every page change. The paginator reads the page from the ref
       * and the total from the items, both in place.
       */
-    private[uic] def render(using Frame): UI =
-        val page: Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
+    private def drawn(using Frame): UI =
+        val page: Reading[Int] = pageSlot.reading(0)
 
         // A list region; the empty state gets its OWN region over the narrowest projection there is (`isEmpty`), so
         // `emptyContent` survives without putting the rows behind a region that repaints them whenever the list changes
@@ -167,7 +175,7 @@ final case class DataView[A] private (
                 .totalRecords(itemsSigV.fold(itemsV.size: Int | Signal[Int])(_.map(_.size)))
                 .rows(size)
                 .hostClass("p-dataview-paginator-bottom")
-            pageSlot.foreach(p => pag = pag.hostPage(p, onPageF))
+            pageSlot.binding.foreach(p => pag = pag.hostPage(p, pageSlot.hearer))
             pag.render
         }
 
@@ -197,7 +205,7 @@ final case class DataView[A] private (
         el(
             UI.children(loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot)*
         )
-    end render
+    end drawn
 
     /** The rows of page `page` (clamped into the page count) of `items`, `size` to a page. */
     private def slice(items: List[A], page: Int, size: Int): List[A] =

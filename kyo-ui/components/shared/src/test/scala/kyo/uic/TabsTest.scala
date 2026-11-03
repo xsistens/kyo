@@ -339,13 +339,13 @@ class TabsTest extends ReactiveValueContract:
     "a strip of url headers bound one way is heard by the navigation, so it carries no card" in {
         for
             route <- Signal.initRef("one")
-            cards <- elementsWithClass(navStrip.selected(route.readOnly).render, "p-uic-key-error")
+            cards <- elementsWithClass(navStrip.selected(route.readOnly).render, "p-uic-diagnostic")
             mixed <- elementsWithClass(
                 uic.Tabs[String]().tabs(
                     uic.Tab("One", p("first"), "one").url("/one"),
                     uic.Tab("Two", p("second"), "two")
                 ).selected(route.readOnly).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
         yield
             assert(cards.isEmpty, s"a link click reaches the router: ${cards.map(textOf)}")
@@ -373,7 +373,7 @@ class TabsTest extends ReactiveValueContract:
     private def third(t: UI)(using Frame): UI.Ast.Element < Sync =
         elementsWithClass(t, "p-tab").map(hs => hs.lift(2).getOrElse(throw new AssertionError(s"${hs.size} headers")))
 
-    holds(new Slot[uic.Tabs[String], String](
+    holds(new SlotCase[uic.Tabs[String], String](
         name = "selected",
         bare = Present(strip),
         bind = strip.selected(_),
@@ -387,5 +387,45 @@ class TabsTest extends ReactiveValueContract:
         // The placeholder's headers take a click too, but only the mount holds the tab an unbound strip keeps.
         ready = Present(t => elementsWithClass(t, "p-tab").map(_.exists(declaresClick)))
     ))
+
+    private def headerNamed(t: UI, text: String)(using Frame): UI.Ast.Element < Sync =
+        elementsWithClass(t, "p-tab").map(_.find(textOf(_) == text).getOrElse(throw new AssertionError(s"no header $text")))
+
+    private def activeHeader(t: UI)(using Frame): Maybe[String] < Sync =
+        elementsWithClass(t, "p-tab-active").map(hs => Maybe.fromOption(hs.headOption.map(textOf)))
+
+    private val tabOne = uic.Tab("One", p("first"), "one")
+    private val tabTwo = uic.Tab("Two", p("second"), "two")
+
+    "an unbound strip whose live list starts empty keeps the tab the reader picks" in {
+        for
+            live  <- Signal.initRef(Seq.empty[uic.Tab[String]])
+            shown <- publishedAfterReady(
+                uic.Tabs[String]().tabs(live).render,
+                _ => true,
+                until = t => activeHeader(t).map(_.contains("Two"))
+            )(
+                _ => live.set(Seq(tabOne, tabTwo)),
+                t => headerNamed(t, "Two").map(click)
+            )
+        yield assert(shown.nonEmpty, "a click on the second tab never made it the active one")
+    }
+
+    "an unbound strip whose live list drops the held tab falls to the first, and the next click still works" in {
+        for
+            live  <- Signal.initRef(Seq(tabOne, tabTwo))
+            shown <- publishedAfterReady(
+                uic.Tabs[String]().tabs(live).render,
+                _ => true,
+                until = t => activeHeader(t).map(_.contains("Two"))
+            )(
+                t => headerNamed(t, "Two").map(click),
+                _ => live.set(Seq(tabOne)),
+                _ => live.set(Seq(tabOne, tabTwo)),
+                t => headerNamed(t, "One").map(click),
+                t => headerNamed(t, "Two").map(click)
+            )
+        yield assert(shown.nonEmpty, "the click after the list came back did not take")
+    }
 
 end TabsTest

@@ -14,7 +14,7 @@ class PopoverTest extends ReactiveValueContract:
 
     private def panels(t: UI)(using Frame) = elementsWithClass(t, "p-popover")
 
-    holds(new Slot[Popover, Boolean](
+    holds(new SlotCase[Popover, Boolean](
         name = "open, with a trigger",
         bare = Present(withTrigger),
         bind = withTrigger.open(_),
@@ -32,7 +32,7 @@ class PopoverTest extends ReactiveValueContract:
 
     // Without a trigger nothing inside can open it, so it starts open and only an outside click or Escape closes it: a
     // fixed one is one nothing dismisses.
-    holds(new Slot[Popover, Boolean](
+    holds(new SlotCase[Popover, Boolean](
         name = "open, without a trigger",
         bare = Present(uic.Popover()(p("inside"))),
         bind = uic.Popover().open(_)(p("inside")),
@@ -175,7 +175,7 @@ class PopoverTest extends ReactiveValueContract:
     "the card for a signal nobody hears names the popover, not the overlay it draws through" in {
         for
             held <- Signal.initRef(false)
-            deaf <- elementsWithClass(withTrigger.open(held.readOnly).render, "p-uic-key-error")
+            deaf <- elementsWithClass(withTrigger.open(held.readOnly).render, "p-uic-diagnostic")
         yield assert(deaf.size == 1 && textOf(deaf.head).contains("Popover"), s"nobody hears: ${deaf.map(textOf)}")
     }
 

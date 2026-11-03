@@ -58,12 +58,15 @@ class OrganizationChartTest extends ReactiveValueContract:
         toggles(t).map(_.headOption.getOrElse(throw new AssertionError("no toggle")))
 
     // The toggle is a button and nothing else, so a fixed one is a tab stop that says it changes nothing.
-    holds(new Slot[uic.OrganizationChart[String], Set[String]](
-        name = "expanded",
-        // `expanded()` turns the toggles on over subtrees the chart keeps itself, starting fully open.
-        bare = Present(org.expanded()),
+    private def expandedCase(
+        name: String,
+        hear: (uic.OrganizationChart[String], Set[String] => UI.Action) => Frame ?=> uic.OrganizationChart[String]
+    ) = new SlotCase[uic.OrganizationChart[String], Set[String]](
+        name = name,
+        // `expandable` turns the toggles on over subtrees the chart keeps itself, starting fully open.
+        bare = Present(org.expandable(true)),
         bind = org.expanded(_),
-        hear = (o, f) => o.onExpandedChange(f),
+        hear = hear,
         event = "onExpandedChange",
         render = _.render,
         start = Set("ceo"),
@@ -71,18 +74,24 @@ class OrganizationChartTest extends ReactiveValueContract:
         control = toggle(_),
         shows = toggle(_).map(t => if t.attrs.ariaAttrs.get("expanded").contains("true") then Set("ceo") else Set.empty),
         ready = Present(toggles(_).map(_.exists(declaresClick)))
-    ))
+    )
+
+    holds(expandedCase("expanded", (o, f) => o.onExpandedChange(f)))
+    heardBy(expandedCase("expanded, heard by onNodeToggle", (o, f) => o.onNodeToggle(_ => f(Set.empty))))
 
     private val idsByLabel = Map("CEO" -> "ceo", "CTO" -> "cto")
 
     private def single(using Frame) = org.selectionMode(uic.SelectionMode.Single)
 
     // A node box has no role, so a fixed selection has no words to say it in: it is fixed because no node takes a click.
-    holds(new Slot[uic.OrganizationChart[String], Set[String]](
-        name = "selection",
+    private def selectionCase(
+        name: String,
+        hear: (uic.OrganizationChart[String], Set[String] => UI.Action) => Frame ?=> uic.OrganizationChart[String]
+    ) = new SlotCase[uic.OrganizationChart[String], Set[String]](
+        name = name,
         bare = Present(single),
         bind = single.selection(_),
-        hear = (o, f) => o.onSelectionChange(f),
+        hear = hear,
         event = "onSelectionChange",
         render = _.render,
         start = Set.empty,
@@ -91,7 +100,10 @@ class OrganizationChartTest extends ReactiveValueContract:
         shows = elementsWithClass(_, "p-organizationchart-node-selected").map(_.map(n => idsByLabel(textOf(n))).toSet),
         isFixed = Present(nodes(_).map(ns => ns.nonEmpty && ns.forall(n => !declaresClick(n)))),
         ready = Present(nodes(_).map(_.exists(declaresClick)))
-    ))
+    )
+
+    holds(selectionCase("selection", (o, f) => o.onSelectionChange(f)))
+    heardBy(selectionCase("selection, heard by onNodeClick", (o, f) => o.onNodeClick(k => f(Set(k)))))
 
     // ---- the node cursor ----
     //
@@ -169,7 +181,9 @@ class OrganizationChartTest extends ReactiveValueContract:
             after <- publishedAfterReady(
                 teamChart.render,
                 t => nodes(t).map(_.exists(_.attrs.onKeyDown.isDefined)),
-                until = t => stopsIn(t).map(_ == Chunk("dev"))
+                // On the newest paint: a click writes the cursor and the selection, so it may publish twice, and the stops of two
+                // trees are two.
+                until = t => elementsWithClass(t, "p-organizationchart").map(_.head).map(stopsIn(_)).map(_ == Chunk("dev"))
             )(t => nodes(t).map(ns => click(ns.find(n => textOf(n) == "Dev").get)))
         yield assert(after.nonEmpty, "the tab stop never followed the click")
     }
@@ -180,7 +194,7 @@ class OrganizationChartTest extends ReactiveValueContract:
             heard <- elementsWithClass(
                 org.expanded(held.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                     .selection(held.readOnly).onNodeClick(_ => ()).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
             live = org.expanded(Set("ceo")).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single).selection(Set("ceo"))
                 .onNodeClick(_ => ()).render
@@ -190,6 +204,91 @@ class OrganizationChartTest extends ReactiveValueContract:
             assert(heard.isEmpty, s"somebody hears both: ${heard.map(textOf)}")
             assert(declaresClick(t) && ns.forall(declaresClick), "a constant somebody hears is not fixed")
         end for
+    }
+
+    // ---- the switch ----
+
+    "expandable" - {
+        "unset with a binding is on" in {
+            toggles(org.expanded(Set("ceo")).onExpandedChange(_ => ()).render).map(ts => assert(ts.nonEmpty))
+        }
+        "false over a binding follows it with no toggle" in {
+            val ui = org.expanded(Set.empty[String]).onExpandedChange(_ => ()).expandable(false).render
+            for
+                ts     <- toggles(ui)
+                hidden <- elementsWithClass(ui, "p-uic-oc-hidden")
+            yield
+                assert(ts.isEmpty, "no toggle")
+                assert(hidden.nonEmpty, "the binding still says the root alone")
+            end for
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(Set("ceo")).map(held =>
+                elementsWithClass(org.expanded(held.readOnly).expandable(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the chart's own, starting fully open" in {
+            for
+                ts     <- toggles(org.expandable(true).render)
+                hidden <- elementsWithClass(org.expandable(true).render, "p-uic-oc-hidden")
+            yield
+                assert(ts.nonEmpty)
+                assert(hidden.isEmpty, "nothing hidden yet")
+            end for
+        }
+        "true over a binding is the binding" in {
+            Signal.initRef(Set.empty[String]).map(held =>
+                elementsWithClass(org.expanded(held).expandable(true).render, "p-uic-oc-hidden")
+                    .map(hidden => assert(hidden.nonEmpty, "the binding says the root alone"))
+            )
+        }
+        "off, a chart that keeps the subtrees shows its whole hierarchy and no toggle" in {
+            for
+                sw     <- Signal.initRef(false)
+                t      <- readyTree(org.expandable(sw).render)(elementsWithClass(_, "p-organizationchart-node").map(_.nonEmpty))
+                ts     <- toggles(t)
+                hidden <- elementsWithClass(t, "p-uic-oc-hidden")
+            yield
+                assert(ts.isEmpty)
+                assert(hidden.isEmpty, "the whole hierarchy shows")
+            end for
+        }
+        "a signal switch going off and on keeps what the reader collapsed" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- publishedAfterReady(
+                    org.expandable(sw).render,
+                    t => toggles(t).map(_.exists(declaresClick)),
+                    until = t => toggles(t).map(_.headOption.exists(_.attrs.ariaAttrs.get("expanded").contains("false")))
+                )(
+                    t => toggles(t).map(ts => click(ts.find(declaresClick).get)),
+                    _ => sw.set(false),
+                    // The chart is one region over the switch and the state: only once it has drawn the switch off is the next
+                    // write one it has to draw, or the two would be one change that repaints nothing.
+                    t =>
+                        elementsWithClass(t, "p-organizationchart").map(_.head).map(toggles(_)).map(ts =>
+                            if ts.nonEmpty then throw new AssertionError("not drawn off yet") else sw.set(true)
+                        )
+                )
+            yield assert(shown.nonEmpty, "what the reader collapsed did not come back with the switch")
+        }
+        "a signal switch takes the card with it, and brings it back" in {
+            for
+                sw   <- Signal.initRef(true)
+                held <- Signal.initRef(Set("ceo"))
+                ui = org.expanded(held.readOnly).expandable(sw).render
+                on   <- elementsWithClass(ui, UicTest.cardClass)
+                _    <- sw.set(false)
+                off  <- elementsWithClass(ui, UicTest.cardClass)
+                _    <- sw.set(true)
+                back <- elementsWithClass(ui, UicTest.cardClass)
+            yield
+                assert(on.size == 1)
+                assert(off.isEmpty, s"a stale card: ${off.map(textOf)}")
+                assert(back.size == 1)
+            end for
+        }
     }
 
 end OrganizationChartTest

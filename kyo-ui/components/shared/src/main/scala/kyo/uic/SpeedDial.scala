@@ -67,8 +67,7 @@ final case class SpeedDial private (
     itemsV: List[MenuItem] = Nil,
     entriesV: List[MenuItemLiveEntry] = Nil,
     directionV: SpeedDialDirection = SpeedDialDirection.Up,
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     disabledFlag: Boolean = false,
     accNameV: Maybe[String] = Absent
 ) extends Node:
@@ -87,10 +86,10 @@ final case class SpeedDial private (
       * only reports. A constant nobody hears is fixed: the fan stays as it is and the toggle, still reachable, changes
       * nothing. Unbound, the dial keeps the state itself, starting closed. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): SpeedDial = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): SpeedDial = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the fan visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): SpeedDial = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): SpeedDial = copy(openSlot = openSlot.hear(f))
 
     /** Disables the toggle (and thereby the fan). */
     def disabled(v: Boolean): SpeedDial = copy(disabledFlag = v)
@@ -99,43 +98,30 @@ final case class SpeedDial private (
     def accessibleName(v: String): SpeedDial = copy(accNameV = Present(v))
 
     private[uic] def render(using Frame): UI =
-        val shownAt  = openSlot.flatMap(_.const).getOrElse(false)
-        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(shownAt, Absent, "", _ => ()))
+        val shownAt  = openSlot.binding.flatMap(_.const).getOrElse(false)
+        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(shownAt, live = false, "", _ => ()))
         val dial     = UI.mounted {
             for
                 cmds <- UI.commands
                 base <- cmds.freshId
                 // Unbound, the dial keeps the fan state itself, starting closed.
-                open <- openSlot match
-                    case Present(slot) => Kyo.lift(slot)
-                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
-            yield copy(openSlot = Present(open)).wiredOver(open, base, id => cmds.focusId(id))
+                open <- openSlot.owned(false)
+            yield copy(openSlot = open).wiredOver(base, id => cmds.focusId(id))
         }.placeholder(stat)
         // A signal nobody hears: every toggle the reader makes is painted away again.
-        if !ReactiveValue.deaf(openSlot, onOpenF) then dial
-        else
-            fragment(
-                KeyDiagnostics.card(
-                    "SpeedDial",
-                    "the fan is bound open one way and nothing hears a toggle, so the reader cannot change it; add " +
-                        "onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                dial
-            )
-        end if
+        Diagnostics.before(dial)("SpeedDial")(Diagnostic.unheard(openSlot, SpeedDial.openName))
     end render
 
     /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
-        copy(openSlot = Present(ReactiveValue[Boolean](open))).wiredOver(ReactiveValue[Boolean](open), base, focus)
+        copy(openSlot = openSlot.bind(open)).wiredOver(base, focus)
 
     /** The subscription tree over the fan state however it is bound. */
-    private def wiredOver(open: ReactiveValue[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
+    private def wiredOver(base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
         // ONE region (see [[Reading]]).
-        MenuRender.readItems(entriesV).and(Reading.of(open)).render((items, o) =>
-            copy(itemsV = items).body(o, Present(open), base, focus)
+        MenuRender.readItems(entriesV).and(openSlot.reading(false)).render((items, o) =>
+            copy(itemsV = items).body(o, live = true, base, focus)
         )
 
     /** The actions the fan actually fans out: a separator has no place in a row of round icon
@@ -144,16 +130,15 @@ final case class SpeedDial private (
       */
     private def actions: List[MenuItem] = itemsV.filterNot(_.separatorFlag)
 
-    private def body(isOpen: Boolean, open: Maybe[ReactiveValue[Boolean]], base: String, focus: String => UI.Action)(using
+    private def body(isOpen: Boolean, live: Boolean, base: String, focus: String => UI.Action)(using
         Frame
     ): UI =
-        // The placeholder has no state to change (`open` Absent): every write below is then a no-op.
-        val live               = open.isDefined
-        val toggle: UI.Action  = if live then ReactiveValue.update(openSlot, !_, onOpenF) else ()
-        def close: UI.Action   = if live then ReactiveValue.change(openSlot, false, onOpenF) else ()
-        def openFan: UI.Action = if live then ReactiveValue.change(openSlot, true, onOpenF) else ()
+        // The placeholder has no state to change (`live` false): every write below is then a no-op.
+        val toggle: UI.Action  = if live then openSlot.update(!_) else ()
+        def close: UI.Action   = if live then openSlot.change(false) else ()
+        def openFan: UI.Action = if live then openSlot.change(true) else ()
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
-        val fixed = ReactiveValue.fixed(openSlot, onOpenF)
+        val fixed = openSlot.fixed
 
         val acts = actions
         // The positions the keyboard may land on: a disabled action is natively disabled, so it
@@ -227,7 +212,7 @@ final case class SpeedDial private (
                             .tabIndexRaw(-1)
                             .focusSeedRaw(i == first)
                             .onKeyDownRaw(itemKey(i, navigable, itemId, focus, close))
-                        if open.isDefined then btn = btn.onClick(activate)
+                        if live then btn = btn.onClick(activate)
                     end if
                     li.cssClass("p-speeddial-item").role("presentation")(btn: UI)
                 }
@@ -276,3 +261,6 @@ end SpeedDial
 object SpeedDial:
     /** An empty speed dial; add actions via [[SpeedDial.items]]. */
     def apply(): SpeedDial = new SpeedDial()
+
+    private val openName = Slot.Name("SpeedDial", "the fan", "a toggle", "onOpenChange")
+end SpeedDial

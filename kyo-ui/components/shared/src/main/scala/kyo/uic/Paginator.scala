@@ -43,8 +43,8 @@ end PaginatorElement
   */
 final case class Paginator private (
     totalV: ReactiveValue[Int] = ReactiveValue.Const(0),
-    rowsV: Maybe[ReactiveValue[Int]] = Absent,
-    pageV: Maybe[ReactiveValue[Int]] = Absent,
+    rowsSlot: Slot[Int] = Slot(),
+    pageSlot: Slot[Int] = Slot(),
     currentPageV: Maybe[Int] = Absent,
     pageLinkSizeV: Int = 5,
     rppOptionsV: List[Int] = Nil,
@@ -52,8 +52,6 @@ final case class Paginator private (
     jtpInputFlag: Boolean = false,
     templateV: Maybe[List[PaginatorElement]] = Absent,
     hostClassesV: List[String] = Nil,
-    onPageF: Maybe[Int => UI.Action] = Absent,
-    onRowsF: Maybe[Int => UI.Action] = Absent,
     // What a host calls the rows event, so the card for a one-way rows count names the setter its caller has.
     rowsEventName: String = "onRowsChange"
 ) extends Node:
@@ -72,12 +70,12 @@ final case class Paginator private (
       * dropdown is drawn read-only. Unbound, the paginator keeps the count the reader picks itself, starting at the first
       * [[rowsPerPageOptions]] entry (at one where there are none).
       */
-    def rows(n: Int | Signal[Int]): Paginator = copy(rowsV = Present(ReactiveValue(n)))
+    def rows(n: Int | Signal[Int]): Paginator = copy(rowsSlot = rowsSlot.bind(n))
 
     /** Package-internal: a host that owns the page size hands a constant one, dropping any binding a caller made, since
       * a dropdown writing a ref the host does not page by would page a list nobody is looking at.
       */
-    private[uic] def fixedRows(n: Int): Paginator = copy(rowsV = Present(ReactiveValue.Const(math.max(1, n))), onRowsF = Absent)
+    private[uic] def fixedRows(n: Int): Paginator = copy(rowsSlot = Slot[Int]().bind(math.max(1, n)))
 
     /** The 0-based page index (clamped at render).
       *
@@ -86,7 +84,7 @@ final case class Paginator private (
       * held in a route or a parent is moved. A one-way page with no [[onPageChange]] cannot move and is reported in a
       * card.
       */
-    def page(n: Int | Signal[Int]): Paginator = copy(pageV = Present(ReactiveValue(n)))
+    def page(n: Int | Signal[Int]): Paginator = copy(pageSlot = pageSlot.bind(n))
 
     /** At most this many page links render, centered on the current page (Prime's
       * `pageLinkSize`, default 5); all pages render when they fit the window.
@@ -134,12 +132,12 @@ final case class Paginator private (
     /** Fired with the page the reader asked for, after a two-way [[page]] is written: a page link, a navigation button,
       * either jump control, and the page a rows-per-page pick moves to.
       */
-    def onPageChange(f: Int => UI.Action)(using Frame): Paginator = copy(onPageF = Present(Callback.of(f)))
+    def onPageChange(f: Int => UI.Action)(using Frame): Paginator = copy(pageSlot = pageSlot.hear(f))
 
     /** Fired with the rows per page the reader picked, after a two-way [[rows]] is written, and before the page the
       * pick moves to is reported.
       */
-    def onRowsChange(f: Int => UI.Action)(using Frame): Paginator = copy(onRowsF = Present(Callback.of(f)))
+    def onRowsChange(f: Int => UI.Action)(using Frame): Paginator = copy(rowsSlot = rowsSlot.hear(f))
 
     /** Package-internal: host components (DataTable/DataView) stamp their
       * positional class (`p-datatable-paginator-bottom`, ...) on the root.
@@ -155,31 +153,28 @@ final case class Paginator private (
       * event the caller set on the paginator itself stays where the host has none.
       */
     private[uic] def hostPage(v: ReactiveValue[Int], report: Maybe[Int => UI.Action]): Paginator =
-        copy(pageV = Present(v), onPageF = report.orElse(onPageF))
+        copy(pageSlot = Slot(Present(v), report.orElse(pageSlot.hearer)))
 
     /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
     private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
-        copy(rowsV = Present(v), onRowsF = report.orElse(onRowsF), rowsEventName = eventName)
+        copy(rowsSlot = Slot(Present(v), report.orElse(rowsSlot.hearer)), rowsEventName = eventName)
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
     private def pageReading(using Frame): Reading[Int] =
         currentPageV match
             case Present(cur) => Reading.Fixed(cur)
-            case Absent       => pageV.fold(Reading.Fixed(0))(Reading.of(_))
+            case Absent       => pageSlot.reading(0)
 
-    private def rowsReading(using Frame): Reading[Int] = Reading.of(rowsSlot).map(math.max(1, _))
+    private def rowsReading(using Frame): Reading[Int] = rowsSlot.reading(rowsStart).map(math.max(1, _))
 
     /** The rows a page holds where nothing set them, which is where an unbound paginator's own count starts too: the first
       * [[rowsPerPageOptions]] entry, so the dropdown shows a count it offers, and one where there are no options.
       */
     private def rowsStart: Int = rppOptionsV.headOption.getOrElse(1)
 
-    /** The rows a page holds: the bound count, else [[rowsStart]]. */
-    private def rowsSlot: ReactiveValue[Int] = rowsV.getOrElse(ReactiveValue.Const(rowsStart))
-
     /** A constant page nobody hears is fixed: the links show it and go nowhere. A host drawing the page owns its clicks. */
-    private def pageFixed: Boolean = currentPageV.isEmpty && ReactiveValue.fixed(pageV, onPageF)
+    private def pageFixed: Boolean = currentPageV.isEmpty && pageSlot.fixed
 
     private def totalReading(using Frame): Reading[Int] = Reading.of(totalV).map(math.max(0, _))
 
@@ -198,17 +193,15 @@ final case class Paginator private (
     private[uic] def render(using Frame): UI =
         // Standing alone and unbound, the paginator keeps the page the reader goes to, and the rows they pick, itself. A
         // host that draws the page (`currentPage`) or hands its own slots on is bound, and keeps nothing of its own.
-        val ownsPage = currentPageV.isEmpty && pageV.isEmpty
-        val ownsRows = rowsV.isEmpty
+        val ownsPage = currentPageV.isEmpty && pageSlot.binding.isEmpty
+        val ownsRows = rowsSlot.binding.isEmpty
         if !ownsPage && !ownsRows then renderLive
         else
             UI.mounted {
                 for
-                    page <-
-                        if ownsPage then Signal.initRef(0).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(pageV)
-                    rows <-
-                        if ownsRows then Signal.initRef(rowsStart).map(r => Maybe(ReactiveValue[Int](r))) else Kyo.lift(rowsV)
-                yield copy(pageV = page, rowsV = rows).renderLive
+                    page <- if ownsPage then pageSlot.owned(0) else Kyo.lift(pageSlot)
+                    rows <- rowsSlot.owned(rowsStart)
+                yield copy(pageSlot = page, rowsSlot = rows).renderLive
             }.placeholder(renderLive)
         end if
     end render
@@ -358,55 +351,42 @@ final case class Paginator private (
                 if !layout.contains(PaginatorElement.RowsPerPageDropdown) || rppOptionsV.nonEmpty then Nil
                 else List("RowsPerPageDropdown, which reads rowsPerPageOptions")
             ).flatten
-            val overruled =
-                if !jtpInputFlag || layout.contains(PaginatorElement.JumpToPageInput) then Nil
-                else
-                    List(KeyDiagnostics.card(
-                        "Paginator",
-                        "the template is the layout and it does not name JumpToPageInput, so jumpToPageInput " +
-                            "is not read; name it in the template or drop the flag",
-                        Nil
-                    ))
-            val bare =
-                if empty.isEmpty then Nil
-                else
-                    List(KeyDiagnostics.card(
-                        "Paginator",
-                        "the template names an element with nothing behind it, so it renders nothing",
-                        empty
-                    ))
-            bare ++ overruled
+            Diagnostics.cards("Paginator")(
+                Diagnostic.naming("the template names an element with nothing behind it, so it renders nothing", empty),
+                Diagnostic(
+                    jtpInputFlag && !layout.contains(PaginatorElement.JumpToPageInput),
+                    "the template is the layout and it does not name JumpToPageInput, so jumpToPageInput " +
+                        "is not read; name it in the template or drop the flag"
+                )
+            ).toList
         end if
     end cards
 
     /** Whether a rows-per-page pick reaches anybody: a two-way binding, or [[onRowsChange]]. Unbound, the count is the
       * paginator's own, which its mount keeps, so the page as first rendered already draws the dropdown the reader will use.
       */
-    private def rowsPickable: Boolean = rowsV.isEmpty || ReactiveValue.heard(rowsV, onRowsF)
+    private def rowsPickable: Boolean = rowsSlot.binding.isEmpty || rowsSlot.heard
 
     /** One-way bindings a reader's pick cannot move: a page with no [[onPageChange]], and a signal of rows behind a
       * shown rows-per-page dropdown with no [[onRowsChange]]. A host that draws the page itself (`currentPage`) owns its
       * clicks, and a constant rows count is one the reader is not meant to change, so neither is reported.
       */
     private def unheard(layout: List[PaginatorElement])(using Frame): List[UI] =
-        val page =
-            if currentPageV.isDefined || !ReactiveValue.deaf(pageV, onPageF) then Nil
-            else List("page is bound one way and nothing hears a click: add onPageChange, or bind a SignalRef")
-        val rows =
-            val shown = rppOptionsV.nonEmpty && layout.contains(PaginatorElement.RowsPerPageDropdown)
-            if !shown || !ReactiveValue.deaf(rowsV, onRowsF) then Nil
-            else List(s"rows is bound one way and nothing hears a pick: add $rowsEventName, or bind a SignalRef")
-        end rows
-        val unheard = page ++ rows
-        if unheard.isEmpty then Nil
-        else List(KeyDiagnostics.card("Paginator", "a binding the reader cannot move", unheard))
+        Diagnostics.cards("Paginator")(
+            Diagnostic.unheard(pageSlot, Paginator.pageName, on = currentPageV.isEmpty),
+            Diagnostic.unheard(
+                rowsSlot,
+                Slot.Name("Paginator", "rows", "a pick", rowsEventName),
+                on = rppOptionsV.nonEmpty && layout.contains(PaginatorElement.RowsPerPageDropdown)
+            )
+        ).toList
     end unheard
 
     /** A page pick: written if [[page]] binds two way, then reported. Targets are valid by construction: nav and page
       * clicks aim at rendered pages, the jump controls clamp against the render-time page count.
       */
     private def activate(target: Int)(using Frame): UI.Action =
-        ReactiveValue.change(pageV, math.max(0, target), onPageF)
+        pageSlot.change(math.max(0, target))
 
     /** RPP pick: write the rows ref, then reposition to the page that keeps the
       * first visible record visible (clamped into the new range).
@@ -419,8 +399,9 @@ final case class Paginator private (
             val page     = math.max(0, target)
             // Typed: an untyped `if` over Unit and an action infers Any and hands the action back unrun.
             val movePage: UI.Action = if page == at.cur then () else activate(page)
-            ReactiveValue.change(rowsV, newRows, onRowsF).andThen(movePage)
+            rowsSlot.change(newRows).andThen(movePage)
 end Paginator
 
 object Paginator:
+    private val pageName   = Slot.Name("Paginator", "page", "a click", "onPageChange")
     def apply(): Paginator = new Paginator()

@@ -100,26 +100,30 @@ class ListboxTest extends ReactiveValueContract:
         rows(t).map(_.filter(_.attrs.ariaAttrs.get("selected").contains("true")).map(r => ids(textOf(r))).toSet)
 
     // The row is what a reader clicks; the list is the one tab stop, and it is what says the selection is fixed.
-    holds(new Slot[uic.Listbox[String], Set[String]](
-        name = "selection",
-        bare = Present(multiple),
-        bind = multiple.selection(_),
-        hear = (l, f) => l.onChange(f),
-        event = "onChange",
-        render = _.render,
-        start = Set.empty,
-        next = Set("b"),
-        control = row("Banana")(_),
-        shows = chosen(_),
-        saysFixed = _.attrs.ariaAttrs.get("readonly").contains("true"),
-        ready = Present(rows(_).map(_.exists(declaresClick))),
-        fixedOn = Present(elementWithClass(_, "p-listbox-list"))
-    ))
+    private def selectionCase(name: String, hear: (uic.Listbox[String], Set[String] => UI.Action) => Frame ?=> uic.Listbox[String]) =
+        new SlotCase[uic.Listbox[String], Set[String]](
+            name = name,
+            bare = Present(multiple),
+            bind = multiple.selection(_),
+            hear = hear,
+            event = "onChange",
+            render = _.render,
+            start = Set.empty,
+            next = Set("b"),
+            control = row("Banana")(_),
+            shows = chosen(_),
+            saysFixed = _.attrs.ariaAttrs.get("readonly").contains("true"),
+            ready = Present(rows(_).map(_.exists(declaresClick))),
+            fixedOn = Present(elementWithClass(_, "p-listbox-list"))
+        )
+
+    holds(selectionCase("selection", (l, f) => l.onChange(f)))
+    heardBy(selectionCase("selection, heard by onItemClick", (l, f) => l.onItemClick(k => f(Set(k)))))
 
     "onItemClick hears a selection bound one way, so it draws no card" in {
         for
             held  <- Signal.initRef(Set("b"))
-            byOld <- elementsWithClass(multiple.selection(held.readOnly).onItemClick(_ => ()).render, "p-uic-key-error")
+            byOld <- elementsWithClass(multiple.selection(held.readOnly).onItemClick(_ => ()).render, "p-uic-diagnostic")
         yield assert(byOld.isEmpty, s"onItemClick hears: ${byOld.map(textOf)}")
     }
 
@@ -159,7 +163,7 @@ class ListboxTest extends ReactiveValueContract:
 
     // The query is a text the list keeps itself, unbound and from a constant, since it filters the rows by it; the page as
     // first rendered draws the field with nothing in it, so the cases read what the mount published.
-    holds(new Slot[uic.Listbox[String], String](
+    holds(new SlotCase[uic.Listbox[String], String](
         name = "filterQuery",
         bare = Present(fruit.filterable(true)),
         bind = fruit.filterQuery(_),
@@ -194,6 +198,14 @@ class ListboxTest extends ReactiveValueContract:
             t     <- mounted(fruit.filterQuery("apple").render)
             shown <- shownTexts(t)
         yield assert(shown == Chunk("Apple", "Pineapple"), s"the list starts filtered: $shown")
+    }
+
+    // A reader who cannot act has nothing to hear: a disabled list takes no query.
+    "a disabled list says nothing about a query bound one way" in {
+        for
+            query <- Signal.initRef("")
+            said  <- elementsWithClass(fruit.disabled(true).filterQuery(query.readOnly).render, UicTest.cardClass)
+        yield assert(said.isEmpty, s"${said.map(textOf)}")
     }
 
 end ListboxTest

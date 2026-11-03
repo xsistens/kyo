@@ -61,7 +61,7 @@ end CascadeItem
   * `openExactly` machinery: sibling branches close); clicking a LEAF writes
   * it, fires `onChange`, and closes the whole chain. `loading` says the tree is
   * still arriving; without it a held leaf the tree does not carry is named in a
-  * `.p-uic-key-error` card. Every panel is a real
+  * `.p-uic-diagnostic` card. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
   * it), Escape closes ONE level too (each panel consumes its own keydown,
   * the Overlay per-level story), and no panel seeds focus: it stays on the trigger, which is the
@@ -86,8 +86,7 @@ final case class CascadeSelect[A] private (
     labelF: A => String,
     keyF: Maybe[A => String] = Absent,
     choice: Maybe[SingleChoice[A]] = Absent,
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     placeholderV: Maybe[TextValue] = Absent,
     disabledFlag: Boolean = false,
     nameV: Maybe[String] = Absent,
@@ -154,22 +153,19 @@ final case class CascadeSelect[A] private (
       * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
       * signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): CascadeSelect[A] = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): CascadeSelect[A] = copy(openSlot = openSlot.hear(f))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-    private def askOpen(open: ReactiveValue[Boolean], v: Boolean)(using Frame): UI.Action =
-        ReactiveValue.change(Present(open), v, onOpenF)
+    private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
 
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
-    private def openFixedShut: Boolean =
-        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+    private def openFixedShut: Boolean = openSlot.fixedAt(false)
 
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
-    private def openFixedOpen: Boolean =
-        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
+    private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = copy(placeholderV = v)
 
@@ -214,7 +210,7 @@ final case class CascadeSelect[A] private (
     def onBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Says the option tree is still arriving: the dropdown icon turns into Prime's spinner, and a held leaf no leaf of the
-      * tree carries yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
+      * tree carries yet is shown from the value itself rather than reported in a `.p-uic-diagnostic` card.
       */
     def loading(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 
@@ -236,18 +232,7 @@ final case class CascadeSelect[A] private (
 
     private[uic] def render(using Frame): UI =
         // A panel bound one way that nothing hears: every open and close the reader asks for is painted away again.
-        if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
-        else
-            fragment(
-                KeyDiagnostics.card(
-                    "CascadeSelect",
-                    "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
-                        "onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                renderLive
-            )
-        end if
+        Diagnostics.before(renderLive)("CascadeSelect")(Diagnostic.unheard(openSlot, CascadeSelect.openName, on = !disabledFlag))
     end render
 
     private def renderLive(using Frame): UI =
@@ -261,9 +246,7 @@ final case class CascadeSelect[A] private (
         UI.mounted {
             for
                 // Unbound, the field keeps the panel state itself, starting closed.
-                open <- openSlot match
-                    case Present(slot) => Kyo.lift(slot)
-                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
+                open  <- openSlot.owned(false)
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
@@ -273,7 +256,7 @@ final case class CascadeSelect[A] private (
                     if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, subs, focus, Present(base))
+            yield self.copy(openSlot = open).wiredOver(subs, focus, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -289,24 +272,22 @@ final case class CascadeSelect[A] private (
         focus: Anchored[List[Int]],
         base: Maybe[String] = Absent
     )(using Frame): UI =
-        val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, subs, focus, base)
+        copy(openSlot = openSlot.bind(open)).wiredOver(subs, focus, base)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
     private def wiredOver(
-        open: ReactiveValue[Boolean],
         subs: Submenus,
         focus: Anchored[List[Int]],
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.of(open).and(subs.reading).and(focus.reading)
+        val panel    = openSlot.reading(false).and(subs.reading).and(focus.reading)
         panel.and(shown).and(roots).render { case ((((o, openSet), f), (held, ld, ph)), rs) =>
             // The open groups and the highlight follow their root options over the roots shown ([[Anchored]]).
             val sv = subs.view(openSet, rs)
             val fv = focus.view(f, rs)
-            val st = CascadeSelect.State(open, sv, fv, fv.value, base)
+            val st = CascadeSelect.State(openSlot, sv, fv, fv.value, base)
             copy(items = rs).bodyStatic(held, o, sv.open, Present(st), ph, ld, validity)
         }
     end wiredOver
@@ -336,11 +317,10 @@ final case class CascadeSelect[A] private (
     )(using Frame): UI =
         val current = held.fold("")(key)
         // A held leaf no leaf of the tree carries, once the tree is said to be complete.
-        val unknownCard: List[UI] =
+        val strays: Seq[String] =
             held match
-                case Present(a) if !leaves.exists(l => key(l) == current) && !loading =>
-                    List(KeyDiagnostics.unknown("CascadeSelect", Seq(labelF(a))))
-                case _ => Nil
+                case Present(a) if !leaves.exists(l => key(l) == current) && !loading => Seq(labelF(a))
+                case _                                                                => Nil
 
         def closeAll: UI.Action =
             st match
@@ -428,7 +408,7 @@ final case class CascadeSelect[A] private (
         // === floating panel chain ================================================
         val panelUI: List[UI] = st.toList.collect {
             case state if isOpen =>
-                Overlay.hosted(state.open, onOpenF)
+                Overlay.hosted(state.open)
                     .animate(false)
                     .panelClass("p-cascadeselect-overlay")
                     .panelClass("p-component")
@@ -510,22 +490,13 @@ final case class CascadeSelect[A] private (
         end if
 
         val field = validity.follow(el(UI.children((labelUI :: dropdownUI :: hiddenCarrier) ++ panelUI)*))
-        val cards = unknownCard ++ unheardCard
-        if cards.isEmpty then field else fragment((field :: cards)*)
+        // A selection bound one way that nothing hears: every pick is painted away again. A disabled field takes no pick, so
+        // it has nothing to say.
+        Diagnostics.after(field)("CascadeSelect")(
+            Diagnostic.unknown(strays),
+            Diagnostic(!disabledFlag && choice.exists(_.deaf(onChangeF.orElse(onPickF))), CascadeSelect.selectionName.advice)
+        )
     end bodyStatic
-
-    /** A selection bound one way that nothing hears: every pick is painted away again. A disabled field takes no pick,
-      * so it has nothing to say.
-      */
-    private def unheardCard(using Frame): List[UI] =
-        if disabledFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
-        else
-            List(KeyDiagnostics.card(
-                "CascadeSelect",
-                "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange or " +
-                    "onPick, or bind a SignalRef",
-                Nil
-            ))
 
     private def activeId(base: String): String = s"$base-active"
 
@@ -619,13 +590,16 @@ final case class CascadeSelect[A] private (
 end CascadeSelect
 
 object CascadeSelect:
+    private val openName      = Slot.Name("CascadeSelect", "the panel", "an open or a close", "onOpenChange")
+    private val selectionName = Slot.Name("CascadeSelect", "the selection", "a pick", "onChange or onPick")
+
     def apply[A](): CascadeSelect[A] = new CascadeSelect[A](Nil, _.toString)
 
     /** The wired interaction state, allocated per mount: the root panel's open flag, the
       * open groups the nested panels ride on, and the keyboard focus path.
       */
     final private[uic] case class State(
-        open: ReactiveValue[Boolean],
+        open: Slot[Boolean],
         submenus: Submenus.View,
         focusRef: Anchored.View[List[Int]],
         focus: List[Int],

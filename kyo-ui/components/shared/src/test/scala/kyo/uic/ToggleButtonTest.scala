@@ -18,7 +18,7 @@ class ToggleButtonTest extends ReactiveValueContract:
             if says != checked then throw new AssertionError(s"aria-pressed says $says, the checked class $checked")
             says
 
-    holds(new Slot[uic.ToggleButton, Boolean](
+    holds(new SlotCase[uic.ToggleButton, Boolean](
         name = "checked",
         bare = Present(uic.ToggleButton()),
         bind = uic.ToggleButton().checked(_),
@@ -36,7 +36,7 @@ class ToggleButtonTest extends ReactiveValueContract:
     ))
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
-        def errors(c: uic.ToggleButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.ToggleButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(false)
             twoWay <- errors(uic.ToggleButton().checked(held))

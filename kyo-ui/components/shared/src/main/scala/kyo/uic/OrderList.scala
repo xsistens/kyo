@@ -24,13 +24,11 @@ import kyo.UI.*
   * option slot onto the typed items.
   */
 final case class OrderList[A] private (
-    itemsSlot: Maybe[ReactiveValue[Seq[A]]] = Absent,
-    onItemsF: Maybe[Seq[A] => UI.Action] = Absent,
+    itemsSlot: Slot[Seq[A]] = Slot[Seq[A]](),
     labelF: Maybe[A => String] = Absent,
     keyF: Maybe[A => String] = Absent,
     templateF: Maybe[A => UI] = Absent,
-    selectedSlot: Maybe[ReactiveValue[Set[A]]] = Absent,
-    onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
+    selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
     disabledFlag: Boolean = false,
     metaKeyFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent
@@ -43,10 +41,10 @@ final case class OrderList[A] private (
       * is the two-column member of the pair and spells the same thing `sourceItems` / `targetItems`.
       */
     def items(v: Seq[A] | Signal[Seq[A]])(label: A => String): OrderList[A] =
-        copy(itemsSlot = Present(ReactiveValue[Seq[A]](v)), labelF = Present(label))
+        copy(itemsSlot = itemsSlot.bind(v), labelF = Present(label))
 
     /** Fired with the order a move asks for, after a two-way [[items]] is written. */
-    def onItemsChange(f: Seq[A] => UI.Action)(using Frame): OrderList[A] = copy(onItemsF = Present(Callback.of(f)))
+    def onItemsChange(f: Seq[A] => UI.Action)(using Frame): OrderList[A] = copy(itemsSlot = itemsSlot.hear(f))
 
     /** Stable item identity: the selection key (defaults to the label). */
     def itemKey(f: A => String): OrderList[A] = copy(keyF = Present(f))
@@ -58,10 +56,10 @@ final case class OrderList[A] private (
       * `SignalRef` binds two way; a plain `Signal` or a constant binds one way, and a click only reports the set it asks
       * for to [[onSelectionChange]].
       */
-    def selection(v: Set[A] | Signal[Set[A]]): OrderList[A] = copy(selectedSlot = Present(ReactiveValue[Set[A]](v)))
+    def selection(v: Set[A] | Signal[Set[A]]): OrderList[A] = copy(selectedSlot = selectedSlot.bind(v))
 
     /** Fired with the items chosen after a click, after a two-way [[selection]] is written. */
-    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): OrderList[A] = copy(onSelectionF = Present(Callback.of(f)))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): OrderList[A] = copy(selectedSlot = selectedSlot.hear(f))
 
     /** Disables the whole control: the listbox dims and the buttons lock. */
     def disabled(v: Boolean): OrderList[A] = copy(disabledFlag = v)
@@ -94,11 +92,11 @@ final case class OrderList[A] private (
       * [[PickList]] carries the same shape and is where that stopped being theoretical.
       */
     private def snapshot(cursor: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
-        val items = itemsSlot.fold(Signal.initConst(Seq.empty[A]))(_.signal)
-        val sel   = selectedSlot match
+        val items = itemsSlot.reading(Seq.empty[A]).signal
+        val sel   = selectedSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) => sig.map(_.map(keyOf))
             case Present(ReactiveValue.Const(c)) => Signal.initConst(c.map(keyOf))
-            case Absent                          => Signal.initConst(Set.empty[String])
+            case _                               => Signal.initConst(Set.empty[String])
         val hi = cursor match
             case Present(c) => c.highlight: Signal[Int]
             case Absent     => Signal.initConst(-1)
@@ -118,9 +116,7 @@ final case class OrderList[A] private (
                 id   <- cmds.freshId
                 hi   <- Signal.initRef(-1)
                 // Unbound, the list keeps the rows the reader picks itself.
-                sel <-
-                    if selectedSlot.isEmpty then Signal.initRef(Set.empty[A]).map(r => Maybe(ReactiveValue[Set[A]](r)))
-                    else Kyo.lift(selectedSlot)
+                sel <- selectedSlot.owned(Set.empty[A])
             yield copy(selectedSlot = sel).wired(Present(ListReorder.Cursor(hi, id)))
         }.placeholder(wired(Absent))
 
@@ -133,7 +129,7 @@ final case class OrderList[A] private (
     private def body(xs: Seq[A], sel: Set[String], cursor: Maybe[ListReorder.Cursor] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
-        val moveDisabled          = disabledFlag || sel.isEmpty || itemsSlot.isEmpty
+        val moveDisabled          = disabledFlag || sel.isEmpty || itemsSlot.binding.isEmpty
         def chosen(a: A): Boolean = sel.contains(keyOf(a))
 
         // The same moves the rail makes, on the list the reader is standing in: the buttons are the
@@ -183,10 +179,10 @@ final case class OrderList[A] private (
             .selectionMode(SelectionMode.Multiple)
             .metaKeySelection(metaKeyFlag)
             .disabled(disabledFlag)
-            .fixed(ReactiveValue.fixed(selectedSlot, onSelectionF))
+            .fixed(selectedSlot.fixed)
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
-        selectedSlot.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, onSelectionF)))
+        selectedSlot.binding.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, selectedSlot.hearer)))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)
@@ -209,18 +205,14 @@ final case class OrderList[A] private (
       * or click, so it has nothing to say.
       */
     private def unheard(using Frame): List[UI] =
-        val missing =
-            if disabledFlag then Nil
-            else
-                (if !ReactiveValue.deaf(itemsSlot, onItemsF) then Nil
-                 else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
-                    (if !ReactiveValue.deaf(selectedSlot, onSelectionF) then Nil
-                     else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
-        if missing.isEmpty then Nil else List(KeyDiagnostics.card("OrderList", "a binding the reader cannot move", missing))
+        Diagnostics.cards("OrderList")(
+            Diagnostic.unheard(itemsSlot, OrderList.itemsName, on = !disabledFlag),
+            Diagnostic.unheard(selectedSlot, OrderList.selectionName, on = !disabledFlag)
+        ).toList
     end unheard
 
     /** A constant order nobody hears is fixed: the list shows it, and no button or key moves a row. */
-    private def itemsFixed: Boolean = ReactiveValue.fixed(itemsSlot, onItemsF)
+    private def itemsFixed: Boolean = itemsSlot.fixed
 
     /** Runs `eff` and puts the highlight back on the row it was on in `after`, the list the move asks for.
       *
@@ -233,7 +225,7 @@ final case class OrderList[A] private (
         Frame
     ): UI.Action =
         cursor match
-            case Present(c) if itemsSlot.isDefined && xs.isDefinedAt(hi) =>
+            case Present(c) if itemsSlot.binding.isDefined && xs.isDefinedAt(hi) =>
                 val id    = keyOf(xs(hi))
                 val moved = after.indexWhere(a => keyOf(a) == id)
                 eff.andThen(c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1)))
@@ -241,14 +233,17 @@ final case class OrderList[A] private (
 
     /** A move steps the bound items, keyed on the current selection: written if they bind two way, then reported. */
     private def reorder(move: (List[A], A => Boolean) => List[A])(using Frame): UI.Action =
-        selectedSlot match
-            case Present(s) if itemsSlot.isDefined =>
+        selectedSlot.binding match
+            case Present(s) if itemsSlot.binding.isDefined =>
                 s.current.map { held =>
                     val sel = held.map(keyOf)
-                    ReactiveValue.update(itemsSlot, xs => move(xs.toList, a => sel.contains(keyOf(a))), onItemsF)
+                    itemsSlot.update(xs => move(xs.toList, a => sel.contains(keyOf(a))))
                 }
             case _ => ()
 end OrderList
 
 object OrderList:
+    private val itemsName        = Slot.Name("OrderList", "items", "a move", "onItemsChange")
+    private val selectionName    = Slot.Name("OrderList", "selection", "a click", "onSelectionChange")
     def apply[A](): OrderList[A] = new OrderList[A]()
+end OrderList

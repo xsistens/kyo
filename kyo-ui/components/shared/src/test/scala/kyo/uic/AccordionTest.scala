@@ -32,20 +32,24 @@ class AccordionTest extends ReactiveValueContract:
     /** The one panel shown open, in single mode. */
     private def open(t: UI)(using Frame): Maybe[String] < Sync = opened(t).map(ids => Maybe.fromOption(ids.headOption))
 
-    holds(new Slot[Accordion[String], Maybe[String]](
-        name = "value",
-        bare = Present(accordion),
-        bind = accordion.value(_),
-        hear = (a, f) => a.onValueChange(f),
-        event = "onValueChange",
-        render = _.render,
-        start = Absent,
-        next = Present("a"),
-        control = headers(_).map(_.head),
-        shows = open(_),
-        ready = Present(headers(_).map(_.exists(declaresClick))),
-        nextPatch = Present(_ == ("aria-expanded", "true"))
-    ))
+    private def valueCase(name: String, hear: (Accordion[String], Maybe[String] => UI.Action) => Frame ?=> Accordion[String]) =
+        new SlotCase[Accordion[String], Maybe[String]](
+            name = name,
+            bare = Present(accordion),
+            bind = accordion.value(_),
+            hear = hear,
+            event = "onValueChange",
+            render = _.render,
+            start = Absent,
+            next = Present("a"),
+            control = headers(_).map(_.head),
+            shows = open(_),
+            ready = Present(headers(_).map(_.exists(declaresClick))),
+            nextPatch = Present(_ == ("aria-expanded", "true"))
+        )
+
+    holds(valueCase("value", (a, f) => a.onValueChange(f)))
+    heardBy(valueCase("value, heard by onToggle", (a, f) => a.onToggle(k => f(Present(k)))))
 
     "unbound, a second click on the open header closes it again" in {
         for
@@ -66,7 +70,7 @@ class AccordionTest extends ReactiveValueContract:
     }
 
     // A set binds the accordion into multiple mode, which is another type, so this slot has no unbound form.
-    holds(new Slot[MultipleAccordion[String], Set[String]](
+    holds(new SlotCase[MultipleAccordion[String], Set[String]](
         name = "value, multiple",
         bare = Absent,
         bind = accordion.value(_),

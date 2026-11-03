@@ -32,7 +32,7 @@ class InputNumberTest extends ReactiveValueContract:
     /** The field takes typing: the mount of a field that keeps its text has wired it (the page as first rendered has not). */
     private def typing(t: UI)(using Frame): Boolean < Sync = number(t).map(_.onInput.isDefined)
 
-    holds(new Slot[uic.InputNumber, Double](
+    holds(new SlotCase[uic.InputNumber, Double](
         name = "value",
         bare = Absent,
         bind = uic.InputNumber().value(_),
@@ -55,7 +55,7 @@ class InputNumberTest extends ReactiveValueContract:
         saysFixed = readonlyField
     ))
 
-    holds(new Slot[uic.InputNumber, Double](
+    holds(new SlotCase[uic.InputNumber, Double](
         name = "value spun",
         bare = Absent,
         bind = uic.InputNumber().showButtons(true).value(_),
@@ -70,7 +70,7 @@ class InputNumberTest extends ReactiveValueContract:
         saysFixed = readonlyField
     ))
 
-    holds(new Slot[uic.InputNumber, String](
+    holds(new SlotCase[uic.InputNumber, String](
         name = "text",
         bare = Present(uic.InputNumber()),
         bind = uic.InputNumber().text(_),
@@ -89,7 +89,7 @@ class InputNumberTest extends ReactiveValueContract:
         startText = Present("4.")
     ))
 
-    holds(new Slot[uic.InputNumber, String](
+    holds(new SlotCase[uic.InputNumber, String](
         name = "text spun",
         bare = Present(uic.InputNumber().showButtons(true)),
         bind = uic.InputNumber().showButtons(true).text(_),
@@ -130,7 +130,7 @@ class InputNumberTest extends ReactiveValueContract:
     }
 
     "a value bound one way says nothing where it reaches somebody or nobody can change it: a ref, disabled" in {
-        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(3.0)
             twoWay <- errors(uic.InputNumber().value(held))
@@ -144,7 +144,7 @@ class InputNumberTest extends ReactiveValueContract:
             t    <- mountedWhen(uic.InputNumber().text("4.").render)(typing)
             n    <- number(t)
             text <- textIn(n)
-            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-key-error")
+            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-diagnostic")
         yield
             assert(text == "4.", s"the field starts from $text")
             assert(n.readOnly.isEmpty, "and the reader goes on typing from it")

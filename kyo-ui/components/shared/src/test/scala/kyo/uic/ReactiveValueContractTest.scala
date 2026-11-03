@@ -2,11 +2,11 @@ package kyo.uic
 
 import kyo.*
 
-/** Rule A for state slots, written once: the six ways a slot can be bound and what each must do. `ReactiveValue` is where
-  * the rule lives (`owned`, `heard`, `fixed`, `deaf`, `change`), so a suite that extends this holds a component's slots to
+/** Rule A for state slots, written once: the six ways a slot can be bound and what each must do. `Slot` is where the rule
+  * lives (`owned`, `heard`, `fixed`, `deaf`, `change`), so a suite that extends this holds a component's slots to
   * it with [[holds]], one call per slot, and adds only what that component alone does.
   *
-  * A [[Slot]] names the slot through its setter and its event, the one control the reader changes it with, and what a
+  * A [[SlotCase]] names the slot through its setter and its event, the one control the reader changes it with, and what a
   * render shows of it. `start` is where an unbound slot starts and `next` is what one gesture on that control asks for
   * from `start`; every case binds `start` and expects `next` to be asked for, and a report to say so exactly once.
   *
@@ -83,7 +83,7 @@ abstract class ReactiveValueContract extends UicTest:
       *   moved): where the elements it measures sit, by id, which the headless page answers its measures with
       *   ([[UicTest.layout]]). Empty, the page has no layout.
       */
-    final class Slot[C, A](
+    final class SlotCase[C, A](
         val name: String,
         val bare: Frame ?=> Maybe[C],
         val bind: (A | Signal[A]) => Frame ?=> C,
@@ -159,9 +159,9 @@ abstract class ReactiveValueContract extends UicTest:
         def asked(ui: UI)(using Frame, kyo.test.AssertScope): Any < Async =
             if after.isEmpty then live(ui).map(t => ask(t))
             else actedOn(ui, t => wired(t))(steps*)
-    end Slot
+    end SlotCase
 
-    private def cards(t: UI)(using Frame) = elementsWithClass(t, "p-uic-key-error")
+    private def cards(t: UI)(using Frame) = elementsWithClass(t, UicTest.cardClass)
 
     /** Whether nothing in a paginator (one of its own, or one a table or a view embeds) goes to another page, and every
       * link and button that would says so: a fixed page.
@@ -208,7 +208,7 @@ abstract class ReactiveValueContract extends UicTest:
         root: String,
         checkedClass: String,
         fixedAria: String = "readonly"
-    ): Slot[C, Boolean] =
+    ): SlotCase[C, Boolean] =
         def control(t: UI)(using Frame): UI.Ast.Element < Sync =
             elements(t).map(_.collectFirst {
                 case b: UI.Ast.BooleanInput if b.attrs.cssClasses.contains(input) => b
@@ -228,7 +228,7 @@ abstract class ReactiveValueContract extends UicTest:
             yield
                 if drawn != native then throw new AssertionError(s"drawn checked $drawn over a native state $native")
                 native
-        new Slot[C, Boolean](
+        new SlotCase[C, Boolean](
             name = name,
             bare = bare,
             bind = bind,
@@ -306,7 +306,7 @@ abstract class ReactiveValueContract extends UicTest:
       * @param commit
       *   whether the slot's event hears the commit (`onChange`) rather than every keystroke (`onInput`)
       * @param ready
-      *   as [[Slot]]'s, for a field whose handlers its mount wires
+      *   as [[SlotCase]]'s, for a field whose handlers its mount wires
       */
     def nativeText[C](
         name: String,
@@ -320,8 +320,8 @@ abstract class ReactiveValueContract extends UicTest:
         startText: String = "start",
         commit: Boolean = false,
         ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent
-    ): Slot[C, String] =
-        new Slot[C, String](
+    ): SlotCase[C, String] =
+        new SlotCase[C, String](
             name = name,
             bare = bare,
             bind = bind,
@@ -352,7 +352,7 @@ abstract class ReactiveValueContract extends UicTest:
     /** Whether a gesture on `ui` changes what the slot shows to `next`: on the tree the mount published once it is ready
       * and its control answers, seen in what it publishes after the gesture, or in a patch where the slot has one.
       */
-    private def changes[C, A](s: Slot[C, A], ui: => UI)(using Frame, kyo.test.AssertScope): Boolean < Async =
+    private def changes[C, A](s: SlotCase[C, A], ui: => UI)(using Frame, kyo.test.AssertScope): Boolean < Async =
         import s.equal
         // What was published since the gesture is read the way a ready tree is: a component of several regions publishes
         // them in either order, so a lookup that fails because the region showing the slot has not come yet means "not
@@ -366,7 +366,7 @@ abstract class ReactiveValueContract extends UicTest:
     end changes
 
     /** Registers the cases of rule A for `s`: all six, or the four of them a slot with no unbound form has. */
-    def holds[C, A](s: Slot[C, A]): Unit =
+    def holds[C, A](s: SlotCase[C, A]): Unit =
         import s.equal
 
         // Evaluated here only to know whether the slot has an unbound form; each case builds its own.
@@ -459,7 +459,7 @@ abstract class ReactiveValueContract extends UicTest:
       * reader left in it, which the transport reads off the field and carries with the blur ([[blurOut]]). The reader
       * types `next` first, so a field that reported its binding instead would report `start` or the constant.
       */
-    def blurs[C](s: Slot[C, String], onBlur: (C, String => UI.Action) => Frame ?=> C): Unit =
+    def blurs[C](s: SlotCase[C, String], onBlur: (C, String => UI.Action) => Frame ?=> C): Unit =
 
         def reported(build: Frame ?=> C)(using Frame, kyo.test.AssertScope): Chunk[String] < Async =
             for
@@ -498,7 +498,7 @@ abstract class ReactiveValueContract extends UicTest:
       * ref) for a slot that has more than one event: [[holds]] holds the slot once, through one of them, and this holds
       * it through each of the others, which `s` names with its own `name`, `hear`, `event` and `gesture`.
       */
-    def heardBy[C, A](s: Slot[C, A]): Unit =
+    def heardBy[C, A](s: SlotCase[C, A]): Unit =
         import s.equal
 
         s"${s.name}: a constant somebody hears reports the gesture with what it asks for, and is no mistake" in s.laidOut {
@@ -526,11 +526,13 @@ abstract class ReactiveValueContract extends UicTest:
                 got   <- seen.get
                 deaf  <- cards(s.render(s.bind(held.readOnly)))
                 heard <- cards(s.render(s.hear(s.bind(held.readOnly), _ => ())))
+                lives <- cardsOnPage(s.render(s.bind(held.readOnly)))
             yield
                 assert(shown == s.start, s"the component follows the signal: it shows $shown")
                 assert(h == s.start && got.size == 1 && got.head == s.next, s"held $h, reported $got")
                 assert(deaf.size == 1 && textOf(deaf.head).contains(s.event), s"nobody hears: ${deaf.map(textOf)}")
                 assert(heard.isEmpty, s"a signal somebody hears is no mistake: ${heard.map(textOf)}")
+                assert(lives.size == 1, s"the page as it lives says it once: ${lives.map(textOf)}")
             end for
         }
 
