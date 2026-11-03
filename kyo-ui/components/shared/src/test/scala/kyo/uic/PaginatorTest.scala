@@ -179,7 +179,7 @@ class PaginatorTest extends ReactiveValueContract:
     private def next(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-next")
 
     // Ten rows over 120 records is twelve pages; the next-page button goes from the first to the second.
-    holds(new Slot[uic.Paginator, Int](
+    holds(new SlotCase[uic.Paginator, Int](
         name = "page",
         bare = Present(uic.Paginator().totalRecords(120).rows(10)),
         bind = uic.Paginator().totalRecords(120).rows(10).page(_),
@@ -207,7 +207,7 @@ class PaginatorTest extends ReactiveValueContract:
         )
 
     // The page count follows the rows, so the page stays where it is: a pick of 20 rows on the first page reports no page.
-    holds(new Slot[uic.Paginator, Int](
+    holds(new SlotCase[uic.Paginator, Int](
         name = "rows",
         bare = Present(uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20))),
         bind = uic.Paginator().totalRecords(120).rowsPerPageOptions(Seq(10, 20)).rows(_),

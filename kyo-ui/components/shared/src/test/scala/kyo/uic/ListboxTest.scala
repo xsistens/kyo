@@ -100,7 +100,7 @@ class ListboxTest extends ReactiveValueContract:
         rows(t).map(_.filter(_.attrs.ariaAttrs.get("selected").contains("true")).map(r => ids(textOf(r))).toSet)
 
     // The row is what a reader clicks; the list is the one tab stop, and it is what says the selection is fixed.
-    holds(new Slot[uic.Listbox[String], Set[String]](
+    holds(new SlotCase[uic.Listbox[String], Set[String]](
         name = "selection",
         bare = Present(multiple),
         bind = multiple.selection(_),
@@ -159,7 +159,7 @@ class ListboxTest extends ReactiveValueContract:
 
     // The query is a text the list keeps itself, unbound and from a constant, since it filters the rows by it; the page as
     // first rendered draws the field with nothing in it, so the cases read what the mount published.
-    holds(new Slot[uic.Listbox[String], String](
+    holds(new SlotCase[uic.Listbox[String], String](
         name = "filterQuery",
         bare = Present(fruit.filterable(true)),
         bind = fruit.filterQuery(_),

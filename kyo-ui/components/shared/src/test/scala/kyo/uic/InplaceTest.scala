@@ -36,7 +36,7 @@ class InplaceTest extends ReactiveValueContract:
 
     private def inplace(using Frame) = uic.Inplace().display(span("View")).content(p("Full")).closable(true)
 
-    holds(new Slot[Inplace, Boolean](
+    holds(new SlotCase[Inplace, Boolean](
         name = "active",
         bare = Present(inplace),
         bind = inplace.active(_),

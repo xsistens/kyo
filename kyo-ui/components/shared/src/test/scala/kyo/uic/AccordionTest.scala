@@ -32,7 +32,7 @@ class AccordionTest extends ReactiveValueContract:
     /** The one panel shown open, in single mode. */
     private def open(t: UI)(using Frame): Maybe[String] < Sync = opened(t).map(ids => Maybe.fromOption(ids.headOption))
 
-    holds(new Slot[Accordion[String], Maybe[String]](
+    holds(new SlotCase[Accordion[String], Maybe[String]](
         name = "value",
         bare = Present(accordion),
         bind = accordion.value(_),
@@ -66,7 +66,7 @@ class AccordionTest extends ReactiveValueContract:
     }
 
     // A set binds the accordion into multiple mode, which is another type, so this slot has no unbound form.
-    holds(new Slot[MultipleAccordion[String], Set[String]](
+    holds(new SlotCase[MultipleAccordion[String], Set[String]](
         name = "value, multiple",
         bare = Absent,
         bind = accordion.value(_),

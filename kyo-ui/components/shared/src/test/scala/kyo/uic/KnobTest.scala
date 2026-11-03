@@ -23,7 +23,7 @@ class KnobTest extends ReactiveValueContract:
 
     private def readonlyDial(d: UI.Ast.Element): Boolean = d.attrs.ariaAttrs.get("readonly").contains("true")
 
-    holds(new Slot[uic.Knob, Double](
+    holds(new SlotCase[uic.Knob, Double](
         name = "value turned by the pointer",
         bare = Present(uic.Knob()),
         bind = uic.Knob().value(_),
@@ -42,7 +42,7 @@ class KnobTest extends ReactiveValueContract:
         saysFixed = readonlyDial
     ))
 
-    holds(new Slot[uic.Knob, Double](
+    holds(new SlotCase[uic.Knob, Double](
         name = "value stepped by the keys",
         bare = Present(uic.Knob()),
         bind = uic.Knob().value(_),

@@ -41,7 +41,7 @@ class TerminalTest extends ReactiveValueContract:
 
     private val ls = uic.TerminalCommand("ls", "ran ls")
 
-    holds(new Slot[uic.Terminal, Seq[uic.TerminalCommand]](
+    holds(new SlotCase[uic.Terminal, Seq[uic.TerminalCommand]](
         name = "commands",
         bare = Present(shell),
         bind = shell.commands(_),

@@ -33,7 +33,7 @@ class FileUploadTest extends ReactiveValueContract:
         yield in.attrs.onFileSelect.isEmpty && root.attrs.dataAttrs.contains("kyo-inert") &&
             choose.attrs.ariaAttrs.get("disabled").contains("true")
 
-    holds(new Slot[uic.FileUpload, Seq[UI.FilePayload]](
+    holds(new SlotCase[uic.FileUpload, Seq[UI.FilePayload]](
         name = "value",
         bare = Present(uic.FileUpload()),
         bind = uic.FileUpload().value(_),

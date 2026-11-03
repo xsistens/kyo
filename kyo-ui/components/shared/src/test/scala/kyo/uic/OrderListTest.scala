@@ -128,7 +128,7 @@ class OrderListTest extends ReactiveValueContract:
         )
 
     // The rows are the items' own, so the slot has no unbound form. A move acts on the selection, which is held at `a`.
-    holds(new Slot[uic.OrderList[String], Seq[String]](
+    holds(new SlotCase[uic.OrderList[String], Seq[String]](
         name = "items",
         bare = Absent,
         bind = uic.OrderList[String]().items(_)(identity).selection(Set("a")),
@@ -154,7 +154,7 @@ class OrderListTest extends ReactiveValueContract:
 
     private def items(using Frame) = uic.OrderList[String]().items(Seq("a", "b", "c"))(identity)
 
-    holds(new Slot[uic.OrderList[String], Set[String]](
+    holds(new SlotCase[uic.OrderList[String], Set[String]](
         name = "selection",
         bare = Present(items),
         bind = items.selection(_),

@@ -32,7 +32,7 @@ class InputNumberTest extends ReactiveValueContract:
     /** The field takes typing: the mount of a field that keeps its text has wired it (the page as first rendered has not). */
     private def typing(t: UI)(using Frame): Boolean < Sync = number(t).map(_.onInput.isDefined)
 
-    holds(new Slot[uic.InputNumber, Double](
+    holds(new SlotCase[uic.InputNumber, Double](
         name = "value",
         bare = Absent,
         bind = uic.InputNumber().value(_),
@@ -55,7 +55,7 @@ class InputNumberTest extends ReactiveValueContract:
         saysFixed = readonlyField
     ))
 
-    holds(new Slot[uic.InputNumber, Double](
+    holds(new SlotCase[uic.InputNumber, Double](
         name = "value spun",
         bare = Absent,
         bind = uic.InputNumber().showButtons(true).value(_),
@@ -70,7 +70,7 @@ class InputNumberTest extends ReactiveValueContract:
         saysFixed = readonlyField
     ))
 
-    holds(new Slot[uic.InputNumber, String](
+    holds(new SlotCase[uic.InputNumber, String](
         name = "text",
         bare = Present(uic.InputNumber()),
         bind = uic.InputNumber().text(_),
@@ -89,7 +89,7 @@ class InputNumberTest extends ReactiveValueContract:
         startText = Present("4.")
     ))
 
-    holds(new Slot[uic.InputNumber, String](
+    holds(new SlotCase[uic.InputNumber, String](
         name = "text spun",
         bare = Present(uic.InputNumber().showButtons(true)),
         bind = uic.InputNumber().showButtons(true).text(_),

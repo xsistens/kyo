@@ -10,7 +10,7 @@ class DialogTest extends ReactiveValueContract:
 
     private def bare(using Frame) = uic.Dialog().header("Details")(p("body"))
 
-    holds(new Slot[Dialog, Boolean](
+    holds(new SlotCase[Dialog, Boolean](
         name = "open",
         bare = Present(bare),
         bind = bare.open(_),

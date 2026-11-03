@@ -210,7 +210,7 @@ class StepperTest extends ReactiveValueContract:
     private def headed(t: UI)(using Frame): Boolean < Sync = headersOf(t).map(_.nonEmpty)
 
     // The active header takes no click (it asks for nothing), so the gesture is on the last one.
-    holds(new Slot[uic.Stepper[Nothing], Int](
+    holds(new SlotCase[uic.Stepper[Nothing], Int](
         name = "active",
         bare = Present(steps),
         bind = steps.active(_),
@@ -228,7 +228,7 @@ class StepperTest extends ReactiveValueContract:
     private val values = List("one", "two")
 
     /** The value slot: unbound, the stepper is driven by position, so the slot has no unbound form of its own. */
-    private def valueSlot(using Frame) = new Slot[uic.Stepper[String], String](
+    private def valueSlot(using Frame) = new SlotCase[uic.Stepper[String], String](
         name = "value",
         bare = Absent,
         bind = valued.value(_),
@@ -246,7 +246,7 @@ class StepperTest extends ReactiveValueContract:
     holds(valueSlot)
 
     // onActiveChange hears a click in value mode too, with the index of the step whose value was asked for.
-    heardBy(new Slot[uic.Stepper[String], String](
+    heardBy(new SlotCase[uic.Stepper[String], String](
         name = "value, heard by onActiveChange",
         bare = Absent,
         bind = valued.value(_),
