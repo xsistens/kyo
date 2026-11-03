@@ -31,7 +31,7 @@ import kyo.UI.*
   */
 final case class Fieldset private (
     legendV: Maybe[TextValue] = Absent,
-    toggleableFlag: Boolean = false,
+    toggleableV: Maybe[BoolValue] = Absent,
     collapsedSlot: Slot[Boolean] = Slot(),
     idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
@@ -49,12 +49,15 @@ final case class Fieldset private (
       */
     def legend(v: String | Signal[String]): Fieldset = copy(legendV = Present(ReactiveValue(v)))
 
-    /** Renders the legend as the toggle button (`.p-fieldset-toggleable`); pair
-      * with [[collapsed]] to bind the collapse state. Default false.
+    /** Renders the legend as the toggle button (`.p-fieldset-toggleable`). Set, it decides alone, and a signal switches the
+      * button and the collapse in place. Without it a binding of [[collapsed]] turns them on, and an unbound fieldset is plain.
+      *
+      * On and unbound, the fieldset keeps the collapse state itself. Under a signal it holds the state while the switch is off,
+      * when the fieldset is plain and its content shows, and comes back to it.
       */
-    def toggleable(v: Boolean): Fieldset = copy(toggleableFlag = v)
+    def toggleable(v: Boolean | Signal[Boolean]): Fieldset = copy(toggleableV = Present(ReactiveValue(v)))
 
-    /** Binds the collapse state (only effective with `toggleable(true)`). A `SignalRef` binds two way: a press of the
+    /** Binds the collapse state, which turns the toggle on unless [[toggleable]] says otherwise. A `SignalRef` binds two way: a press of the
       * toggle writes it, then [[onCollapsedChange]] hears the new state. A plain `Signal` binds one way: the fieldset
       * follows it and only reports a press. A constant nobody hears is fixed: the fieldset keeps it and the toggle,
       * still reachable, changes nothing. Unbound, a toggleable fieldset keeps the state itself, starting expanded. A
@@ -70,9 +73,10 @@ final case class Fieldset private (
 
     private[uic] def render(using Frame): UI =
         // Unbound, a toggleable fieldset keeps its collapse state itself, starting expanded.
-        Slot.draw(collapsedSlot, Fieldset.collapsedName, start = false, on = ReactiveValue.Const(toggleableFlag))(s =>
-            copy(collapsedSlot = s).body
-        )
+        Slot.draw(collapsedSlot, Fieldset.collapsedName, start = false, on = toggleOn)(s => copy(collapsedSlot = s).body)
+
+    /** The switch as this fieldset reads it: set, it decides alone; unset, a binding of [[collapsed]] turns the toggle on. */
+    private def toggleOn: BoolValue = toggleableV.getOrElse(ReactiveValue.Const(collapsedSlot.binding.isDefined))
 
     private def body(using Frame): UI =
         // The toggle button's own aria-label is an attribute channel, and a channel can only
@@ -85,9 +89,10 @@ final case class Fieldset private (
 
         var shell = fieldset.cssClass("p-fieldset").cssClass("p-component")
         idV.foreach(v => shell = shell.id(v))
-        if toggleableFlag then shell = shell.cssClass("p-fieldset-toggleable")
-
-        val toggleSlot: Maybe[ReactiveValue[Boolean]] = if toggleableFlag then collapsedSlot.binding else Absent
+        val on = toggleOn
+        on match
+            case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-fieldset-toggleable")
+            case ReactiveValue.Dyn(sig) => shell = shell.cssClass("p-fieldset-toggleable", sig)
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
         val fixed = collapsedSlot.fixed
 
@@ -96,35 +101,35 @@ final case class Fieldset private (
             case Present(TextValue.Dyn(s))   => span.cssClass("p-fieldset-legend-label")(s)
             case Absent                      => span.cssClass("p-fieldset-legend-label")("")
 
+        // The whole button re-renders on toggle so the plus/minus glyph and aria-expanded track the state (a DIFFERENT element
+        // from the content, so replacing it never resets the content's collapse transition).
+        def toggleButton(c: Boolean): UI =
+            val b = button
+                .cssClass("p-fieldset-toggle-button")
+                .jsProp("type", "button")
+                .aria("expanded", (!c).toString)
+                .aria("label", legendConst.getOrElse("Toggle"))
+            val pressable =
+                if fixed then b.aria("disabled", "true")
+                else b.onClick(collapsedSlot.update(!_))
+            pressable(
+                GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon"),
+                labelSpan
+            )
+        end toggleButton
+
+        val collapse = collapsedSlot.reading(false)
+        // `UI.legend`, not the bare name: this class has its own `legend` setter, which shadows the element factory inside it.
         val legendUI: List[UI] =
-            toggleSlot match
-                case Present(slot) =>
-                    // The whole button re-renders on toggle so the plus/minus glyph and
-                    // aria-expanded track the state (a DIFFERENT element from the content,
-                    // so replacing it never resets the content's collapse transition).
-                    List(
-                        // `UI.legend`, not the bare name: this class has its own `legend` setter,
-                        // which shadows the element factory inside it.
-                        UI.legend.cssClass("p-fieldset-legend")(
-                            Reading.of(slot).render { c =>
-                                val b = button
-                                    .cssClass("p-fieldset-toggle-button")
-                                    .jsProp("type", "button")
-                                    .aria("expanded", (!c).toString)
-                                    .aria("label", legendConst.getOrElse("Toggle"))
-                                val pressable =
-                                    if fixed then b.aria("disabled", "true")
-                                    else b.onClick(collapsedSlot.update(!_))
-                                pressable(
-                                    GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon"),
-                                    labelSpan
-                                )
-                            }
-                        )
-                    )
-                case Absent if legendV.isDefined =>
-                    List(UI.legend.cssClass("p-fieldset-legend")(labelSpan))
-                case Absent => Nil
+            on match
+                case ReactiveValue.Const(true) => List(UI.legend.cssClass("p-fieldset-legend")(collapse.render(toggleButton)))
+                case ReactiveValue.Dyn(sig)    =>
+                    // The switch and the collapse are read as ONE region: off, the legend is the plain label.
+                    List(UI.legend.cssClass("p-fieldset-legend")(
+                        Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then toggleButton(c) else labelSpan)
+                    ))
+                case _ if legendV.isDefined => List(UI.legend.cssClass("p-fieldset-legend")(labelSpan))
+                case _                      => Nil
 
         val containerBase =
             div.cssClass("p-fieldset-content-container").role("region")(
@@ -132,9 +137,12 @@ final case class Fieldset private (
                     div.cssClass("p-fieldset-content")(UI.children(kids)*)
                 )
             )
-        val container: UI = toggleSlot match
-            case Present(slot) => Reading.of(slot).render(collapseContainer(_))
-            case Absent        => containerBase
+        val container: UI = on match
+            case ReactiveValue.Const(false) => containerBase
+            case ReactiveValue.Const(true)  => collapse.render(collapseContainer(_))
+            case ReactiveValue.Dyn(sig)     =>
+                // Off the fieldset is plain and its content shows; the collapse state is held, not applied.
+                Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c) else containerBase)
 
         shell(UI.children(legendUI :+ container)*)
     end body
