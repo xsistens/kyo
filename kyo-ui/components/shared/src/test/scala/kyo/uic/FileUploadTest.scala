@@ -54,4 +54,29 @@ class FileUploadTest extends ReactiveValueContract:
         ready = Present(elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty)))
     ))
 
+    "unbound, a blur after a pick reports the files picked" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Seq[UI.FilePayload]])
+            t    <- readyTree(uic.FileUpload().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(
+                elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty))
+            )
+            in  <- inputOf(t)
+            _   <- handled(in.attrs.onFileSelect.getOrElse(throw new AssertionError("the input takes no pick"))(Seq(report)))
+            _   <- handled(in.attrs.onBlur.getOrElse(throw new AssertionError("the input declares no blur")))
+            got <- seen.get
+        yield assert(got == Chunk(Seq(report)), s"reported $got")
+    }
+
+    "unbound, a blur before any pick reports no files" in {
+        for
+            seen <- Signal.initRef(Chunk.empty[Seq[UI.FilePayload]])
+            t    <- readyTree(uic.FileUpload().onBlur(v => seen.updateAndGet(_.append(v)).unit).render)(
+                elementsWithClass(_, "p-hidden-accessible").map(_.exists(_.attrs.onFileSelect.nonEmpty))
+            )
+            in  <- inputOf(t)
+            _   <- handled(in.attrs.onBlur.getOrElse(throw new AssertionError("the input declares no blur")))
+            got <- seen.get
+        yield assert(got == Chunk(Seq.empty[UI.FilePayload]), s"reported $got")
+    }
+
 end FileUploadTest
