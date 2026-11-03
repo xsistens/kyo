@@ -288,11 +288,6 @@ final case class Overlay private (
     /** Package-internal: the component a binding mistake is reported for, when a host hands its own binding on. */
     private[uic] def reportedAs(component: String): Overlay = copy(reportedAsV = component)
 
-    /** Package-internal: a host whose binding is not the reader's to see yet (a static placeholder over a signal that
-      * stands in for state the host has not allocated) keeps the overlay from reporting it.
-      */
-    private[uic] def quiet: Overlay = copy(openSlot = openSlot.quieted)
-
     private[uic] def render(using Frame): UI =
         // Shown while the binding says so: a constant needs no region, a signal is one boundary.
         val gated: UI = openSlot.binding match
