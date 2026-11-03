@@ -119,7 +119,7 @@ final case class SpeedDial private (
     /** The subscription tree over the fan state however it is bound. */
     private def wiredOver(base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
-        // ONE region (see [[Reading]]).
+        // ONE region (see [[ReactiveValue.and]]).
         MenuRender.readItems(entriesV).and(openSlot.reading(false)).render((items, o) =>
             copy(itemsV = items).body(o, live = true, base, focus)
         )

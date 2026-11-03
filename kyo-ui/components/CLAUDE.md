@@ -101,7 +101,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   of its own, and `Slot.draw` that with the placeholder drawn over `slot.standIn(start)` and the card in front, for a container.
   `Slot.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
   state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
-  the component a key. A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
+  the component a key. So a component that draws itself again for `disabled` reads that signal below the mount that holds its state,
+  never around it (`SlotCase.disable` holds the fields that do). A host that supplies the held value itself (DataTable's filter selects through `Select.current`) is bound
   and keeps nothing of its own, and so does a paginator a table or a view embeds. A hearer turns `contextMenuRow` on as well
   (decided 2026-10-31): unbound with an `onContextMenuRowChange` the table keeps the row itself and marks it, and unbound with
   nothing hearing the rows leave the browser its own menu.
@@ -199,7 +200,7 @@ honour it, or the same call means different things in different places with noth
 to say so. Contrast `HasElementId`, where each component genuinely was its own decision.
 
 - **A reactive slot on a model type is resolved by the HOST, before it builds rows.**
-  `MenuRender.resolveDisabled` folds every reactive slot in the tree into ONE subscription chain
+  `MenuRender.readDisabled` folds every reactive slot in the tree into ONE subscription chain
   and hands back items pinned to `Const`, so `MenuNav`, the navigable index set and the row
   builders all stay pure functions of a plain `Boolean` read through `constTrue`. This is
   `BoolValue.reactive` lifted from a value to a list.
@@ -242,13 +243,13 @@ Rules a new one follows:
   Ids that follow the options derive from ONE minted base (`$base-<n>`), never one mint per option, or a
   list that grows has rows without ids.
 - **Structural components take it too** (Tabs, Accordion, Breadcrumb, Galleria, Tree, TreeTable, Stepper
-  through `LiveEntry`; Carousel and Timeline through `Iterable[A] | Signal[Seq[A]]`, read with `Reading.concat`). Each
+  through `LiveEntry`; Carousel and Timeline through `Iterable[A] | Signal[Seq[A]]`, read with `ReactiveValue.concat`). Each
   exposes its list as `entries` and keeps the resolved copy (`tabList`, `nodeList`) only for what a render
   hands its body; a host that builds one internally hands it resolved entries (`Tree.rooted`), or its methods
   see an empty list. Rows that carry content the reader works in (tab and accordion panels) are a list keyed
   by their id (`foreachKeyed`), so a change to the list builds only the rows that are new, and state that a
   row shows per selection is a reactive class or attribute on the row, never a region over it. All rows share
-  one region (`Reading.children`), so Prime's sibling rules (`:first-child`, `:nth-child`, `~`) still see one
+  one region (`ReactiveValue.children`), so Prime's sibling rules (`:first-child`, `:nth-child`, `~`) still see one
   run. `GoldenRenderTest` ("every structural component draws its entries from a signal ...") holds them.
 - **Which submenus are open is ONE set of paths** (`Submenus`), not a ref per path: refs could only be
   allocated for the items the host was built with. A submenu panel is `Overlay.gated(subs.close(path))`.
@@ -800,11 +801,14 @@ refs themselves held the correct result.
 - **Combine the signals instead**: `a.combineLatest(b).render { case (x, y) => ... }` reads every
   value on every emission, so there is one region and nothing to be stale. `Signal.initConst`
   stands in for an unbound slot, and is built for exactly this pairing.
-- **`Reading` is the module's way to do that** (`Reading.scala`): `Reading.Fixed` / `Reading.Live`,
-  combined with `and` and rendered once. A combination of fixed values renders with no region at
-  all, so a static projection stays free of subscriptions. `Reading.of` / `optional` / `orElse`
-  lift the slots, `Reading.keyed` reads a set of flags as one map, `MenuRender.readDisabled` and
-  `readAll` the menu state, `SingleChoice.reading` and `SetBinding.signal` the choices.
+- **`ReactiveValue` is the module's way to do that**: `Const` / `Dyn`, combined with `and` and
+  rendered once. A combination of constants renders with no region at all, so a static projection
+  stays free of subscriptions. A slot is one already (`slot.reading(unbound)`); `optional` / `orElse`
+  lift the rest, `keyed` reads a set of flags as one map, `MenuRender.readDisabled` and `readAll` the
+  menu state, `SingleChoice.reading` and `SetBinding.signal` the choices. Wrap internal state with
+  `ReactiveValue.Dyn(ref)`, never `ReactiveValue(ref)`: the smart constructor dispatches on the runtime
+  class and would make the ref two way. `map` drops the ref, so a mapped value handed on through
+  `bound` binds one way.
 - **A panel the host gates itself is part of its one region.** A host that reads the open state
   renders the panel only while open and uses `Overlay.renderShown` (or `renderGated(open)` where
   the trigger stays), never `render`, whose own `when(openRef)` would be a second region inside.

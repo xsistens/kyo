@@ -253,7 +253,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     end drive
 
     /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
-    private def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
+    private[uic] def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
         Abort.run[Unit](Retry[Unit](Schedule.fixed(10.millis).maxDuration(within))(
             cond.map(ok => if ok then Kyo.unit else Abort.fail(()))
         )).map(_.isSuccess)
@@ -352,15 +352,15 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 if it.itemsV.nonEmpty then p :: loop(it.itemsV, p) else Nil
             }
         MenuItemScope.reading(entries) match
-            case Reading.Fixed(items) => loop(items, Nil)
-            case Reading.Live(_)      => throw new AssertionError("submenu paths are read from fixed entries")
+            case ReactiveValue.Const(items) => loop(items, Nil)
+            case ReactiveValue.Dyn(_)       => throw new AssertionError("submenu paths are read from fixed entries")
     end submenuPaths
 
     /** The root indices of a MegaMenu that open a panel. */
     private[uic] def panelPaths(entries: List[MegaMenuItemLiveEntry])(using Frame): List[List[Int]] =
         MegaMenuItemScope.reading(entries) match
-            case Reading.Fixed(items) => items.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
-            case Reading.Live(_)      => throw new AssertionError("panel paths are read from fixed entries")
+            case ReactiveValue.Const(items) => items.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
+            case ReactiveValue.Dyn(_)       => throw new AssertionError("panel paths are read from fixed entries")
 
     /** Paths of every group of a CascadeSelect's options. */
     private[uic] def groupPaths[A](c: CascadeSelect[A])(using Frame): List[List[Int]] =
@@ -372,8 +372,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 case _ => Nil
             }
         Entry.reading((), c.itemSources) match
-            case Reading.Fixed(roots) => loop(roots, Nil)
-            case Reading.Live(_)      => throw new AssertionError("group paths are read from fixed roots")
+            case ReactiveValue.Const(roots) => loop(roots, Nil)
+            case ReactiveValue.Dyn(_)       => throw new AssertionError("group paths are read from fixed roots")
     end groupPaths
 
     /** How many regions sit above the mount of the control drawn with `cls`. Unlike [[regionsAbove]] it stops at the

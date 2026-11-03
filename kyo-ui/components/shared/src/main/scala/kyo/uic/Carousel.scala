@@ -96,16 +96,13 @@ final case class Carousel[A] private (
     end items
 
     /** The items as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[A]] = Reading.concat(itemSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[A]] = ReactiveValue.concat(itemSources)
 
-    /** The items and the page, read as ONE region (see [[Reading]]): the page count and so the clamp follow the items. */
-    private def shown(r: Signal[Int])(using Frame): Reading[(List[A], Int)] = entries.and(Reading.Live(r))
+    /** The items and the page, read as ONE region (see [[ReactiveValue.and]]): the page count and so the clamp follow the items. */
+    private def shown(r: Signal[Int])(using Frame): ReactiveValue[(List[A], Int)] = entries.and(ReactiveValue.Dyn(r))
 
     /** The items as they are now, read when an autoplay step or a swipe needs their count. */
-    private def current(using Frame): List[A] < Sync =
-        entries match
-            case Reading.Fixed(as) => as
-            case Reading.Live(sig) => sig.current
+    private def current(using Frame): List[A] < Sync = entries.current
 
     /** The 0-based page (clamped into range at render). A `SignalRef` binds two way: a turn (a nav button, a dot, a
       * swipe, an autoplay step) writes it, then [[onPageChange]] hears the page. A plain `Signal` or a constant binds one
@@ -198,8 +195,8 @@ final case class Carousel[A] private (
         // Fixed items that make one page have nothing to cycle; a live list may grow into more, so it always gets the
         // fiber, and each step counts the pages it holds then.
         val idle = entries match
-            case Reading.Fixed(as) => pagesOf(as.size) <= 1
-            case Reading.Live(_)   => false
+            case ReactiveValue.Const(as) => pagesOf(as.size) <= 1
+            case ReactiveValue.Dyn(_)    => false
         if autoplayMsV <= 0 || idle then ()
         else
             Fiber.init {
@@ -312,13 +309,13 @@ final case class Carousel[A] private (
                     templateF.map(_(a)).getOrElse(stringToUI(a.toString))
                 )
         val itemEls: List[UI] = entries match
-            case Reading.Fixed(as) => as.zipWithIndex.map((a, i) => itemEl(a, i, as.size))
-            case Reading.Live(sig) =>
+            case ReactiveValue.Const(as) => as.zipWithIndex.map((a, i) => itemEl(a, i, as.size))
+            case ReactiveValue.Dyn(sig)  =>
                 given CanEqual[Chunk[(A, Int)], Chunk[(A, Int)]] = CanEqual.derived
                 List(sig.map(as => Chunk.from(as.map(a => (a, as.size)))).foreachIndexed((i, an) => itemEl(an._1, i, an._2)))
         val initial = entries match
-            case Reading.Fixed(as) => as.size
-            case Reading.Live(_)   => 0
+            case ReactiveValue.Const(as) => as.size
+            case ReactiveValue.Dyn(_)    => 0
 
         var strip = div
             .cssClass("p-carousel-item-list")

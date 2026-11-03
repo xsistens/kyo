@@ -207,13 +207,19 @@ final case class Button private (
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = copy(extraChildren = extraChildren ++ cs)
 
-    // Resolve any reactive (Dyn) disabled / aria-disabled slots to their current boolean first
-    // (each re-renders its own boundary on emission, like TextValue.Dyn), then build the element.
+    // The three switches are read as ONE region (see [[ReactiveValue.and]]), pinned back into the slots as constants so the element reads
+    // plain values. With none of them a signal the button draws no region and pays for no reading.
     private[uic] def render(using Frame): UI =
-        BoolValue.reactive(disabledV): d =>
-            BoolValue.reactive(ariaDisabledV): ad =>
-                BoolValue.reactive(loadingV): l =>
-                    copy(disabledV = d, ariaDisabledV = ad, loadingV = l).renderResolved
+        if disabledV.dynSig.isEmpty && ariaDisabledV.dynSig.isEmpty && loadingV.dynSig.isEmpty then renderResolved
+        else
+            ReactiveValue.optional(disabledV).and(ReactiveValue.optional(ariaDisabledV)).and(ReactiveValue.optional(loadingV)).render {
+                case ((d, ad), l) =>
+                    copy(
+                        disabledV = d.map(BoolValue.Const(_)),
+                        ariaDisabledV = ad.map(BoolValue.Const(_)),
+                        loadingV = l.map(BoolValue.Const(_))
+                    ).renderResolved
+            }
 
     /** The resolved busy state, read after the reactive slots are pinned to their current constants. */
     private def loadingNow: Boolean = loadingV.constTrue

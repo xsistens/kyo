@@ -73,16 +73,10 @@ final private[uic] case class Slot[A](
     def update(step: A => A)(using Frame): UI.Action = ReactiveValue.update(binding, step, hearer)
 
     /** What one render reads of the slot, with `unbound` standing in where nothing is bound. */
-    def reading(unbound: A)(using CanEqual[A, A], Frame): Reading[A] =
-        binding match
-            case Present(v) => Reading.of(v)
-            case _          => Reading.Fixed(unbound)
+    def reading(unbound: A): ReactiveValue[A] = binding.getOrElse(ReactiveValue.Const(unbound))
 
     /** The value at this moment, with `unbound` standing in where nothing is bound. */
-    def current(unbound: A)(using Frame): A < Sync =
-        binding match
-            case Present(v) => v.current
-            case _          => unbound
+    def current(unbound: A)(using Frame): A < Sync = reading(unbound).current
 
     /** The binding as the caller gave it, for a native setter or a component a host embeds. */
     def bound: Maybe[A | Signal[A]] = binding.map(_.bound)

@@ -86,7 +86,8 @@ class InputNumberTest extends ReactiveValueContract:
         answers = editable,
         saysFixed = readonlyField,
         ready = Present(typing(_)),
-        startText = Present("4.")
+        startText = Present("4."),
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     holds(new SlotCase[uic.InputNumber, String](
@@ -104,7 +105,8 @@ class InputNumberTest extends ReactiveValueContract:
         // mount, only a region around the field itself, which holds no button to act on.
         fixedOn = Present(number(_)),
         saysFixed = readonlyField,
-        startText = Present("4.")
+        startText = Present("4."),
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     "a number its owner does not take is put back" in {

@@ -37,7 +37,7 @@ final case class MenuItem private (
       * on the click that opened it.
       *
       * Resolved by the host BEFORE it builds rows, through
-      * [[MenuRender.resolveDisabled]], so everything downstream (the navigable index
+      * [[MenuRender.readDisabled]], so everything downstream (the navigable index
       * set, `MenuNav.skip`, the `.p-disabled` class, whether an activate effect is
       * attached) stays a pure function of a plain `Boolean` and reads it through
       * `constTrue`. A host that forgets to resolve reads `false`, which is the same
@@ -66,7 +66,7 @@ final case class MenuItem private (
       * position survives the navigation that a `Routes.current.render { … }` around the whole
       * strip would have thrown away.
       *
-      * That is also why this needs none of [[MenuRender.resolveDisabled]]'s machinery, which
+      * That is also why this needs none of [[MenuRender.readDisabled]]'s machinery, which
       * `disabled` does need: being current changes nothing structural (not the navigable index
       * set, not `MenuNav.skip`, not whether an activate effect is attached), so there is nothing
       * downstream that must read it as a plain `Boolean`.
@@ -92,7 +92,7 @@ final case class MenuItem private (
     /** Package-internal: hosts (MegaMenu) carry an already-deferred effect over. */
     private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = copy(actionV = eff)
 
-    /** Package-internal: [[MenuRender.resolveDisabled]] pins the resolved slot back in.
+    /** Package-internal: [[MenuRender.readDisabled]] pins the resolved slot back in.
       * A writer rather than `copy`, because the constructor is private and `MenuRender`
       * is not this class.
       */
@@ -170,7 +170,7 @@ object MenuItemScope:
 
     private[uic] def resolve(entries: Seq[MenuItemEntry]): List[MenuItem] = Entry.resolve(scope, entries)
 
-    private[uic] def reading(entries: Seq[MenuItemLiveEntry])(using Frame): Reading[List[MenuItem]] = Entry.reading(scope, entries)
+    private[uic] def reading(entries: Seq[MenuItemLiveEntry])(using Frame): ReactiveValue[List[MenuItem]] = Entry.reading(scope, entries)
 end MenuItemScope
 
 /** A titled group of a MegaMenu column, built directly or as `_.group(...)` (see [[MenuGroupScope]]). */
@@ -204,7 +204,7 @@ end MenuGroupScope
 final private[uic] class Anchored[S] private (ref: SignalRef[Anchored.Snap[S]]):
 
     /** The value and its roots, for the host's one region. */
-    def reading: Reading[Anchored.Snap[S]] = Reading.Live(ref)
+    def reading: ReactiveValue[Anchored.Snap[S]] = ReactiveValue.Dyn(ref)
 
     /** The value as last written, untranslated: for tests and for state that means the same against any roots. */
     def get(using Frame): S < Sync = ref.get.map(_.value)
@@ -309,7 +309,7 @@ private[uic] object Rooted:
 final private[uic] class Submenus private (paths: Anchored[Set[List[Int]]]):
 
     /** The open paths and their roots, for the host's one region. */
-    def reading: Reading[Anchored.Snap[Set[List[Int]]]] = paths.reading
+    def reading: ReactiveValue[Anchored.Snap[Set[List[Int]]]] = paths.reading
 
     /** The open paths now, untranslated. */
     def openPaths(using Frame): Set[List[Int]] < Sync = paths.get
@@ -375,13 +375,7 @@ private[uic] object MenuRender:
         end match
     end pinDisabled
 
-    /** Resolves every reactive `disabled` in the tree before the host builds rows, and
-      * hands `f` a list whose slots are all `Const`: [[readDisabled]] rendered on its own.
-      */
-    def resolveDisabled(items: List[MenuItem])(f: List[MenuItem] => UI)(using Frame): UI =
-        readDisabled(items).render(f)
-
-    /** Every reactive `disabled` in the tree as ONE [[Reading]] of the items, each slot pinned to `Const`, for a host that
+    /** Every reactive `disabled` in the tree as ONE [[ReactiveValue]] of the items, each slot pinned to `Const`, for a host that
       * reads it beside its own state in one region.
       *
       * The value-level [[BoolValue.reactive]] over a LIST, read the same way [[Submenus.reading]]
@@ -394,26 +388,27 @@ private[uic] object MenuRender:
       * With no reactive slot anywhere the reading is fixed and adds no subscription at
       * all, so a menu of constants renders exactly as it did.
       */
-    def readDisabled(items: List[MenuItem])(using Frame): Reading[List[MenuItem]] =
+    def readDisabled(items: List[MenuItem])(using Frame): ReactiveValue[List[MenuItem]] =
         pinned(dynamicDisabled(items), items)(pinDisabled)
 
-    /** A host's rows as ONE [[Reading]]: the entries a setter took, signals among them read in place, and every reactive
+    /** A host's rows as ONE [[ReactiveValue]]: the entries a setter took, signals among them read in place, and every reactive
       * `disabled` resolved as [[readDisabled]] does. Fixed while nothing in it is reactive.
       */
-    def readItems(entries: List[MenuItemLiveEntry])(using Frame): Reading[List[MenuItem]] =
+    def readItems(entries: List[MenuItemLiveEntry])(using Frame): ReactiveValue[List[MenuItem]] =
         MenuItemScope.reading(entries) match
-            case Reading.Fixed(items) => readDisabled(items)
-            case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => readDisabled(items).signal))
+            case ReactiveValue.Const(items) => readDisabled(items)
+            case ReactiveValue.Dyn(sig)     => ReactiveValue.Dyn(sig.switchMap(items => readDisabled(items).signal))
 
     /** [[readItems]] beside the RAW root items it was resolved from, which are what [[Anchored]] state is matched against.
       * Raw, because resolving a reactive `disabled` copies the items it pins, so the rows a host draws are new values on
       * every emission; the raw ones are the setter's fixed entries, resolved once, and the app's own instances from a
       * signal.
       */
-    def readRooted(entries: List[MenuItemLiveEntry])(using Frame): Reading[Rooted[MenuItem]] =
+    def readRooted(entries: List[MenuItemLiveEntry])(using Frame): ReactiveValue[Rooted[MenuItem]] =
         MenuItemScope.reading(entries) match
-            case Reading.Fixed(items) => readDisabled(items).map(pinned => Rooted(items, pinned))
-            case Reading.Live(sig) => Reading.Live(sig.switchMap(items => readDisabled(items).map(pinned => Rooted(items, pinned)).signal))
+            case ReactiveValue.Const(items) => readDisabled(items).map(pinned => Rooted(items, pinned))
+            case ReactiveValue.Dyn(sig)     =>
+                ReactiveValue.Dyn(sig.switchMap(items => readDisabled(items).map(pinned => Rooted(items, pinned)).signal))
     end readRooted
 
     /** The reading itself, shared by the two traversals: every reactive slot as one `combineLatestAll`, each value
@@ -421,27 +416,23 @@ private[uic] object MenuRender:
       */
     private def pinned[T](dyns: List[(List[Int], Signal[Boolean])], seed: T)(
         pin: (T, List[Int], Boolean) => T
-    )(using Frame): Reading[T] =
-        if dyns.isEmpty then Reading.Fixed(seed)
+    )(using Frame): ReactiveValue[T] =
+        if dyns.isEmpty then ReactiveValue.Const(seed)
         else
             given CanEqual[T, T] = CanEqual.derived
             val paths            = dyns.map(_._1)
-            Reading.Live(Signal.combineLatestAll(dyns.map(_._2)).map { values =>
+            ReactiveValue.Dyn(Signal.combineLatestAll(dyns.map(_._2)).map { values =>
                 paths.zip(values).foldLeft(seed) { case (acc, (p, v)) => pin(acc, p, v) }
             })
     end pinned
 
-    /** [[resolveDisabled]] for MegaMenu, whose leaves sit two containers deeper:
+    /** [[readDisabled]] for MegaMenu, whose leaves sit two containers deeper:
       * `MegaMenuItem.columnsV : List[List[MenuGroup]]`, each group holding the
       * `MenuItem`s. The root rows carry their own plain-`Boolean` `disabled` and are
       * untouched; only the leaves have the reactive slot. Paths are
       * `[root, column, group, item]`.
       */
-    def resolveMegaDisabled(items: List[MegaMenuItem])(f: List[MegaMenuItem] => UI)(using Frame): UI =
-        readMegaDisabled(items).render(f)
-
-    /** [[readDisabled]] for MegaMenu's leaves (see [[resolveMegaDisabled]]). */
-    def readMegaDisabled(items: List[MegaMenuItem])(using Frame): Reading[List[MegaMenuItem]] =
+    def readMegaDisabled(items: List[MegaMenuItem])(using Frame): ReactiveValue[List[MegaMenuItem]] =
         val dyns =
             for
                 (root, ri)  <- items.zipWithIndex

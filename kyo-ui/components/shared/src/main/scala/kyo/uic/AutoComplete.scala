@@ -350,7 +350,7 @@ final case class AutoComplete[A] private (
         using Frame
     ): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(open).and(Reading.Live(hi)).and(Reading.Live(all))
+        val panel    = ReactiveValue.Dyn(open).and(ReactiveValue.Dyn(hi)).and(ReactiveValue.Dyn(all))
         validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).render {
             case (((((o, h), a), cur), opts)) =>
                 val self = copy(optionsV = opts)
@@ -359,9 +359,9 @@ final case class AutoComplete[A] private (
     end wired
 
     /** The typed text: a bound signal is read live, constants and unbound fields hold a fixed query. Read beside the
-      * panel's state as ONE region (see [[Reading]]).
+      * panel's state as ONE region (see [[ReactiveValue.and]]).
       */
-    private def text(using Frame): Reading[String] =
+    private def text(using Frame): ReactiveValue[String] =
         valueSlot.reading("")
 
     /** How a suggestion matches the typed text: [[filter]], else the start of any word of the label. */

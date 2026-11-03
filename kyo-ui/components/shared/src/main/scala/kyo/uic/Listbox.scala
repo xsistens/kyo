@@ -398,12 +398,12 @@ final case class Listbox[K] private (
         idBase: Maybe[String],
         validity: FieldValidity
     )(using Frame): UI =
-        // The selection, the query and the highlight are read as ONE region (see [[Reading]]): a row click writes the
+        // The selection, the query and the highlight are read as ONE region (see [[ReactiveValue.and]]): a row click writes the
         // highlight and the selection, and a nested region would repaint the values it closed over.
         val shown = shownQuery(q)
-        val sel   = selectedRef.fold(Reading.Fixed(Set.empty[K]))(s => Reading.Live(s.signal))
-        val query = shown.fold(Reading.Fixed(""))(Reading.Live(_))
-        val hi    = hiRef.fold(Reading.Fixed(-1))(Reading.Live(_))
+        val sel   = selectedRef.fold(ReactiveValue.Const(Set.empty[K]))(s => ReactiveValue.Dyn(s.signal))
+        val query = ReactiveValue.orElse(shown, "")
+        val hi    = ReactiveValue.orElse(hiRef, -1)
         validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, qv), h), opts) =>
             copy(optionsV = opts).body(s, qv, if shown.isDefined then q else Slot(), hiRef, idBase, h)(validity)
         })

@@ -110,10 +110,10 @@ final case class TieredMenu private (
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight, the submenus and
-        // a popup's open state are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus (and
+        // a popup's open state are read as ONE region (see [[ReactiveValue.and]]): a key writes the highlight and the submenus (and
         // a popup's ref) together, and a nested region would repaint the values it closed over. Both follow their items
         // over the roots shown ([[Anchored]]).
-        val popup = Reading.optional(popupSlot.binding)
+        val popup = ReactiveValue.optional(popupSlot.binding)
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).and(popup).render {
             case (((Rooted(roots, items), f), open), shown) =>
                 val fv = focus.view(f, roots)

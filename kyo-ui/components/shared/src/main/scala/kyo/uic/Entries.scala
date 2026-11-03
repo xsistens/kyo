@@ -55,8 +55,8 @@ private[uic] object Entry:
       *
       * A signal is matched before a function, since neither an entry type nor a builder is a `Signal`.
       */
-    def reading[A, S](scope: S, entries: Seq[LiveEntry[A, S]])(using Frame): Reading[List[A]] =
-        Reading.concat(entries.map {
+    def reading[A, S](scope: S, entries: Seq[LiveEntry[A, S]])(using Frame): ReactiveValue[List[A]] =
+        ReactiveValue.concat(entries.map {
             case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
             case entry          => resolve[A, S](scope, Seq(entry.asInstanceOf[Entry[A, S]]))
         })
