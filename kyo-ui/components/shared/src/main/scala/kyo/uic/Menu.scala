@@ -246,9 +246,9 @@ final case class Menu private (
                 // placed outside the mount would rebuild the mount on every emission, taking the
                 // open state with it. Inside the mount's content it re-renders the rows and nothing
                 // else.
-                // The items, the highlight and a popup's open state are read as ONE region (see [[Reading]]): leaving
+                // The items, the highlight and a popup's open state are read as ONE region (see [[ReactiveValue.and]]): leaving
                 // writes the popup ref and the highlight together, and a nested region would repaint what it closed over.
-                val popup = Reading.optional(popupSlot.binding)
+                val popup = ReactiveValue.optional(popupSlot.binding)
                 // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
                 MenuRender.readRooted(entriesV).and(hi.reading).and(popup).render { case ((Rooted(roots, items), h), shown) =>
                     val hv = hi.view(h, roots)(using Menu.rowRebase)

@@ -270,26 +270,26 @@ final case class TreeSelect[K] private (
         idBase: String
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = openSlot.reading(false).and(exp.reading(Set.empty[K])).and(Reading.Live(hi))
+        val panel    = openSlot.reading(false).and(exp.reading(Set.empty[K])).and(ReactiveValue.Dyn(hi))
         panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
             copy(nodeList = rs).bodyStatic(sel, e, o, Present(TreeSelect.State(openSlot, exp, hi, h, idBase)), ph, ld, validity)
         }
     end wiredOver
 
     /** The roots as ONE reading, in the order the setters received them: fixed while none of them is a signal. */
-    private[uic] def roots(using Frame): Reading[List[TreeNode[K]]] =
+    private[uic] def roots(using Frame): ReactiveValue[List[TreeNode[K]]] =
         TreeNodeScope.reading(nodeSources.flatMap {
             case TreeSelect.NodeSource.Entries(es)  => es
             case TreeSelect.NodeSource.Projected(f) => List(f(summon[Frame]))
         })
 
     /** What the field shows whatever its panel does: the selected ids, whether the nodes are still loading, and the
-      * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * placeholder. Read beside the panel's state as ONE region (see [[ReactiveValue.and]]); the validity is stamped on the field,
       * never read here.
       */
-    private def shown(using Frame): Reading[(Set[K], Boolean, Maybe[String])] =
-        val held: Reading[Set[K]] = valueSlot.reading(Set.empty[K])
-        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((sel, ld), ph) =>
+    private def shown(using Frame): ReactiveValue[(Set[K], Boolean, Maybe[String])] =
+        val held: ReactiveValue[Set[K]] = valueSlot.reading(Set.empty[K])
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((sel, ld), ph) =>
             (sel, ld.getOrElse(false), ph)
         }
     end shown

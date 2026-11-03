@@ -293,15 +293,15 @@ final case class CascadeSelect[A] private (
     end wiredOver
 
     /** The roots as ONE reading: fixed while none of them came as a signal. */
-    private def roots(using Frame): Reading[List[CascadeItem[A]]] = Entry.reading((), itemSources)
+    private def roots(using Frame): ReactiveValue[List[CascadeItem[A]]] = Entry.reading((), itemSources)
 
     /** What the field shows whatever its panels do: the held leaf, whether the options are still loading, and the
-      * placeholder. Read beside the panels' state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * placeholder. Read beside the panels' state as ONE region (see [[ReactiveValue.and]]); the validity is stamped on the field,
       * never read here.
       */
-    private def shown(using Frame): Reading[(Maybe[A], Boolean, Maybe[String])] =
-        val held: Reading[Maybe[A]] = choice.fold(Reading.Fixed(Maybe.empty[A]))(_.reading)
-        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
+    private def shown(using Frame): ReactiveValue[(Maybe[A], Boolean, Maybe[String])] =
+        val held: ReactiveValue[Maybe[A]] = choice.fold(ReactiveValue.Const(Maybe.empty[A]))(_.reading)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
             (h, ld.getOrElse(false), ph)
         }
     end shown

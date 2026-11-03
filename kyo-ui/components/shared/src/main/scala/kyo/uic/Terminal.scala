@@ -124,7 +124,7 @@ final case class Terminal private (
         scrollTo: String => UI.Action,
         paints: Maybe[SignalRef[Int]]
     )(using Frame): UI =
-        val painted            = paints.fold(Reading.Fixed(0))(Reading.Live(_))
+        val painted            = ReactiveValue.orElse(paints, 0)
         val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
         // The paint count is read and dropped: it is there so a repaint draws the prompt empty again.
         commandsSlot.reading(Seq.empty).and(painted).render((h, _) => body(h, Present(lastId), Present(scrollTo), repaint))

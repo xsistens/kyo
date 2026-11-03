@@ -93,7 +93,7 @@ final case class Menubar private (
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
-        // are read as ONE region (see [[Reading]]): a key writes the highlight and the submenus together, and a nested
+        // are read as ONE region (see [[ReactiveValue.and]]): a key writes the highlight and the submenus together, and a nested
         // region would repaint the values it closed over. Both follow their items over the roots shown ([[Anchored]]).
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).render { case ((Rooted(roots, items), f), open) =>
             val fv = focus.view(f, roots)

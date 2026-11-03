@@ -23,12 +23,12 @@ private[uic] enum SingleChoice[A]:
     case Value(v: ReactiveValue[A])
     case Optional(v: ReactiveValue[Maybe[A]])
 
-    /** The held option as a [[Reading]], `Absent` for none, for a host that reads it beside its other state in one region. */
-    def reading(using CanEqual[A, A], Frame): Reading[Maybe[A]] =
+    /** The held option as a [[ReactiveValue]], `Absent` for none, for a host that reads it beside its other state in one region. */
+    def reading(using CanEqual[A, A], Frame): ReactiveValue[Maybe[A]] =
         this match
-            case Value(ReactiveValue.Dyn(sig)) => Reading.Live(sig.map(a => Present(a)))
-            case Value(ReactiveValue.Const(a)) => Reading.Fixed(Present(a))
-            case Optional(v)                   => Reading.of(v)
+            case Value(ReactiveValue.Dyn(sig)) => ReactiveValue.Dyn(sig.map(a => Present(a)))
+            case Value(ReactiveValue.Const(a)) => ReactiveValue.Const(Present(a))
+            case Optional(v)                   => v
 
     /** The held option as it is at this moment. */
     def current(using Frame): Maybe[A] < Sync =
@@ -125,8 +125,8 @@ end SingleChoice
   */
 final private[uic] case class MultiChoice[A](v: ReactiveValue[Set[A]]):
 
-    /** The held options as a [[Reading]], for a host that reads them beside its other state in one region. */
-    def reading(using Frame): Reading[Set[A]] = Reading.of(v)
+    /** The held options as a [[ReactiveValue]], for a host that reads them beside its other state in one region. */
+    def reading(using Frame): ReactiveValue[Set[A]] = v
 
     /** Renders `f` with the held options. */
     def render(f: Set[A] => UI)(using Frame): UI = reading.render(f)
@@ -204,8 +204,8 @@ private[uic] object SetBinding:
         // Ids are compared by their own `equals`, as everywhere a model carries its id (see `ListItem`).
         given CanEqual[Set[K], Set[K]] = CanEqual.derived
         new SetBinding[K]:
-            def render(f: Set[K] => UI)(using Frame): UI             = Reading.of(v).render(f)
-            def signal(using Frame): Signal[Set[K]]                  = Reading.of(v).signal
+            def render(f: Set[K] => UI)(using Frame): UI             = v.render(f)
+            def signal(using Frame): Signal[Set[K]]                  = v.signal
             def read(f: Set[K] => UI.Action)(using Frame): UI.Action = current.map(f)
             def heard[R](report: Maybe[R]): Boolean                  = ReactiveValue.heard(Present(v), report)
             def fixed[R](report: Maybe[R]): Boolean                  = ReactiveValue.fixed(Present(v), report)

@@ -29,7 +29,10 @@ object TreeTableNodeScope:
     private[uic] def resolve[A](entries: Seq[TreeTableNodeEntry[A]]): List[TreeTableNode[A]] =
         Entry.resolve(new TreeTableNodeScope[A], entries)
 
-    private[uic] def reading[A](entries: Seq[TreeTableNodeLiveEntry[A]])(using CanEqual[A, A], Frame): Reading[List[TreeTableNode[A]]] =
+    private[uic] def reading[A](entries: Seq[TreeTableNodeLiveEntry[A]])(using
+        CanEqual[A, A],
+        Frame
+    ): ReactiveValue[List[TreeTableNode[A]]] =
         Entry.reading(new TreeTableNodeScope[A], entries)
 end TreeTableNodeScope
 
@@ -97,7 +100,7 @@ final case class TreeTable[A] private (
     def nodes(ns: TreeTableNodeLiveEntry[A]*): TreeTable[A] = copy(nodeSources = nodeSources ++ ns)
 
     /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[TreeTableNode[A]]] = TreeTableNodeScope.reading(nodeSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[TreeTableNode[A]]] = TreeTableNodeScope.reading(nodeSources)
 
     /** Stable row identity: the expansion/selection key and the event payloads.
       * Required for reliable expansion/selection (the fallback is the row's
@@ -285,17 +288,17 @@ final case class TreeTable[A] private (
         val seed: String => UI.Action = cursorRef match
             case Present(r) => (k: String) => r.set(Present(k))
             case Absent     => (_: String) => ()
-        // Everything the table reads is ONE region (see [[Reading]]): a key writes the expansion, the cursor and the
+        // Everything the table reads is ONE region (see [[ReactiveValue.and]]): a key writes the expansion, the cursor and the
         // selection together, and a region nested per signal would repaint the rows against the values it closed over.
         // The reactive `visible` and `sortable` flags are resolved here too, each to a plain boolean.
-        val visible  = Reading.keyed(cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig))))
-        val sortable = Reading.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig))))
+        val visible  = ReactiveValue.keyed(cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig))))
+        val sortable = ReactiveValue.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig))))
         // The bound rows are matched to keys inside the region, against the roots it read: without a [[rowKey]] a row's
         // key is its place in the tree, which a live list moves.
         val exp    = expandedSlot.reading(Set.empty[A])
         val sel    = selectedSlot.reading(Set.empty[A])
         val sort   = sortSlot.reading(List.empty[SortKey])
-        val cursor = Reading.orElse(cursorRef, Absent: Maybe[String])
+        val cursor = ReactiveValue.orElse(cursorRef, Absent: Maybe[String])
         entries.and(visible).and(sortable).and(exp).and(sel).and(sort).and(cursor).render {
             case ((((((ns, vis), flags), e), s), so), cu) =>
                 val table = copy(nodeList = ns)

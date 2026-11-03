@@ -47,7 +47,7 @@ object TreeNodeScope:
     private[uic] def resolve[K](entries: Seq[TreeNodeEntry[K]]): List[TreeNode[K]] =
         Entry.resolve(scope.asInstanceOf[TreeNodeScope[K]], entries)
 
-    private[uic] def reading[K](entries: Seq[TreeNodeLiveEntry[K]])(using Frame): Reading[List[TreeNode[K]]] =
+    private[uic] def reading[K](entries: Seq[TreeNodeLiveEntry[K]])(using Frame): ReactiveValue[List[TreeNode[K]]] =
         Entry.reading(scope.asInstanceOf[TreeNodeScope[K]], entries)
 end TreeNodeScope
 
@@ -113,7 +113,7 @@ final case class Tree[K] private (
     def nodes(ns: TreeNodeLiveEntry[K]*): Tree[K] = copy(nodeSources = nodeSources ++ ns)
 
     /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[TreeNode[K]]] = TreeNodeScope.reading(nodeSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[TreeNode[K]]] = TreeNodeScope.reading(nodeSources)
 
     /** This tree with `ns` as its roots, already resolved: what a host that read the roots itself hands over, so every
       * method (the key handler, the cascade) sees them, and not only a render that reads the sources again.
@@ -230,13 +230,13 @@ final case class Tree[K] private (
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))
 
     /** The roots, the expansion, the selection and the highlight around one [[body]] render, read as ONE region (see
-      * [[Reading]]): a key writes the highlight, the expansion and the selection together, and a nested region would
+      * [[ReactiveValue]]): a key writes the highlight, the expansion and the selection together, and a nested region would
       * repaint the values it closed over.
       */
     private def subscribed(keyboard: Maybe[(SignalRef[Int], String)])(using Frame): UI =
         val exp = expandedSlot.reading(Set.empty[K])
         val sel = selectedSlot.reading(Set.empty[K])
-        val hi  = keyboard.fold(Reading.Fixed(-1))((ref, _) => Reading.Live(ref))
+        val hi  = keyboard.fold(ReactiveValue.Const(-1))((ref, _) => ReactiveValue.Dyn(ref))
         entries.and(exp).and(sel).and(hi).render { case (((ns, e), s), h) =>
             rooted(ns).body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
         }

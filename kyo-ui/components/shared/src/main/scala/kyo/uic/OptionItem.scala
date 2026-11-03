@@ -47,9 +47,9 @@ object OptionItem:
     /** A picker's sources as ONE reading of its rows, in order: fixed while none of them is a signal, so a picker of plain
       * options draws no region for them.
       */
-    private[uic] def reading[A](sources: List[OptionSource[A]])(using Frame): Reading[List[OptionItem[A]]] =
+    private[uic] def reading[A](sources: List[OptionSource[A]])(using Frame): ReactiveValue[List[OptionItem[A]]] =
         given CanEqual[Seq[OptionItem[A]], Seq[OptionItem[A]]] = CanEqual.derived
-        Reading.concat(sources.map {
+        ReactiveValue.concat(sources.map {
             case OptionSource.Values(sig) => sig.map(_.map(OptionItem.Item(_)))
             case OptionSource.Rows(sig)   => sig
             case OptionSource.Fixed(rows) => rows

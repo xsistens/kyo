@@ -458,7 +458,7 @@ final case class Select[A] private (
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(openSlot.reading(false).signal)).and(Reading.Live(hi)).and(q.reading(""))
+        val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
             self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
@@ -467,14 +467,14 @@ final case class Select[A] private (
 
     /** What the field shows whatever its panel does: the held option, whether the options are still loading, and the
       * placeholder. Hosts supply `currentV` resolved, a bound ref is read live, an unbound select is empty. Read beside
-      * the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field, never read here.
+      * the panel's state as ONE region (see [[ReactiveValue.and]]); the validity is stamped on the field, never read here.
       */
-    private def shown(using Frame): Reading[(Maybe[A], Boolean, Maybe[String])] =
-        val held: Reading[Maybe[A]] =
+    private def shown(using Frame): ReactiveValue[(Maybe[A], Boolean, Maybe[String])] =
+        val held: ReactiveValue[Maybe[A]] =
             currentV match
-                case Present(cur) => Reading.Fixed(cur)
-                case Absent       => choice.fold(Reading.Fixed(Maybe.empty[A]))(_.reading)
-        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
+                case Present(cur) => ReactiveValue.Const(cur)
+                case Absent       => choice.fold(ReactiveValue.Const(Maybe.empty[A]))(_.reading)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
             (h, ld.getOrElse(false), ph)
         }
     end shown
