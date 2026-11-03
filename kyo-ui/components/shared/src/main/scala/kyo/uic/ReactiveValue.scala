@@ -5,9 +5,12 @@ import kyo.UI.*
 
 /** Generic const-or-reactive carrier: either a constant `A` or a `Signal[A]` that a
   * component realizes reactively (a text node, a boolean attribute, a class swap, ...).
-  * The shared shape behind the domain aliases, e.g. `type SeverityValue =
-  * ReactiveValue[Severity]`. [[TextValue]] and [[BoolValue]] predate this and keep their
-  * own type-specific helpers, but are the same `Const | Dyn` shape.
+  * The shared shape behind the domain aliases: `type SeverityValue = ReactiveValue[Severity]`, and
+  * [[TextValue]] and [[BoolValue]], which add their type-specific helpers.
+  *
+  * It is also what one render of a control reads, combined with [[and]] and drawn with [[render]] or
+  * [[children]], whether a caller bound the value or the control holds it in a ref of its own. A
+  * value read that way is only read: [[map]] drops the ref, and a write goes through the [[Slot]].
   *
   * How a `Dyn` value updates is the component's choice (Signal.render for a text node,
   * the boolean-attribute channel for `disabled`, the class channel for a severity accent).
@@ -136,7 +139,7 @@ private[uic] object ReactiveValue:
       * `Signal` (all UI value slots: Boolean/String/enum/Int/Double).
       *
       * The `SignalRef` case comes FIRST and is what makes one setter enough for the editable slots
-      * (Slider, Knob, Rating, ProgressBar): handing a component something writable means "write back
+      * (Slider, Knob, Rating): handing a component something writable means "write back
       * to me". `Signal` is sealed and `SignalRef` is its only named subclass, so the two reactive cases
       * are exact and total, not a heuristic.
       *
@@ -238,7 +241,7 @@ end ReactiveValue
 /** A two-way reactive binding: a writable `SignalRef`. IS-A [[ReactiveValue.Dyn]] (and hence a
   * [[ReactiveValue]]) because a `SignalRef[A]` is a `Signal[A]` (so it reads exactly like a one-way
   * reactive value), while additionally exposing [[ref]] for write-back. Editable value slots
-  * (Slider/Rating/Knob/ProgressBar) match `case ReactiveVariable(ref)` to enable two-way binding;
+  * (Slider/Rating/Knob) match `case ReactiveVariable(ref)` to enable two-way binding;
   * read-only slots never construct one, and match it transparently as a `Dyn`.
   */
 final private[uic] case class ReactiveVariable[A](ref: SignalRef[A]) extends ReactiveValue.Dyn[A]:
