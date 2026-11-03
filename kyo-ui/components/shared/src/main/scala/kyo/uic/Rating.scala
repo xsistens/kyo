@@ -35,8 +35,7 @@ import scala.annotation.targetName
   * or the first star's while none is checked.
   */
 final case class Rating private (
-    valueBinding: Maybe[ReactiveValue[Int]] = Absent,
-    doubleBinding: Maybe[ReactiveValue[Double]] = Absent,
+    valueSlot: Slot[Int] = Slot(),
     starsV: Int = 5,
     readonlyFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
@@ -47,7 +46,6 @@ final case class Rating private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Int => UI.Action] = Absent,
     onBlurDoubleF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
@@ -68,7 +66,7 @@ final case class Rating private (
       * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Int]` does
       * not opt out of write-back; pass `ref.readOnly` for that.
       */
-    def value(v: Int | Signal[Int]): Rating = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: Int | Signal[Int]): Rating = copy(valueSlot = valueSlot.bind(v))
 
     /** The `Double`-shaped binding of [[NumberFormControl]], so a Rating can carry a
       * `Form.numberField`. The stars remain whole: the value is read rounded and written back as a
@@ -78,7 +76,14 @@ final case class Rating private (
       * JVM name is the only thing that differs, and the call site still reads `value(...)`.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Rating = copy(doubleBinding = Present(ReactiveValue(v)))
+    def value(v: Double | Signal[Double]): Rating =
+        // The setter is the trait's, which takes no Frame. Nothing here runs: a Frame only names where a signal was built.
+        given Frame = Frame.internal
+        copy(valueSlot = valueSlot.bind(v match
+            case r: SignalRef[Double] @unchecked => r.zoom(Rating.stars)((_, i) => i.toDouble)
+            case s: Signal[Double] @unchecked    => s.map(Rating.stars)
+            case d: Double                       => Rating.stars(d)))
+    end value
 
     /** Number of stars (Prime default 5). */
     def stars(n: Int): Rating = copy(starsV = math.max(1, n))
@@ -123,7 +128,7 @@ final case class Rating private (
     def integer(v: Boolean): Rating = this
 
     /** Fired with the NEW value (0 on cancel) after the ref write-back. */
-    def onChange(f: Int => UI.Action)(using Frame): Rating = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Int => UI.Action)(using Frame): Rating = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss with the current star count: the validation layer's Blur
       * trigger, in the `Double` shape the number family speaks.
@@ -134,11 +139,8 @@ final case class Rating private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the rating keeps the stars the reader picks itself.
-        val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
-        if shown.exists(_.const.isDefined) && onChangeF.isEmpty && !readonlyFlag then copy(readonlyFlag = true).render
-        else if shown.isEmpty then ReactiveValue.owned(0)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
-        else renderLive
-    end render
+        if valueSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
+        else Slot.owning(valueSlot, start = 0)(s => copy(valueSlot = s).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
         // The radios' `name` is what the browser groups them by, and the grouping is what gives
@@ -152,12 +154,8 @@ final case class Rating private (
                 UI.mounted {
                     UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
                 }.placeholder(renderNamed)
-        // A value bound one way that nothing hears: every star the reader picks is put back. The form layer's
-        // `Double` binding wins where both are set, as it does for what the stars show.
-        val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
-        val unheard = shown.exists(b => b.dyn.isDefined && b.writable.isEmpty) && onChangeF.isEmpty && !readonlyFlag &&
-            !disabledFlag.constTrue
-        if unheard then fragment(field, Diagnostics.unheard("Rating", "value", "onChange")) else field
+        // A value bound one way that nothing hears: every star the reader picks is put back.
+        Diagnostics.after(field)("Rating")(Diagnostic.unheard(valueSlot, Rating.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
 
     /** The tree the mount publishes once it has a name to group the radios by, the seam golden
@@ -169,38 +167,12 @@ final case class Rating private (
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
 
-    /** The `Double` ref to write back to, i.e. only when the form-layer binding is two-way. */
-    private def doubleWriteRef: Maybe[SignalRef[Double]] = doubleBinding match
-        case Present(ReactiveVariable(r)) => Present(r)
-        case _                            => Absent
-
+    // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
+    // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        doubleBinding match
-            // The Double binding wins when present: it is the form layer's, and a control
-            // bound to a field has no second source of truth. ReactiveVariable before Dyn,
-            // since a two-way binding IS a Dyn.
-            case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent, validity))
-            // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
-            // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
-            case Present(ReactiveValue.Dyn(sig)) =>
-                val stars = sig.map(d => math.rint(d).toInt)
-                stars.render(v => body(v, Absent, validity, Present(stars)))
-            case Present(ReactiveValue.Const(d)) if onChangeF.isDefined =>
-                val v = math.rint(d).toInt
-                body(v, Absent, validity, Present(Signal.initConst(v)))
-            case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent, validity)
-            case Absent                          =>
-                valueBinding match
-                    case Present(ReactiveVariable(ref))                         => ref.render(v => body(v, Present(ref), validity))
-                    case Present(ReactiveValue.Dyn(sig))                        => sig.render(v => body(v, Absent, validity, Present(sig)))
-                    case Present(ReactiveValue.Const(v)) if onChangeF.isDefined =>
-                        body(v, Absent, validity, Present(Signal.initConst(v)))
-                    case Present(ReactiveValue.Const(v)) => body(v, Absent, validity)
-                    case Absent                          => body(0, Absent, validity)
+        Slot.drawField(valueSlot, unbound = 0)(f => body(f.value, validity, f.native))
 
-    private def body(value: Int, ref: Maybe[SignalRef[Int]], validity: FieldValidity, native: Maybe[Signal[Int]] = Absent)(using
-        Frame
-    ): UI =
+    private def body(value: Int, validity: FieldValidity, native: Int | Signal[Int])(using Frame): UI =
         // The radio a Tab lands on, which is where the caller's id goes: the group itself takes no
         // focus, and `Label.forId`, `Commands.focusId` and focus-first-invalid all need an element
         // that does. A radio group's tab stop is its checked radio, else its first.
@@ -209,7 +181,7 @@ final case class Rating private (
             val active = i <= value
             var opt    = div.cssClass("p-rating-option")
             if active then opt = opt.cssClass("p-rating-option-active")
-            if interactive then opt = opt.onClick(activate(i, value, ref))
+            if interactive then opt = opt.onClick(activate(i, value))
 
             // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
             // keyboard semantics: the arrows move within the name group and select as they go,
@@ -224,7 +196,7 @@ final case class Rating private (
             // press on the visible star reaches only the option, since the radio is clipped away),
             // so it is the one that acts.
             var hidden = radio
-                .checked(native.fold[Boolean | Signal[Boolean]](i == value)(_.map(_ == i)))
+                .checked(Slot.mapNative[Int, Boolean](native)(_ == i))
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
             // Unnamed (the page as first rendered, before the mount mints a name), the browser does not
@@ -244,7 +216,7 @@ final case class Rating private (
             // that star alone, which is exactly the star no click can come from.
             if interactive && i == value then
                 hidden = hidden.onKeyDown { e =>
-                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref) else ()
+                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value) else ()
                     eff
                 }
             end if
@@ -268,30 +240,23 @@ final case class Rating private (
             case Absent                      => ()
         end match
         onBlurDoubleF.foreach { f =>
-            el = el.onBlur(doubleWriteRef match
-                case Present(r) => r.use(d => f(math.rint(d)))
-                case Absent     => f(value.toDouble))
+            el = el.onBlur(valueSlot.writable match
+                case Present(r) => r.use(i => f(i.toDouble))
+                case _          => f(value.toDouble))
         }
         el(UI.children(options)*)
     end body
 
     /** Prime's select semantics: picking the current value clears to 0. */
-    private def activate(i: Int, current: Int, ref: Maybe[SignalRef[Int]])(using Frame): UI.Action =
-        val next             = if i == current then 0 else i
-        val write: UI.Action = (ref, doubleWriteRef) match
-            case (Present(r), _)       => r.set(next)
-            case (Absent, Present(dr)) => dr.set(next.toDouble)
-            case _                     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
-    end activate
+    private def activate(i: Int, current: Int)(using Frame): UI.Action =
+        valueSlot.change(if i == current then 0 else i)
 end Rating
 
 object Rating:
     def apply(): Rating = new Rating()
+
+    /** The whole stars of the number family's `Double`. */
+    private def stars(d: Double): Int = math.rint(d).toInt
+
+    private val valueName = Slot.Name("Rating", "value", "a change", "onChange")
+end Rating

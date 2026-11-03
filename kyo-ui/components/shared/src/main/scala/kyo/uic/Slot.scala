@@ -47,8 +47,11 @@ final private[uic] case class Slot[A](
     def standIn(start: A)(using CanEqual[A, A], Frame): Slot[A] =
         copy(binding = Present(ReactiveValue.Dyn(Signal.initConst(start))), quiet = true)
 
+    /** The ref a reader's change is written into, where the slot binds two way. */
+    def writable: Maybe[SignalRef[A]] = binding.flatMap(_.writable)
+
     /** Whether a reader's change reaches anybody: a two-way binding, the slot's event, or another event. */
-    def heard: Boolean = binding.exists(_.writable.isDefined) || hearer.isDefined || heardElsewhere
+    def heard: Boolean = writable.isDefined || hearer.isDefined || heardElsewhere
 
     /** A constant nobody hears: a value meant to stay, which the component draws read-only and says nothing about. */
     def fixed: Boolean = binding.exists(_.const.isDefined) && !heard
