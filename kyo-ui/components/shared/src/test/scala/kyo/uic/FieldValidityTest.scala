@@ -70,12 +70,12 @@ class FieldValidityTest extends UicTest:
     }
 
     "where a card trails the field, the message row stays the field's immediate next sibling" - {
-        // The pickers render a `.p-uic-key-error` card after the field when the held value names no option. The message
+        // The pickers render a `.p-uic-diagnostic` card after the field when the held value names no option. The message
         // belongs to the field, so it sits between the two, as the constant render always put it.
         def order(ui: UI, root: String)(using Frame): Chunk[String] < Sync =
             def kind(n: UI): Chunk[String] < Sync = n match
                 case e: UI.Ast.Element if e.attrs.cssClasses.contains(root)                    => Chunk("field")
-                case e: UI.Ast.Element if e.attrs.cssClasses.contains("p-uic-key-error")       => Chunk("card")
+                case e: UI.Ast.Element if e.attrs.cssClasses.contains("p-uic-diagnostic")      => Chunk("card")
                 case e: UI.Ast.Element if e.attrs.cssClasses.contains("p-uic-invalid-message") => Chunk("message")
                 case r: UI.Ast.Reactive[?]                                                     =>
                     r.signal.current(using r.frame).map(c =>

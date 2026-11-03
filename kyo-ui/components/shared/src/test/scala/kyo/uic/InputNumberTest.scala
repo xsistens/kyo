@@ -130,7 +130,7 @@ class InputNumberTest extends ReactiveValueContract:
     }
 
     "a value bound one way says nothing where it reaches somebody or nobody can change it: a ref, disabled" in {
-        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.InputNumber): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(3.0)
             twoWay <- errors(uic.InputNumber().value(held))
@@ -144,7 +144,7 @@ class InputNumberTest extends ReactiveValueContract:
             t    <- mountedWhen(uic.InputNumber().text("4.").render)(typing)
             n    <- number(t)
             text <- textIn(n)
-            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-key-error")
+            card <- elementsWithClass(uic.InputNumber().text("4.").render, "p-uic-diagnostic")
         yield
             assert(text == "4.", s"the field starts from $text")
             assert(n.readOnly.isEmpty, "and the reader goes on typing from it")

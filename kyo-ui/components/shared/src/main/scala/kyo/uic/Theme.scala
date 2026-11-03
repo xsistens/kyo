@@ -358,7 +358,7 @@ object Theme:
       |  outline-offset: var(--p-focus-ring-offset, 2px); }
       |/* Identity misconfiguration (a colliding option key, a table using selection with no rowKey):
       |   the failure it causes is silent and data-dependent, so the card is deliberately loud. */
-      |.p-uic-key-error { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
+      |.p-uic-diagnostic { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
       |  border-radius: var(--p-border-radius-sm, 4px); padding: 0.375rem 0.5rem; font-size: 0.875rem; }
       |/* "You are here" on a menu row (MenuItem.current), a nav's whole job. Deliberately NOT
       |   Prime's item-focus tokens: .p-focus is the roving keyboard highlight the component

@@ -59,7 +59,7 @@ class KnobTest extends ReactiveValueContract:
     ))
 
     "a value bound one way says nothing where it reaches somebody or nobody can turn it: a ref, disabled" in {
-        def errors(k: uic.Knob): Chunk[UI.Ast.Element] < Sync = elementsWithClass(k.render, "p-uic-key-error")
+        def errors(k: uic.Knob): Chunk[UI.Ast.Element] < Sync = elementsWithClass(k.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(10.0)
             twoWay <- errors(uic.Knob().value(held))

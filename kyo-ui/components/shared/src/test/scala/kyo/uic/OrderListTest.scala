@@ -113,7 +113,7 @@ class OrderListTest extends ReactiveValueContract:
     "a disabled list says nothing about who hears it, since the reader cannot change it" in {
         for
             xs  <- Signal.initRef(Seq("a", "b"))
-            off <- elementsWithClass(uic.OrderList[String]().items(xs.readOnly)(identity).disabled(true).render, "p-uic-key-error")
+            off <- elementsWithClass(uic.OrderList[String]().items(xs.readOnly)(identity).disabled(true).render, "p-uic-diagnostic")
         yield assert(off.isEmpty, s"nobody can change it: ${off.map(textOf)}")
     }
 

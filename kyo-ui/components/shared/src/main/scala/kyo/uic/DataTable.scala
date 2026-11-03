@@ -580,7 +580,7 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   * which survives sorting and filtering (both computed here) but not a data
   * change: reorder the rows and every selection, expansion and click payload
   * re-associates with a different record, silently. A table that binds identity
-  * without a key therefore renders a loud `.p-uic-key-error` card above itself
+  * without a key therefore renders a loud `.p-uic-diagnostic` card above itself
   * rather than shipping that failure to production data.
   */
 final case class DataTable[A] private (

@@ -61,7 +61,7 @@ end CascadeItem
   * `openExactly` machinery: sibling branches close); clicking a LEAF writes
   * it, fires `onChange`, and closes the whole chain. `loading` says the tree is
   * still arriving; without it a held leaf the tree does not carry is named in a
-  * `.p-uic-key-error` card. Every panel is a real
+  * `.p-uic-diagnostic` card. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
   * it), Escape closes ONE level too (each panel consumes its own keydown,
   * the Overlay per-level story), and no panel seeds focus: it stays on the trigger, which is the
@@ -210,7 +210,7 @@ final case class CascadeSelect[A] private (
     def onBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Says the option tree is still arriving: the dropdown icon turns into Prime's spinner, and a held leaf no leaf of the
-      * tree carries yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
+      * tree carries yet is shown from the value itself rather than reported in a `.p-uic-diagnostic` card.
       */
     def loading(v: Boolean | Signal[Boolean]): CascadeSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 

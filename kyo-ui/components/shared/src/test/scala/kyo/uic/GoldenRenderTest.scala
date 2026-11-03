@@ -2075,7 +2075,7 @@ class GoldenRenderTest extends UicTest:
             // reach down the full header the way an ungrouped column does.
             assert(checked.contains("rowspan=\"2\""), "the select-all cell reaches down the header")
             assert(empty.contains(">Code<") && !empty.contains(">Nothing<"), "an empty group renders no cell")
-            assert(empty.contains("p-uic-key-error") && empty.contains("Nothing"), "and is reported instead")
+            assert(empty.contains("p-uic-diagnostic") && empty.contains("Nothing"), "and is reported instead")
             // Both headers read "Q1", so which one the spec picked shows in which th carries
             // the sorted class: the second, whose path is 2025 / Q1.
             val firstQ1  = qualified.indexOf(">Q1<")
@@ -2083,9 +2083,9 @@ class GoldenRenderTest extends UicTest:
             val sortedTh = qualified.indexOf("p-datatable-column-sorted")
             assert(occurrences(qualified, "p-datatable-column-sorted") == 1, "one column sorts")
             assert(sortedTh > firstQ1 && sortedTh < secondQ1, "and it is the one the path names")
-            assert(!qualified.contains("p-uic-key-error"), "and a shared header under two groups is no fault")
-            assert(unqualified.contains("p-uic-key-error"), "a path missing its group labels matches nothing")
-            assert(samePath.contains("p-uic-key-error"), "two columns reachable by one path are reported")
+            assert(!qualified.contains("p-uic-diagnostic"), "and a shared header under two groups is no fault")
+            assert(unqualified.contains("p-uic-diagnostic"), "a path missing its group labels matches nothing")
+            assert(samePath.contains("p-uic-diagnostic"), "two columns reachable by one path are reported")
         end for
     }
 
@@ -2168,7 +2168,7 @@ class GoldenRenderTest extends UicTest:
             assert(!idle.contains("p-datatable-sortable-column"))
             // The reactive form resolves to its current value before the table builds.
             assert(!reactive.contains("p-datatable-sortable-column"), "a signal reading false is inert")
-            assert(noOrdering.contains("p-uic-key-error"), "sortable(true) with no ordering is reported")
+            assert(noOrdering.contains("p-uic-diagnostic"), "sortable(true) with no ordering is reported")
             assert(!tree.contains("p-treetable-sortable-column"), "TreeTable honors the same flag")
         end for
     }
@@ -2250,7 +2250,7 @@ class GoldenRenderTest extends UicTest:
             // A header cell over nothing spans nothing, so the group leaves with its columns.
             assert(!grouped.contains(">Detail<"), "a group whose columns are all hidden goes with them")
             assert(grouped.contains(">Name<") && occurrences(grouped, "<tr") == 3, "one header row left, plus two rows")
-            assert(!grouped.contains("p-uic-key-error"), "and it is not reported as an empty group")
+            assert(!grouped.contains("p-uic-diagnostic"), "and it is not reported as an empty group")
             assert(!footers.contains("p-datatable-tfoot"), "the only footer was on a hidden column")
             // The filter matches what is ON THE SCREEN: the query hits the hidden column's
             // text alone, so it matches nothing.
@@ -2258,7 +2258,7 @@ class GoldenRenderTest extends UicTest:
             // The spec is the caller's, so hiding a column never reshuffles the rows: it
             // still sorts, and it is still not reported as a column the table cannot sort.
             assert(sorted.indexOf(">A<") < sorted.indexOf(">B<"), "the hidden column still sorts")
-            assert(!sorted.contains("p-uic-key-error"), "and the spec that names it is not called unknown")
+            assert(!sorted.contains("p-uic-diagnostic"), "and the spec that names it is not called unknown")
             assert(!tree.contains(">B<"), "TreeTable honors the same flag")
             assert(tree.contains("p-treetable-node-toggle-button"), "and the toggler moves onto the column that is left")
         end for
@@ -2316,7 +2316,7 @@ class GoldenRenderTest extends UicTest:
             // Unbound, the table keeps the filters itself once its mount runs; the first frame is the placeholder, which
             // already draws the row the reader will type in, and an unbound slot is no mistake, so it says nothing.
             assert(occurrences(unbound, "p-datatable-inline-filter") == 2, "the placeholder draws the filter row already")
-            assert(!unbound.contains("p-uic-key-error"), "and an unbound filter is no mistake")
+            assert(!unbound.contains("p-uic-diagnostic"), "and an unbound filter is no mistake")
             // One inline filter per filterable column, and an empty header cell over the
             // column that carries no pipeline.
             assert(occurrences(live, "p-datatable-inline-filter") == 2)
@@ -2326,7 +2326,7 @@ class GoldenRenderTest extends UicTest:
                 occurrences(live, "p-datatable-header-cell\"></th>") == 1,
                 "the column that carries no pipeline keeps an empty cell, so the row still lines up"
             )
-            assert(!live.contains("p-uic-key-error"), "a bound filter row reports nothing")
+            assert(!live.contains("p-uic-diagnostic"), "a bound filter row reports nothing")
             // The funnel says whether its column is narrowing the table without being opened.
             assert(live.contains(uic.Icons.filter.pathData) && !live.contains(uic.Icons.filterFill.pathData))
             assert(filtering.contains(uic.Icons.filterFill.pathData), "a filtering column carries the filled funnel")
@@ -2916,10 +2916,10 @@ class GoldenRenderTest extends UicTest:
             // editableWhen gates the affordance per row.
             assert(occurrences(perRow, "p-editable-column") == 1, "only the row the predicate admits can open")
             // What a binding cannot do, it says.
-            assert(noEditable.contains("p-uic-key-error"), "editing bound with no editable column is reported")
-            assert(nowhereToSave.contains("p-uic-key-error"), "and an editable column over rows nobody hears")
-            assert(bothModes.contains("p-uic-key-error"), "and binding both modes at once")
-            assert(noKey.contains("p-uic-key-error"), "editing is keyed by rowKey, so it needs one")
+            assert(noEditable.contains("p-uic-diagnostic"), "editing bound with no editable column is reported")
+            assert(nowhereToSave.contains("p-uic-diagnostic"), "and an editable column over rows nobody hears")
+            assert(bothModes.contains("p-uic-diagnostic"), "and binding both modes at once")
+            assert(noKey.contains("p-uic-diagnostic"), "editing is keyed by rowKey, so it needs one")
         end for
     }
 
@@ -3610,16 +3610,16 @@ class GoldenRenderTest extends UicTest:
             dupTree    <- treeHtml(Seq(Dept("Ops", List(Dept("Ops", Nil)))))
             okTree     <- treeHtml(Seq(Dept("Ops", List(Dept("Field", Nil)))))
         yield
-            assert(dupSelect.contains("p-uic-key-error"), "Select: duplicate derived keys render the diagnostic card")
+            assert(dupSelect.contains("p-uic-diagnostic"), "Select: duplicate derived keys render the diagnostic card")
             assert(dupSelect.contains("optionKey"), "Select: the card names the setter to reach for")
             assert(dupSelect.contains("Ada"), "Select: the card names the offending key")
             assert(dupSelect.contains("""role="alert""""), "the card announces itself to assistive tech")
-            assert(!keyedSelect.contains("p-uic-key-error"), "Select: a distinct optionKey clears the diagnostic")
-            assert(dupMulti.contains("p-uic-key-error"), "MultiSelect: duplicate derived keys render the card")
-            assert(dupButtons.contains("p-uic-key-error"), "SelectButton: duplicate derived keys render the card")
-            assert(!okButtons.contains("p-uic-key-error"), "SelectButton: distinct options render no card")
-            assert(dupTree.contains("p-uic-key-error"), "TreeSelect: duplicate node ids render the card")
-            assert(!okTree.contains("p-uic-key-error"), "TreeSelect: distinct node ids render no card")
+            assert(!keyedSelect.contains("p-uic-diagnostic"), "Select: a distinct optionKey clears the diagnostic")
+            assert(dupMulti.contains("p-uic-diagnostic"), "MultiSelect: duplicate derived keys render the card")
+            assert(dupButtons.contains("p-uic-diagnostic"), "SelectButton: duplicate derived keys render the card")
+            assert(!okButtons.contains("p-uic-diagnostic"), "SelectButton: distinct options render no card")
+            assert(dupTree.contains("p-uic-diagnostic"), "TreeSelect: duplicate node ids render the card")
+            assert(!okTree.contains("p-uic-diagnostic"), "TreeSelect: distinct node ids render no card")
         end for
     }
 
@@ -3639,11 +3639,11 @@ class GoldenRenderTest extends UicTest:
             // nothing is reported.
             readOnly <- renderHtml(uic.DataTable[Row]().rows(rows).columns(uic.Column[Row]("Name")(_.name)))
         yield
-            assert(unkeyed.contains("p-uic-key-error"), "selection bound without rowKey renders the diagnostic card")
+            assert(unkeyed.contains("p-uic-diagnostic"), "selection bound without rowKey renders the diagnostic card")
             assert(unkeyed.contains("rowKey"), "the card names the setter to reach for")
             assert(unkeyed.contains("p-datatable-table-container"), "the table still renders alongside the card")
-            assert(!keyed.contains("p-uic-key-error"), "a rowKey clears the diagnostic")
-            assert(!readOnly.contains("p-uic-key-error"), "a table that consumes no identity is not nagged")
+            assert(!keyed.contains("p-uic-diagnostic"), "a rowKey clears the diagnostic")
+            assert(!readOnly.contains("p-uic-diagnostic"), "a table that consumes no identity is not nagged")
         end for
     }
 
@@ -3799,9 +3799,9 @@ class GoldenRenderTest extends UicTest:
             assert(!reversed.contains("p-paginator-first"), "an element the template does not name does not render")
             assert(!reversed.contains("p-paginator-last"))
             // Named with nothing behind it, and the flag the template overrules.
-            assert(bare.contains("p-uic-key-error") && bare.contains("currentPageReport"))
+            assert(bare.contains("p-uic-diagnostic") && bare.contains("currentPageReport"))
             assert(!dropped.contains("p-paginator-jtp-input"), "the template is the layout")
-            assert(dropped.contains("p-uic-key-error") && dropped.contains("JumpToPageInput"))
+            assert(dropped.contains("p-uic-diagnostic") && dropped.contains("JumpToPageInput"))
             assert(
                 jump.contains("p-paginator-jtp-dropdown") && jump.contains(">2<"),
                 "a Select over the pages, showing the one the reader is on"

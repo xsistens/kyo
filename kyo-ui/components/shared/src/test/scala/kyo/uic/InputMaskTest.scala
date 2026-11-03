@@ -79,14 +79,14 @@ class InputMaskTest extends ReactiveValueContract:
     "the card for a signal nobody hears names InputMask, not the Input inside it" in {
         for
             held <- Signal.initRef("1")
-            deaf <- elementsWithClass(uic.InputMask("99").value(held.readOnly).render, "p-uic-key-error")
+            deaf <- elementsWithClass(uic.InputMask("99").value(held.readOnly).render, "p-uic-diagnostic")
         yield
             val text = deaf.map(textOf).mkString
             assert(deaf.size == 1 && text.startsWith("InputMask:"), s"nobody hears: $text")
     }
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can edit it: a ref, readonly, disabled" in {
-        def errors(c: uic.InputMask): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.InputMask): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef("1")
             twoWay <- errors(uic.InputMask("99").value(held))

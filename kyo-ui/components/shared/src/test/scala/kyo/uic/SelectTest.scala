@@ -313,7 +313,7 @@ class SelectTest extends ReactiveValueContract:
             ui   <- opened(uic.Select[Plain]().options(plain)(_.name).optionKey(_.id).selection(ref))
             lbl  <- elementWithClass(ui, "p-select-label")
             rs   <- rows(ui)
-            card <- elementsWithClass(ui, "p-uic-key-error")
+            card <- elementsWithClass(ui, "p-uic-diagnostic")
             _    <- click(rs(1))
             got  <- ref.get
         yield
@@ -370,7 +370,7 @@ class SelectTest extends ReactiveValueContract:
             ref  <- Signal.initRef(Maybe(gone))
             ui   <- opened(select.selection(ref))
             lbl  <- elementWithClass(ui, "p-select-label")
-            card <- elementWithClass(ui, "p-uic-key-error")
+            card <- elementWithClass(ui, "p-uic-diagnostic")
         yield
             assert(textOf(lbl) == "Zucchini")
             assert(textOf(card).contains("Zucchini"))
@@ -382,7 +382,7 @@ class SelectTest extends ReactiveValueContract:
         for
             ref     <- Signal.initRef(Maybe(gone))
             ui      <- opened(select.loading(true).selection(ref))
-            cards   <- elementsWithClass(ui, "p-uic-key-error")
+            cards   <- elementsWithClass(ui, "p-uic-diagnostic")
             spinner <- elementsWithClass(ui, "p-select-loading-icon")
             root    <- elementWithClass(ui, "p-select")
         yield
@@ -398,10 +398,10 @@ class SelectTest extends ReactiveValueContract:
             ref     <- Signal.initRef(Maybe(gone))
             loading <- Signal.initRef(true)
             ui1     <- opened(select.loading(loading).selection(ref))
-            during  <- elementsWithClass(ui1, "p-uic-key-error")
+            during  <- elementsWithClass(ui1, "p-uic-diagnostic")
             _       <- loading.set(false)
             ui2     <- opened(select.loading(loading).selection(ref))
-            after   <- elementsWithClass(ui2, "p-uic-key-error")
+            after   <- elementsWithClass(ui2, "p-uic-diagnostic")
         yield assert(during.isEmpty && after.size == 1)
         end for
     }
@@ -944,7 +944,7 @@ class SelectTest extends ReactiveValueContract:
     ))
 
     "a selection a ref holds, or one a disabled field shows, draws no card" in {
-        def errors(s: uic.Select[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(s.render, "p-uic-key-error")
+        def errors(s: uic.Select[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(s.render, "p-uic-diagnostic")
         def base(using Frame)                                            = uic.Select[String]().options(Seq("a", "b"))
         for
             held   <- Signal.initRef("a")

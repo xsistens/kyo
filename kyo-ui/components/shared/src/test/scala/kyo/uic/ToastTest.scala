@@ -32,7 +32,7 @@ class ToastTest extends ReactiveValueContract:
     "a toast the reader cannot close has nothing to hear, so a signal nobody hears is no card" in {
         for
             held <- Signal.initRef(true)
-            mute <- elementsWithClass(toast.closable(false).open(held.readOnly).render, "p-uic-key-error")
+            mute <- elementsWithClass(toast.closable(false).open(held.readOnly).render, "p-uic-diagnostic")
         yield assert(mute.isEmpty, s"nothing the reader does can be lost: ${mute.map(textOf)}")
     }
 

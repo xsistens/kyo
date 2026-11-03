@@ -27,7 +27,7 @@ class RadioButtonTest extends ReactiveValueContract:
         handled(r.onChange.getOrElse(throw new AssertionError("no handler wired"))(true))
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can select it: a ref, readonly, disabled" in {
-        def errors(c: uic.RadioButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.RadioButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(false)
             twoWay <- errors(uic.RadioButton().checked(held))

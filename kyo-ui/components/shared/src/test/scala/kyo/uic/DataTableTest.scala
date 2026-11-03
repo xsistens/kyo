@@ -910,7 +910,7 @@ class DataTableTest extends ReactiveValueContract:
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name)
             ).columnWidths(cols).render
-            cards <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-uic-key-error")))
+            cards <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-uic-diagnostic")))
             text = cards.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }).mkString(" ")
         yield
             assert(cards.size == 2, "one column is no boundary, and the entry names no column")
@@ -936,7 +936,7 @@ class DataTableTest extends ReactiveValueContract:
         }).distinct
 
     private def cards(node: UI)(using Frame): String < Sync =
-        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-uic-key-error"))
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-uic-diagnostic"))
             .flatMap(_.children.collect { case t: UI.Ast.Text => t.value }).mkString(" "))
 
     // The whole arithmetic in one table: a frozen column holds at the distance the columns

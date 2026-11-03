@@ -34,7 +34,7 @@ class TreeTest extends ReactiveValueContract:
             exp <- Signal.initRef(Set.empty[String])
             sel <- Signal.initRef(Set.empty[String])
             base = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(exp.readOnly).selection(sel.readOnly)
-            byOld <- elementsWithClass(base.onNodeToggle(_ => ()).onItemClick(_ => ()).render, "p-uic-key-error")
+            byOld <- elementsWithClass(base.onNodeToggle(_ => ()).onItemClick(_ => ()).render, "p-uic-diagnostic")
             live = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(Set.empty[String])
                 .onNodeToggle(_ => ()).selection(Set.empty[String]).onItemClick(_ => ()).render
             toggles <- elementsWithClass(live, "p-tree-node-toggle-button")

@@ -33,7 +33,7 @@ import scala.annotation.targetName
   * one. `nodes(TreeNode*)` remains for hand-authored trees whose nodes carry an
   * icon, a tooltip or their own accessible name. `loading` says the tree is still
   * arriving; without it a selected id no node carries is named in a
-  * `.p-uic-key-error` card.
+  * `.p-uic-diagnostic` card.
   *
   * The trigger shows the selected nodes' labels (tree order, comma-joined) or
   * the placeholder while empty.
@@ -127,7 +127,7 @@ final case class TreeSelect[K] private (
     def onExpandedChange(f: Set[K] => UI.Action)(using Frame): TreeSelect[K] = copy(expandedSlot = expandedSlot.hear(f))
 
     /** Says the tree is still arriving: the dropdown icon turns into Prime's spinner, and a selected id no node carries
-      * yet is left alone rather than reported in a `.p-uic-key-error` card.
+      * yet is left alone rather than reported in a `.p-uic-diagnostic` card.
       */
     def loading(v: Boolean | Signal[Boolean]): TreeSelect[K] = copy(loadingV = Present(ReactiveValue(v)))
 

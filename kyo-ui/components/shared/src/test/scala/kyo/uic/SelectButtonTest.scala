@@ -332,7 +332,7 @@ class SelectButtonTest extends ReactiveValueContract:
     ))
 
     "a single choice a ref holds, or one a disabled group shows, draws no card" in {
-        def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-key-error")
+        def errors(b: uic.SelectButton[Size]): Chunk[UI.Ast.Element] < Async = elementsWithClass(b.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(Size.M)
             twoWay <- errors(typed.selection(held))
@@ -344,7 +344,7 @@ class SelectButtonTest extends ReactiveValueContract:
     "several choices bound one way stay quiet while the group is disabled" in {
         for
             held <- Signal.initRef(Set("Small"))
-            off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+            off  <- elementsWithClass(group.multiple.selection(held.readOnly).disabled(true).render, "p-uic-diagnostic")
         yield assert(off.isEmpty, s"nobody can pick: ${off.map(textOf)}")
     }
 

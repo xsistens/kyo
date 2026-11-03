@@ -36,7 +36,7 @@ class ToggleButtonTest extends ReactiveValueContract:
     ))
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
-        def errors(c: uic.ToggleButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.ToggleButton): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(false)
             twoWay <- errors(uic.ToggleButton().checked(held))

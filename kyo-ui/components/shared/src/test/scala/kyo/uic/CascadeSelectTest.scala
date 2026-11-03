@@ -371,7 +371,7 @@ class CascadeSelectTest extends ReactiveValueContract:
     ))
 
     "a selection a ref holds, or one a disabled field shows, draws no card" in {
-        def errors(c: uic.CascadeSelect[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.CascadeSelect[String]): Chunk[UI.Ast.Element] < Async = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef("Bern")
             twoWay <- errors(cascade.selection(held))

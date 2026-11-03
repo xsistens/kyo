@@ -371,7 +371,7 @@ class AutoCompleteTest extends ReactiveValueContract:
 
     "a text bound one way names each edit that reaches nobody: typing, a pick, a clear" in {
         def card(c: uic.AutoComplete[String]): String < Sync =
-            elementsWithClass(c.render, "p-uic-key-error").map(_.map(textOf).mkString)
+            elementsWithClass(c.render, "p-uic-diagnostic").map(_.map(textOf).mkString)
         for
             held      <- Signal.initRef("a")
             deaf      <- card(field.value(held.readOnly).showClear(true))

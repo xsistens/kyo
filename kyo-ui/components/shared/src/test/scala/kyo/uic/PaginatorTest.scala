@@ -166,7 +166,7 @@ class PaginatorTest extends ReactiveValueContract:
             p     <- page.get
             sr    <- seenRows.get
             sp    <- seenPage.get
-            cards <- elementsWithClass(pag.render, "p-uic-key-error")
+            cards <- elementsWithClass(pag.render, "p-uic-diagnostic")
         yield
             assert(r == 10 && p == 3, s"the signals still hold rows $r, page $p")
             assert(sr == 20 && sp == 1, s"reported rows $sr, page $sp")
@@ -237,7 +237,7 @@ class PaginatorTest extends ReactiveValueContract:
         val fixed = uic.Paginator().totalRecords(120).rows(10).page(2).template(PaginatorElement.JumpToPageDropdown).render
         for
             d    <- elementWithClass(fixed, "p-paginator-jtp-dropdown")
-            card <- elementsWithClass(fixed, "p-uic-key-error")
+            card <- elementsWithClass(fixed, "p-uic-diagnostic")
         yield
             assert(!d.attrs.cssClasses.contains("p-disabled"), "a fixed page is not a disabled one")
             assert(readOnly(d) && d.attrs.tabIndex.contains(0) && !opens(d), s"reachable and inert: ${d.attrs.ariaAttrs}")
