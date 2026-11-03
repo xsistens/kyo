@@ -1,6 +1,7 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.*
 
 /** Generic const-or-reactive carrier: either a constant `A` or a `Signal[A]` that a
   * component realizes reactively (a text node, a boolean attribute, a class swap, ...).
@@ -54,6 +55,45 @@ sealed private[uic] trait ReactiveValue[A]:
 
     /** The ref a reader's change is written into, if this binds two way, else `Absent`. */
     private[uic] def writable: Maybe[SignalRef[A]] = Absent
+
+    /** Reads both, as one.
+      *
+      * A control that reads several values combines them with this and renders the result ONCE, so it is a single region over
+      * everything it reads (see "A control that reads several refs is ONE region" in this module's CLAUDE.md). Nesting a `render`
+      * per signal instead leaves each inner region subscribed against the values its outer one held when it built it, and an
+      * effect that writes two of them (a pick writes the value and closes the panel) lets the inner one repaint an older state
+      * over the finished write.
+      *
+      * A combination of constants stays a constant and renders with no region at all, which is what keeps a control's static
+      * projection free of subscriptions where nothing in it can change. A live combination is one `combineLatest` chain, and a
+      * constant joins it as a `Signal.initConst`, which sits out the change-driven combinators rather than drive them.
+      */
+    private[uic] def and[B](other: ReactiveValue[B])(using CanEqual[A, A], CanEqual[B, B], Frame): ReactiveValue[(A, B)] =
+        (this, other) match
+            case (ReactiveValue.Const(a), ReactiveValue.Const(b)) => ReactiveValue.Const((a, b))
+            case _                                                => ReactiveValue.Dyn(signal.combineLatest(other.signal))
+
+    /** The value through `f`. A mapped binding is one way, over a ref too: a reader's change goes through the [[Slot]], never through
+      * what a render read from it.
+      */
+    private[uic] def map[B](f: A => B)(using CanEqual[B, B], Frame): ReactiveValue[B] =
+        this match
+            case ReactiveValue.Const(a) => ReactiveValue.Const(f(a))
+            case ReactiveValue.Dyn(sig) => ReactiveValue.Dyn(sig.map(f))
+
+    /** Renders `f` with the value: once for a constant, as one region for a signal. */
+    private[uic] def render(f: A => UI)(using Frame): UI =
+        this match
+            case ReactiveValue.Const(a) => f(a)
+            case ReactiveValue.Dyn(sig) => sig.render(f)
+
+    /** Renders the children `f` draws for the value: as they are for a constant, inside one region for a signal. All of them share
+      * that region, so a rule over siblings (`:first-child`, `:nth-child`, `~`) still sees them as one run.
+      */
+    private[uic] def children(f: A => List[UI])(using Frame): List[UI] =
+        this match
+            case ReactiveValue.Const(a) => f(a)
+            case ReactiveValue.Dyn(sig) => List(sig.render(a => fragment(f(a)*)))
 end ReactiveValue
 
 private[uic] object ReactiveValue:
@@ -108,6 +148,49 @@ private[uic] object ReactiveValue:
         case r: SignalRef[A] @unchecked => ReactiveVariable(r)
         case s: Signal[A] @unchecked    => Dyn(s)
         case a: A @unchecked            => Const(a)
+
+    /** Lists, each fixed or a signal, as ONE value of them end to end, in order: a constant while none of them is a signal, so a
+      * component given plain lists draws no region for them. Neighbouring fixed lists are joined first, so two parts or more left
+      * over hold a signal.
+      */
+    def concat[A](parts: Seq[List[A] | Signal[Seq[A]]])(using Frame): ReactiveValue[List[A]] =
+        given CanEqual[List[A], List[A]]         = CanEqual.derived
+        val joined: List[ReactiveValue[List[A]]] =
+            parts.foldLeft(List.empty[ReactiveValue[List[A]]]) { (acc, part) =>
+                part match
+                    case sig: Signal[?] => Dyn(sig.asInstanceOf[Signal[Seq[A]]].map(_.toList)) :: acc
+                    case fixed          =>
+                        val as = fixed.asInstanceOf[List[A]]
+                        acc match
+                            case Const(prev) :: rest => Const(prev ++ as) :: rest
+                            case _                   => Const(as) :: acc
+            }.reverse
+        joined match
+            case Nil        => Const(Nil)
+            case one :: Nil => one
+            case several    => Dyn(Signal.combineLatestAll(several.map(_.signal)).map(_.toList.flatten))
+        end match
+    end concat
+
+    /** A signal where one is bound, else `fallback`, a constant. */
+    def orElse[A](sig: Maybe[Signal[A]], fallback: A): ReactiveValue[A] =
+        sig.fold[ReactiveValue[A]](Const(fallback))(Dyn(_))
+
+    /** Several signals, each under its key, as ONE value of the map of their values; with none, an empty map, a constant. */
+    def keyed[K, V](entries: Seq[(K, Signal[V])])(using CanEqual[V, V], Frame): ReactiveValue[Map[K, V]] =
+        if entries.isEmpty then Const(Map.empty)
+        else
+            given CanEqual[Map[K, V], Map[K, V]] = CanEqual.derived
+            val keys                             = entries.map(_._1)
+            Dyn(Signal.combineLatestAll(entries.map(_._2)).map(values => keys.zip(values).toMap))
+    end keyed
+
+    /** An optional slot as a value of its value, `Absent` where it is unset. */
+    def optional[A](v: Maybe[ReactiveValue[A]])(using CanEqual[A, A], Frame): ReactiveValue[Maybe[A]] =
+        v match
+            case Present(Dyn(sig)) => Dyn(sig.map(a => Present(a)))
+            case Present(Const(a)) => Const(Present(a))
+            case Absent            => Const(Absent)
 
     /** A reader's change to a state slot, as every slot takes it: a two-way binding is written first, then `report` hears
       * the new value, whatever the binding is. A slot bound one way (a signal, a constant, or nothing at all) is not
