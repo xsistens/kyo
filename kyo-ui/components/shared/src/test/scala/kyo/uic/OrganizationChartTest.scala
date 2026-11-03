@@ -181,7 +181,9 @@ class OrganizationChartTest extends ReactiveValueContract:
             after <- publishedAfterReady(
                 teamChart.render,
                 t => nodes(t).map(_.exists(_.attrs.onKeyDown.isDefined)),
-                until = t => stopsIn(t).map(_ == Chunk("dev"))
+                // On the newest paint: a click writes the cursor and the selection, so it may publish twice, and the stops of two
+                // trees are two.
+                until = t => elementsWithClass(t, "p-organizationchart").map(_.head).map(stopsIn(_)).map(_ == Chunk("dev"))
             )(t => nodes(t).map(ns => click(ns.find(n => textOf(n) == "Dev").get)))
         yield assert(after.nonEmpty, "the tab stop never followed the click")
     }
@@ -261,8 +263,13 @@ class OrganizationChartTest extends ReactiveValueContract:
                     until = t => toggles(t).map(_.headOption.exists(_.attrs.ariaAttrs.get("expanded").contains("false")))
                 )(
                     t => toggles(t).map(ts => click(ts.find(declaresClick).get)),
-                    _ => setSettled(sw, false),
-                    _ => sw.set(true)
+                    _ => sw.set(false),
+                    // The chart is one region over the switch and the state: only once it has drawn the switch off is the next
+                    // write one it has to draw, or the two would be one change that repaints nothing.
+                    t =>
+                        elementsWithClass(t, "p-organizationchart").map(_.head).map(toggles(_)).map(ts =>
+                            if ts.nonEmpty then throw new AssertionError("not drawn off yet") else sw.set(true)
+                        )
                 )
             yield assert(shown.nonEmpty, "what the reader collapsed did not come back with the switch")
         }
