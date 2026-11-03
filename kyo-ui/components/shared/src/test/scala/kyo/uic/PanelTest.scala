@@ -10,7 +10,7 @@ class PanelTest extends ReactiveValueContract:
 
     private def panel(using Frame) = uic.Panel().header("Details").toggleable(true)(p("body"))
 
-    holds(new Slot[Panel, Boolean](
+    holds(new SlotCase[Panel, Boolean](
         name = "collapsed",
         bare = Present(panel),
         bind = panel.collapsed(_),

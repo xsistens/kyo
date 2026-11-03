@@ -373,7 +373,7 @@ class TabsTest extends ReactiveValueContract:
     private def third(t: UI)(using Frame): UI.Ast.Element < Sync =
         elementsWithClass(t, "p-tab").map(hs => hs.lift(2).getOrElse(throw new AssertionError(s"${hs.size} headers")))
 
-    holds(new Slot[uic.Tabs[String], String](
+    holds(new SlotCase[uic.Tabs[String], String](
         name = "selected",
         bare = Present(strip),
         bind = strip.selected(_),

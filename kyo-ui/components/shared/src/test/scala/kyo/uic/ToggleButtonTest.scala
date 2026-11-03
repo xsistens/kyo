@@ -18,7 +18,7 @@ class ToggleButtonTest extends ReactiveValueContract:
             if says != checked then throw new AssertionError(s"aria-pressed says $says, the checked class $checked")
             says
 
-    holds(new Slot[uic.ToggleButton, Boolean](
+    holds(new SlotCase[uic.ToggleButton, Boolean](
         name = "checked",
         bare = Present(uic.ToggleButton()),
         bind = uic.ToggleButton().checked(_),

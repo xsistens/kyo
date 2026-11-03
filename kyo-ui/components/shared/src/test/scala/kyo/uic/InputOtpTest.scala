@@ -21,7 +21,7 @@ class InputOtpTest extends ReactiveValueContract:
 
     private def otp(using Frame) = uic.InputOtp().length(3)
 
-    holds(new Slot[uic.InputOtp, String](
+    holds(new SlotCase[uic.InputOtp, String](
         name = "value",
         bare = Present(otp),
         bind = otp.value(_),

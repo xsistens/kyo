@@ -1139,7 +1139,7 @@ class DatePickerTest extends ReactiveValueContract:
                 case None       => throw new AssertionError("no 9th on the page yet")
         )
 
-    holds(new Slot[uic.DatePicker[LocalDate], Maybe[LocalDate]](
+    holds(new SlotCase[uic.DatePicker[LocalDate], Maybe[LocalDate]](
         name = "value",
         bare = Present(picker),
         bind = picker.value(_),
@@ -1156,7 +1156,7 @@ class DatePickerTest extends ReactiveValueContract:
         after = Seq(pickNinth(_))
     ))
 
-    holds(new Slot[uic.DatePicker[LocalDate], Boolean](
+    holds(new SlotCase[uic.DatePicker[LocalDate], Boolean](
         name = "open",
         bare = Present(picker),
         bind = picker.open(_),
@@ -1174,7 +1174,7 @@ class DatePickerTest extends ReactiveValueContract:
 
     // A calendar open by a constant somebody hears, bound one way or to a ref still closes on the dropdown: the reader asks,
     // and the owner decides.
-    heardBy(new Slot[uic.DatePicker[LocalDate], Boolean](
+    heardBy(new SlotCase[uic.DatePicker[LocalDate], Boolean](
         name = "open, from open",
         bare = Absent,
         bind = picker.open(_),
@@ -1197,7 +1197,7 @@ class DatePickerTest extends ReactiveValueContract:
 
     // The page and the view are drawn only in the open calendar, which only the mount draws: the calendar is held open here,
     // so the page and the view are the slots under test.
-    holds(new Slot[uic.DatePicker[LocalDate], YearMonth](
+    holds(new SlotCase[uic.DatePicker[LocalDate], YearMonth](
         name = "month",
         bare = Present(calendar),
         bind = calendar.month(_),
@@ -1223,7 +1223,7 @@ class DatePickerTest extends ReactiveValueContract:
             }
         )
 
-    holds(new Slot[uic.DatePicker[LocalDate], DatePickerView](
+    holds(new SlotCase[uic.DatePicker[LocalDate], DatePickerView](
         name = "currentView",
         bare = Present(calendar),
         bind = calendar.currentView(_),
@@ -1240,7 +1240,7 @@ class DatePickerTest extends ReactiveValueContract:
 
     // A set binds the picker into another type, so this slot has no unbound form. Its field is read-only whatever binds it,
     // since the set is picked in the calendar: fixed is the dropdown opening nothing besides.
-    holds(new Slot[uic.MultiDatePicker[LocalDate], Set[LocalDate]](
+    holds(new SlotCase[uic.MultiDatePicker[LocalDate], Set[LocalDate]](
         name = "values",
         bare = Absent,
         bind = picker.values(_),
@@ -1271,7 +1271,7 @@ class DatePickerTest extends ReactiveValueContract:
 
     // A range is two bindings and one event over both, so each end is a slot, held with the other end a constant: the
     // picker is fixed only where both are constants nobody hears, and a pick reports both ends.
-    holds(new Slot[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
+    holds(new SlotCase[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
         name = "range, its start",
         bare = Absent,
         bind = picker.range(_, Maybe.empty[LocalDate]),
@@ -1288,7 +1288,7 @@ class DatePickerTest extends ReactiveValueContract:
         after = Seq(pickNinth(_))
     ))
 
-    holds(new Slot[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
+    holds(new SlotCase[uic.RangeDatePicker[LocalDate], Maybe[LocalDate]](
         name = "range, its end",
         bare = Absent,
         bind = picker.range(Present(july2), _),

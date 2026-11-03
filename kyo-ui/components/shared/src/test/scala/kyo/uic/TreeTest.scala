@@ -55,7 +55,7 @@ class TreeTest extends ReactiveValueContract:
     // The toggle is what a pointer opens a branch with. A tree has no readonly state for its expansion and its toggles are
     // hidden from assistive tech, so a fixed expansion says nothing beyond each branch's aria-expanded: it is fixed because
     // no toggle answers (the keys ignore a fixed expansion too, `toggleNode`'s guard).
-    holds(new Slot[uic.Tree[String], Set[String]](
+    holds(new SlotCase[uic.Tree[String], Set[String]](
         name = "expanded",
         bare = Present(tree),
         bind = tree.expanded(_),
@@ -77,7 +77,7 @@ class TreeTest extends ReactiveValueContract:
     // A tree has no readonly state for its selection either, and a treeitem's aria-disabled would also take the branch it
     // opens away from the reader, so a fixed selection says nothing beyond each node's aria-selected: it is fixed because no
     // label takes a click (the keys ignore it too, `selectNode`'s guard).
-    holds(new Slot[uic.Tree[String], Set[String]](
+    holds(new SlotCase[uic.Tree[String], Set[String]](
         name = "selection",
         bare = Present(single),
         bind = single.selection(_),

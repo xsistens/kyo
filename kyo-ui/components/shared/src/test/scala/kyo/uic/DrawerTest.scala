@@ -10,7 +10,7 @@ class DrawerTest extends ReactiveValueContract:
 
     private def bare(using Frame) = uic.Drawer().header("Details")(p("body"))
 
-    holds(new Slot[Drawer, Boolean](
+    holds(new SlotCase[Drawer, Boolean](
         name = "open",
         bare = Present(bare),
         bind = bare.open(_),

@@ -58,7 +58,7 @@ class OrganizationChartTest extends ReactiveValueContract:
         toggles(t).map(_.headOption.getOrElse(throw new AssertionError("no toggle")))
 
     // The toggle is a button and nothing else, so a fixed one is a tab stop that says it changes nothing.
-    holds(new Slot[uic.OrganizationChart[String], Set[String]](
+    holds(new SlotCase[uic.OrganizationChart[String], Set[String]](
         name = "expanded",
         // `expanded()` turns the toggles on over subtrees the chart keeps itself, starting fully open.
         bare = Present(org.expanded()),
@@ -78,7 +78,7 @@ class OrganizationChartTest extends ReactiveValueContract:
     private def single(using Frame) = org.selectionMode(uic.SelectionMode.Single)
 
     // A node box has no role, so a fixed selection has no words to say it in: it is fixed because no node takes a click.
-    holds(new Slot[uic.OrganizationChart[String], Set[String]](
+    holds(new SlotCase[uic.OrganizationChart[String], Set[String]](
         name = "selection",
         bare = Present(single),
         bind = single.selection(_),

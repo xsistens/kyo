@@ -156,7 +156,7 @@ class OverlayTest extends ReactiveValueContract:
         yield outside.isEmpty && p.attrs.onKeyDown.isEmpty
 
     // An overlay is open or not from its constructor on, so the slot has no unbound form.
-    holds(new Slot[Overlay, Boolean](
+    holds(new SlotCase[Overlay, Boolean](
         name = "open",
         bare = Absent,
         bind = panel(_),

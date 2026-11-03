@@ -10,7 +10,7 @@ class FieldsetTest extends ReactiveValueContract:
 
     private def fieldset(using Frame) = uic.Fieldset().legend("Details").toggleable(true)(p("body"))
 
-    holds(new Slot[Fieldset, Boolean](
+    holds(new SlotCase[Fieldset, Boolean](
         name = "collapsed",
         bare = Present(fieldset),
         bind = fieldset.collapsed(_),

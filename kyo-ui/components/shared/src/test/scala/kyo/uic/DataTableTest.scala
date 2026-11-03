@@ -4180,7 +4180,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // A sort is said by aria-sort, and a column header has no readonly state for it: a fixed sort is one no header changes,
     // by a press or by a key, on a header that stays the tab stop it is when the sort is live.
-    holds(new Slot[uic.DataTable[Item], List[uic.SortKey]](
+    holds(new SlotCase[uic.DataTable[Item], List[uic.SortKey]](
         name = "sort",
         bare = Present(bare),
         bind = bare.sort(_),
@@ -4204,7 +4204,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The field is a native text field, so a fixed filter is what native readonly is: reachable, readable, and edited by
     // nobody. Its mode funnel is wired by the mount, which is what a ready tree has.
-    holds(new Slot[uic.DataTable[Item], Map[List[String], ColumnFilter]](
+    holds(new SlotCase[uic.DataTable[Item], Map[List[String], ColumnFilter]](
         name = "columnFilters",
         bare = Present(filterable),
         bind = filterable.columnFilters(_),
@@ -4237,7 +4237,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The handles are only the affordance: fixed widths drop them, keep the layout, and say nothing. Under Expand a drag
     // grows the one column it grabbed from the width the page measures it at.
-    holds(new Slot[uic.DataTable[Item], Map[List[String], Double]](
+    holds(new SlotCase[uic.DataTable[Item], Map[List[String], Double]](
         name = "columnWidths",
         bare = Present(widths.columnWidths()),
         bind = widths.columnWidths(_),
@@ -4274,7 +4274,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The drag is only the affordance: a fixed order keeps every header where it says and offers no drag. Each header is
     // a hundred pixels wide, so letting go at 190 drops the first column in front of the third.
-    holds(new Slot[uic.DataTable[Item], List[List[String]]](
+    holds(new SlotCase[uic.DataTable[Item], List[List[String]]](
         name = "columnOrder",
         bare = Present(ordered.columnOrder()),
         bind = ordered.columnOrder(_),
@@ -4315,7 +4315,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The page is the paginator's argument, so it has no unbound form; the embedded paginator's next-page button moves it,
     // and a fixed page is the paginator's fixed page.
-    holds(new Slot[uic.DataTable[Item], Int](
+    holds(new SlotCase[uic.DataTable[Item], Int](
         name = "page",
         bare = Absent,
         bind = paged.paginate(2)(_),
@@ -4336,7 +4336,7 @@ class DataTableTest extends ReactiveValueContract:
         )
 
     // The size is the paginator's argument too, picked from its rows-per-page dropdown; a fixed one is a readonly dropdown.
-    holds(new Slot[uic.DataTable[Item], Int](
+    holds(new SlotCase[uic.DataTable[Item], Int](
         name = "page size",
         bare = Absent,
         bind = paged.paginate(_)(0).paginator(_.rowsPerPageOptions(Seq(2, 4))),
@@ -4358,7 +4358,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // A row's aria-selected says the selection, and a grid's readonly state is about its cells: a fixed selection is one
     // no row takes as a pick, on rows that stay the tab stops they are when it is live.
-    holds(new Slot[uic.DataTable[Item], Set[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Set[Item]](
         name = "selection",
         bare = Present(picking),
         bind = picking.selection(_),
@@ -4384,7 +4384,7 @@ class DataTableTest extends ReactiveValueContract:
     // The anchor is never drawn, and the click that moves it is the row's own pick, which a fixed anchor leaves in place: a
     // fixed anchor is one a range starts at whatever the reader clicks, which "a constant anchor nobody hears is fixed"
     // holds above, beside "an unbound ranging table still mints its anchor". These are the cases a hearer takes part in.
-    heardBy(new Slot[uic.DataTable[Item], Maybe[Item]](
+    heardBy(new SlotCase[uic.DataTable[Item], Maybe[Item]](
         name = "selectionAnchor",
         bare = Absent,
         bind = ranging.selectionAnchor(_),
@@ -4410,7 +4410,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // A picked cell says so by aria-selected, and a cell's readonly state is about its value: fixed cells are ones no
     // click picks.
-    holds(new Slot[uic.DataTable[Item], Set[CellPath[Item]]](
+    holds(new SlotCase[uic.DataTable[Item], Set[CellPath[Item]]](
         name = "selectedCells",
         bare = Present(cellPicking.selectedCells()),
         bind = cellPicking.selectedCells(_),
@@ -4430,7 +4430,7 @@ class DataTableTest extends ReactiveValueContract:
     // A context menu row has no vocabulary to say it is fixed: the right-click is left to the browser, and the mark stays.
     // Unbound, a hearer is what turns it on, as a binding does ("a table with no context binding leaves the browser's own
     // menu alone" holds the table with neither).
-    holds(new Slot[uic.DataTable[Item], Maybe[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Maybe[Item]](
         name = "contextMenuRow",
         bare = Present(contextual.onContextMenuRowChange(_ => ())),
         bind = contextual.contextMenuRow(_),
@@ -4451,7 +4451,7 @@ class DataTableTest extends ReactiveValueContract:
     private def toggleButtons(t: UI)(using Frame): Chunk[UI.Ast.Element] < Sync = elementsWithClass(t, "p-datatable-row-toggle-button")
 
     // The toggle is a button and nothing else, so a fixed one is a tab stop that says it changes nothing.
-    holds(new Slot[uic.DataTable[Item], Set[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Set[Item]](
         name = "expanded",
         bare = Present(expandable),
         bind = expandable.expanded(_),
@@ -4465,7 +4465,7 @@ class DataTableTest extends ReactiveValueContract:
     ))
 
     // A group's toggle is a button too, and expandedGroups() is what turns the collapsible groups on over the table's own.
-    holds(new Slot[uic.DataTable[Item], Set[GroupPath]](
+    holds(new SlotCase[uic.DataTable[Item], Set[GroupPath]](
         name = "expandedGroups",
         bare = Present(grouped.expandedGroups()),
         bind = grouped.expandedGroups(_),
@@ -4485,7 +4485,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The row editor's buttons are buttons, so fixed editing rows are buttons that say they change nothing. The mount
     // wires them: the page as first rendered has nothing for a click to write into.
-    holds(new Slot[uic.DataTable[Item], Set[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Set[Item]](
         name = "editingRows",
         bare = Present(editableBare.editingRows()),
         bind = editableBare.editingRows(_),
@@ -4507,7 +4507,7 @@ class DataTableTest extends ReactiveValueContract:
     ))
 
     // A cell that opens is marked p-editable-column and takes the click; a fixed editing cell is one no cell opens.
-    holds(new Slot[uic.DataTable[Item], Maybe[CellPath[Item]]](
+    holds(new SlotCase[uic.DataTable[Item], Maybe[CellPath[Item]]](
         name = "editingCell",
         bare = Present(editableBare.editingCell()),
         bind = editableBare.editingCell(_),
@@ -4541,7 +4541,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // The rows are the table's argument, so they have no unbound form. A commit opens a cell, types, and presses Enter; a
     // fixed row list opens no cell.
-    holds(new Slot[uic.DataTable[Item], Seq[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Seq[Item]](
         name = "rows, by a commit",
         bare = Absent,
         bind = committing.rows(_),
@@ -4575,7 +4575,7 @@ class DataTableTest extends ReactiveValueContract:
 
     // A drop on a row's grip moves it. The grip is only the affordance: fixed rows keep the column and lose the grip.
     // Three rows forty pixels tall: letting the first go at 95 drops it after the second.
-    holds(new Slot[uic.DataTable[Item], Seq[Item]](
+    holds(new SlotCase[uic.DataTable[Item], Seq[Item]](
         name = "rows, by a drop",
         bare = Absent,
         bind = droppable.rows(_),

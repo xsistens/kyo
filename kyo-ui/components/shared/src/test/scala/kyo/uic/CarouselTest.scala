@@ -41,7 +41,7 @@ class CarouselTest extends ReactiveValueContract:
         )
 
     // The next-page navigator turns it; a fixed one is a button that turns nothing, so it says so the way a button can.
-    holds(new Slot[uic.Carousel[String], Int](
+    holds(new SlotCase[uic.Carousel[String], Int](
         name = "page",
         bare = Present(strip),
         bind = strip.page(_),
