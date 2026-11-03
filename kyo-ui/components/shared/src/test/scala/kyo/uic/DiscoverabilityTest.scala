@@ -593,6 +593,22 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x(using Frame) = uic.Chip("Tag").removable(true).onClose(())""")
     }
 
+    "a feature's switch takes a signal too, and a setter with no argument is gone; paginate names its page or keeps it" in {
+        typeCheck(preamble + """def x(s: Signal[Boolean]) = uic.Panel().toggleable(s)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]) = uic.Fieldset().toggleable(s)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]) = uic.DataTable[String]().resizableColumns(s).reorderableColumns(true)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]) = uic.DataTable[String]().collapsibleGroups(s).cellSelection(true)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]) = uic.DataTable[String]().rowEditing(s).cellEditing(true)""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().columnWidths()""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().columnOrder()""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().expandedGroups()""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().selectedCells()""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().editingRows()""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().editingCell()""")
+        typeCheck(preamble + """def x = uic.DataView[String]().paginate(10)""")
+        typeCheck(preamble + """def x(r: SignalRef[Int]) = uic.DataView[String]().paginate(10)(r)""")
+    }
+
     "Panel is toggleable (not ui5-fixed); sticky/noAnimation are retired" in {
         typeCheck(
             preamble + """def x(r: SignalRef[Boolean])(using Frame) = uic.Panel().header("H").toggleable(true).collapsed(r).footer(span("f"))"""

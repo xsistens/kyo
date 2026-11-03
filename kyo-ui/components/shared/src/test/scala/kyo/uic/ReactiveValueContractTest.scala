@@ -2,8 +2,8 @@ package kyo.uic
 
 import kyo.*
 
-/** Rule A for state slots, written once: the six ways a slot can be bound and what each must do. `ReactiveValue` is where
-  * the rule lives (`owned`, `heard`, `fixed`, `deaf`, `change`), so a suite that extends this holds a component's slots to
+/** Rule A for state slots, written once: the six ways a slot can be bound and what each must do. `Slot` is where the rule
+  * lives (`owned`, `heard`, `fixed`, `deaf`, `change`), so a suite that extends this holds a component's slots to
   * it with [[holds]], one call per slot, and adds only what that component alone does.
   *
   * A [[SlotCase]] names the slot through its setter and its event, the one control the reader changes it with, and what a
