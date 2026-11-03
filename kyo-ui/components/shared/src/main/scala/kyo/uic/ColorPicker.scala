@@ -60,7 +60,7 @@ import kyo.UI.*
   * of an inline one (its root where an inline picker has no slider, which is while it is disabled).
   */
 final case class ColorPicker private (
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     inlineFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
@@ -68,7 +68,6 @@ final case class ColorPicker private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
     onBlurF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, HasAccessibleName:
@@ -86,7 +85,7 @@ final case class ColorPicker private (
       * starts from: unbound or from a constant, the picker keeps the colour itself, so a drag or key moves it and
       * [[onChange]] hears each one. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): ColorPicker = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): ColorPicker = copy(valueSlot = valueSlot.bind(v))
 
     /** Renders the panel inline (`.p-colorpicker-panel-inline`) instead of the
       * default overlay behind a swatch trigger (Prime's `inline`).
@@ -108,7 +107,7 @@ final case class ColorPicker private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ColorPicker = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW hex after the ref write-back (one-way, with the hex the reader asked for). */
-    def onChange(f: String => UI.Action)(using Frame): ColorPicker = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): ColorPicker = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss with the current hex; unlike onChange it fires even when the
       * color was not changed. The validation layer's Blur trigger.
@@ -127,29 +126,23 @@ final case class ColorPicker private (
             copy(disabledFlag = d).renderResolved
 
     private def renderResolved(using Frame): UI =
-        val field = valueBinding match
+        val field = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) => body(Present(sig), ColorPicker.DefaultHex)
-            // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the
-            // colour the reader moves to is one it keeps, for as long as it is shown.
-            case Present(ReactiveValue.Const(v)) if interactive => owned(v)
-            case Absent if interactive                          => owned(ColorPicker.DefaultHex)
-            case Present(ReactiveValue.Const(v))                => body(Absent, v)
-            case Absent                                         => body(Absent, ColorPicker.DefaultHex)
-        val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
-        if unheard then fragment(field, Diagnostics.unheard("ColorPicker", "value", "onChange")) else field
+            // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour
+            // the reader moves to is one it keeps, for as long as it is shown. The page as first rendered draws the same
+            // anatomy at where it starts, with no handler, since nothing is wired before the mount runs.
+            case other if interactive =>
+                val start = other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
+                Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex)(s => copy(valueSlot = s).renderResolved)(
+                    body(Present(Signal.initConst(start)), start, wire = false)
+                )
+            case other => body(Absent, other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex))
+        Diagnostics.after(field)("ColorPicker")(Diagnostic.unheard(valueSlot, ColorPicker.valueName, on = interactive))
     end renderResolved
-
-    /** The picker over a colour it keeps itself, starting at `initial`, drawn as a two-way binding of it. The page as
-      * first rendered draws the same anatomy at `initial`, with no handler, since nothing is wired before the mount runs.
-      */
-    private def owned(initial: String)(using Frame): UI =
-        ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).renderResolved)(
-            body(Present(Signal.initConst(initial)), initial, wire = false)
-        )
 
     /** A hex the reader asked for: written where the binding is two-way, then reported. */
     private def commit(hex: String)(using Frame): UI.Action =
-        ReactiveValue.change(valueBinding, hex, onChangeF)
+        valueSlot.change(hex)
 
     /** The saturation × brightness plane + the hue bar.
       *
@@ -382,7 +375,7 @@ final case class ColorPicker private (
             case Absent                      => ()
         end match
         onBlurF.foreach { f =>
-            root = root.onBlur(valueBinding.fold(f(ColorPicker.DefaultHex))(_.current.map(f)))
+            root = root.onBlur(valueSlot.current(ColorPicker.DefaultHex).map(f))
         }
         root
     end shellRoot
@@ -478,6 +471,8 @@ end ColorPicker
 
 object ColorPicker:
 
+    private val valueName = Slot.Name("ColorPicker", "value", "a change", "onChange")
+
     /** The two refs an overlay picker owns: whether the panel is open, and the colour it opened
       * with, which is what Escape puts back. They travel together because the confirm/cancel pair
       * is only meaningful with both.
@@ -485,7 +480,7 @@ object ColorPicker:
     final private[uic] case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
 
     /** A color picker whose hex value binds two-way to `ref`. */
-    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(ReactiveValue(ref)))
+    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueSlot = Slot().bind(ref))
 
     /** An unbound color picker; set the value via [[ColorPicker.value]]. */
     def apply(): ColorPicker = new ColorPicker()
