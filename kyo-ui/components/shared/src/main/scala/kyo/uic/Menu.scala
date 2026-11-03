@@ -123,7 +123,7 @@ final case class Menu private (
     private def popupCard(using Frame): List[UI] =
         if !ReactiveValue.deaf(popupSlot, onPopupF) then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "Menu",
                 "the popup is bound one way and nothing hears a close, so the reader cannot close it; add onPopupChange, " +
                     "or bind a SignalRef",

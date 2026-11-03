@@ -79,7 +79,7 @@ final case class Fieldset private (
             // A signal nobody hears: every press the reader makes is painted away again.
             case _ if toggleableFlag && ReactiveValue.deaf(collapsedSlot, onCollapsedF) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "Fieldset",
                         "the collapse state is bound one way and nothing hears a press, so the reader cannot change it; " +
                             "add onCollapsedChange, or bind a SignalRef",

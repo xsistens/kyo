@@ -157,7 +157,7 @@ final case class Rating private (
         val shown: Maybe[ReactiveValue[?]] = if doubleBinding.isDefined then doubleBinding else valueBinding
         val unheard = shown.exists(b => b.dyn.isDefined && b.writable.isEmpty) && onChangeF.isEmpty && !readonlyFlag &&
             !disabledFlag.constTrue
-        if unheard then fragment(field, KeyDiagnostics.unheard("Rating", "value", "onChange")) else field
+        if unheard then fragment(field, Diagnostics.unheard("Rating", "value", "onChange")) else field
     end renderLive
 
     /** The tree the mount publishes once it has a name to group the radios by, the seam golden

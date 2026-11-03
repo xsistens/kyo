@@ -248,7 +248,7 @@ There is no public setter that takes the key a component compares by. Rules:
   `Dyn` or `Const` is only shown, and a pick against it is judged against the value shown and reported, never written,
   so the app writes its own state (a route). Forms are unaffected: `bind` passes the field's ref, which is two-way.
 - **A value no option carries is a data error**, named in a `.p-uic-key-error` card
-  (`KeyDiagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
+  (`Diagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.
 - **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
   `FormField[A]`, `FormField[Maybe[A]]` or `FormField[Set[A]]` (whatever its rules refine to).

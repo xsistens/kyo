@@ -148,7 +148,7 @@ final case class Drawer private (
             // A signal nobody hears: every close the reader asks for is painted away again.
             case _ if ReactiveValue.deaf(openSlot, onOpenF) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "Drawer",
                         "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
                             "onOpenChange, or bind a SignalRef",

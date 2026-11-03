@@ -126,7 +126,7 @@ final case class Slider private (
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is put back.
         if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue then
-            fragment(field, KeyDiagnostics.unheard("Slider", "value", "onChange"))
+            fragment(field, Diagnostics.unheard("Slider", "value", "onChange"))
         else field
     end renderLive
 

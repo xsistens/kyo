@@ -108,7 +108,7 @@ final case class SplitButton private (
         if !ReactiveValue.deaf(openSlot, onOpenF) then button
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "SplitButton",
                     "the menu is bound open one way and nothing hears a toggle or a pick, so the reader cannot change it; " +
                         "add onOpenChange, or bind a SignalRef",

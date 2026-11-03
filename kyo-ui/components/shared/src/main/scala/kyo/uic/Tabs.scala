@@ -207,7 +207,7 @@ final case class Tabs[K] private (
             if !ReactiveValue.deaf(selectedBinding, onSelectedF) then strip
             else
                 val card = entries.render(ts =>
-                    if ts.exists(_.urlV.isEmpty) then KeyDiagnostics.unheard("Tabs", "selected", "onSelectedChange") else fragment()
+                    if ts.exists(_.urlV.isEmpty) then Diagnostics.unheard("Tabs", "selected", "onSelectedChange") else fragment()
                 )
                 fragment(card, strip)
             end if

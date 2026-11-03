@@ -215,7 +215,7 @@ final case class Input private (
                 )
         val unheard = valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onInputF.orElse(onChangeF)) &&
             !readonlyFlag.constTrue && !disabledFlag.constTrue
-        if unheard then fragment(validity.follow(built), KeyDiagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
+        if unheard then fragment(validity.follow(built), Diagnostics.unheard(unheardAsV._1, "value", unheardAsV._2))
         else validity.follow(built)
     end render
 

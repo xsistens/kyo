@@ -2,7 +2,7 @@ package kyo.uic.form
 
 import kyo.*
 import kyo.UI.*
-import kyo.uic.KeyDiagnostics
+import kyo.uic.Diagnostics
 
 /** What a form can say for CERTAIN about its own ids, computed once when it mounts.
   *
@@ -33,13 +33,13 @@ private[form] object FormDiagnostics:
             seen   <- scan(ui)
         yield
             val conflicts = fields.collect { case f if f.idConflict.isDefined => f.idConflict.get }
-            val dupes     = KeyDiagnostics.duplicates(fields.map(_.domId))
+            val dupes     = Diagnostics.duplicates(fields.map(_.domId))
             val dangling  = seen.labelFors.distinct.filterNot(seen.ids.contains)
 
             val conflictCard =
                 if conflicts.isEmpty then Chunk.empty
                 else
-                    Chunk(KeyDiagnostics.card(
+                    Chunk(Diagnostics.card(
                         "kyo.uic.form",
                         "a control bound to a field already carried an id, which bind replaced; the form owns " +
                             "that slot, so choose it at declaration with form.field(...).domId(...)",
@@ -49,7 +49,7 @@ private[form] object FormDiagnostics:
             val dupeCard =
                 if dupes.isEmpty then Chunk.empty
                 else
-                    Chunk(KeyDiagnostics.card(
+                    Chunk(Diagnostics.card(
                         "kyo.uic.form",
                         "two fields declare the same domId; getElementById answers with whichever came first, so " +
                             "focus-first-invalid and the error summary will reach the wrong field",
@@ -59,7 +59,7 @@ private[form] object FormDiagnostics:
             val danglingCard =
                 if dangling.isEmpty then Chunk.empty
                 else
-                    Chunk(KeyDiagnostics.card(
+                    Chunk(Diagnostics.card(
                         "kyo.uic.form",
                         "a label points at an id no element in this form carries; the usual cause is an id set on " +
                             "a control AFTER bind, which the label's forId was read before",

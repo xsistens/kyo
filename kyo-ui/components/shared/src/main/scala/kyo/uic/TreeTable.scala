@@ -432,7 +432,7 @@ final case class TreeTable[A] private (
         val sort     =
             if sortable.isEmpty || !ReactiveValue.deaf(sortSlot, onSortF) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "TreeTable",
                     "the sort is bound one way and nothing hears a header press, so the reader cannot change it; add " +
                         "onSortChange, or bind a SignalRef",
@@ -446,7 +446,7 @@ final case class TreeTable[A] private (
             then Nil
             else List("selection is bound one way and nothing hears a row press: add onSelectionChange, or bind a SignalRef")
         val rows = expansion ++ selection
-        sort ++ (if rows.isEmpty then Nil else List(KeyDiagnostics.card("TreeTable", "a binding the reader cannot move", rows)))
+        sort ++ (if rows.isEmpty then Nil else List(Diagnostics.card("TreeTable", "a binding the reader cannot move", rows)))
     end unheard
 
     /** Applies the sort spec to one sibling list (stable, back-to-front: the

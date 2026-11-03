@@ -216,7 +216,7 @@ final case class OrderList[A] private (
                  else List("items is bound one way and nothing hears a move: add onItemsChange, or bind a SignalRef")) ++
                     (if !ReactiveValue.deaf(selectedSlot, onSelectionF) then Nil
                      else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef"))
-        if missing.isEmpty then Nil else List(KeyDiagnostics.card("OrderList", "a binding the reader cannot move", missing))
+        if missing.isEmpty then Nil else List(Diagnostics.card("OrderList", "a binding the reader cannot move", missing))
     end unheard
 
     /** A constant order nobody hears is fixed: the list shows it, and no button or key moves a row. */

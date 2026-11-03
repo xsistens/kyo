@@ -161,7 +161,7 @@ final case class Galleria private (
         if !ReactiveValue.deaf(activeSlot, onActiveIndexF) then gallery
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "Galleria",
                     "the active image is bound one way and nothing hears a navigation, so the reader cannot change it; add " +
                         "onActiveIndexChange, or bind a SignalRef",

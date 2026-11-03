@@ -349,7 +349,7 @@ final case class MultiSelect[A] private (
                      List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
                  else Nil)
         if unheard.isEmpty then renderLive
-        else fragment((unheard.map(a => KeyDiagnostics.card("MultiSelect", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
+        else fragment((unheard.map(a => Diagnostics.card("MultiSelect", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
         end if
     end render
 
@@ -458,7 +458,7 @@ final case class MultiSelect[A] private (
         val strays                = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
         val selected              = items.filter(a => current.contains(key(a))) ++ strays
         val unknownCard: List[UI] =
-            if strays.isEmpty || loading then Nil else List(KeyDiagnostics.unknown("MultiSelect", strays.map(labelF)))
+            if strays.isEmpty || loading then Nil else List(Diagnostics.unknown("MultiSelect", strays.map(labelF)))
 
         // Toggles one option key; the panel STAYS OPEN (Prime's multiselect pick).
         def toggleOption(a: A): UI.Action =
@@ -648,7 +648,7 @@ final case class MultiSelect[A] private (
         val unheard: List[UI] =
             if disabledFlag || !choice.exists(_.deaf(onChangeF)) then Nil
             else
-                List(KeyDiagnostics.card(
+                List(Diagnostics.card(
                     "MultiSelect",
                     "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange, " +
                         "or bind a SignalRef",
@@ -878,14 +878,14 @@ final case class MultiSelect[A] private (
     end panelKey
 
     /** The loud card shown at the top of the panel when the option keys collide (see
-      * [[KeyDiagnostics]]). A `Set[String]` value makes the failure worse here than
+      * [[Diagnostics]]). A `Set[String]` value makes the failure worse here than
       * in [[Select]]: colliding keys also merge two options into one selection.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = KeyDiagnostics.duplicates(items.map(key))
+        val dups = Diagnostics.duplicates(items.map(key))
         if dups.isEmpty then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "MultiSelect",
                 if keyF.isEmpty then
                     "option labels are not unique and optionKey is unset, so options share one selection entry; set optionKey"

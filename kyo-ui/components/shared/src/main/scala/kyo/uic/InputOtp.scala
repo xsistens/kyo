@@ -129,7 +129,7 @@ final case class InputOtp private (
             case Present(ReactiveValue.Const(v))                => validity.follow(body(v, Absent, _ => (), validity))
             case Absent                                         => validity.follow(body("", Absent, _ => (), validity))
         val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
-        if unheard then fragment(field, KeyDiagnostics.unheard("InputOtp", "value", "onChange")) else field
+        if unheard then fragment(field, Diagnostics.unheard("InputOtp", "value", "onChange")) else field
     end renderResolved
 
     /** The field over a code it keeps itself, starting at `initial`, drawn as a two-way binding of it. */
