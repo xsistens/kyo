@@ -833,10 +833,9 @@ class SelectTest extends ReactiveValueContract:
 
     "a click on an option the opening paint shows picks it, though the panel's own mount has not started yet" in {
         import kyo.internal.*
-        // The opening click writes the open state, and the field it re-renders already holds the panel's placeholder,
-        // which is what the page shows; the overlay's own mount registers itself on a fiber of its own afterwards. A click
-        // sent the moment the opening click returns lands in between, which is where the issue tracker's first click on
-        // an option landed. The rounds keep it from passing on one lucky interleaving.
+        // The opening click writes the panel's state, and the field's one region takes it up on a fiber of its own. A click
+        // sent the moment the opening click returns lands before, during or after that repaint, whichever the scheduler
+        // gives; the test below holds the one during it, and these rounds sweep the rest.
         val rounds                                                                        = 25
         def round(fieldPath: Seq[String], optionPath: Seq[String]): Maybe[String] < Async =
             for
@@ -866,6 +865,45 @@ class SelectTest extends ReactiveValueContract:
         yield
             val missed = picks.count(_ != Present("Cherry"))
             assert(missed == 0, s"$missed of $rounds clicks on Cherry left the field elsewhere: ${picks.distinct}")
+        end for
+    }
+
+    "a click on an option while the opening click's repaint is running picks it" in {
+        import kyo.internal.*
+        // The opening click writes the panel's state, and the field's one region takes it up on a fiber of its own. Here that
+        // repaint is paused with its paints still waiting, and the click on the option arrives during it.
+        for
+            value  <- Signal.initRef(Present(fruit.head): Maybe[Fruit])
+            live   <- Promise.init[Unit, Any]
+            paused <- Promise.init[Unit, Any]
+            letGo  <- Promise.init[Unit, Any]
+            cmds   <- UI.Commands.init(_ => Kyo.unit)
+            armed = new java.util.concurrent.atomic.AtomicBoolean(false)
+            ui    = select.selection(value).render
+            // The first paint is the field's mount publishing the live field, the one a click can open.
+            exchange = new RecordingExchange(beforePaint = (_, _) => live.completeUnitDiscard)
+            closed         <- HtmlRenderer.render(select.selection(Present(fruit.head): Maybe[Fruit]).render, Seq.empty)
+            (_, _, opened) <- field(select, open = true)
+            shown          <- HtmlRenderer.render(opened, Seq.empty)
+            fieldPath  = pathOf(closed, "sel")
+            optionPath = pathOf(shown, "sel-option-2")
+            picked <- Scope.run(BoundaryHold.duringPass.let(at =>
+                // The field's region sits at the root; the panel's measuring trigger has passes of its own, further down.
+                if at.isEmpty && armed.compareAndSet(true, false) then paused.completeUnitDiscard.andThen(letGo.get) else Kyo.unit
+            )(UICommands.commands.let(Present(cmds)) {
+                for
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    sub  <- ReactiveUI.subscribe(root, exchange)
+                    _    <- live.get
+                    _    <- Sync.defer(armed.set(true))
+                    _    <- sub.handle(fieldPath, clickAt(fieldPath))
+                    _    <- paused.get
+                    _    <- sub.handle(optionPath, clickAt(optionPath))
+                    v    <- value.get
+                    _    <- letGo.completeUnitDiscard
+                yield v
+            }))
+        yield assert(picked.map(_.name) == Present("Cherry"), s"the click on Cherry left the field at $picked")
         end for
     }
 
