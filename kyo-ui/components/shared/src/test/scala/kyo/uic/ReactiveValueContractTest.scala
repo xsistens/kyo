@@ -161,7 +161,7 @@ abstract class ReactiveValueContract extends UicTest:
             else actedOn(ui, t => wired(t))(steps*)
     end SlotCase
 
-    private def cards(t: UI)(using Frame) = elementsWithClass(t, "p-uic-key-error")
+    private def cards(t: UI)(using Frame) = elementsWithClass(t, UicTest.cardClass)
 
     /** Whether nothing in a paginator (one of its own, or one a table or a view embeds) goes to another page, and every
       * link and button that would says so: a fixed page.
@@ -526,11 +526,13 @@ abstract class ReactiveValueContract extends UicTest:
                 got   <- seen.get
                 deaf  <- cards(s.render(s.bind(held.readOnly)))
                 heard <- cards(s.render(s.hear(s.bind(held.readOnly), _ => ())))
+                lives <- cardsOnPage(s.render(s.bind(held.readOnly)))
             yield
                 assert(shown == s.start, s"the component follows the signal: it shows $shown")
                 assert(h == s.start && got.size == 1 && got.head == s.next, s"held $h, reported $got")
                 assert(deaf.size == 1 && textOf(deaf.head).contains(s.event), s"nobody hears: ${deaf.map(textOf)}")
                 assert(heard.isEmpty, s"a signal somebody hears is no mistake: ${heard.map(textOf)}")
+                assert(lives.size == 1, s"the page as it lives says it once: ${lives.map(textOf)}")
             end for
         }
 

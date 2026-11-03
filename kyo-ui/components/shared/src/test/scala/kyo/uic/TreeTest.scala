@@ -33,9 +33,8 @@ class TreeTest extends ReactiveValueContract:
         for
             exp <- Signal.initRef(Set.empty[String])
             sel <- Signal.initRef(Set.empty[String])
-            hi  <- Signal.initRef(-1)
             base = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(exp.readOnly).selection(sel.readOnly)
-            byOld <- elementsWithClass(base.onNodeToggle(_ => ()).onItemClick(_ => ()).wired(hi, "t"), "p-uic-key-error")
+            byOld <- elementsWithClass(base.onNodeToggle(_ => ()).onItemClick(_ => ()).render, "p-uic-key-error")
             live = uic.Tree[String]().nodes(nodes*).selectionMode(uic.SelectionMode.Single).expanded(Set.empty[String])
                 .onNodeToggle(_ => ()).selection(Set.empty[String]).onItemClick(_ => ()).render
             toggles <- elementsWithClass(live, "p-tree-node-toggle-button")
@@ -55,20 +54,24 @@ class TreeTest extends ReactiveValueContract:
     // The toggle is what a pointer opens a branch with. A tree has no readonly state for its expansion and its toggles are
     // hidden from assistive tech, so a fixed expansion says nothing beyond each branch's aria-expanded: it is fixed because
     // no toggle answers (the keys ignore a fixed expansion too, `toggleNode`'s guard).
-    holds(new SlotCase[uic.Tree[String], Set[String]](
-        name = "expanded",
-        bare = Present(tree),
-        bind = tree.expanded(_),
-        hear = (t, f) => t.onExpandedChange(f),
-        event = "onExpandedChange",
-        render = _.render,
-        start = Set.empty,
-        next = Set("src"),
-        control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
-        shows = elementsWithClass(_, "p-tree-node-label").map(ls => if ls.exists(textOf(_) == "main") then Set("src") else Set.empty),
-        isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
-        ready = Present(toggles(_).map(_.exists(declaresClick)))
-    ))
+    private def expandedCase(name: String, hear: (uic.Tree[String], Set[String] => UI.Action) => Frame ?=> uic.Tree[String]) =
+        new SlotCase[uic.Tree[String], Set[String]](
+            name = name,
+            bare = Present(tree),
+            bind = tree.expanded(_),
+            hear = hear,
+            event = "onExpandedChange",
+            render = _.render,
+            start = Set.empty,
+            next = Set("src"),
+            control = toggles(_).map(_.headOption.getOrElse(throw new AssertionError("no toggle"))),
+            shows = elementsWithClass(_, "p-tree-node-label").map(ls => if ls.exists(textOf(_) == "main") then Set("src") else Set.empty),
+            isFixed = Present(toggles(_).map(ts => ts.nonEmpty && ts.forall(t => !declaresClick(t)))),
+            ready = Present(toggles(_).map(_.exists(declaresClick)))
+        )
+
+    holds(expandedCase("expanded", (t, f) => t.onExpandedChange(f)))
+    heardBy(expandedCase("expanded, heard by onNodeToggle", (t, f) => t.onNodeToggle(k => f(Set(k)))))
 
     private val idsByLabel = Map("src" -> "src", "main" -> "main", "test" -> "test", "build.sbt" -> "build")
 
@@ -77,19 +80,23 @@ class TreeTest extends ReactiveValueContract:
     // A tree has no readonly state for its selection either, and a treeitem's aria-disabled would also take the branch it
     // opens away from the reader, so a fixed selection says nothing beyond each node's aria-selected: it is fixed because no
     // label takes a click (the keys ignore it too, `selectNode`'s guard).
-    holds(new SlotCase[uic.Tree[String], Set[String]](
-        name = "selection",
-        bare = Present(single),
-        bind = single.selection(_),
-        hear = (t, f) => t.onSelectionChange(f),
-        event = "onSelectionChange",
-        render = _.render,
-        start = Set.empty,
-        next = Set("build"),
-        control = labelOf(_, "build.sbt"),
-        shows = elementsWithClass(_, "p-tree-node-selected").map(_.map(n => idsByLabel(textOf(n))).toSet),
-        isFixed = Present(elementsWithClass(_, "p-tree-node-label").map(ls => ls.nonEmpty && ls.forall(l => !declaresClick(l)))),
-        ready = Present(elementsWithClass(_, "p-tree-node-label").map(_.exists(declaresClick)))
-    ))
+    private def selectionCase(name: String, hear: (uic.Tree[String], Set[String] => UI.Action) => Frame ?=> uic.Tree[String]) =
+        new SlotCase[uic.Tree[String], Set[String]](
+            name = name,
+            bare = Present(single),
+            bind = single.selection(_),
+            hear = hear,
+            event = "onSelectionChange",
+            render = _.render,
+            start = Set.empty,
+            next = Set("build"),
+            control = labelOf(_, "build.sbt"),
+            shows = elementsWithClass(_, "p-tree-node-selected").map(_.map(n => idsByLabel(textOf(n))).toSet),
+            isFixed = Present(elementsWithClass(_, "p-tree-node-label").map(ls => ls.nonEmpty && ls.forall(l => !declaresClick(l)))),
+            ready = Present(elementsWithClass(_, "p-tree-node-label").map(_.exists(declaresClick)))
+        )
+
+    holds(selectionCase("selection", (t, f) => t.onSelectionChange(f)))
+    heardBy(selectionCase("selection, heard by onItemClick", (t, f) => t.onItemClick(k => f(Set(k)))))
 
 end TreeTest
