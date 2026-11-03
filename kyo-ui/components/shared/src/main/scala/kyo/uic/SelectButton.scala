@@ -182,9 +182,10 @@ final case class SelectButton[A] private (
     private[uic] def render(using Frame): UI =
         // Unbound, the group keeps what the reader presses itself.
         if multipleFlag && multi.isEmpty then
-            ReactiveValue.owned(Set.empty[A])(own => copy(multi = Present(MultiChoice(own))).renderBound)(renderBound)
+            UI.owned(Set.empty[A])(own => copy(multi = Present(MultiChoice(ReactiveVariable(own)))).renderBound).placeholder(renderBound)
         else if !multipleFlag && single.isEmpty then
-            ReactiveValue.owned(Maybe.empty[A])(own => copy(single = Present(SingleChoice.Optional(own))).renderBound)(renderBound)
+            UI.owned(Maybe.empty[A])(own => copy(single = Present(SingleChoice.Optional(ReactiveVariable(own)))).renderBound)
+                .placeholder(renderBound)
         else renderBound
 
     private def renderBound(using Frame): UI =

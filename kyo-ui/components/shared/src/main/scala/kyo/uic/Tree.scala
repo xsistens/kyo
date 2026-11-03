@@ -96,10 +96,8 @@ final case class Tree[K] private (
     // The roots `body` draws, resolved from `nodeSources` by the render.
     nodeList: List[TreeNode[K]] = Nil,
     nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
-    expandedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
-    selectedSlot: Maybe[ReactiveValue[Set[K]]] = Absent,
-    onExpandedF: Maybe[Set[K] => UI.Action] = Absent,
-    onSelectionF: Maybe[Set[K] => UI.Action] = Absent,
+    expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
+    selectedSlot: Slot[Set[K]] = Slot[Set[K]](),
     onNodeToggleF: Maybe[K => UI.Action] = Absent,
     onItemClickF: Maybe[K => UI.Action] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
@@ -126,28 +124,30 @@ final case class Tree[K] private (
       * A plain `Signal` or a constant binds one way: the tree opens those nodes and a toggle only reports the set it asks
       * for to [[onExpandedChange]]; with neither that nor [[onNodeToggle]] it is reported in a card.
       */
-    def expanded(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(expandedSlot = Present(ReactiveValue[Set[K]](v)))
+    def expanded(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(expandedSlot = expandedSlot.bind(v))
 
     /** The chosen node ids. A `SignalRef` binds two way: clicking a node updates the set, ref changes re-render selection.
       * A plain `Signal` or a constant binds one way: the tree marks those nodes and a click only reports the set it asks
       * for to [[onSelectionChange]]; with neither that nor [[onItemClick]] it is reported in a card.
       */
-    def selection(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(selectedSlot = Present(ReactiveValue[Set[K]](v)))
+    def selection(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(selectedSlot = selectedSlot.bind(v))
 
     /** Fired with the nodes open after a toggle, after a two-way [[expanded]] is written, and before [[onNodeToggle]]. */
-    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(onExpandedF = Present(Callback.of(f)))
+    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(expandedSlot = expandedSlot.hear(f))
 
     /** Fired with the nodes chosen after a click, after a two-way [[selection]] is written, and before [[onItemClick]].
       * Unlike [[onItemClick]] it carries what the click made of the selection: the mode, the modifier and a checkbox's
       * cascade included.
       */
-    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(onSelectionF = Present(Callback.of(f)))
+    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(selectedSlot = selectedSlot.hear(f))
 
     /** Fired with the node id after a toggle (after the expansion write). */
-    def onNodeToggle(f: K => UI.Action)(using Frame): Tree[K] = copy(onNodeToggleF = Present(Callback.of(f)))
+    def onNodeToggle(f: K => UI.Action)(using Frame): Tree[K] =
+        copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo)
 
     /** Fired with the node id after a content click (after the selection write). */
-    def onItemClick(f: K => UI.Action)(using Frame): Tree[K] = copy(onItemClickF = Present(Callback.of(f)))
+    def onItemClick(f: K => UI.Action)(using Frame): Tree[K] =
+        copy(onItemClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo)
 
     /** Selection semantics: `None` (default; nodes inert unless `onItemClick` is
       * set), `Single` (clicking replaces the selection; re-clicking clears it),
@@ -195,30 +195,20 @@ final case class Tree[K] private (
     private[uic] def resolved(exp: Set[K], sel: Set[K], roving: Maybe[Roving] = Absent)(using Frame): UI =
         entries.render(ns => rooted(ns).body(exp, sel, roving))
 
-    private[uic] def render(using Frame): UI = withUnheard(mountedTree)
-
     /** Bindings made one way that nothing hears, ahead of the tree. A toggle also reaches [[onNodeToggle]] and a click
       * [[onItemClick]], so either is an outlet as good as the change events.
       */
-    private def withUnheard(tree: UI)(using Frame): UI =
-        val expansion =
-            if !ReactiveValue.deaf(expandedSlot, onExpandedF.orElse(onNodeToggleF)) then Nil
-            else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef")
-        val selection =
-            if selectionModeV == SelectionMode.None || !ReactiveValue.deaf(selectedSlot, onSelectionF.orElse(onItemClickF))
-            then Nil
-            else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef")
-        val unheard = expansion ++ selection
-        if unheard.isEmpty then tree
-        else fragment(Diagnostics.card("Tree", "a binding the reader cannot move", unheard), tree)
-    end withUnheard
+    private[uic] def render(using Frame): UI =
+        Diagnostics.before(mountedTree)("Tree")(
+            Diagnostic.unheard(expandedSlot, Tree.expandedName),
+            Diagnostic.unheard(selectedSlot, Tree.selectionName, on = selectionModeV != SelectionMode.None)
+        )
 
     /** A constant expansion nobody hears is fixed: the branches show it, and no toggle opens or closes one. */
-    private def expansionFixed: Boolean = ReactiveValue.fixed(expandedSlot, onExpandedF.orElse(onNodeToggleF))
+    private def expansionFixed: Boolean = expandedSlot.fixed
 
     /** A constant selection nobody hears is fixed: the nodes show it, and no click or key picks one. */
-    private def selectionFixed: Boolean =
-        selectionModeV != SelectionMode.None && ReactiveValue.fixed(selectedSlot, onSelectionF.orElse(onItemClickF))
+    private def selectionFixed: Boolean = selectionModeV != SelectionMode.None && selectedSlot.fixed
 
     private def mountedTree(using Frame): UI =
         // One mount for the keyboard highlight and the id it addresses rows by, allocated
@@ -231,13 +221,8 @@ final case class Tree[K] private (
                 base <- cmds.freshId
                 hi   <- Signal.initRef(-1)
                 // Unbound, the tree keeps what the reader opens, and picks where it selects, itself.
-                exp <-
-                    if expandedSlot.isEmpty then Signal.initRef(Set.empty[K]).map(r => Maybe(ReactiveValue[Set[K]](r)))
-                    else Kyo.lift(expandedSlot)
-                sel <-
-                    if selectedSlot.isEmpty && selectionModeV != SelectionMode.None then
-                        Signal.initRef(Set.empty[K]).map(r => Maybe(ReactiveValue[Set[K]](r)))
-                    else Kyo.lift(selectedSlot)
+                exp <- expandedSlot.owned(Set.empty[K])
+                sel <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[K]) else Kyo.lift(selectedSlot)
             yield copy(expandedSlot = exp, selectedSlot = sel).wired(hi, base)
         }.placeholder(subscribed(Absent))
 
@@ -249,8 +234,8 @@ final case class Tree[K] private (
       * repaint the values it closed over.
       */
     private def subscribed(keyboard: Maybe[(SignalRef[Int], String)])(using Frame): UI =
-        val exp = expandedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
-        val sel = selectedSlot.fold(Reading.Fixed(Set.empty[K]))(Reading.of(_))
+        val exp = expandedSlot.reading(Set.empty[K])
+        val sel = selectedSlot.reading(Set.empty[K])
         val hi  = keyboard.fold(Reading.Fixed(-1))((ref, _) => Reading.Live(ref))
         entries.and(exp).and(sel).and(hi).render { case (((ns, e), s), h) =>
             rooted(ns).body(e, s, keyboard.map((ref, base) => Roving(ref, h, base)))
@@ -443,7 +428,7 @@ final case class Tree[K] private (
 
     private def toggleNodeLive(id: K)(using Frame): UI.Action =
         val setExpanded: UI.Action =
-            ReactiveValue.update(expandedSlot, cur => if cur.contains(id) then cur - id else cur + id, onExpandedF)
+            expandedSlot.update(cur => if cur.contains(id) then cur - id else cur + id)
         val fireToggle: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -466,8 +451,8 @@ final case class Tree[K] private (
             case SelectionMode.None => ()
             // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
             // this mode does not go through the shared one.
-            case SelectionMode.Checkbox => ReactiveValue.update(selectedSlot, cur => cascadeToggle(id, cur), onSelectionF)
-            case m => ReactiveValue.update(selectedSlot, cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur), onSelectionF)
+            case SelectionMode.Checkbox => selectedSlot.update(cur => cascadeToggle(id, cur))
+            case m                      => selectedSlot.update(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
         val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -534,6 +519,9 @@ final case class Tree[K] private (
 end Tree
 
 object Tree:
+    private val expandedName  = Slot.Name("Tree", "expanded", "a toggle", "onExpandedChange")
+    private val selectionName = Slot.Name("Tree", "selection", "a click", "onSelectionChange")
+
     /** The rows the reader can see, outermost first, in the order they render.
       *
       * A collapsed node contributes itself and none of its children, which is exactly what

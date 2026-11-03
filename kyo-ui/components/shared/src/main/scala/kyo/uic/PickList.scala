@@ -30,17 +30,13 @@ import kyo.UI.*
   * drop the per-column reorder rails.
   */
 final case class PickList[A] private (
-    sourceSlot: Maybe[ReactiveValue[Seq[A]]] = Absent,
-    targetSlot: Maybe[ReactiveValue[Seq[A]]] = Absent,
-    onSourceItemsF: Maybe[Seq[A] => UI.Action] = Absent,
-    onTargetItemsF: Maybe[Seq[A] => UI.Action] = Absent,
+    sourceSlot: Slot[Seq[A]] = Slot[Seq[A]](),
+    targetSlot: Slot[Seq[A]] = Slot[Seq[A]](),
     labelF: Maybe[A => String] = Absent,
     keyF: Maybe[A => String] = Absent,
     templateF: Maybe[A => UI] = Absent,
-    sourceSelectedSlot: Maybe[ReactiveValue[Set[A]]] = Absent,
-    targetSelectedSlot: Maybe[ReactiveValue[Set[A]]] = Absent,
-    onSourceSelectionF: Maybe[Set[A] => UI.Action] = Absent,
-    onTargetSelectionF: Maybe[Set[A] => UI.Action] = Absent,
+    sourceSelectedSlot: Slot[Set[A]] = Slot[Set[A]](),
+    targetSelectedSlot: Slot[Set[A]] = Slot[Set[A]](),
     showSourceControlsFlag: Boolean = true,
     showTargetControlsFlag: Boolean = true,
     disabledFlag: Boolean = false,
@@ -54,18 +50,18 @@ final case class PickList[A] private (
       * [[onSourceItemsChange]].
       */
     def sourceItems(v: Seq[A] | Signal[Seq[A]])(label: A => String): PickList[A] =
-        copy(sourceSlot = Present(ReactiveValue[Seq[A]](v)), labelF = Present(label))
+        copy(sourceSlot = sourceSlot.bind(v), labelF = Present(label))
 
     /** The target column, bound like [[sourceItems]]; the label projection comes from [[sourceItems]] and covers both
       * columns.
       */
-    def targetItems(v: Seq[A] | Signal[Seq[A]]): PickList[A] = copy(targetSlot = Present(ReactiveValue[Seq[A]](v)))
+    def targetItems(v: Seq[A] | Signal[Seq[A]]): PickList[A] = copy(targetSlot = targetSlot.bind(v))
 
     /** Fired with the source column a transfer or a reorder asks for, after a two-way [[sourceItems]] is written. */
-    def onSourceItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = copy(onSourceItemsF = Present(Callback.of(f)))
+    def onSourceItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = copy(sourceSlot = sourceSlot.hear(f))
 
     /** Fired with the target column a transfer or a reorder asks for, after a two-way [[targetItems]] is written. */
-    def onTargetItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = copy(onTargetItemsF = Present(Callback.of(f)))
+    def onTargetItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = copy(targetSlot = targetSlot.hear(f))
 
     /** Stable item identity: the selection key (defaults to the label). */
     def itemKey(f: A => String): PickList[A] = copy(keyF = Present(f))
@@ -77,36 +73,31 @@ final case class PickList[A] private (
       * reported to [[onSourceSelectionChange]]. A transfer out of the column clears it.
       */
     def sourceSelection(v: Set[A] | Signal[Set[A]]): PickList[A] =
-        copy(sourceSelectedSlot = Present(ReactiveValue[Set[A]](v)))
+        copy(sourceSelectedSlot = sourceSelectedSlot.bind(v))
 
     /** The target column's selection, bound and reported like [[sourceSelection]]. */
     def targetSelection(v: Set[A] | Signal[Set[A]]): PickList[A] =
-        copy(targetSelectedSlot = Present(ReactiveValue[Set[A]](v)))
+        copy(targetSelectedSlot = targetSelectedSlot.bind(v))
 
     /** Fired with the source selection a click or a transfer asks for, after a two-way [[sourceSelection]] is written. */
     def onSourceSelectionChange(f: Set[A] => UI.Action)(using Frame): PickList[A] =
-        copy(onSourceSelectionF = Present(Callback.of(f)))
+        copy(sourceSelectedSlot = sourceSelectedSlot.hear(f))
 
     /** Fired with the target selection a click or a transfer asks for, after a two-way [[targetSelection]] is written. */
     def onTargetSelectionChange(f: Set[A] => UI.Action)(using Frame): PickList[A] =
-        copy(onTargetSelectionF = Present(Callback.of(f)))
+        copy(targetSelectedSlot = targetSelectedSlot.hear(f))
 
     /** One column's bindings and the events that hear them, so a move or a transfer is the same code for either. */
-    final private case class Col(
-        items: Maybe[ReactiveValue[Seq[A]]],
-        onItems: Maybe[Seq[A] => UI.Action],
-        sel: Maybe[ReactiveValue[Set[A]]],
-        onSel: Maybe[Set[A] => UI.Action]
-    ):
+    final private case class Col(items: Slot[Seq[A]], sel: Slot[Set[A]]):
         /** A constant column nobody hears is fixed: it shows its rows, and nothing moves or transfers them. */
-        def itemsFixed: Boolean = ReactiveValue.fixed(items, onItems)
+        def itemsFixed: Boolean = items.fixed
 
         /** A constant selection nobody hears is fixed: the column shows it, and no click picks a row. */
-        def selFixed: Boolean = ReactiveValue.fixed(sel, onSel)
+        def selFixed: Boolean = sel.fixed
     end Col
 
-    private def sourceCol: Col = Col(sourceSlot, onSourceItemsF, sourceSelectedSlot, onSourceSelectionF)
-    private def targetCol: Col = Col(targetSlot, onTargetItemsF, targetSelectedSlot, onTargetSelectionF)
+    private def sourceCol: Col = Col(sourceSlot, sourceSelectedSlot)
+    private def targetCol: Col = Col(targetSlot, targetSelectedSlot)
 
     /** Renders the source column's reorder rail (default true, like Prime). */
     def showSourceControls(v: Boolean): PickList[A] = copy(showSourceControlsFlag = v)
@@ -142,15 +133,12 @@ final case class PickList[A] private (
     private given CanEqual[(Columns, Selections), (Columns, Selections)] = CanEqual.derived
     private given CanEqual[Snapshot, Snapshot]                           = CanEqual.derived
 
-    private def sig[T](slot: Maybe[ReactiveValue[T]], fallback: T)(using CanEqual[T, T], Frame): Signal[T] =
-        slot.fold(Signal.initConst(fallback))(_.signal)
-
     /** A column's selection as the keys its rows are matched by. */
-    private def selectionKeys(slot: Maybe[ReactiveValue[Set[A]]])(using Frame): Signal[Set[String]] =
-        slot match
+    private def selectionKeys(slot: Slot[Set[A]])(using Frame): Signal[Set[String]] =
+        slot.binding match
             case Present(ReactiveValue.Dyn(s))   => s.map(_.map(keyOf))
             case Present(ReactiveValue.Const(c)) => Signal.initConst(c.map(keyOf))
-            case Absent                          => Signal.initConst(Set.empty[String])
+            case _                               => Signal.initConst(Set.empty[String])
 
     /** Everything one render of this control reads, as ONE signal.
       *
@@ -165,7 +153,7 @@ final case class PickList[A] private (
       * one state, and splitting them again is how this went wrong the first time.
       */
     private def snapshot(source: Maybe[ListReorder.Cursor], target: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
-        val columns    = sig(sourceSlot, Seq.empty[A]).combineLatest(sig(targetSlot, Seq.empty[A]))
+        val columns    = sourceSlot.reading(Seq.empty[A]).signal.combineLatest(targetSlot.reading(Seq.empty[A]).signal)
         val selections = selectionKeys(sourceSelectedSlot).combineLatest(selectionKeys(targetSelectedSlot))
         val cursors    = source.fold(Signal.initConst(-1))(_.highlight).combineLatest(target.fold(Signal.initConst(-1))(_.highlight))
         columns.combineLatest(selections).combineLatest(cursors)
@@ -187,20 +175,16 @@ final case class PickList[A] private (
                 sourceHi <- Signal.initRef(-1)
                 targetHi <- Signal.initRef(-1)
                 // Unbound, the list keeps its columns and what the reader picks in them itself.
-                src    <- owned(sourceSlot, Seq.empty[A])
-                tgt    <- owned(targetSlot, Seq.empty[A])
-                srcSel <- owned(sourceSelectedSlot, Set.empty[A])
-                tgtSel <- owned(targetSelectedSlot, Set.empty[A])
+                src    <- sourceSlot.owned(Seq.empty[A])
+                tgt    <- targetSlot.owned(Seq.empty[A])
+                srcSel <- sourceSelectedSlot.owned(Set.empty[A])
+                tgtSel <- targetSelectedSlot.owned(Set.empty[A])
                 self = copy(sourceSlot = src, targetSlot = tgt, sourceSelectedSlot = srcSel, targetSelectedSlot = tgtSel)
             yield self.wired(
                 Present(ListReorder.Cursor(sourceHi, sourceId)),
                 Present(ListReorder.Cursor(targetHi, targetId))
             )
         }.placeholder(wired(Absent, Absent))
-
-    /** The slot as bound, or a ref of the list's own starting at `initial` where nothing bound it. */
-    private def owned[T](slot: Maybe[ReactiveValue[T]], initial: T)(using CanEqual[T, T], Frame): Maybe[ReactiveValue[T]] < Sync =
-        if slot.isDefined then slot else Signal.initRef(initial).map(r => Maybe(ReactiveValue[T](r)))
 
     /** The tree the mount publishes, the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.
@@ -244,8 +228,8 @@ final case class PickList[A] private (
         srcHi: Int = -1,
         tgtHi: Int = -1
     )(using Frame): UI =
-        val srcMoveOff = srcSel.isEmpty || sourceSlot.isEmpty
-        val tgtMoveOff = tgtSel.isEmpty || targetSlot.isEmpty
+        val srcMoveOff = srcSel.isEmpty || sourceSlot.binding.isEmpty
+        val tgtMoveOff = tgtSel.isEmpty || targetSlot.binding.isEmpty
 
         // The same moves the rails and the transfer buttons make, on the list the reader is
         // standing in: the buttons are the pointer's way to them and these are the keyboard's, so
@@ -305,7 +289,7 @@ final case class PickList[A] private (
                 .fixed(col.selFixed)
                 .onHostKey(hostKeys)
             cursor.foreach(c => lb = lb.id(c.id))
-            col.sel.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, col.onSel)))
+            col.sel.binding.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, col.sel.hearer)))
             templateF.foreach { f =>
                 val byKey = xs.map(a => keyOf(a) -> a).toMap
                 lb = lb.itemTemplate(li =>
@@ -374,15 +358,12 @@ final case class PickList[A] private (
       * take none of those, so they have nothing to say.
       */
     private def unheard(using Frame): List[UI] =
-        def missing[T, R](slot: Maybe[ReactiveValue[T]], report: Maybe[R], setter: String, event: String): List[String] =
-            if disabledFlag || !ReactiveValue.deaf(slot, report) then Nil
-            else List(s"$setter is bound one way and nothing hears a change: add $event, or bind a SignalRef")
-        val all =
-            missing(sourceSlot, onSourceItemsF, "sourceItems", "onSourceItemsChange") ++
-                missing(targetSlot, onTargetItemsF, "targetItems", "onTargetItemsChange") ++
-                missing(sourceSelectedSlot, onSourceSelectionF, "sourceSelection", "onSourceSelectionChange") ++
-                missing(targetSelectedSlot, onTargetSelectionF, "targetSelection", "onTargetSelectionChange")
-        if all.isEmpty then Nil else List(Diagnostics.card("PickList", "a binding the reader cannot move", all))
+        Diagnostics.cards("PickList")(
+            Diagnostic.unheard(sourceSlot, PickList.name("sourceItems", "onSourceItemsChange"), on = !disabledFlag),
+            Diagnostic.unheard(targetSlot, PickList.name("targetItems", "onTargetItemsChange"), on = !disabledFlag),
+            Diagnostic.unheard(sourceSelectedSlot, PickList.name("sourceSelection", "onSourceSelectionChange"), on = !disabledFlag),
+            Diagnostic.unheard(targetSelectedSlot, PickList.name("targetSelection", "onTargetSelectionChange"), on = !disabledFlag)
+        ).toList
     end unheard
 
     /** Runs `eff` and puts the highlight back on the row it was on in `after`, the column the move asks for.
@@ -397,7 +378,7 @@ final case class PickList[A] private (
         using Frame
     ): UI.Action =
         cursor match
-            case Present(c) if col.items.isDefined && xs.isDefinedAt(hi) =>
+            case Present(c) if col.items.binding.isDefined && xs.isDefinedAt(hi) =>
                 val id    = keyOf(xs(hi))
                 val moved = after.indexWhere(a => keyOf(a) == id)
                 eff.andThen(c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1)))
@@ -405,26 +386,26 @@ final case class PickList[A] private (
 
     /** The keys a column's selection holds now. */
     private def chosenKeys(col: Col)(using Frame): Set[String] < Sync =
-        col.sel.fold(Set.empty[String]: Set[String] < Sync)(_.current.map(_.map(keyOf)))
+        col.sel.current(Set.empty[A]).map(_.map(keyOf))
 
     /** A reorder steps its column, keyed on that column's selection: written if it binds two way, then reported. */
     private def reorder(col: Col, move: (List[A], A => Boolean) => List[A])(using Frame): UI.Action =
-        if col.items.isEmpty || col.sel.isEmpty then ()
-        else chosenKeys(col).map(sel => ReactiveValue.update(col.items, xs => move(xs.toList, a => sel.contains(keyOf(a))), col.onItems))
+        if col.items.binding.isEmpty || col.sel.binding.isEmpty then ()
+        else chosenKeys(col).map(sel => col.items.update(xs => move(xs.toList, a => sel.contains(keyOf(a)))))
 
     /** Moves the items of `from` that `pick` names to the END of `to` (Prime appends), then clears `from`'s selection:
       * each column and the selection written where they bind two way, and reported in that order.
       */
     private def transfer(from: Col, to: Col)(pick: Set[String] => A => Boolean)(using Frame): UI.Action =
-        (from.items, to.items, from.sel) match
+        (from.items.binding, to.items.binding, from.sel.binding) match
             case (Present(f), Present(_), Present(_)) =>
                 for
                     sel <- chosenKeys(from)
                     xs  <- f.current
                     (moved, kept) = xs.partition(pick(sel))
-                    _ <- ReactiveValue.change(from.items, kept, from.onItems)
-                    _ <- ReactiveValue.update(to.items, _ ++ moved, to.onItems)
-                    _ <- ReactiveValue.change(from.sel, Set.empty[A], from.onSel)
+                    _ <- from.items.change(kept)
+                    _ <- to.items.update(_ ++ moved)
+                    _ <- from.sel.change(Set.empty[A])
                 yield ()
             case _ => ()
 
@@ -438,4 +419,5 @@ final case class PickList[A] private (
 end PickList
 
 object PickList:
-    def apply[A](): PickList[A] = new PickList[A]()
+    private def name(subject: String, event: String) = Slot.Name("PickList", subject, "a change", event)
+    def apply[A](): PickList[A]                      = new PickList[A]()
