@@ -340,51 +340,35 @@ final case class SelectButton[A] private (
             end if
             tb.render
         }
-        el(UI.children(keyCollisionCard ++ unknownCard(unknown) ++ unheardCard ++ buttons)*)
+        el(UI.children(Diagnostics.cards("SelectButton")(keyCollisionCard, Diagnostic.unknown(unknown.map(labelF)), unheardCard).toList ++
+            buttons)*)
     end body
 
     /** The loud card rendered ahead of the fused buttons when the option keys
       * collide (see [[Diagnostics]]): two options sharing a key toggle together.
       */
-    private def keyCollisionCard(using Frame): List[UI] =
-        val dups = Diagnostics.duplicates(items.map(key))
-        if dups.isEmpty then Nil
-        else
-            List(Diagnostics.card(
-                "SelectButton",
-                if keyF.isEmpty then "option labels are not unique and optionKey is unset, so those options select together; set optionKey"
-                else "optionKey is not unique across the options, so those options select together",
-                dups
-            ))
-        end if
-    end keyCollisionCard
+    private def keyCollisionCard(using Frame): Diagnostic =
+        Diagnostic.naming(
+            if keyF.isEmpty then "option labels are not unique and optionKey is unset, so those options select together; set optionKey"
+            else "optionKey is not unique across the options, so those options select together",
+            Diagnostics.duplicates(items.map(key))
+        )
 
     /** A selection bound one way that nothing hears: every click is painted away again. A disabled group takes no click,
       * so it has nothing to say.
       */
-    private def unheardCard(using Frame): List[UI] =
+    private def unheardCard(using Frame): Diagnostic =
         val deaf =
             if multipleFlag then multi.exists(_.deaf(onChangeSetF))
             else single.exists(_.deaf(onChangeF.orElse(onPickF)))
-        if !deaf || disabledFlag.constTrue then Nil
-        else
-            List(Diagnostics.card(
-                "SelectButton",
-                "the selection is bound one way and nothing hears a click, so the reader cannot change it; add " +
-                    (if multipleFlag then "onChange" else "onChange or onPick") + ", or bind a SignalRef",
-                Nil
-            ))
-        end if
+        val name = Slot.Name("SelectButton", "the selection", "a click", if multipleFlag then "onChange" else "onChange or onPick")
+        Diagnostic(deaf && !disabledFlag.constTrue, name.advice)
     end unheardCard
 
     /** A constant nobody hears is fixed: the group is drawn read-only, its buttons pressing nothing. */
     private def fixed: Boolean =
         if multipleFlag then multi.exists(_.fixed(onChangeSetF))
         else single.exists(_.fixed(onChangeF.orElse(onPickF)))
-
-    /** The card naming held options no button carries (see [[Diagnostics.unknown]]). */
-    private def unknownCard(unknown: List[A])(using Frame): List[UI] =
-        if unknown.isEmpty then Nil else List(Diagnostics.unknown("SelectButton", unknown.map(labelF)))
 
     /** Clicking an option updates the bound selection (single replaces, multiple
       * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`

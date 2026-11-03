@@ -61,16 +61,14 @@ final case class MultiSelect[A] private (
     keyF: Maybe[A => String] = Absent,
     optionDisabledF: Maybe[A => Boolean] = Absent,
     choice: Maybe[MultiChoice[A]] = Absent,
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     placeholderV: Maybe[TextValue] = Absent,
     displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
     maxSelectedLabelsV: Maybe[Int] = Absent,
     selectedItemsLabelV: Maybe[TextValue] = Absent,
     filterableV: Maybe[BoolValue] = Absent,
     filterF: Maybe[(A, String) => Boolean] = Absent,
-    filterQuerySlot: Maybe[ReactiveValue[String]] = Absent,
-    onFilterQueryF: Maybe[String => UI.Action] = Absent,
+    filterQuerySlot: Slot[String] = Slot(),
     showToggleAllFlag: Boolean = true,
     highlightOnSelectFlag: Boolean = false,
     showClearFlag: Boolean = false,
@@ -157,22 +155,19 @@ final case class MultiSelect[A] private (
       * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
       * signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = copy(openSlot = openSlot.hear(f))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
-    private def askOpen(open: ReactiveValue[Boolean], v: Boolean)(using Frame): UI.Action =
-        ReactiveValue.change(Present(open), v, onOpenF)
+    private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
 
     /** A panel bound closed by a constant nobody hears: nothing the reader does may open it. */
-    private def openFixedShut: Boolean =
-        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(false)
+    private def openFixedShut: Boolean = openSlot.fixedAt(false)
 
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
-    private def openFixedOpen: Boolean =
-        ReactiveValue.fixed(openSlot, onOpenF) && openSlot.flatMap(_.const).contains(true)
+    private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = copy(placeholderV = v)
 
@@ -216,10 +211,10 @@ final case class MultiSelect[A] private (
       * by typing, a plain `Signal` filters the panel and typing is only reported and painted back, a constant is the
       * starting text. Turns the header filter on unless [[filterable]] says otherwise.
       */
-    def filterQuery(v: String | Signal[String]): MultiSelect[A] = copy(filterQuerySlot = Present(ReactiveValue(v)))
+    def filterQuery(v: String | Signal[String]): MultiSelect[A] = copy(filterQuerySlot = filterQuerySlot.bind(v))
 
     /** Fired with the query the reader types, and with the empty query a new open starts from. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] = copy(onFilterQueryF = Present(Callback.of(f)))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] = copy(filterQuerySlot = filterQuerySlot.hear(f))
 
     /** Whether the header renders the select-all checkbox (default true,
       * Prime's `showToggleAll`).
@@ -295,7 +290,7 @@ final case class MultiSelect[A] private (
       * [[FieldValidity]]; without one, a [[filter]] or an app-owned [[filterQuery]] turns it on.
       */
     private def filterOn: BoolValue =
-        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.isDefined))
+        filterableV.getOrElse(BoolValue.Const(filterF.isDefined || filterQuerySlot.binding.isDefined))
 
     /** How an option matches the query: [[filter]], else a contains on the label projection. */
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
@@ -312,8 +307,8 @@ final case class MultiSelect[A] private (
     /** Clears the query for a new open while the filter is on. While it is off the query is not the panel's to touch,
       * so switching the filter back on finds it as it was.
       */
-    private def freshQuery(q: ReactiveValue[String])(using Frame): UI.Action =
-        val fresh: UI.Action = ReactiveValue.change(Present(q), "", onFilterQueryF)
+    private def freshQuery(q: Slot[String])(using Frame): UI.Action =
+        val fresh: UI.Action = q.change("")
         filterOn match
             case BoolValue.Dyn(on)     => on.current.map(isOn => if isOn then fresh else (): UI.Action)
             case BoolValue.Const(true) => fresh
@@ -323,11 +318,11 @@ final case class MultiSelect[A] private (
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
-        open: ReactiveValue[Boolean],
+        open: Slot[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
         hiV: Int,
-        q: ReactiveValue[String],
+        q: Slot[String],
         qV: String,
         /** Whether the filter is on. Read only while the panel is open: closed, `false` stands in for a switch that
           * is not subscribed, and the trigger's role follows the switch itself.
@@ -341,16 +336,10 @@ final case class MultiSelect[A] private (
 
     private[uic] def render(using Frame): UI =
         // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
-        val unheard =
-            (if !disabledFlag && ReactiveValue.deaf(openSlot, onOpenF) then
-                 List("the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add onOpenChange")
-             else Nil) ++
-                (if !disabledFlag && ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
-                     List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
-                 else Nil)
-        if unheard.isEmpty then renderLive
-        else fragment((unheard.map(a => Diagnostics.card("MultiSelect", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
-        end if
+        Diagnostics.before(renderLive)("MultiSelect")(
+            Diagnostic.unheard(openSlot, MultiSelect.openName, on = !disabledFlag),
+            Diagnostic.unheard(filterQuerySlot, MultiSelect.queryName, on = !disabledFlag)
+        )
     end render
 
     private def renderLive(using Frame): UI =
@@ -367,23 +356,17 @@ final case class MultiSelect[A] private (
                 cmds <- UI.commands
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the field keeps the panel state itself, starting closed.
-                open <- openSlot match
-                    case Present(slot) => Kyo.lift(slot)
-                    case Absent        => Signal.initRef(false).map(r => ReactiveValue[Boolean](r))
-                hi <- Signal.initRef(-1)
-                // Same shape as `open` above: an app-owned query ref takes over the
-                // slot the component would otherwise allocate for itself.
-                // A constant query is the starting text, kept here like an unbound one.
-                q <- filterQuerySlot match
-                    case Present(slot) if slot.const.isEmpty => Kyo.lift(slot)
-                    case Present(slot)                       => Signal.initRef(slot.const.getOrElse("")).map(r => ReactiveValue[String](r))
-                    case Absent                              => Signal.initRef("").map(r => ReactiveValue[String](r))
+                open <- openSlot.owned(false)
+                hi   <- Signal.initRef(-1)
+                // An app-owned query takes over the slot the component would otherwise allocate for itself; a constant query
+                // is the starting text, kept here like an unbound one.
+                q <- filterQuerySlot.ownedFrom("")
                 // Unbound, the field keeps the options the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
                 self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
-            yield self.copy(openSlot = Present(open)).wiredOver(open, hi, q, Present(base))
+            yield self.copy(openSlot = open).wiredOver(hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -396,22 +379,20 @@ final case class MultiSelect[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
-        val slot = ReactiveValue[Boolean](open)
-        copy(openSlot = Present(slot)).wiredOver(slot, hi, ReactiveValue[String](q), base)
+        copy(openSlot = openSlot.bind(open)).wiredOver(hi, filterQuerySlot.bind(q), base)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
     private def wiredOver(
-        open: ReactiveValue[Boolean],
         hi: SignalRef[Int],
-        q: ReactiveValue[String],
+        q: Slot[String],
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(open.signal)).and(Reading.Live(hi)).and(Reading.of(q))
+        val panel    = Reading.Live(openFiltering(openSlot.reading(false).signal)).and(Reading.Live(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(open, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -455,10 +436,8 @@ final case class MultiSelect[A] private (
         val filtering = st.fold(filterOn.const.getOrElse(false))(_.filtering)
         val current   = held.map(key)
         // Held options no row carries: the trigger still shows them from the value itself, after the known ones.
-        val strays                = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
-        val selected              = items.filter(a => current.contains(key(a))) ++ strays
-        val unknownCard: List[UI] =
-            if strays.isEmpty || loading then Nil else List(Diagnostics.unknown("MultiSelect", strays.map(labelF)))
+        val strays   = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
+        val selected = items.filter(a => current.contains(key(a))) ++ strays
 
         // Toggles one option key; the panel STAYS OPEN (Prime's multiselect pick).
         def toggleOption(a: A): UI.Action =
@@ -645,17 +624,10 @@ final case class MultiSelect[A] private (
 
         val field = validity.follow(el(UI.children((labelContainerUI :: clearUI) ++ (dropdownUI :: hiddenCarrier) ++ panelUI)*))
         // A selection bound one way that nothing hears: every toggle is painted away again.
-        val unheard: List[UI] =
-            if disabledFlag || !choice.exists(_.deaf(onChangeF)) then Nil
-            else
-                List(Diagnostics.card(
-                    "MultiSelect",
-                    "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange, " +
-                        "or bind a SignalRef",
-                    Nil
-                ))
-        val cards = unknownCard ++ unheard
-        if cards.isEmpty then field else fragment((field :: cards)*)
+        Diagnostics.after(field)("MultiSelect")(
+            Diagnostic.unknown(if loading then Nil else strays.map(labelF)),
+            Diagnostic(!disabledFlag && choice.exists(_.deaf(onChangeF)), MultiSelect.selectionName.advice)
+        )
     end bodyStatic
 
     /** The options the panel is showing, the positions the highlight may land on, and where it is
@@ -774,7 +746,7 @@ final case class MultiSelect[A] private (
                          // the field back to the owner's query.
                          .onInput(text =>
                              s.hi.set(0)
-                                 .andThen(ReactiveValue.change(Present(s.q), text, onFilterQueryF))
+                                 .andThen(s.q.change(text))
                          )
                          // The header is where focus goes and therefore where the option keyboard
                          // lives: the arrows move the highlight, the caret keeps Space and the
@@ -803,7 +775,7 @@ final case class MultiSelect[A] private (
             if headerKids.nonEmpty then List(div.cssClass("p-multiselect-header")(UI.children(headerKids)*))
             else Nil
 
-        Overlay.hosted(s.open, onOpenF)
+        Overlay.hosted(s.open)
             .panelClass("p-multiselect-overlay")
             .panelClass("p-component")
             // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
@@ -882,19 +854,19 @@ final case class MultiSelect[A] private (
       * in [[Select]]: colliding keys also merge two options into one selection.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = Diagnostics.duplicates(items.map(key))
-        if dups.isEmpty then Nil
-        else
-            List(Diagnostics.card(
-                "MultiSelect",
-                if keyF.isEmpty then
-                    "option labels are not unique and optionKey is unset, so options share one selection entry; set optionKey"
-                else "optionKey is not unique across the options, so options share one selection entry",
-                dups
-            ))
-        end if
+        Diagnostics.cards("MultiSelect")(Diagnostic.naming(
+            if keyF.isEmpty then
+                "option labels are not unique and optionKey is unset, so options share one selection entry; set optionKey"
+            else "optionKey is not unique across the options, so options share one selection entry",
+            Diagnostics.duplicates(items.map(key))
+        )).toList
     end keyCollisionCard
 end MultiSelect
 
 object MultiSelect:
+    private val openName      = Slot.Name("MultiSelect", "the panel", "an open or a close", "onOpenChange")
+    private val queryName     = Slot.Name("MultiSelect", "the filter query", "the reader type", "onFilterQueryChange")
+    private val selectionName = Slot.Name("MultiSelect", "the selection", "a pick", "onChange")
+
     def apply[A](): MultiSelect[A] = new MultiSelect[A](Nil, _.toString)
+end MultiSelect
