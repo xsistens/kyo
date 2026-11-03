@@ -60,7 +60,7 @@ class FormDiagnosticsTest extends UicTest:
                 yield div(uic.Input().id("login-username").bind(f))
             }
         yield
-            assert(said.contains("p-uic-key-error"), "the replacement is reported")
+            assert(said.contains("p-uic-diagnostic"), "the replacement is reported")
             assert(said.contains("login-username"), "and the card names the id that was lost")
             assert(said.contains("domId"), "and the setter that would have worked")
     }
@@ -92,7 +92,7 @@ class FormDiagnosticsTest extends UicTest:
                 yield div(uic.Input().bind(a), uic.Input().bind(b))
             }
         yield
-            assert(said.contains("p-uic-key-error"))
+            assert(said.contains("p-uic-diagnostic"))
             assert(said.contains("dup"))
     }
 
@@ -105,7 +105,7 @@ class FormDiagnosticsTest extends UicTest:
                 yield div(uic.Label("Email").forId(f.domId), uic.Input().bind(f).id("something-else"))
             }
         yield
-            assert(said.contains("p-uic-key-error"), "the dangling label is reported")
+            assert(said.contains("p-uic-diagnostic"), "the dangling label is reported")
             assert(said.contains("email"), "named by the id it points at")
     }
 

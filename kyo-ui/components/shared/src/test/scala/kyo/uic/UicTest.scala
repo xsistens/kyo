@@ -701,6 +701,6 @@ object UicTest:
     private[uic] val layout: Local[Map[String, UI.Rect]] = Local.init(Map.empty[String, UI.Rect])
 
     /** The class a card carries. */
-    private[uic] val cardClass = "p-uic-key-error"
+    private[uic] val cardClass = "p-uic-diagnostic"
 
 end UicTest

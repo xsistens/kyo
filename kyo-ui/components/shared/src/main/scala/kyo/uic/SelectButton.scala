@@ -130,7 +130,7 @@ final case class SelectButton[A] private (
     private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A]   = copy(onBlurSetF = Present(Callback.of(f)))
 
     /** Says the options are still arriving (`aria-busy` on the group): a held option no button carries yet is left
-      * alone rather than reported in a `.p-uic-key-error` card. Prime's SelectButton has no loading look, so none is drawn.
+      * alone rather than reported in a `.p-uic-diagnostic` card. Prime's SelectButton has no loading look, so none is drawn.
       */
     def loading(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(loadingV = Present(ReactiveValue(v)))
 

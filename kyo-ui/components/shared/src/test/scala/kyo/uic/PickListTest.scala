@@ -270,7 +270,7 @@ class PickListTest extends ReactiveValueContract:
             src <- Signal.initRef(Seq("a"))
             off <- elementsWithClass(
                 uic.PickList[String]().sourceItems(src.readOnly)(identity).targetItems(Seq.empty[String]).disabled(true).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
         yield assert(off.isEmpty, s"nobody can change them: ${off.map(textOf)}")
     }

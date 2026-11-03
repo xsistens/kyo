@@ -247,7 +247,7 @@ There is no public setter that takes the key a component compares by. Rules:
 - **A single choice binds one way too.** `SingleChoice` holds a `ReactiveValue`: a `ReactiveVariable` is written, a
   `Dyn` or `Const` is only shown, and a pick against it is judged against the value shown and reported, never written,
   so the app writes its own state (a route). Forms are unaffected: `bind` passes the field's ref, which is two-way.
-- **A value no option carries is a data error**, named in a `.p-uic-key-error` card
+- **A value no option carries is a data error**, named in a `.p-uic-diagnostic` card
   (`Diagnostics.unknown`) and shown in the trigger from the value itself, unless `loading` says the
   options are still arriving.
 - **Forms bind by the option type**: `ChoiceFormControl[A]` / `MultiChoiceFormControl[A]`, so `bind` takes a
@@ -817,7 +817,7 @@ rebuild replaced the textarea a reader was typing into at the very keystroke tha
 
 - **Place `follow` outside the control's own value and open regions**, inside a mount where there is
   one (the static HTML keeps the row inside the mount's host). The exception is a field with a trailing
-  sibling: the pickers' `.p-uic-key-error` card follows the field, and the row belongs between the two,
+  sibling: the pickers' `.p-uic-diagnostic` card follows the field, and the row belongs between the two,
   so there `follow` wraps the field alone inside the body. The row region is then rebuilt with an open
   or highlight change, the field still never by its validity. `FieldValidityTest` sweeps every control:
   no validity region above the root, the channels on exactly the elements the constant render marks,

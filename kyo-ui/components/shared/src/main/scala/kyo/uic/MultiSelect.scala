@@ -143,7 +143,7 @@ final case class MultiSelect[A] private (
     def selection(v: Set[A] | Signal[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice(ReactiveValue[Set[A]](v))))
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no row carries
-      * yet is shown from the value itself rather than reported in a `.p-uic-key-error` card.
+      * yet is shown from the value itself rather than reported in a `.p-uic-diagnostic` card.
       */
     def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
 

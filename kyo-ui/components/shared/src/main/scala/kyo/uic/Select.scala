@@ -39,7 +39,7 @@ import scala.annotation.targetName
   * `optionsWithNone` adds a labelled none row to a select over `Maybe`;
   * `itemTemplate` draws the rows and the chosen value; `loading` says the options
   * are still arriving, and without it a held option no row carries is named in a
-  * `.p-uic-key-error` card. `open(ref)`
+  * `.p-uic-diagnostic` card. `open(ref)`
   * optionally exposes the panel visibility (it is self-managed otherwise). The interaction
   * state (open/highlight/filter query) lives in signals allocated by an
   * effectful `UI.mounted` region; static projections (SSG, the SSR page HTML)
@@ -150,7 +150,7 @@ final case class Select[A] private (
       * unique. When they are not, two options share one key and a pick applies to
       * the wrong one, a failure that appears only with the data that triggers it,
       * so it survives development and shows up in production. The panel therefore
-      * renders a loud `.p-uic-key-error` card whenever the derived keys collide,
+      * renders a loud `.p-uic-diagnostic` card whenever the derived keys collide,
       * naming the offending keys.
       */
     def optionKey(f: A => String): Select[A] = copy(keyF = Present(f))
@@ -271,7 +271,7 @@ final case class Select[A] private (
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no option row
       * carries yet is shown from the value itself rather than reported. Without it, such an option is a mistake the field
-      * names in a `.p-uic-key-error` card, since a typed value that matches no option can only mean the data and the
+      * names in a `.p-uic-diagnostic` card, since a typed value that matches no option can only mean the data and the
       * binding disagree. A `Signal[Boolean]` follows the load.
       */
     def loading(v: Boolean | Signal[Boolean]): Select[A] = copy(loadingV = Present(ReactiveValue(v)))

@@ -206,7 +206,7 @@ class RatingTest extends ReactiveValueContract:
     }
 
     "a value bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
-        def errors(c: uic.Rating): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.Rating): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(2)
             twoWay <- errors(uic.Rating().value(held))

@@ -66,8 +66,8 @@ class ConfirmDialogTest extends ReactiveValueContract:
             _        <- click(r)
             h        <- held.get
             s        <- seen.get
-            deaf     <- elementsWithClass(confirm.open(held.readOnly).render, "p-uic-key-error")
-            halfDeaf <- elementsWithClass(confirm.open(held.readOnly).onAccept(()).render, "p-uic-key-error")
+            deaf     <- elementsWithClass(confirm.open(held.readOnly).render, "p-uic-diagnostic")
+            halfDeaf <- elementsWithClass(confirm.open(held.readOnly).onAccept(()).render, "p-uic-diagnostic")
         yield
             assert(h && s == List("open false", "reject"), s"held $h, heard $s")
             assert(deaf.nonEmpty && deaf.map(textOf).mkString.contains("onOpenChange"), s"nobody hears: ${deaf.map(textOf)}")

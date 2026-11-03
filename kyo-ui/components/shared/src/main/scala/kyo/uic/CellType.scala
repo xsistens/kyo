@@ -65,7 +65,7 @@ object CellType:
       *
       * The label is both what the editor writes and what the parser reads back, so an
       * option can only round-trip. Two values sharing a label collide, and the Select
-      * reports that itself in its `.p-uic-key-error` card, since it is the same failure
+      * reports that itself in its `.p-uic-diagnostic` card, since it is the same failure
       * `optionKey` already guards.
       */
     def of[V](values: Seq[V])(label: V => String): CellType[V] =
