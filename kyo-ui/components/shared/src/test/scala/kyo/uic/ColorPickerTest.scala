@@ -214,6 +214,20 @@ class ColorPickerTest extends ReactiveValueContract:
         end for
     end shown
 
+    /** The colour a disabled picker draws, which announces nothing: read off where its two handles sit. */
+    private def drawn(t: UI)(using Frame): String < Sync =
+        def at(cls: String)(pick: PartialFunction[Style.Prop, Length]): Double < Sync =
+            elementWithClass(t, cls).map(_.attrs.uiStyle.props.collectFirst(pick) match
+                case Some(Length.Pct(v)) => v
+                case other               => throw new AssertionError(s"$cls sits at $other"))
+        for
+            s <- at("p-colorpicker-color-handle") { case Style.Prop.Left(v) => v }
+            v <- at("p-colorpicker-color-handle") { case Style.Prop.Top(v) => v }
+            h <- at("p-colorpicker-hue-handle") { case Style.Prop.Top(v) => v }
+        yield uic.ColorPicker.hexOf((1 - h / 100) * 360.0, s / 100, 1 - v / 100)
+        end for
+    end drawn
+
     private def planeOf(t: UI)(using Frame): UI.Ast.Element < Sync =
         sliders(t).map(_.find(_.attrs.ariaAttrs.get("label").contains(plane))
             .getOrElse(throw new AssertionError("no plane slider: the picker offers the reader nothing to change")))
@@ -231,14 +245,15 @@ class ColorPickerTest extends ReactiveValueContract:
         start = red,
         next = "#ffffff",
         control = planeOf(_),
-        shows = shown(_),
+        shows = t => sliders(t).map(s => if s.isEmpty then drawn(t) else shown(t)),
         gesture = (c: UI.Ast.Element) => press(c, UI.Keyboard.Home),
         answers = _.attrs.onKeyDown.isDefined,
         ready = Present(t => Abort.run[AssertionError](Abort.catching[AssertionError](planeOf(t))).map(_.isSuccess)),
         // The sliders stay where they are while the colour moves (a rebuilt one would lose the focus that pressed it), so
         // what says the reader's colour is shown is the plane announcing it in place.
         nextPatch = Present((name, value) => name == "aria-valuetext" && value == "Saturation 0%, brightness 100%"),
-        startText = Present("#00ff00")
+        startText = Present("#00ff00"),
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     "a color bound one way follows its owner" in {

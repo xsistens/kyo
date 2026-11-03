@@ -44,7 +44,8 @@ class SliderTest extends ReactiveValueContract:
                 r.attrs.ariaAttrs.get("readonly").contains("true") && r.attrs.dataAttrs.get("kyo-inert").contains("1") &&
                 !r.disabled.contains(true)
             case _ => false
-        }
+        },
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     "a drag its owner does not take is put back" in {
