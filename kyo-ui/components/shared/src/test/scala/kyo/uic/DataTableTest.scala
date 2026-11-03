@@ -4947,4 +4947,38 @@ class DataTableTest extends ReactiveValueContract:
         end for
     }
 
+    // What a column's header sits over: the header row holds one cell for every leading column a data row draws.
+    private def columnOfHeader(html: String, title: String, value: String): (Int, Int, Int, Int) =
+        val cell    = "<(th|td)[ >]".r
+        val head    = html.substring(html.indexOf("<thead"), html.indexOf("</thead>"))
+        val body    = html.substring(html.indexOf("<tbody"))
+        val row     = body.substring(body.indexOf("<tr"), body.indexOf("</tr>"))
+        val heads   = "<th[ >]".r.findAllMatchIn(head).map(_.start).toList
+        val cells   = cell.findAllMatchIn(row).map(_.start).toList
+        val titleAt = head.indexOf(title)
+        val valueAt = row.indexOf(value)
+        (heads.count(_ < titleAt) - 1, cells.count(_ < valueAt) - 1, heads.length, cells.length)
+    end columnOfHeader
+
+    "a column's header sits over its column, whatever leading columns the rows draw" in {
+        val plain = uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name), uic.column("Price")(_.price.toString))
+        val cases = List(
+            "a grip"                 -> plain.reorderableRows(true),
+            "an expander"            -> plain.rowExpansionTemplate(i => span(i.name)),
+            "a checkbox"             -> plain.selectionMode(uic.SelectionMode.Checkbox),
+            "a grip and an expander" -> plain.reorderableRows(true).rowExpansionTemplate(i => span(i.name)),
+            "a grip and a checkbox"  -> plain.reorderableRows(true).selectionMode(uic.SelectionMode.Checkbox),
+            "all three" -> plain.reorderableRows(true).rowExpansionTemplate(i => span(i.name)).selectionMode(uic.SelectionMode.Checkbox)
+        )
+        Kyo.foreach(cases) { (name, t) =>
+            renderHtml(t.render).map { html =>
+                val (nameHead, nameCell, heads, cells) = columnOfHeader(html, "Name", ">A<")
+                val (priceHead, priceCell, _, _)       = columnOfHeader(html, "Price", ">10<")
+                assert(heads == cells, s"$name: $heads header cells over $cells cells in a row")
+                assert(nameHead == nameCell, s"$name: Name sits over column $nameHead, its values are in $nameCell")
+                assert(priceHead == priceCell, s"$name: Price sits over column $priceHead, its values are in $priceCell")
+            }
+        }.unit.andThen(succeed)
+    }
+
 end DataTableTest
