@@ -211,10 +211,10 @@ final case class ContextMenu private (
         at: SignalRef[Maybe[UI.Point]],
         subs: Submenus
     )(using Frame): UI =
-        // The items, the open state, the highlight and the submenus are read as ONE region (see [[Reading]]): opening at
+        // The items, the open state, the highlight and the submenus are read as ONE region (see [[ReactiveValue.and]]): opening at
         // a point writes the open state and the highlight together, and a nested region would repaint what it closed over.
         // The highlight and the submenus follow their items over the roots shown ([[Anchored]]).
-        val read = MenuRender.readRooted(entriesV).and(Reading.Live(openRef)).and(focus.reading).and(subs.reading)
+        val read = MenuRender.readRooted(entriesV).and(ReactiveValue.Dyn(openRef)).and(focus.reading).and(subs.reading)
         read.render { case (((Rooted(roots, items), isOpen), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)

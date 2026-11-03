@@ -206,9 +206,10 @@ final case class SelectButton[A] private (
 
     private def renderNav(minted: Maybe[(String, String => UI.Action)])(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        // The switches and the selection are read as ONE region (see [[Reading]]), pinned back into the slots as constants
+        // The switches and the selection are read as ONE region (see [[ReactiveValue.and]]), pinned back into the slots as constants
         // so the body reads plain values.
-        val read = Reading.optional(disabledFlag).and(Reading.optional(loadingV)).and(held).and(OptionItem.reading(optionSources))
+        val read =
+            ReactiveValue.optional(disabledFlag).and(ReactiveValue.optional(loadingV)).and(held).and(OptionItem.reading(optionSources))
         validity.follow(read.render { case (((d, l), h), opts) =>
             val shownItems = OptionItem.flatten(opts)
             val nav: Nav   = minted.map((base, focus) => (shownItems.indices.map(i => s"$base-$i").toList, focus))
@@ -217,11 +218,11 @@ final case class SelectButton[A] private (
     end renderNav
 
     /** The options held, whichever binding holds them. */
-    private def held(using Frame): Reading[List[A]] =
+    private def held(using Frame): ReactiveValue[List[A]] =
         (single, multi) match
             case (Present(c), _) if !multipleFlag => c.reading.map(_.toList)
             case (_, Present(c)) if multipleFlag  => c.reading.map(_.toList)
-            case _                                => Reading.Fixed(Nil)
+            case _                                => ReactiveValue.Const(Nil)
 
     /** Writes `k` as THE selection, without the click's clear-on-same-value.
       *

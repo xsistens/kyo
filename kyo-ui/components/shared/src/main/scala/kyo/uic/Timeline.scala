@@ -66,7 +66,7 @@ final case class Timeline[A] private (
     end events
 
     /** The events as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[A]] = Reading.concat(eventSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[A]] = ReactiveValue.concat(eventSources)
 
     /** Content template, rendered in `div.p-timeline-event-content`. */
     def content(f: A => UI): Timeline[A] = copy(contentF = Present(f))

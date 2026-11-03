@@ -106,9 +106,9 @@ final case class VirtualScroller[A] private (
     private[uic] def wired(scroll: SignalRef[Double])(using Frame): UI =
         sourceV match
             case Present(src) =>
-                // The scroll, the window and the total are read as ONE region (see [[Reading]]): a feed writes the window and
+                // The scroll, the window and the total are read as ONE region (see [[ReactiveValue.and]]): a feed writes the window and
                 // the total together, and a nested region would draw the rows against a total it closed over.
-                val read = Reading.Live(scroll).and(Reading.Live(src.window)).and(Reading.Live(src.total))
+                val read = ReactiveValue.Dyn(scroll).and(ReactiveValue.Dyn(src.window)).and(ReactiveValue.Dyn(src.total))
                 shell(Present(scroll))(read.render { case ((top, w), t) => sourceWindow(top, w, t) })
             case Absent => shell(Present(scroll))(scroll.render(top => window(top)))
 

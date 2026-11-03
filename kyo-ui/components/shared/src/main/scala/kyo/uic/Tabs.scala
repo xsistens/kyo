@@ -91,7 +91,7 @@ object TabScope:
     private[uic] def resolve[K](entries: Seq[TabEntry[K]]): List[Tab[K]] =
         Entry.resolve(scope.asInstanceOf[TabScope[K]], entries)
 
-    private[uic] def reading[K](entries: Seq[TabLiveEntry[K]])(using CanEqual[K, K], Frame): Reading[List[Tab[K]]] =
+    private[uic] def reading[K](entries: Seq[TabLiveEntry[K]])(using CanEqual[K, K], Frame): ReactiveValue[List[Tab[K]]] =
         Entry.reading(scope.asInstanceOf[TabScope[K]], entries)
 end TabScope
 
@@ -158,7 +158,7 @@ final case class Tabs[K] private (
         copy(tabSources = tabSources :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
 
     /** The tabs as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[Tab[K]]] = TabScope.reading(tabSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[Tab[K]]] = TabScope.reading(tabSources)
 
     /** The active tab's id. A `SignalRef` binds two way: clicking a tab writes its
       * id back before firing `onSelectedChange`, which is the self-contained panel
@@ -227,8 +227,8 @@ final case class Tabs[K] private (
                     case Absent     => cmds.freshId
                 // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
                 val first: Maybe[K] < Sync = entries match
-                    case Reading.Fixed(ts) => Maybe.fromOption(ts.headOption.map(_.id))
-                    case Reading.Live(sig) => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.id)))
+                    case ReactiveValue.Const(ts) => Maybe.fromOption(ts.headOption.map(_.id))
+                    case ReactiveValue.Dyn(sig)  => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.id)))
                 val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => copy(selectedSlot = s))
                 base.map(b => self.map(_.wired(b, id => cmds.focusId(id))))
             }
@@ -258,10 +258,10 @@ final case class Tabs[K] private (
     /** Hides the panel of tab `id` while another tab is active. A live selection toggles the attribute in place, which is
       * what keeps the panel's subtree alive across a switch.
       */
-    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: K, act: Reading[Maybe[K]])(using Frame): E =
+    private def hideUnlessActive[E <: UI.Ast.Element { type Self = E }](el: E, id: K, act: ReactiveValue[Maybe[K]])(using Frame): E =
         act match
-            case Reading.Live(sig) => el.hidden(sig.map(a => !a.contains(id)))
-            case Reading.Fixed(a)  => if a.contains(id) then el else el.hidden(true)
+            case ReactiveValue.Dyn(sig) => el.hidden(sig.map(a => !a.contains(id)))
+            case ReactiveValue.Const(a) => if a.contains(id) then el else el.hidden(true)
 
     /** Moves focus to the header `step` lands on, and to nothing else.
       *
@@ -359,8 +359,8 @@ final case class Tabs[K] private (
             else
                 def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.id, act)(t.content)
                 entries match
-                    case Reading.Fixed(ts) => div.cssClass("p-tabpanels")(UI.children(ts.map(t => shown(t)))*)
-                    case Reading.Live(sig) =>
+                    case ReactiveValue.Const(ts) => div.cssClass("p-tabpanels")(UI.children(ts.map(t => shown(t)))*)
+                    case ReactiveValue.Dyn(sig)  =>
                         given CanEqual[Chunk[Tab[K]], Chunk[Tab[K]]] = CanEqual.derived
                         div.cssClass("p-tabpanels")(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(shown))
                 end match

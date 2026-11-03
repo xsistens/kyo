@@ -59,7 +59,10 @@ object AccordionPanelScope:
     private[uic] def resolve[K](entries: Seq[AccordionPanelEntry[K]]): List[AccordionPanel[K]] =
         Entry.resolve(scope.asInstanceOf[AccordionPanelScope[K]], entries)
 
-    private[uic] def reading[K](entries: Seq[AccordionPanelLiveEntry[K]])(using CanEqual[K, K], Frame): Reading[List[AccordionPanel[K]]] =
+    private[uic] def reading[K](entries: Seq[AccordionPanelLiveEntry[K]])(using
+        CanEqual[K, K],
+        Frame
+    ): ReactiveValue[List[AccordionPanel[K]]] =
         Entry.reading(scope.asInstanceOf[AccordionPanelScope[K]], entries)
 end AccordionPanelScope
 
@@ -167,17 +170,17 @@ final case class Accordion[K] private (
         copy(onToggleF = Present(Callback.of(f)), singleSlot = singleSlot.heardToo, multiSlot = multiSlot.heardToo)
 
     /** The panels as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
 
     /** The open panel ids, read from whichever value is bound (single mode lifts the one id into a set); none before the
       * mount allocates the accordion's own.
       */
-    private def openIds(using Frame): Reading[Set[K]] =
+    private def openIds(using Frame): ReactiveValue[Set[K]] =
         given CanEqual[Set[K], Set[K]] = CanEqual.derived
         (singleSlot.binding, multiSlot.binding) match
-            case (Present(v), _) => Reading.of(v).map(_.toList.toSet)
-            case (_, Present(v)) => Reading.of(v)
-            case _               => Reading.Fixed(Set.empty)
+            case (Present(v), _) => v.map(_.toList.toSet)
+            case (_, Present(v)) => v
+            case _               => ReactiveValue.Const(Set.empty)
         end match
     end openIds
 
@@ -209,8 +212,8 @@ final case class Accordion[K] private (
         val open                          = openIds.signal
         def row(p: AccordionPanel[K]): UI = renderAnimatedPanel(p, base, open, focus)
         val rows: List[UI]                = entries match
-            case Reading.Fixed(ps) => ps.map(row)
-            case Reading.Live(sig) =>
+            case ReactiveValue.Const(ps) => ps.map(row)
+            case ReactiveValue.Dyn(sig)  =>
                 given CanEqual[Chunk[AccordionPanel[K]], Chunk[AccordionPanel[K]]] = CanEqual.derived
                 List(sig.map(Chunk.from(_)).foreachKeyed(_.id.toString)(row))
         div.cssClass("p-accordion").cssClass("p-component")(UI.children(rows)*)
@@ -231,10 +234,7 @@ final case class Accordion[K] private (
     /** The panels as they are now: what a key press moves among, read when the key arrives so a live list counts the
       * panels it holds at that moment.
       */
-    private def current(using Frame): List[AccordionPanel[K]] < Sync =
-        entries match
-            case Reading.Fixed(ps) => ps
-            case Reading.Live(sig) => sig.current
+    private def current(using Frame): List[AccordionPanel[K]] < Sync = entries.current
 
     /** ArrowDown/ArrowUp/Home/End move focus between the headers, which is the ARIA accordion
       * pattern and what Prime does: the headers are buttons and each is its own tab stop, so

@@ -126,7 +126,7 @@ final case class Fieldset private (
                 case ReactiveValue.Dyn(sig)    =>
                     // The switch and the collapse are read as ONE region: off, the legend is the plain label.
                     List(UI.legend.cssClass("p-fieldset-legend")(
-                        Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then toggleButton(c) else labelSpan)
+                        ReactiveValue.Dyn(sig).and(collapse).render((isOn, c) => if isOn then toggleButton(c) else labelSpan)
                     ))
                 case _ if legendV.isDefined => List(UI.legend.cssClass("p-fieldset-legend")(labelSpan))
                 case _                      => Nil
@@ -142,7 +142,7 @@ final case class Fieldset private (
             case ReactiveValue.Const(true)  => collapse.render(collapseContainer(_))
             case ReactiveValue.Dyn(sig)     =>
                 // Off the fieldset is plain and its content shows; the collapse state is held, not applied.
-                Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c) else containerBase)
+                ReactiveValue.Dyn(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c) else containerBase)
 
         shell(UI.children(legendUI :+ container)*)
     end body

@@ -52,7 +52,7 @@ object BreadcrumbItemScope:
     private[uic] def resolve(entries: Seq[BreadcrumbItemEntry]): List[BreadcrumbItem] =
         Entry.resolve(scope, entries)
 
-    private[uic] def reading(entries: Seq[BreadcrumbItemLiveEntry])(using Frame): Reading[List[BreadcrumbItem]] =
+    private[uic] def reading(entries: Seq[BreadcrumbItemLiveEntry])(using Frame): ReactiveValue[List[BreadcrumbItem]] =
         Entry.reading(scope, entries)
 end BreadcrumbItemScope
 
@@ -105,7 +105,7 @@ final case class Breadcrumb private (
     def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb = copy(onItemClickF = Present(Callback.of(f)))
 
     /** The crumbs as ONE reading: fixed unless one of the setters was handed a signal. */
-    private[uic] def entries(using Frame): Reading[List[BreadcrumbItem]] = BreadcrumbItemScope.reading(itemSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[BreadcrumbItem]] = BreadcrumbItemScope.reading(itemSources)
 
     private[uic] def render(using Frame): UI =
         val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")

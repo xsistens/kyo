@@ -340,10 +340,10 @@ final case class DatePicker[A] private (
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
             DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
         // Whether it is open, the month, the cursor, the seed flag, the view and the selection are read as ONE region (see
-        // [[Reading]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
+        // [[ReactiveValue]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
         // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
         val calendar =
-            Reading.of(oref).and(Reading.Live(mref.signal)).and(Reading.Live(cursor)).and(Reading.Live(seed)).and(calendarState)
+            oref.and(ReactiveValue.Dyn(mref.signal)).and(ReactiveValue.Dyn(cursor)).and(ReactiveValue.Dyn(seed)).and(calendarState)
         val panel: UI =
             calendar.render { case ((((open, mv), cv), sd), (view, snap)) =>
                 if !open then UI.empty
@@ -652,17 +652,19 @@ final case class DatePicker[A] private (
       * there is, read with the view and the selection as ONE region.
       */
     private def calendarStatic(using Frame): UI =
-        val month: Reading[Maybe[String]] =
-            monthSlot.binding.fold(Reading.Fixed(Maybe.empty[String])) { m =>
-                Reading.Live(DatePicker.ShownMonth.Bound(m, monthSlot.hearer).signal.map(iso => Present(iso)))
+        val month: ReactiveValue[Maybe[String]] =
+            monthSlot.binding.fold(ReactiveValue.Const(Maybe.empty[String])) { m =>
+                ReactiveValue.Dyn(DatePicker.ShownMonth.Bound(m, monthSlot.hearer).signal.map(iso => Present(iso)))
             }
         calendarState.and(month).render { case ((view, snap), mOv) => panelUI(view, mOv, snap, Absent, Absent, inline = true) }
     end calendarStatic
 
-    /** The view and the selection the calendar reads, as one [[Reading]] the host reads beside its month. */
-    private def calendarState(using Frame): Reading[(DatePickerView, DatePicker.Snapshot)] =
+    /** The view and the selection the calendar reads, as one [[ReactiveValue]] the host reads beside its month. */
+    private def calendarState(using Frame): ReactiveValue[(DatePickerView, DatePicker.Snapshot)] =
         val view = currentViewSlot.reading(kind.view)
-        val snap = bindingV.fold(Reading.Fixed[DatePicker.Snapshot](DatePicker.Snapshot.Single("")))(b => Reading.Live(b.snapshot(kind)))
+        val snap = bindingV.fold(ReactiveValue.Const[DatePicker.Snapshot](DatePicker.Snapshot.Single("")))(b =>
+            ReactiveValue.Dyn(b.snapshot(kind))
+        )
         view.and(snap)
     end calendarState
 
