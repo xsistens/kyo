@@ -1204,10 +1204,10 @@ final case class DataTable[A] private (
       */
     def csv(using Frame): String < Async =
         for
-            sort  <- sortReading.signal.current
-            query <- queryReading.signal.current
-            specs <- filtersReading.signal.current
-            order <- orderReading.signal.current
+            sort  <- sortReading.current
+            query <- queryReading.current
+            specs <- filtersReading.current
+            order <- orderReading.current
             rows  <- currentRows
         yield
             // In the reader's column order too, since that is as much a part of what they
@@ -1224,15 +1224,15 @@ final case class DataTable[A] private (
       */
     def state(using Frame): TableState < Async =
         for
-            sort   <- sortReading.signal.current
-            query  <- queryReading.signal.current
-            specs  <- filtersReading.signal.current
-            page   <- pageReading.signal.current
+            sort   <- sortReading.current
+            query  <- queryReading.current
+            specs  <- filtersReading.current
+            page   <- pageReading.current
             sel    <- currentValue(selectedBinding, Set.empty[String])
             exp    <- currentValue(expandedBinding, Set.empty[String])
-            groups <- groupsReading.signal.current
-            widths <- widthsReading.signal.current
-            order  <- orderReading.signal.current
+            groups <- groupsReading.current
+            widths <- widthsReading.current
+            order  <- orderReading.current
         yield TableState(sort, query, specs, page, sel, exp, groups, widths, order)
 
     /** Puts a reader back where they were: writes each field of `s` into the ref it came
@@ -1725,8 +1725,8 @@ final case class DataTable[A] private (
         }
 
     /** The open groups as the table reads them: the bound set, else none. */
-    private def groupsReading(using Frame): Reading[Set[GroupPath]] =
-        expandedGroupsSlot.fold(Reading.Fixed(Set.empty[GroupPath]))(Reading.of(_))
+    private def groupsReading(using Frame): ReactiveValue[Set[GroupPath]] =
+        expandedGroupsSlot.getOrElse(ReactiveValue.Const(Set.empty[GroupPath]))
 
     /** The rows being edited as keys, whichever way they were bound. */
     private def editingRowsBinding(using Frame): Maybe[ReactiveValue[Set[String]]] =
@@ -1918,16 +1918,16 @@ final case class DataTable[A] private (
       * row, the selected cells, the expansion, the groups and the total, as one reading. [[renderWith]] reads them below
       * the body instead wherever [[rowInputsBelow]] allows it.
       */
-    private def rowInputsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[(RowInputs[A], Total)] =
+    private def rowInputsReading(using CanEqual[Seq[A], Seq[A]], Frame): ReactiveValue[(RowInputs[A], Total)] =
         given CanEqual[RowInputs[A], RowInputs[A]] = CanEqual.derived
-        val sel                                    = selectedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_))
+        val sel                                    = selectedBinding.getOrElse(ReactiveValue.Const(Set.empty[String]))
         rowsReading
             .and(sel)
-            .and(contextBinding.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.of(_)))
-            .and(cellsBinding.fold(Reading.Fixed(Set.empty[CellKey]))(Reading.of(_)))
-            .and(expandedBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
+            .and(contextBinding.getOrElse(ReactiveValue.Const(Absent: Maybe[String])))
+            .and(cellsBinding.getOrElse(ReactiveValue.Const(Set.empty[CellKey])))
+            .and(expandedBinding.getOrElse(ReactiveValue.Const(Set.empty[String])))
             .and(groupsReading)
-            .and(loadingV.fold(Reading.Fixed(false))(Reading.of(_)))
+            .and(loadingV.getOrElse(ReactiveValue.Const(false)))
             .map { case (((((((rows, offset), s), ctx), cells), exp), groups), waiting) =>
                 RowInputs(rows, offset, s, ctx, cells, exp, groups, waiting)
             }
@@ -2148,7 +2148,7 @@ final case class DataTable[A] private (
     private def switched(draw: DataTable[A] => UI)(using Frame): UI =
         def named(name: String, sw: Maybe[BoolValue]): List[(String, Signal[Boolean])] =
             sw.flatMap(_.dyn).fold(Nil)(sig => List(name -> sig))
-        Reading.keyed(
+        ReactiveValue.keyed(
             named("widths", resizableColumnsV) ++ named("order", reorderableColumnsV) ++ named("groups", collapsibleGroupsV) ++
                 named("cells", cellSelectionV) ++ named("rows", rowEditingV) ++ named("cell", cellEditingV)
         ).render(held => draw(pinned(held)))
@@ -2340,7 +2340,7 @@ final case class DataTable[A] private (
         end if
         // The drag marks follow the drag through class channels, so a move to another boundary patches two cells
         // rather than drawing the header again.
-        def during(f: ColumnDrag => Boolean): Reading[Boolean] =
+        def during(f: ColumnDrag => Boolean): ReactiveValue[Boolean] =
             live.held.map {
                 case Present(d) if d.moved && !d.done => f(d)
                 case _                                => false
@@ -2583,15 +2583,15 @@ final case class DataTable[A] private (
       */
     private def freezeLive[E <: Ast.Element { type Self = E }](
         cell: E,
-        widths: Reading[Map[List[String], Double]],
+        widths: ReactiveValue[Map[List[String], Double]],
         slot: FrozenPlan => Maybe[FrozenSlot]
     )(using Frame): E =
         if !frozenOn then cell
         else
             given CanEqual[Maybe[FrozenSlot], Maybe[FrozenSlot]] = CanEqual.derived
             widths.map(w => slot(frozenPlan(SizeState(widths = w)))) match
-                case Reading.Fixed(s)  => freeze(cell, s).asInstanceOf[E]
-                case Reading.Live(sig) =>
+                case ReactiveValue.Const(s) => freeze(cell, s).asInstanceOf[E]
+                case ReactiveValue.Dyn(sig) =>
                     given CanEqual[Style, Style] = CanEqual.derived
                     cell.cssClass("p-datatable-frozen-column", sig.map(_.isDefined)).inlineStyle(sig.map {
                         case Present(s) => if s.edge == FrozenEdge.Start then Style.left(s.offset) else Style.right(s.offset)
@@ -2602,20 +2602,20 @@ final case class DataTable[A] private (
     end freezeLive
 
     /** A class that follows a reading: set statically from a fixed one, a class channel over a live one. */
-    private def classWhen[E <: Ast.Element { type Self = E }](el: E, name: String, on: Reading[Boolean])(using Frame): E =
+    private def classWhen[E <: Ast.Element { type Self = E }](el: E, name: String, on: ReactiveValue[Boolean])(using Frame): E =
         on match
-            case Reading.Fixed(b)  => if b then el.cssClass(name) else el
-            case Reading.Live(sig) => el.cssClass(name, sig)
+            case ReactiveValue.Const(b) => if b then el.cssClass(name) else el
+            case ReactiveValue.Dyn(sig) => el.cssClass(name, sig)
 
     /** What the header reads as it changes, once the header is no longer drawn again for every one of them: the sort,
       * the column filters, the widths and the column drag. Each reaches the cells through a channel or a region of its
       * own; fixed in a static projection.
       */
     final private case class HeadLive(
-        sort: Reading[List[SortKey]],
-        specs: Reading[Map[List[String], ColumnFilter]],
-        widths: Reading[Map[List[String], Double]],
-        held: Reading[Maybe[ColumnDrag]]
+        sort: ReactiveValue[List[SortKey]],
+        specs: ReactiveValue[Map[List[String], ColumnFilter]],
+        widths: ReactiveValue[Map[List[String], Double]],
+        held: ReactiveValue[Maybe[ColumnDrag]]
     )
 
     /** A table that edits owns two things no caller supplies: one draft per editable
@@ -2732,7 +2732,7 @@ final case class DataTable[A] private (
 
     /** The table drawn with no state of its own: a pure render, and what a mount shows before it runs. */
     private def staticBody(using Frame): UI =
-        renderWith(Reading.Fixed(()), (), navOn = false) { _ =>
+        renderWith(ReactiveValue.Const(()), (), navOn = false) { _ =>
             DataTable.Wiring[A](
                 EditState(Set.empty, Absent),
                 NavState[A](),
@@ -2893,11 +2893,11 @@ final case class DataTable[A] private (
         given errEq: CanEqual[Maybe[(CellKey, FieldError)], Maybe[(CellKey, FieldError)]] = CanEqual.derived
         given dragEq: CanEqual[Maybe[ColumnDrag], Maybe[ColumnDrag]]                      = CanEqual.derived
         given rowDragEq: CanEqual[Maybe[RowDrag], Maybe[RowDrag]]                         = CanEqual.derived
-        val outer                                                                         = Reading.Live(errRef)
-            .and(editingRowsBinding.fold(Reading.Fixed(Set.empty[String]))(Reading.of(_)))
-            .and(editingCellBinding.fold(Reading.Fixed(Absent: Maybe[CellKey]))(Reading.of(_)))
-            .and(Reading.orElse(moving, Absent: Maybe[ColumnDrag]))
-            .and(Reading.orElse(rowDrag, Absent: Maybe[RowDrag]))
+        val outer                                                                         = ReactiveValue.Dyn(errRef)
+            .and(editingRowsBinding.getOrElse(ReactiveValue.Const(Set.empty[String])))
+            .and(editingCellBinding.getOrElse(ReactiveValue.Const(Absent: Maybe[CellKey])))
+            .and(ReactiveValue.orElse(moving, Absent: Maybe[ColumnDrag]))
+            .and(ReactiveValue.orElse(rowDrag, Absent: Maybe[RowDrag]))
         renderWith(outer, ((((Absent, Set.empty[String]), Absent), Absent), Absent), navOn) {
             case ((((e, editRows), editCell), drag), rowHeld) =>
                 DataTable.Wiring[A](
@@ -2929,7 +2929,7 @@ final case class DataTable[A] private (
       *
       * What follows the state (the caller's own, `outer`, turned into the table's by `wiring`; the column order, the
       * column flags, the frozen rows, the sort, the filters, the widths, the page and, where they are not read below the
-      * body, the row bindings) is read as ONE reading (see [[Reading]]): an effect here writes several of them at once
+      * body, the row bindings) is read as ONE reading (see [[ReactiveValue.and]]): an effect here writes several of them at once
       * (starting an edit writes the error and the edited cell, a column drop writes the order and the drag), and a
       * region nested per signal repaints against the values the inner one closed over. Two sibling regions draw from that
       * reading: the diagnostic cards and the table itself. Neither nests in the other, so neither can repaint an older
@@ -2940,15 +2940,15 @@ final case class DataTable[A] private (
       * paginator, which reads the record count as a signal and the page from its ref. Each of those may hold a mount, and
       * a region above a mount starts it again on every repaint, which a sort, a search or an edit elsewhere is.
       */
-    private def renderWith[O](outer: Reading[O], base: O, navOn: Boolean)(wiring: O => Wiring)(using CanEqual[O, O], Frame): UI =
+    private def renderWith[O](outer: ReactiveValue[O], base: O, navOn: Boolean)(wiring: O => Wiring)(using CanEqual[O, O], Frame): UI =
         // The rows compare by their own equality, whatever the element type does; the region only
         // ever asks whether the values changed.
         given rowsEq: CanEqual[Seq[A], Seq[A]]                                                    = CanEqual.derived
         given specsEq: CanEqual[Map[List[String], ColumnFilter], Map[List[String], ColumnFilter]] = CanEqual.derived
         given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]]            = CanEqual.derived
         given inputsEq: CanEqual[RowInputs[A], RowInputs[A]]                                      = CanEqual.derived
-        val order: Reading[Maybe[List[List[String]]]]                                             =
-            columnOrderSlot.fold(Reading.Fixed(Maybe.empty[List[List[String]]]))(Reading.of(_).map(o => Present(o)))
+        val order: ReactiveValue[Maybe[List[List[String]]]]                                       =
+            ReactiveValue.optional(columnOrderSlot)
         val columns = order.and(visibleReading).and(sortableReading)
         val view    = frozenRowsReading
             .and(sortReading)
@@ -2956,15 +2956,15 @@ final case class DataTable[A] private (
             .and(filtersReading)
             .and(widthsReading)
             .and(pageReading)
-        val live                                 = if rowInputsBelow then rowInputsSignal else Absent
-        val rows: Reading[(RowInputs[A], Total)] =
-            if live.isDefined then Reading.Fixed((RowInputs[A](), Total.Unknown(false)))
+        val live                                       = if rowInputsBelow then rowInputsSignal else Absent
+        val rows: ReactiveValue[(RowInputs[A], Total)] =
+            if live.isDefined then ReactiveValue.Const((RowInputs[A](), Total.Unknown(false)))
             else rowInputsReading
         // On the signal path the rows reach the diagnostic cards and the paginator through `chrome`, which reads them
         // (and the total) in a region of its own, so a rows emission repaints those and reconciles the rows.
         def chrome(inputs: RowInputs[A], total: Total): ((RowInputs[A], Total) => UI) => UI =
             live match
-                case Present(sig) => f => Reading.Live(sig).and(totalReading).render((in, t) => f(in, t))
+                case Present(sig) => f => ReactiveValue.Dyn(sig).and(totalReading).render((in, t) => f(in, t))
                 case Absent       => f => f(inputs, total)
         val state = outer.and(columns).and(view).and(rows).and(pageSizeReading)
         // What the parts below the column layout read: the state but the layout, which the table container draws over.
@@ -3031,25 +3031,25 @@ final case class DataTable[A] private (
         sourceV.toList.map(src => UI.mounted(src.run.andThen(UI.empty)).placeholder(UI.empty))
 
     /** The page size as the table pages by it: the bound one's value, else the constant (one where nothing pages). */
-    private def pageSizeReading(using Frame): Reading[Int] =
-        pageSizeSlot.fold(Reading.Fixed(pageSizeV.getOrElse(1)))(Reading.of(_).map(math.max(1, _)))
+    private def pageSizeReading(using Frame): ReactiveValue[Int] =
+        pageSizeSlot.fold(ReactiveValue.Const(pageSizeV.getOrElse(1)))(_.map(math.max(1, _)))
 
     /** The global query as the table filters by it: the bound one, else none. */
-    private def queryReading(using Frame): Reading[String] = filterSlot.fold(Reading.Fixed(""))(Reading.of(_))
+    private def queryReading(using Frame): ReactiveValue[String] = filterSlot.getOrElse(ReactiveValue.Const(""))
 
     /** The widths as the table lays out by them: the bound map, else none. */
-    private def widthsReading(using Frame): Reading[Map[List[String], Double]] =
-        columnWidthsSlot.fold(Reading.Fixed(Map.empty[List[String], Double]))(Reading.of(_))
+    private def widthsReading(using Frame): ReactiveValue[Map[List[String], Double]] =
+        columnWidthsSlot.getOrElse(ReactiveValue.Const(Map.empty[List[String], Double]))
 
     /** The column order as the table lays out by it: the bound list, else the authored one. */
-    private def orderReading(using Frame): Reading[List[List[String]]] =
-        columnOrderSlot.fold(Reading.Fixed(List.empty[List[String]]))(Reading.of(_))
+    private def orderReading(using Frame): ReactiveValue[List[List[String]]] =
+        columnOrderSlot.getOrElse(ReactiveValue.Const(List.empty[List[String]]))
 
     /** The page as the table pages by it: the bound one's value, else the first. */
-    private def pageReading(using Frame): Reading[Int] = pageSlot.fold(Reading.Fixed(0))(Reading.of(_))
+    private def pageReading(using Frame): ReactiveValue[Int] = pageSlot.getOrElse(ReactiveValue.Const(0))
 
     /** The sort as the table sorts by it: the bound spec, else none. */
-    private def sortReading(using Frame): Reading[List[SortKey]] = sortSlot.fold(Reading.Fixed(List.empty[SortKey]))(Reading.of(_))
+    private def sortReading(using Frame): ReactiveValue[List[SortKey]] = sortSlot.getOrElse(ReactiveValue.Const(List.empty[SortKey]))
 
     /** This table paging by `size`, where it pages at all. */
     private def sized(size: Int): DataTable[A] =
@@ -3059,7 +3059,7 @@ final case class DataTable[A] private (
       * an `Expand` table states its width, which depends on which columns are shown and how wide they are) is a class
       * channel, so the root is built once and nothing under it is drawn again for it.
       */
-    private def rootElement(order: Reading[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
+    private def rootElement(order: ReactiveValue[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
         var root = div.cssClass("p-datatable").cssClass("p-component")
         idV.foreach(v => root = root.id(v))
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
@@ -3080,8 +3080,8 @@ final case class DataTable[A] private (
                     requested.fold(this)(reordered).shown(vis).resizeModeAt(SizeState(widths = widths)) == ColumnResizeMode.Expand
                 }
             expanding match
-                case Reading.Fixed(on) => if on then root = root.cssClass("p-datatable-scrollable")
-                case Reading.Live(sig) => root = root.cssClass("p-datatable-scrollable", sig)
+                case ReactiveValue.Const(on) => if on then root = root.cssClass("p-datatable-scrollable")
+                case ReactiveValue.Dyn(sig)  => root = root.cssClass("p-datatable-scrollable", sig)
         end if
         if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
@@ -3120,7 +3120,12 @@ final case class DataTable[A] private (
       * repaint an older state over each other, and the regions nested here read refs disjoint from the layout around
       * them, which is what keeps the one-region guarantee for state written together.
       */
-    private def tableContainer[V](inner: Reading[V], live: Maybe[Signal[RowInputs[A]]], w0: Wiring, flags: Map[List[String], Boolean])(
+    private def tableContainer[V](
+        inner: ReactiveValue[V],
+        live: Maybe[Signal[RowInputs[A]]],
+        w0: Wiring,
+        flags: Map[List[String], Boolean]
+    )(
         drawn: V => Drawn
     )(using CanEqual[V, V], Frame): UI =
         given widthsEq: CanEqual[Map[List[String], Double], Map[List[String], Double]]            = CanEqual.derived
@@ -3132,7 +3137,7 @@ final case class DataTable[A] private (
             sort = sortReading,
             specs = filtersReading,
             widths = widthsReading,
-            held = w0.order.drag.fold(Reading.Fixed(Absent: Maybe[ColumnDrag]))(Reading.Live(_))
+            held = ReactiveValue.orElse(w0.order.drag, Absent: Maybe[ColumnDrag])
         )
         def part(f: Drawn => UI): UI = inner.render(v => f(drawn(v)))
         val size                     = w0.size
@@ -3155,12 +3160,12 @@ final case class DataTable[A] private (
           * alone. Nothing bound renders inline, exactly as before, and stays free of markers.
           */
         def rowList(group: Ast.Tbody, specsOf: (Drawn, Maybe[RowInputs[A]]) => List[RowSpec[A]]): UI =
-            val specs: Reading[List[RowSpec[A]]] = live match
-                case Present(sig) => Reading.Live(inner.signal.combineLatest(sig).map((v, in) => specsOf(drawnOnce(v), Present(in))))
+            val specs: ReactiveValue[List[RowSpec[A]]] = live match
+                case Present(sig) => ReactiveValue.Dyn(inner.signal.combineLatest(sig).map((v, in) => specsOf(drawnOnce(v), Present(in))))
                 case Absent       => inner.map(v => specsOf(drawnOnce(v), Absent))
             specs match
-                case Reading.Fixed(ss) => group(UI.children(ss.map(renderTr))*)
-                case Reading.Live(sig) => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
+                case ReactiveValue.Const(ss) => group(UI.children(ss.map(renderTr))*)
+                case ReactiveValue.Dyn(sig)  => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
             end match
         end rowList
 
@@ -3238,17 +3243,18 @@ final case class DataTable[A] private (
                 given CanEqual[Style, Style] = CanEqual.derived
                 var group                    = tbody.cssClass("p-datatable-tbody")
                 inner.map(v => Style.height(drawnOnce(v).windowHeight.px)) match
-                    case Reading.Fixed(st) => group = group.style(st)
-                    case Reading.Live(sig) => group = group.inlineStyle(sig)
-                val window: Reading[List[RowSpec[A]]] = w0.scroll.ref match
+                    case ReactiveValue.Const(st) => group = group.style(st)
+                    case ReactiveValue.Dyn(sig)  => group = group.inlineStyle(sig)
+                val window: ReactiveValue[List[RowSpec[A]]] = w0.scroll.ref match
                     case Present(r) =>
                         inner match
-                            case Reading.Fixed(v)  => Reading.Live(r.map(top => drawnOnce(v).windowSpecs(top)))
-                            case Reading.Live(sig) => Reading.Live(sig.combineLatest(r).map((v, top) => drawnOnce(v).windowSpecs(top)))
+                            case ReactiveValue.Const(v) => ReactiveValue.Dyn(r.map(top => drawnOnce(v).windowSpecs(top)))
+                            case ReactiveValue.Dyn(sig) =>
+                                ReactiveValue.Dyn(sig.combineLatest(r).map((v, top) => drawnOnce(v).windowSpecs(top)))
                     case Absent => inner.map(v => drawnOnce(v).windowSpecs(0.0))
                 window match
-                    case Reading.Fixed(ss) => group(UI.children(ss.map(renderTr))*)
-                    case Reading.Live(sig) => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
+                    case ReactiveValue.Const(ss) => group(UI.children(ss.map(renderTr))*)
+                    case ReactiveValue.Dyn(sig)  => group(sig.map(Chunk.from(_)).foreachKeyed(rowSpecKey)(renderTr))
                 end match
             end if
         end tbodyEl
@@ -3270,8 +3276,8 @@ final case class DataTable[A] private (
             end if
         end frozenBody
 
-        val expanding: Reading[Boolean] =
-            if resizeModeV != ColumnResizeMode.Expand then Reading.Fixed(false)
+        val expanding: ReactiveValue[Boolean] =
+            if resizeModeV != ColumnResizeMode.Expand then ReactiveValue.Const(false)
             else head.widths.map(w => resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand)
         var tbl = table.cssClass("p-datatable-table")
         if scrollingOn || frozenOn || frozenRowsOn then tbl = tbl.cssClass("p-datatable-scrollable-table")
@@ -3302,8 +3308,8 @@ final case class DataTable[A] private (
                 if resizeModeAt(SizeState(widths = w)) == ColumnResizeMode.Expand then Style.width(statedWidth(SizeState(widths = w)))
                 else Style.empty
             ) match
-                case Reading.Fixed(st) => tbl = tbl.style(st)
-                case Reading.Live(sig) => tbl = tbl.inlineStyle(sig)
+                case ReactiveValue.Const(st) => tbl = tbl.style(st)
+                case ReactiveValue.Dyn(sig)  => tbl = tbl.inlineStyle(sig)
             end match
         end if
         accNameV match
@@ -3361,17 +3367,17 @@ final case class DataTable[A] private (
       * nothing it is counted from can change) and the page from the page ref, and clamps the page itself, so a sort, a
       * search or an edit never draws it again and its two dropdowns never start their mounts again.
       */
-    private def paginatorPart(order: Reading[Maybe[List[List[String]]]])(using Frame): List[UI] =
+    private def paginatorPart(order: ReactiveValue[Maybe[List[List[String]]]])(using Frame): List[UI] =
         if pageSizeV.isEmpty || windowOn then Nil
         else
             given specsEq: CanEqual[Map[List[String], ColumnFilter], Map[List[String], ColumnFilter]] = CanEqual.derived
             given inputsEq: CanEqual[RowInputs[A], RowInputs[A]]                                      = CanEqual.derived
             given rowsEq: CanEqual[Seq[A], Seq[A]]                                                    = CanEqual.derived
-            val rowsAndTotal: Reading[(RowInputs[A], Total)]                                          =
+            val rowsAndTotal: ReactiveValue[(RowInputs[A], Total)]                                    =
                 rowInputsSignal match
-                    case Present(sig) if rowInputsBelow => Reading.Live(sig).and(totalReading)
+                    case Present(sig) if rowInputsBelow => ReactiveValue.Dyn(sig).and(totalReading)
                     case _                              => rowInputsReading
-            val count: Reading[Int] =
+            val count: ReactiveValue[Int] =
                 order.and(visibleReading)
                     .and(rowsAndTotal)
                     .and(queryReading)
@@ -3382,7 +3388,7 @@ final case class DataTable[A] private (
                         requested.fold(this)(reordered).shown(vis).sized(size).countOf(in, query, specs, page, total)
                     }
             var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
-                .totalRecords(count.slot)
+                .totalRecords(count.bound)
                 .hostClass("p-datatable-paginator-bottom")
             // The table owns the page and how many rows it holds, whatever the caller handed the paginator: it hands over
             // its own bindings and its own events, so a pick is written where the table pages from and reported under the
@@ -3506,11 +3512,11 @@ final case class DataTable[A] private (
     private def bodyViewNow(using Frame): BodyView[A] < Async =
         for
             rowsNow <- currentRows
-            sort    <- sortReading.signal.current
-            query   <- queryReading.signal.current
-            specs   <- filtersReading.signal.current
-            page    <- pageReading.signal.current
-            groups  <- groupsReading.signal.current
+            sort    <- sortReading.current
+            query   <- queryReading.current
+            specs   <- filtersReading.current
+            page    <- pageReading.current
+            groups  <- groupsReading.current
         yield
             val rows   = rowsNow.toList
             val reads  = if lazyOn then Nil else filterReads(specs)
@@ -3585,8 +3591,8 @@ final case class DataTable[A] private (
       * catches a row held and scrolling at once needs them beside the body's, and the group
       * that renders them needs them anyway.
       */
-    private def frozenRowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[Seq[A]] =
-        frozenRowsV.fold(Reading.Fixed(Seq.empty[A]))(Reading.of(_))
+    private def frozenRowsReading(using CanEqual[Seq[A], Seq[A]], Frame): ReactiveValue[Seq[A]] =
+        frozenRowsV.getOrElse(ReactiveValue.Const(Seq.empty[A]))
 
     /** The rows the table renders, and the row index the first of them sits at. A two-way
       * list is what lets a committed edit reach the screen, since the table stores the new
@@ -3597,18 +3603,18 @@ final case class DataTable[A] private (
       * the one they were asked for at is not the one they came back at while a fetch is in
       * flight.
       */
-    private def rowsReading(using CanEqual[Seq[A], Seq[A]], Frame): Reading[(Seq[A], Int)] =
-        if windowedSource then Reading.Live(sourceV.get.window.map(w => (w.rows, w.offset)))
+    private def rowsReading(using CanEqual[Seq[A], Seq[A]], Frame): ReactiveValue[(Seq[A], Int)] =
+        if windowedSource then ReactiveValue.Dyn(sourceV.get.window.map(w => (w.rows, w.offset)))
         else
-            rowsSlot.flatMap(_.dyn).fold(Reading.Fixed((rowsSlot.flatMap(_.const).getOrElse(Seq.empty[A]), 0)))(sig =>
-                Reading.Live(sig.map(rows => (rows, 0)))
+            rowsSlot.flatMap(_.dyn).fold(ReactiveValue.Const((rowsSlot.flatMap(_.const).getOrElse(Seq.empty[A]), 0)))(sig =>
+                ReactiveValue.Dyn(sig.map(rows => (rows, 0)))
             )
 
     /** How many rows the page the table was given came out of, zero where it was given no
       * total and computes its own.
       */
-    private def totalReading(using Frame): Reading[Total] =
-        lazyTotalV.fold(Reading.Fixed(Total.Unknown(false): Total))(Reading.of(_))
+    private def totalReading(using Frame): ReactiveValue[Total] =
+        lazyTotalV.getOrElse(ReactiveValue.Const(Total.Unknown(false): Total))
 
     /** Every reactive [[Column.sortable]] flag, resolved to a plain boolean before the table
       * builds, keyed by the column's path.
@@ -3619,12 +3625,12 @@ final case class DataTable[A] private (
       * filter, page, selection, expansion, groups, and this is the seventh of those: the
       * cost is a sort click's worth of render, and the cell code reads a plain boolean.
       */
-    private def sortableReading(using Frame): Reading[Map[List[String], Boolean]] =
-        Reading.keyed(leafPaths.flatMap((p, c) => c.sortableSig.toList.map(sig => (p, sig))))
+    private def sortableReading(using Frame): ReactiveValue[Map[List[String], Boolean]] =
+        ReactiveValue.keyed(leafPaths.flatMap((p, c) => c.sortableSig.toList.map(sig => (p, sig))))
 
     /** Every reactive [[Column.visible]] flag, keyed by the column's path, which a reorder leaves as it is. */
-    private def visibleReading(using Frame): Reading[Map[List[String], Boolean]] =
-        Reading.keyed(leafPaths.flatMap((p, c) => c.visibleSig.toList.map(sig => (p, sig))))
+    private def visibleReading(using Frame): ReactiveValue[Map[List[String], Boolean]] =
+        ReactiveValue.keyed(leafPaths.flatMap((p, c) => c.visibleSig.toList.map(sig => (p, sig))))
 
     /** Every bound filter with something in it, paired with the row test its column reads
       * it as, or `Absent` where the column cannot: a query that is not a value of its
@@ -4013,12 +4019,12 @@ final case class DataTable[A] private (
             // the skeletons and off over loading content of the caller's own, which already says how the
             // wait looks and would have the spinner on top of it. Two constants decide it here; a signal
             // on either side makes it one region of its own.
-            val loading = loadingV.fold(Reading.Fixed(false))(Reading.of(_))
-            val wanted  = loadingMaskV.fold(Reading.Fixed(loadingContentV.isEmpty))(Reading.of(_))
+            val loading = loadingV.getOrElse(ReactiveValue.Const(false))
+            val wanted  = loadingMaskV.getOrElse(ReactiveValue.Const(loadingContentV.isEmpty))
             loading.and(wanted).map(_ && _) match
-                case Reading.Fixed(true)  => List(maskDiv)
-                case Reading.Fixed(false) => Nil
-                case Reading.Live(sig)    => List(sig.render(b => if b then maskDiv else UI.empty))
+                case ReactiveValue.Const(true)  => List(maskDiv)
+                case ReactiveValue.Const(false) => Nil
+                case ReactiveValue.Dyn(sig)     => List(sig.render(b => if b then maskDiv else UI.empty))
             end match
         end if
     end loadingMask
@@ -4615,19 +4621,19 @@ final case class DataTable[A] private (
             case Absent      => cell
             case Present(cf) =>
                 given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
-                val spec: Reading[ColumnFilter]            = live.specs.map(_.getOrElse(path, ColumnFilter("", cf.default)))
+                val spec: ReactiveValue[ColumnFilter]      = live.specs.map(_.getOrElse(path, ColumnFilter("", cf.default)))
                 // The input, the funnel and an open constraint list are ONE region over this column's filter and its menu's
                 // open state, and nothing else: a pick writes both, and the column's own cell is all either changes.
-                val open: Reading[Boolean] =
+                val open: ReactiveValue[Boolean] =
                     filter.openOf(path) match
-                        case Present(openRef) if filter.live && cf.modes.sizeIs > 1 => Reading.Live(openRef)
-                        case _                                                      => Reading.Fixed(false)
+                        case Present(openRef) if filter.live && cf.modes.sizeIs > 1 => ReactiveValue.Dyn(openRef)
+                        case _                                                      => ReactiveValue.Const(false)
                 // Over one-way filters the field shows what the reader typed until they leave it (see `FilterState.typed`);
                 // a two-way binding is written on every keystroke, in order, so its value is already what they typed.
                 val typedRef: Maybe[SignalRef[Maybe[String]]] =
                     if columnFiltersSlot.exists(_.writable.isEmpty) then filter.typedOf(path) else Absent
                 given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
-                val typed: Reading[Maybe[String]]            = typedRef.fold(Reading.Fixed(Absent: Maybe[String]))(Reading.Live(_))
+                val typed: ReactiveValue[Maybe[String]]      = ReactiveValue.orElse(typedRef, Absent: Maybe[String])
                 cell(spec.and(open).and(typed).render { case ((held, isOpen), kept) =>
                     // The filter as the reader sees it: the field, its validity and the mode menu all read this one, so a
                     // mode picked before the owner caught up carries what the reader typed.
@@ -4745,7 +4751,7 @@ final case class DataTable[A] private (
                 case Absent      => Nil
                 case Present(cf) =>
                     given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
-                    val spec: Reading[ColumnFilter]            = live.specs.map(_.getOrElse(path, ColumnFilter.empty(cf.default)))
+                    val spec: ReactiveValue[ColumnFilter]      = live.specs.map(_.getOrElse(path, ColumnFilter.empty(cf.default)))
                     def trigger(cur: ColumnFilter, open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): Button =
                         // Filled while the column is filtering, hollow while it is not: which
                         // columns are narrowing the table has to be readable without opening
@@ -4774,10 +4780,10 @@ final case class DataTable[A] private (
                             List(
                                 span.cssClass("p-datatable-popover-filter")(
                                     // The open state, the draft and the column's filter are read as ONE region (see
-                                    // [[Reading]]): opening writes the draft and the open state together, and applying writes
+                                    // [[ReactiveValue]]): opening writes the draft and the open state together, and applying writes
                                     // the filter and closes. It is the only region above the menu: the header around it
                                     // follows the sort, the widths and the drag through channels.
-                                    Reading.Live(openRef).and(Reading.Live(draft)).and(spec).render { case ((open, d), cur) =>
+                                    ReactiveValue.Dyn(openRef).and(ReactiveValue.Dyn(draft)).and(spec).render { case ((open, d), cur) =>
                                         Overlay(openRef)
                                             .matchWidth(false)
                                             .panelClass("p-datatable-filter-overlay-popover")
@@ -4943,8 +4949,8 @@ final case class DataTable[A] private (
         ReactiveValue.update(columnFiltersSlot, step, onColumnFiltersF)
 
     /** The filters as the table filters by them: the bound map, else none. */
-    private def filtersReading(using Frame): Reading[Map[List[String], ColumnFilter]] =
-        columnFiltersSlot.fold(Reading.Fixed(Map.empty[List[String], ColumnFilter]))(Reading.of(_))
+    private def filtersReading(using Frame): ReactiveValue[Map[List[String], ColumnFilter]] =
+        columnFiltersSlot.getOrElse(ReactiveValue.Const(Map.empty[List[String], ColumnFilter]))
 
     private def pickMode(
         path: List[String],
@@ -5073,8 +5079,8 @@ final case class DataTable[A] private (
         given CanEqual[SortDirection, SortDirection] = CanEqual.derived
         // Unbound, the sort is the table's own, so the page as first rendered already draws the header the reader will
         // press; only the mount's own sort makes the press do something.
-        val sortable                          = sorts && !sortFixed
-        val direction: Reading[SortDirection] =
+        val sortable                                = sorts && !sortFixed
+        val direction: ReactiveValue[SortDirection] =
             live.sort.map(sort => sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted))
 
         var cell = th.cssClass("p-datatable-header-cell")
@@ -5085,10 +5091,10 @@ final case class DataTable[A] private (
         // Whether this boundary takes a grip follows the widths where they decide it: under `Expand` the table expands
         // only once every column is sized, which a drag may be what completes, so the class is a channel and the grip a
         // region over the widths alone. Under `Fit` the widths decide nothing here.
-        val resizable: Reading[Boolean] =
-            if index < 0 then Reading.Fixed(false)
+        val resizable: ReactiveValue[Boolean] =
+            if index < 0 then ReactiveValue.Const(false)
             else if resizeModeV == ColumnResizeMode.Expand then live.widths.map(w => resizableAt(index, size.copy(widths = w)))
-            else Reading.Fixed(resizableAt(index, size))
+            else ReactiveValue.Const(resizableAt(index, size))
         cell = classWhen(cell, "p-datatable-resizable-column", resizable)
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
@@ -5122,8 +5128,8 @@ final case class DataTable[A] private (
                 case SortDirection.Descending => "descending"
                 case SortDirection.Unsorted   => "none"
             } match
-                case Reading.Fixed(v)  => cell = cell.aria("sort", v)
-                case Reading.Live(sig) => cell = cell.aria("sort", sig)
+                case ReactiveValue.Const(v) => cell = cell.aria("sort", v)
+                case ReactiveValue.Dyn(sig) => cell = cell.aria("sort", sig)
             end match
         end if
 
