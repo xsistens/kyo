@@ -199,7 +199,7 @@ honour it, or the same call means different things in different places with noth
 to say so. Contrast `HasElementId`, where each component genuinely was its own decision.
 
 - **A reactive slot on a model type is resolved by the HOST, before it builds rows.**
-  `MenuRender.resolveDisabled` folds every reactive slot in the tree into ONE subscription chain
+  `MenuRender.readDisabled` folds every reactive slot in the tree into ONE subscription chain
   and hands back items pinned to `Const`, so `MenuNav`, the navigable index set and the row
   builders all stay pure functions of a plain `Boolean` read through `constTrue`. This is
   `BoolValue.reactive` lifted from a value to a list.
