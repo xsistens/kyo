@@ -5395,10 +5395,10 @@ final case class DataTable[A] private (
         val handleTd: List[UI] =
             if !handleColumn then Nil
             else
-                // Fixed rows keep the column, which is anatomy the grid lines up by, and drop the grip class, whose move
-                // cursor says a drag would change something.
+                // Fixed rows keep the column, which is anatomy the grid lines up by, and swap the grip class, whose move
+                // cursor says a drag would change something, for the disabled look: a grip that reads as usable invites a drag.
                 var cell = td.aria("hidden", "true")
-                if !movesFixed then cell = cell.cssClass("p-datatable-reorderable-row-handle")
+                cell = cell.cssClass(if movesFixed then "p-uic-aria-disabled" else "p-datatable-reorderable-row-handle")
                 if move.live then
                     val at = move.base + index
                     cell = cell

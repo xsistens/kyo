@@ -4981,4 +4981,19 @@ class DataTableTest extends ReactiveValueContract:
         }.unit.andThen(succeed)
     }
 
+    "a grip on rows that cannot move says so, and one on rows that can does not" in {
+        def table(rows: Seq[Item] | SignalRef[Seq[Item]])(using Frame) =
+            uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).reorderableRows(true)
+        for
+            ref     <- Signal.initRef[Seq[Item]](trio)
+            fixed   <- renderHtml(table(trio).render)
+            movable <- renderHtml(table(ref).render)
+        yield
+            assert(classInHtml(fixed, "p-uic-aria-disabled"), s"a fixed grip reads as off: $fixed")
+            assert(!classInHtml(fixed, "p-datatable-reorderable-row-handle"), "and has no move cursor")
+            assert(!classInHtml(movable, "p-uic-aria-disabled"), "a grip the reader can use is not marked off")
+            assert(classInHtml(movable, "p-datatable-reorderable-row-handle"))
+        end for
+    }
+
 end DataTableTest
