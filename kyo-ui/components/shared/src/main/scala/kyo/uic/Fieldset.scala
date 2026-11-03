@@ -32,8 +32,7 @@ import kyo.UI.*
 final case class Fieldset private (
     legendV: Maybe[TextValue] = Absent,
     toggleableFlag: Boolean = false,
-    collapsedSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onCollapsedF: Maybe[Boolean => UI.Action] = Absent,
+    collapsedSlot: Slot[Boolean] = Slot(),
     idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasElementId:
@@ -61,33 +60,19 @@ final case class Fieldset private (
       * still reachable, changes nothing. Unbound, a toggleable fieldset keeps the state itself, starting expanded. A
       * signal nothing hears is reported in a card.
       */
-    def collapsed(v: Boolean | Signal[Boolean]): Fieldset = copy(collapsedSlot = Present(ReactiveValue(v)))
+    def collapsed(v: Boolean | Signal[Boolean]): Fieldset = copy(collapsedSlot = collapsedSlot.bind(v))
 
     /** Fired with the new collapse state after a press of the toggle, after a two-way [[collapsed]] is written. */
-    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Fieldset = copy(onCollapsedF = Present(Callback.of(f)))
+    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Fieldset = copy(collapsedSlot = collapsedSlot.hear(f))
 
     /** Adds content children. */
     def apply(cs: UI*): Fieldset = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        collapsedSlot match
-            // Unbound, a toggleable fieldset keeps its collapse state itself, starting expanded.
-            case Absent if toggleableFlag =>
-                ReactiveValue.owned(false)(own => copy(collapsedSlot = Present(own)).body)(
-                    copy(collapsedSlot = Present(ReactiveValue[Boolean](Signal.initConst(false)))).body
-                )
-            // A signal nobody hears: every press the reader makes is painted away again.
-            case _ if toggleableFlag && ReactiveValue.deaf(collapsedSlot, onCollapsedF) =>
-                fragment(
-                    Diagnostics.card(
-                        "Fieldset",
-                        "the collapse state is bound one way and nothing hears a press, so the reader cannot change it; " +
-                            "add onCollapsedChange, or bind a SignalRef",
-                        Nil
-                    ),
-                    body
-                )
-            case _ => body
+        // Unbound, a toggleable fieldset keeps its collapse state itself, starting expanded.
+        Slot.draw(collapsedSlot, Fieldset.collapsedName, start = false, on = ReactiveValue.Const(toggleableFlag))(s =>
+            copy(collapsedSlot = s).body
+        )
 
     private def body(using Frame): UI =
         // The toggle button's own aria-label is an attribute channel, and a channel can only
@@ -102,9 +87,9 @@ final case class Fieldset private (
         idV.foreach(v => shell = shell.id(v))
         if toggleableFlag then shell = shell.cssClass("p-fieldset-toggleable")
 
-        val toggleSlot: Maybe[ReactiveValue[Boolean]] = if toggleableFlag then collapsedSlot else Absent
+        val toggleSlot: Maybe[ReactiveValue[Boolean]] = if toggleableFlag then collapsedSlot.binding else Absent
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
-        val fixed = ReactiveValue.fixed(collapsedSlot, onCollapsedF)
+        val fixed = collapsedSlot.fixed
 
         def labelSpan: UI = legendV match
             case Present(TextValue.Const(v)) => span.cssClass("p-fieldset-legend-label")(v)
@@ -129,7 +114,7 @@ final case class Fieldset private (
                                     .aria("label", legendConst.getOrElse("Toggle"))
                                 val pressable =
                                     if fixed then b.aria("disabled", "true")
-                                    else b.onClick(ReactiveValue.update(collapsedSlot, !_, onCollapsedF))
+                                    else b.onClick(collapsedSlot.update(!_))
                                 pressable(
                                     GlyphSvg(if c then Icons.plus else Icons.minus, "p-fieldset-toggle-icon"),
                                     labelSpan
@@ -172,3 +157,6 @@ end Fieldset
 
 object Fieldset:
     def apply(): Fieldset = new Fieldset()
+
+    private val collapsedName = Slot.Name("Fieldset", "the collapse state", "a press", "onCollapsedChange")
+end Fieldset

@@ -110,8 +110,8 @@ end OverlayAnchor
   * (menu-family hosts that gate the panel's presence themselves do so).
   */
 final case class Overlay private (
-    // Absent for a panel its host gates and closes itself (see [[Overlay.gated]]).
-    openSlot: Maybe[ReactiveValue[Boolean]],
+    // Unbound for a panel its host gates and closes itself (see [[Overlay.gated]]).
+    openSlot: Slot[Boolean],
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
     matchWidthV: Boolean = true,
     maxHeightV: Maybe[String] = Absent,
@@ -131,9 +131,7 @@ final case class Overlay private (
     triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
     kids: List[UI] = Nil,
     closeV: Maybe[UI.Action] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
-    reportedAsV: String = "Overlay",
-    quietFlag: Boolean = false
+    reportedAsV: String = "Overlay"
 ) extends Node:
     type Self = Overlay
 
@@ -285,7 +283,7 @@ final case class Overlay private (
     /** Fired with the visibility the reader asks for (false for an outside click, an outside scroll and Escape), after
       * a two-way [[Overlay.apply open]] binding is written.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Overlay = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Overlay = copy(openSlot = openSlot.hear(f))
 
     /** Package-internal: the component a binding mistake is reported for, when a host hands its own binding on. */
     private[uic] def reportedAs(component: String): Overlay = copy(reportedAsV = component)
@@ -293,11 +291,11 @@ final case class Overlay private (
     /** Package-internal: a host whose binding is not the reader's to see yet (a static placeholder over a signal that
       * stands in for state the host has not allocated) keeps the overlay from reporting it.
       */
-    private[uic] def quiet: Overlay = copy(quietFlag = true)
+    private[uic] def quiet: Overlay = copy(openSlot = openSlot.quieted)
 
     private[uic] def render(using Frame): UI =
         // Shown while the binding says so: a constant needs no region, a signal is one boundary.
-        val gated: UI = openSlot match
+        val gated: UI = openSlot.binding match
             case Absent        => openContent
             case Present(slot) =>
                 slot.const match
@@ -305,26 +303,15 @@ final case class Overlay private (
                     case Absent     => when(slot.signal)(openContent)
         val drawn = triggerV match
             case Present(t) =>
-                val announced = PopupTrigger.announced(t, "dialog", PopupTrigger.expanded(openSlot))
+                val announced = PopupTrigger.announced(t, "dialog", PopupTrigger.expanded(openSlot.binding))
                 div.cssClass("p-uic-overlay-anchor")(announced, gated)
             case _ => gated
         // A signal nobody hears: every dismissal the reader asks for is painted away again.
-        if quietFlag || !ReactiveValue.deaf(openSlot, onOpenF) then drawn
-        else
-            fragment(
-                Diagnostics.card(
-                    reportedAsV,
-                    "the visibility is bound one way and nothing hears a dismissal, so the reader cannot close it; add " +
-                        "onOpenChange, or bind a SignalRef",
-                    Nil
-                ),
-                drawn
-            )
-        end if
+        Diagnostics.before(drawn)(reportedAsV)(Diagnostic(openSlot.deaf, Overlay.openAdvice))
     end render
 
     /** A constant nobody hears is fixed: an open panel stays, and nothing outside dismisses it. */
-    private def fixed: Boolean = ReactiveValue.fixed(openSlot, onOpenF)
+    private def fixed: Boolean = openSlot.fixed
 
     /** The open panel content: the continuous flip/shift reposition when `autoFlip`, else the declared-anchor render.
       *
@@ -566,8 +553,7 @@ final case class Overlay private (
         // Typed branch by branch: a `fold` over `()` and the ref write infers `Any`, and the write would land inert.
         val close: UI.Action = closeV match
             case Present(action) => action
-            case Absent          =>
-                ReactiveValue.change(openSlot, false, onOpenF)
+            case Absent          => openSlot.change(false)
 
         val outside            = dismissOnOutsideClickV && !fixed
         val escape             = dismissOnEscapeV && !fixed
@@ -643,18 +629,23 @@ object Overlay:
       * one way: the panel follows it and only reports a dismissal. A constant nobody hears is fixed: an open panel
       * stays, and nothing outside dismisses it. A signal nothing hears is reported in a card.
       */
-    def apply(open: Boolean | Signal[Boolean]): Overlay = new Overlay(Present(ReactiveValue(open)))
+    def apply(open: Boolean | Signal[Boolean]): Overlay = new Overlay(Slot().bind(open))
 
     /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
       * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
       */
-    private[uic] def gated(close: UI.Action): Overlay = new Overlay(Absent, closeV = Present(close))
+    private[uic] def gated(close: UI.Action): Overlay = new Overlay(Slot(), closeV = Present(close))
 
     /** Package-internal: the panel of a host over the host's own open binding, reporting a dismissal to the host's
       * callback. Quiet, since the host reports its binding itself.
       */
     private[uic] def hosted(open: ReactiveValue[Boolean], report: Maybe[Boolean => UI.Action]): Overlay =
-        new Overlay(Present(open), onOpenF = report, quietFlag = true)
+        new Overlay(Slot(Present(open), report, quiet = true))
+
+    /** Package-internal: the slot of a host that embeds this overlay, as the host wants it heard. */
+    private[uic] def withOpen(slot: Slot[Boolean]): Overlay = new Overlay(slot)
+
+    private val openAdvice = Slot.Name("Overlay", "the visibility", "a dismissal", "onOpenChange").advice
 
     /** How an OPEN overlay responds to scroll input outside its panel. The invisible outside-click
       * backdrop covers the whole viewport, so page scrolling necessarily runs through it; the mode

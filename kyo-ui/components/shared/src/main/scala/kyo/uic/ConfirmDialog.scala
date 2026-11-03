@@ -28,8 +28,7 @@ import kyo.UI.*
   * the anatomy and the interaction story.
   */
 final case class ConfirmDialog private (
-    openSlot: Maybe[ReactiveValue[Boolean]] = Absent,
-    onOpenF: Maybe[Boolean => UI.Action] = Absent,
+    openSlot: Slot[Boolean] = Slot(),
     messageV: Maybe[TextValue] = Absent,
     headerV: Maybe[TextValue] = Absent,
     iconV: Maybe[IconGlyph] = Absent,
@@ -45,12 +44,12 @@ final case class ConfirmDialog private (
       * `Signal` is followed and a close only reported, a constant nobody hears is fixed, and unbound the dialog keeps
       * the state itself and starts open. A signal no choice is heard for is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): ConfirmDialog = copy(openSlot = Present(ReactiveValue(v)))
+    def open(v: Boolean | Signal[Boolean]): ConfirmDialog = copy(openSlot = openSlot.bind(v))
 
     /** Fired with the visibility the reader asks for (false for every choice and dismissal), after a two-way [[open]]
       * is written and before [[onAccept]] or [[onReject]].
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): ConfirmDialog = copy(onOpenF = Present(Callback.of(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): ConfirmDialog = copy(openSlot = openSlot.hear(f))
 
     /** The confirmation question (`span.p-confirmdialog-message`). A `Signal[String]` re-renders it in
       * place on emission, e.g. a locale-driven `I18n.t` leaf.
@@ -90,49 +89,33 @@ final case class ConfirmDialog private (
     def onReject(action: => UI.Action)(using Frame): ConfirmDialog =
         copy(onRejectEff = Present(Callback(action)))
 
-    /** What hears an accept: [[onOpenChange]], or [[onAccept]]. */
-    private def acceptHeard: Maybe[Unit] = if onOpenF.isDefined || onAcceptEff.isDefined then Present(()) else Absent
+    /** The slot as an accept hears it: [[onOpenChange]], or [[onAccept]]. */
+    private def accepting: Slot[Boolean] = if onAcceptEff.isDefined then openSlot.heardToo else openSlot
 
-    /** What hears a reject and every dismissal: [[onOpenChange]], or [[onReject]]. */
-    private def rejectHeard: Maybe[Unit] = if onOpenF.isDefined || onRejectEff.isDefined then Present(()) else Absent
+    /** The slot as a reject and every dismissal hear it: [[onOpenChange]], or [[onReject]]. */
+    private def rejecting: Slot[Boolean] = if onRejectEff.isDefined then openSlot.heardToo else openSlot
 
     private[uic] def render(using Frame): UI =
-        openSlot match
-            // Unbound, the confirm dialog keeps its visibility itself and starts open, like [[Dialog]].
-            case Absent =>
-                ReactiveValue.owned(true)(own => copy(openSlot = Present(own)).drawn)(
-                    copy(openSlot = Present(ReactiveValue[Boolean](Signal.initConst(true)))).drawn
-                )
-            case _ =>
-                // A signal nobody hears for a choice: that choice is painted away again. One card for both, since the
-                // dialog underneath is kept quiet.
-                val unheard =
-                    (if ReactiveValue.deaf(openSlot, acceptHeard) then List("an accept") else Nil) ++
-                        (if ReactiveValue.deaf(openSlot, rejectHeard) then List("a reject or a dismissal") else Nil)
-                if unheard.isEmpty then drawn
-                else
-                    fragment(
-                        Diagnostics.card(
-                            "ConfirmDialog",
-                            s"the visibility is bound one way and nothing hears ${unheard.mkString(" or ")}; add " +
-                                "onOpenChange, or bind a SignalRef",
-                            Nil
-                        ),
-                        drawn
-                    )
-                end if
+        // Unbound, the confirm dialog keeps its visibility itself and starts open, like [[Dialog]].
+        val drawing = Slot.owning(openSlot, start = true)(s => copy(openSlot = s).drawn)(copy(openSlot = openSlot.standIn(true)).drawn)
+        // A signal nobody hears for a choice: that choice is painted away again. One card for both, since the dialog
+        // underneath is kept quiet.
+        val unheard = Seq("an accept").filter(_ => accepting.deaf) ++ Seq("a reject or a dismissal").filter(_ => rejecting.deaf)
+        Diagnostics.before(drawing)("ConfirmDialog")(
+            Diagnostic(unheard.nonEmpty, ConfirmDialog.openName(unheard.mkString(" or ")).advice)
+        )
     end render
 
     private def drawn(using Frame): UI =
-        openSlot match
-            case Absent        => UI.empty
-            case Present(slot) =>
+        openSlot.binding match
+            case Absent     => UI.empty
+            case Present(_) =>
                 // A constant nobody hears for a choice is fixed for that choice: its button stays, inert.
-                val acceptFixed = ReactiveValue.fixed(openSlot, acceptHeard)
-                val rejectFixed = ReactiveValue.fixed(openSlot, rejectHeard)
+                val acceptFixed = accepting.fixed
+                val rejectFixed = rejecting.fixed
                 // Every choice asks for false: a two-way binding is written, the close reported, then the choice heard.
                 def choose(eff: Maybe[UI.Action]): UI.Action =
-                    val asked = ReactiveValue.change(openSlot, false, onOpenF)
+                    val asked = openSlot.change(false)
                     eff match
                         case Present(e) => asked.andThen(e)
                         case Absent     => asked
@@ -160,8 +143,7 @@ final case class ConfirmDialog private (
                 val reject = if rejectFixed then rejectShell.ariaDisabled(true) else rejectShell.onClick(choose(onRejectEff))
 
                 var dialog = Dialog()
-                    .open(slot.bound)
-                    .quiet
+                    .withOpen(Slot(openSlot.binding, quiet = true))
                     .boxClass("p-confirmdialog")
                     .accessibleRole(PopupAccessibleRole.AlertDialog)
                     .footer(fragment(reject, accept))
@@ -171,9 +153,9 @@ final case class ConfirmDialog private (
                 }
                 // Dismissal = declining: Escape, the header close button and a backdrop click are rejects. Heard, the
                 // dialog wires them; unheard, a constant leaves them inert, the dialog's own fixed state.
-                if rejectHeard.isDefined then
+                if openSlot.hearer.isDefined || onRejectEff.isDefined then
                     dialog = dialog.onOpenChange(v =>
-                        val reported: UI.Action = onOpenF.fold[UI.Action](())(f => f(v))
+                        val reported: UI.Action = openSlot.hearer.fold[UI.Action](())(f => f(v))
                         onRejectEff.fold[UI.Action](reported)(e => reported.andThen(e))
                     )
                 end if
@@ -184,8 +166,10 @@ end ConfirmDialog
 
 object ConfirmDialog:
     /** A confirm dialog whose visibility binds to `open` (see [[ConfirmDialog.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(openSlot = Present(ReactiveValue(open)))
+    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(openSlot = Slot().bind(open))
 
     /** An unbound confirm dialog: it keeps its visibility itself and starts open. */
     def apply(): ConfirmDialog = new ConfirmDialog()
+
+    private def openName(gesture: String) = Slot.Name("ConfirmDialog", "the visibility", gesture, "onOpenChange")
 end ConfirmDialog
