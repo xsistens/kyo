@@ -58,16 +58,21 @@ class DataViewTest extends ReactiveValueContract:
 
     private def paged(using Frame) = DataView[Int]().items(1 to 30).itemTemplate(i => UI.div.cssClass("row")(i.toString))
 
-    /** The page the rows shown belong to, ten to a page. */
+    /** The page the rows shown belong to, ten to a page, or, in a tree the embedded paginator published with no rows in it,
+      * the page its selected link says.
+      */
     private def pageShown(t: UI)(using Frame): Int < Sync =
         elementsWithClass(t, "row").map(_.headOption.flatMap(textOf(_).toIntOption) match
             case Some(first) => (first - 1) / 10
-            case None        => throw new AssertionError("no rows shown"))
+            case None        =>
+                elementsWithClass(t, "p-paginator-page-selected").map(_.headOption.flatMap(textOf(_).toIntOption) match
+                    case Some(link) => link - 1
+                    case None       => throw new AssertionError("no rows and no page shown")))
 
-    // The page is the paginator's argument, so it has no unbound form; the embedded paginator's next-page button moves it.
+    // Unbound, the page is the view's own; the embedded paginator's next-page button moves it.
     holds(new SlotCase[uic.DataView[Int], Int](
         name = "page",
-        bare = Absent,
+        bare = Present(paged.paginate(10)),
         bind = paged.paginate(10)(_),
         hear = (v, f) => v.onPageChange(f),
         event = "onPageChange",
@@ -75,7 +80,19 @@ class DataViewTest extends ReactiveValueContract:
         start = 0,
         next = 1,
         control = elementWithClass(_, "p-paginator-next"),
-        shows = pageShown(_)
+        shows = pageShown(_),
+        ready = Present(elementsWithClass(_, "p-paginator-next").map(_.exists(declaresClick)))
     ))
+
+    "paginate with no page is the view's own, and both forms compile side by side" in {
+        for
+            page  <- Signal.initRef(1)
+            bound <- elementsWithClass(paged.paginate(10)(page).render, "row")
+            own   <- elementsWithClass(paged.paginate(10).render, "row")
+        yield
+            assert(textOf(bound.head) == "11", "the bound page shows")
+            assert(textOf(own.head) == "1", "its own starts on the first")
+        end for
+    }
 
 end DataViewTest
