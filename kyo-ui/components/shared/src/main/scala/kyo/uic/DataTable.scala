@@ -604,7 +604,9 @@ final case class DataTable[A] private (
     onSelectionF: Maybe[Set[A] => UI.Action] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
     cellsTyped: Maybe[ReactiveValue[Set[CellPath[A]]]] = Absent,
+    cellSelectionV: Maybe[BoolValue] = Absent,
     ownCellsFlag: Boolean = false,
+    ownSelectionFlag: Boolean = false,
     onCellsF: Maybe[Set[CellPath[A]] => UI.Action] = Absent,
     contextTyped: Maybe[ReactiveValue[Maybe[A]]] = Absent,
     onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
@@ -616,6 +618,7 @@ final case class DataTable[A] private (
     groupsV: List[RowGroup[A]] = Nil,
     expandedGroupsSlot: Maybe[ReactiveValue[Set[GroupPath]]] = Absent,
     onExpandedGroupsF: Maybe[Set[GroupPath] => UI.Action] = Absent,
+    collapsibleGroupsV: Maybe[BoolValue] = Absent,
     ownGroupsFlag: Boolean = false,
     removableSortFlag: Boolean = true,
     stripedFlag: Boolean = false,
@@ -639,6 +642,8 @@ final case class DataTable[A] private (
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
     editingRowsTyped: Maybe[ReactiveValue[Set[A]]] = Absent,
     editingCellTyped: Maybe[ReactiveValue[Maybe[CellPath[A]]]] = Absent,
+    rowEditingV: Maybe[BoolValue] = Absent,
+    cellEditingV: Maybe[BoolValue] = Absent,
     ownEditRowsFlag: Boolean = false,
     ownEditCellFlag: Boolean = false,
     onEditingRowsF: Maybe[Set[A] => UI.Action] = Absent,
@@ -654,10 +659,12 @@ final case class DataTable[A] private (
     filterDisplayV: FilterDisplay = FilterDisplay.Row,
     columnWidthsSlot: Maybe[ReactiveValue[Map[List[String], Double]]] = Absent,
     onColumnWidthsF: Maybe[Map[List[String], Double] => UI.Action] = Absent,
+    resizableColumnsV: Maybe[BoolValue] = Absent,
     ownWidthsFlag: Boolean = false,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderSlot: Maybe[ReactiveValue[List[List[String]]]] = Absent,
     onColumnOrderF: Maybe[List[List[String]] => UI.Action] = Absent,
+    reorderableColumnsV: Maybe[BoolValue] = Absent,
     ownOrderFlag: Boolean = false,
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
@@ -828,15 +835,20 @@ final case class DataTable[A] private (
       * no column the reader is not touching moves. The last column has no boundary to its
       * right, and neither does one whose neighbour says [[Column.resizable]] is false.
       * [[columnResizeMode]] is what changes that.
+      *
+      * Binding it turns the drag on unless [[resizableColumns]] says otherwise.
       */
     def columnWidths(v: Map[List[String], Double] | Signal[Map[List[String], Double]]): DataTable[A] =
-        copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v)), ownWidthsFlag = false)
+        copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v)))
 
-    /** Turns the boundary drag on with the widths kept by the table itself, for as long as it is shown: the
-      * [[columnWidths]] drag with no ref to hand over, for a page that does not read the widths. [[onColumnWidthsChange]]
-      * still hears every move.
+    /** Whether the column boundaries take a drag. Set, it decides alone, and a signal switches them in place. Without it a
+      * binding of [[columnWidths]] turns them on, and an unbound table has none.
+      *
+      * On and unbound, the table keeps the widths itself, for a page that does not read them. Under a signal it holds them
+      * while the switch is off, when the columns lay out as an unsized table does, and comes back to them. Off over a binding
+      * the columns keep the widths and only the handles go, as with fixed widths. [[onColumnWidthsChange]] hears every move.
       */
-    def columnWidths(): DataTable[A] = copy(columnWidthsSlot = Absent, ownWidthsFlag = true)
+    def resizableColumns(v: Boolean | Signal[Boolean]): DataTable[A] = copy(resizableColumnsV = Present(ReactiveValue(v)))
 
     /** Fired with the widths after every move of a boundary drag, after two-way [[columnWidths]] are written. */
     def onColumnWidthsChange(f: Map[List[String], Double] => UI.Action)(using Frame): DataTable[A] =
@@ -877,13 +889,16 @@ final case class DataTable[A] private (
       * not offered, since freezing is what the reader would silently lose.
       */
     def columnOrder(v: List[List[String]] | Signal[List[List[String]]]): DataTable[A] =
-        copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v)), ownOrderFlag = false)
+        copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v)))
 
-    /** Turns the header drag on with the order kept by the table itself, for as long as it is shown: the [[columnOrder]]
-      * drag with no ref to hand over, for a page that does not read the order. [[onColumnOrderChange]] still hears every
-      * drop.
+    /** Whether the headers take a drag. Set, it decides alone, and a signal switches them in place. Without it a binding of
+      * [[columnOrder]] turns them on, and an unbound table has none.
+      *
+      * On and unbound, the table keeps the order itself, for a page that does not read it. Under a signal it holds the order
+      * while the switch is off, when the columns stand as authored, and comes back to it. Off over a binding the columns keep
+      * the order and only the drag goes, as with a fixed order. [[onColumnOrderChange]] hears every drop.
       */
-    def columnOrder(): DataTable[A] = copy(columnOrderSlot = Absent, ownOrderFlag = true)
+    def reorderableColumns(v: Boolean | Signal[Boolean]): DataTable[A] = copy(reorderableColumnsV = Present(ReactiveValue(v)))
 
     /** Fired with the whole order a header drop asks for, after a two-way [[columnOrder]] is written. With a signal or a
       * constant bound the table lays out by that and only reports the drop; a one-way order with no handler here is
@@ -1094,12 +1109,16 @@ final case class DataTable[A] private (
       * the click.
       */
     def selectedCells(v: Set[CellPath[A]] | Signal[Set[CellPath[A]]]): DataTable[A] =
-        copy(cellsTyped = Present(ReactiveValue(v)), ownCellsFlag = false)
+        copy(cellsTyped = Present(ReactiveValue(v)))
 
-    /** Turns cell selection on over picked cells the table keeps itself, starting with none: [[selectedCells]] with no
-      * ref to hand over, for a page that does not read them. [[onSelectedCellsChange]] still hears every pick.
+    /** Whether a click picks cells. Set, it decides alone, and a signal switches it in place. Without it a binding of
+      * [[selectedCells]] turns it on, and an unbound table picks none.
+      *
+      * On and unbound, the table keeps the picked cells itself. Under a signal it holds them while the switch is off, and comes
+      * back to them. Off, a click picks no cell and no cell shows picked, whatever is bound. [[onSelectedCellsChange]] hears
+      * every pick.
       */
-    def selectedCells(): DataTable[A] = copy(cellsTyped = Absent, ownCellsFlag = true)
+    def cellSelection(v: Boolean | Signal[Boolean]): DataTable[A] = copy(cellSelectionV = Present(ReactiveValue(v)))
 
     /** Fired with the picked cells after a click changes them, after a two-way [[selectedCells]] is written. */
     def onSelectedCellsChange(f: Set[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
@@ -1362,12 +1381,16 @@ final case class DataTable[A] private (
       * on the screen it failed on.
       */
     def editingRows(v: Set[A] | Signal[Set[A]]): DataTable[A] =
-        copy(editingRowsTyped = Present(ReactiveValue(v)), ownEditRowsFlag = false)
+        copy(editingRowsTyped = Present(ReactiveValue(v)))
 
-    /** Turns row editing on over open rows the table keeps itself, starting with none: [[editingRows]] with no ref to
-      * hand over. [[onEditingRowsChange]] still hears every row opened or closed.
+    /** Whether rows open for editing. Set, it decides alone, and a signal switches it in place. Without it a binding of
+      * [[editingRows]] turns it on, and an unbound table edits no row.
+      *
+      * On and unbound, the table keeps the open rows itself. Under a signal it holds them while the switch is off, and comes
+      * back to them. Off, there is no editor column and no row opens, whatever is bound. [[onEditingRowsChange]] hears every
+      * row opened or closed.
       */
-    def editingRows(): DataTable[A] = copy(editingRowsTyped = Absent, ownEditRowsFlag = true)
+    def rowEditing(v: Boolean | Signal[Boolean]): DataTable[A] = copy(rowEditingV = Present(ReactiveValue(v)))
 
     /** Fired with the rows being edited after a button opens or closes one, after a two-way [[editingRows]] is written. */
     def onEditingRowsChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = copy(onEditingRowsF = Present(Callback.of(f)))
@@ -1381,12 +1404,15 @@ final case class DataTable[A] private (
       * A [[CellPath]], since a cell is a row crossed with a column.
       */
     def editingCell(v: Maybe[CellPath[A]] | Signal[Maybe[CellPath[A]]]): DataTable[A] =
-        copy(editingCellTyped = Present(ReactiveValue(v)), ownEditCellFlag = false)
+        copy(editingCellTyped = Present(ReactiveValue(v)))
 
-    /** Turns cell editing on over an open cell the table keeps itself, starting with none: [[editingCell]] with no ref to
-      * hand over. [[onEditingCellChange]] still hears every move.
+    /** Whether a click opens a cell's editor. Set, it decides alone, and a signal switches it in place. Without it a binding of
+      * [[editingCell]] turns it on, and an unbound table opens none.
+      *
+      * On and unbound, the table keeps the open cell itself. Under a signal it holds it while the switch is off, and comes back
+      * to it. Off, no cell opens, whatever is bound. [[onEditingCellChange]] hears every move.
       */
-    def editingCell(): DataTable[A] = copy(editingCellTyped = Absent, ownEditCellFlag = true)
+    def cellEditing(v: Boolean | Signal[Boolean]): DataTable[A] = copy(cellEditingV = Present(ReactiveValue(v)))
 
     /** Fired with the open cell after the reader moves or closes the editor, after a two-way [[editingCell]] is written. */
     def onEditingCellChange(f: Maybe[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
@@ -1489,13 +1515,16 @@ final case class DataTable[A] private (
       * others. A level with [[RowGroup.showHeader]] off has no toggle and stays open.
       */
     def expandedGroups(v: Set[GroupPath] | Signal[Set[GroupPath]]): DataTable[A] =
-        copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v)), ownGroupsFlag = false)
+        copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v)))
 
-    /** Makes the groups collapsible with the open ones kept by the table itself, for as long as it is shown, starting
-      * with every group collapsed: the [[expandedGroups]] toggles with no ref to hand over, for a page that does not read
-      * them. [[onExpandedGroupsChange]] still hears every toggle.
+    /** Whether the groups collapse. Set, it decides alone, and a signal switches it in place. Without it a binding of
+      * [[expandedGroups]] turns it on, and an unbound table keeps every group open.
+      *
+      * On and unbound, the table keeps the open groups itself, starting with every group collapsed. Under a signal it holds
+      * them while the switch is off, when every group shows, and comes back to them. Off over a binding the groups follow the
+      * binding and only the toggles go. [[onExpandedGroupsChange]] hears every toggle.
       */
-    def expandedGroups(): DataTable[A] = copy(expandedGroupsSlot = Absent, ownGroupsFlag = true)
+    def collapsibleGroups(v: Boolean | Signal[Boolean]): DataTable[A] = copy(collapsibleGroupsV = Present(ReactiveValue(v)))
 
     /** Fired with the groups open after a group header toggle, after two-way [[expandedGroups]] are written. */
     def onExpandedGroupsChange(f: Set[GroupPath] => UI.Action)(using Frame): DataTable[A] =
@@ -1713,11 +1742,15 @@ final case class DataTable[A] private (
             case ReactiveValue.Dyn(sig)    => ReactiveValue.Dyn(sig.map(_.map(cellKey)))
         }
 
-    /** Whether row editing was asked for, bound or kept by the table ([[editingRows]]). */
-    private def rowEditOn: Boolean = editingRowsTyped.isDefined || ownEditRowsFlag
+    /** Whether row editing was asked for, bound or kept by the table ([[rowEditing]]). An off switch has taken the binding away
+      * ([[pinned]]).
+      */
+    private def rowEditOn: Boolean = editingRowsTyped.isDefined || switchOn(rowEditingV)
 
-    /** Whether cell editing was asked for, bound or kept by the table ([[editingCell]]). */
-    private def cellEditOn: Boolean = editingCellTyped.isDefined || ownEditCellFlag
+    /** Whether cell editing was asked for, bound or kept by the table ([[cellEditing]]). An off switch has taken the binding away
+      * ([[pinned]]).
+      */
+    private def cellEditOn: Boolean = editingCellTyped.isDefined || switchOn(cellEditingV)
 
     /** Constant editing rows nobody hears: their editors show, and no button changes the set. */
     private def rowEditFixed: Boolean = ReactiveValue.fixed(editingRowsTyped, onEditingRowsF)
@@ -1760,8 +1793,10 @@ final case class DataTable[A] private (
         cellsOn && !cellEditOn && selectedTyped.isEmpty &&
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
-    /** Whether cell selection was asked for, bound or kept by the table ([[selectedCells]]). */
-    private def cellsOn: Boolean = cellsTyped.isDefined || ownCellsFlag
+    /** Whether cell selection was asked for, bound or kept by the table ([[cellSelection]]). An off switch has taken the binding
+      * away ([[pinned]]).
+      */
+    private def cellsOn: Boolean = cellsTyped.isDefined || switchOn(cellSelectionV)
 
     /** A constant cell set nobody hears: the picked cells show and a click picks nothing. */
     private def cellsFixed: Boolean = ReactiveValue.fixed(cellsTyped, onCellsF)
@@ -1992,7 +2027,7 @@ final case class DataTable[A] private (
       * boundary needs a resizable column on both sides of it, so a single column has none
       * and neither does a table whose columns are all pinned.
       */
-    private def resizeOn: Boolean = resizable && !widthsFixed
+    private def resizeOn: Boolean = resizable && !widthsFixed && !switchOff(resizableColumnsV)
 
     /** Whether the widths are laid out the way a draggable table lays them out, whatever binds them: fixed widths drop the
       * handles, which are only the affordance, and keep the layout, so an expanding table still states its width.
@@ -2037,7 +2072,7 @@ final case class DataTable[A] private (
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        widthsOn && !widthsFixed && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
+        widthsOn && !widthsFixed && !switchOff(resizableColumnsV) && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
             case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
             case ColumnResizeMode.Expand => true)
 
@@ -2059,13 +2094,65 @@ final case class DataTable[A] private (
     /** Whether the page asked for the boundary drag, by binding the widths or by keeping them in the table. Before the
       * mount runs, a table that keeps them has no ref yet and draws the drag all the same, so the layout does not move.
       */
-    private def widthsOn: Boolean = columnWidthsSlot.isDefined || ownWidthsFlag
+    private def widthsOn: Boolean = columnWidthsSlot.isDefined || switchOn(resizableColumnsV)
 
     /** Whether the page asked for the header drag, by binding the order or by keeping it in the table. */
-    private def orderOn: Boolean = columnOrderSlot.isDefined || ownOrderFlag
+    private def orderOn: Boolean = columnOrderSlot.isDefined || switchOn(reorderableColumnsV)
 
     /** Whether the page asked for collapsible groups, by binding the open ones or by keeping them in the table. */
-    private def groupsOn: Boolean = expandedGroupsSlot.isDefined || ownGroupsFlag
+    private def groupsOn: Boolean = expandedGroupsSlot.isDefined || switchOn(collapsibleGroupsV)
+
+    /** Whether a switch holds true, or false, as this render reads it: below [[switched]] every switch is a constant. */
+    private def switchOn(sw: Maybe[BoolValue]): Boolean  = sw.exists(_.const.contains(true))
+    private def switchOff(sw: Maybe[BoolValue]): Boolean = sw.exists(_.const.contains(false))
+
+    /** The table as it is with each signal switch at what `held` says. What the table keeps itself is held in the refs above
+      * this, so it comes back when the switch does: a feature switched off over the table's own state, and a selection of rows
+      * the cells have taken over, are simply not bound here. A switch off over editing or cell selection takes a caller's
+      * binding away too, since there is no layout to keep; over widths, an order or groups the binding stays and only the
+      * affordance goes.
+      */
+    private def pinned(held: String => Boolean): DataTable[A] =
+        def at(name: String, sw: Maybe[BoolValue]): Maybe[BoolValue] =
+            sw match
+                case Present(ReactiveValue.Dyn(_)) => Present(ReactiveValue.Const(held(name)))
+                case other                         => other
+        val widths   = at("widths", resizableColumnsV)
+        val order    = at("order", reorderableColumnsV)
+        val groups   = at("groups", collapsibleGroupsV)
+        val cells    = at("cells", cellSelectionV)
+        val rows     = at("rows", rowEditingV)
+        val cell     = at("cell", cellEditingV)
+        val cellsNow = !switchOff(cells) && (cellsTyped.isDefined || switchOn(cells))
+        copy(
+            resizableColumnsV = widths,
+            reorderableColumnsV = order,
+            collapsibleGroupsV = groups,
+            cellSelectionV = cells,
+            rowEditingV = rows,
+            cellEditingV = cell,
+            columnWidthsSlot = if ownWidthsFlag && switchOff(widths) then Absent else columnWidthsSlot,
+            columnOrderSlot = if ownOrderFlag && switchOff(order) then Absent else columnOrderSlot,
+            expandedGroupsSlot = if ownGroupsFlag && switchOff(groups) then Absent else expandedGroupsSlot,
+            cellsTyped = if switchOff(cells) then Absent else cellsTyped,
+            editingRowsTyped = if switchOff(rows) then Absent else editingRowsTyped,
+            editingCellTyped = if switchOff(cell) then Absent else editingCellTyped,
+            selectedTyped = if ownSelectionFlag && cellsNow then Absent else selectedTyped
+        )
+    end pinned
+
+    /** Draws the table with its switches read: below this every switch is a constant, so every predicate over one stays a plain
+      * `Boolean`. A signal switch is one region over what it decides, the whole table, which a flip of a page-level switch is
+      * worth. It sits inside the mounts, whose refs are what a flip must not lose.
+      */
+    private def switched(draw: DataTable[A] => UI)(using Frame): UI =
+        def named(name: String, sw: Maybe[BoolValue]): List[(String, Signal[Boolean])] =
+            sw.flatMap(_.dyn).fold(Nil)(sig => List(name -> sig))
+        Reading.keyed(
+            named("widths", resizableColumnsV) ++ named("order", reorderableColumnsV) ++ named("groups", collapsibleGroupsV) ++
+                named("cells", cellSelectionV) ++ named("rows", rowEditingV) ++ named("cell", cellEditingV)
+        ).render(held => draw(pinned(held)))
+    end switched
 
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
@@ -2075,7 +2162,7 @@ final case class DataTable[A] private (
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
       */
-    private def reorderOn: Boolean = reorderable && !orderFixed
+    private def reorderOn: Boolean = reorderable && !orderFixed && !switchOff(reorderableColumnsV)
 
     /** Whether two columns are willing to trade places under an order the page asked for, whatever binds it. A fixed
       * order is one of them: its headers stand where it says and offer no drag, and it is no mistake.
@@ -2549,16 +2636,16 @@ final case class DataTable[A] private (
         val ownsExpansion = expandedTyped.isEmpty && expansionF.isDefined
         // Not under cell selection: there the mode says what a click on a CELL means, and a row selection kept here would
         // count as a bound one and switch the cells off.
-        val ownsSelection = selectedTyped.isEmpty && selectionModeV != SelectionMode.None && !cellsOn
-        // The layout the reader drags and the groups they open are kept only where the page asked for the feature
-        // with no ref: `columnWidths()`, `columnOrder()`, `expandedGroups()`.
-        // `selectedCells()`, `editingRows()` and `editingCell()` likewise.
-        val ownsWidths   = columnWidthsSlot.isEmpty && ownWidthsFlag
-        val ownsOrder    = columnOrderSlot.isEmpty && ownOrderFlag
-        val ownsGroups   = expandedGroupsSlot.isEmpty && ownGroupsFlag
-        val ownsCells    = cellsTyped.isEmpty && ownCellsFlag
-        val ownsEditRows = editingRowsTyped.isEmpty && ownEditRowsFlag
-        val ownsEditCell = editingCellTyped.isEmpty && ownEditCellFlag
+        val ownsSelection =
+            selectedTyped.isEmpty && selectionModeV != SelectionMode.None && !(pinned(_ => true).cellsOn && pinned(_ => false).cellsOn)
+        // The layout the reader drags, the groups they open, the cells they pick and what they edit are kept only where a
+        // switch asked for the feature with no binding, and a signal switch may turn it on, so the state is minted under it.
+        val ownsWidths   = columnWidthsSlot.isEmpty && BoolValue.mayTurnOn(resizableColumnsV)
+        val ownsOrder    = columnOrderSlot.isEmpty && BoolValue.mayTurnOn(reorderableColumnsV)
+        val ownsGroups   = expandedGroupsSlot.isEmpty && BoolValue.mayTurnOn(collapsibleGroupsV)
+        val ownsCells    = cellsTyped.isEmpty && BoolValue.mayTurnOn(cellSelectionV)
+        val ownsEditRows = editingRowsTyped.isEmpty && BoolValue.mayTurnOn(rowEditingV)
+        val ownsEditCell = editingCellTyped.isEmpty && BoolValue.mayTurnOn(cellEditingV)
         // The row a context menu was opened on is turned on by a binding or by a hearer: unbound and heard, the table
         // keeps the row itself; unbound and unheard, the rows leave the browser its own menu.
         val ownsContext = contextTyped.isEmpty && onRowContextF.isDefined
@@ -2628,34 +2715,42 @@ final case class DataTable[A] private (
                     columnOrderSlot = order,
                     expandedGroupsSlot = groups,
                     cellsTyped = cells,
-                    ownCellsFlag = false,
                     editingRowsTyped = editRows,
-                    ownEditRowsFlag = false,
                     editingCellTyped = editCell,
-                    ownEditCellFlag = false,
-                    contextTyped = context
+                    contextTyped = context,
+                    ownWidthsFlag = ownsWidths,
+                    ownOrderFlag = ownsOrder,
+                    ownGroupsFlag = ownsGroups,
+                    ownCellsFlag = ownsCells,
+                    ownEditRowsFlag = ownsEditRows,
+                    ownEditCellFlag = ownsEditCell,
+                    ownSelectionFlag = ownsSelection
                 ).renderBound
             }.placeholder(renderBound)
         end if
     end render
 
+    /** The table drawn with no state of its own: a pure render, and what a mount shows before it runs. */
+    private def staticBody(using Frame): UI =
+        renderWith(Reading.Fixed(()), (), navOn = false) { _ =>
+            DataTable.Wiring[A](
+                EditState(Set.empty, Absent),
+                NavState[A](),
+                FilterState(),
+                SizeState(),
+                OrderState(),
+                ScrollState(),
+                MoveState[A](),
+                // A caller-bound anchor works without a mount, which is the point of binding it:
+                // a table that ranges and owns nothing else stays a pure render.
+                SelectState(metaKey = metaKeyFlag, anchor = anchorSlot, onAnchor = onAnchorF)
+            )
+        }
+
     private def renderBound(using Frame): UI =
-        def static: UI =
-            renderWith(Reading.Fixed(()), (), navOn = false) { _ =>
-                DataTable.Wiring[A](
-                    EditState(Set.empty, Absent),
-                    NavState[A](),
-                    FilterState(),
-                    SizeState(),
-                    OrderState(),
-                    ScrollState(),
-                    MoveState[A](),
-                    // A caller-bound anchor works without a mount, which is the point of binding it:
-                    // a table that ranges and owns nothing else stays a pure render.
-                    SelectState(metaKey = metaKeyFlag, anchor = anchorSlot, onAnchor = onAnchorF)
-                )
-            }
-        if !ownsState then static
+        def static: UI = switched(_.staticBody)
+        // The mount below a signal switch is there for either state of it, since it is what a flip must not start again.
+        if !pinned(_ => true).ownsState && !pinned(_ => false).ownsState then static
         else
             val mount = UI.mounted {
                 for
@@ -2698,30 +2793,32 @@ final case class DataTable[A] private (
                     // decides whether it is handed on.
                     anchorRow <- Signal.initRef(Absent: Maybe[A])(using summon[Frame], CanEqual.derived)
                 yield
-                    val tree = wired(
-                        prefix,
-                        drafts.toMap,
-                        err,
-                        id => cmds.focusId(id),
-                        menus.toMap,
-                        // A grab needs every edge: one element gone mid-grab measures nothing.
-                        ids =>
-                            cmds.requestMeasureByIds(ids).map { rects =>
-                                val found = rects.flatMap(_.toChunk)
-                                if found.size == rects.size then found else Chunk.empty
-                            },
-                        Present(held),
-                        Present(moving),
-                        if windowOn then Present(scroll) else Absent,
-                        if frozenRowsOn then Present(headTop) else Absent,
-                        if handleColumn then Present(rowsIn) else Absent,
-                        drafts0.toMap,
-                        // A caller who bound the anchor owns it; the minted one is the fallback for
-                        // a table that did not, and it lives exactly as long as this mount does.
-                        if !rangeOn then Absent
-                        else if anchorSlot.isDefined then anchorSlot
-                        else Present(ReactiveValue[Maybe[A]](anchorRow)),
-                        typed.toMap
+                    val tree = switched(self =>
+                        self.wired(
+                            prefix,
+                            drafts.toMap,
+                            err,
+                            id => cmds.focusId(id),
+                            menus.toMap,
+                            // A grab needs every edge: one element gone mid-grab measures nothing.
+                            ids =>
+                                cmds.requestMeasureByIds(ids).map { rects =>
+                                    val found = rects.flatMap(_.toChunk)
+                                    if found.size == rects.size then found else Chunk.empty
+                                },
+                            Present(held),
+                            Present(moving),
+                            if windowOn then Present(scroll) else Absent,
+                            if frozenRowsOn then Present(headTop) else Absent,
+                            if handleColumn then Present(rowsIn) else Absent,
+                            drafts0.toMap,
+                            // A caller who bound the anchor owns it; the minted one is the fallback for
+                            // a table that did not, and it lives exactly as long as this mount does.
+                            if !self.rangeOn then Absent
+                            else if anchorSlot.isDefined then anchorSlot
+                            else Present(ReactiveValue[Maybe[A]](anchorRow)),
+                            typed.toMap
+                        )
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
@@ -4278,7 +4375,11 @@ final case class DataTable[A] private (
             if expansionF.isEmpty || !ReactiveValue.deaf(expandedTyped, onExpandedF) then Nil
             else List("expanded is bound one way and nothing hears a row toggle: add onExpandedChange, or bind a SignalRef")
         val groups =
-            if !groupsV.exists(_.showHeaderFlag) || !ReactiveValue.deaf(expandedGroupsSlot, onExpandedGroupsF) then Nil
+            if !groupsV.exists(_.showHeaderFlag) || switchOff(collapsibleGroupsV) || !ReactiveValue.deaf(
+                    expandedGroupsSlot,
+                    onExpandedGroupsF
+                )
+            then Nil
             else
                 List("expandedGroups is bound one way and nothing hears a group toggle: add onExpandedGroupsChange, or bind " +
                     "a SignalRef")
@@ -5309,8 +5410,10 @@ final case class DataTable[A] private (
                     // A level without a header row has nowhere to put a toggle, so it can
                     // never be collapsed: collapsing it would hide its rows with no way
                     // back.
-                    val collapsible = groupsOn && level.showHeaderFlag
-                    val open        = !collapsible || openGroups.contains(groupPath)
+                    val collapses = groupsOn && level.showHeaderFlag
+                    val open      = !collapses || openGroups.contains(groupPath)
+                    // Switched off over a binding the groups follow it, with no toggle to change it.
+                    val collapsible = collapses && !switchOff(collapsibleGroupsV)
 
                     val headerRow: List[RowSpec[A]] =
                         if !level.showHeaderFlag then Nil
