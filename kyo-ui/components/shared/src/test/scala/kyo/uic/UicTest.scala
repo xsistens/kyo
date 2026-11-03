@@ -432,6 +432,67 @@ abstract class UicTest extends kyo.test.Test[Any]:
         )
     end regionsAbove
 
+    /** How many mounts sit above the nearest element carrying `cls`, seen through their placeholders. One is what a component
+      * that mints its state beside its ids wants: a slot that adds a mount of its own there is a mount inside a mount for every
+      * instance, and while a mount restarts kyo-ui shows an inert snapshot no click or key reaches.
+      */
+    private[uic] def mountsAbove(node: UI, cls: String)(using Frame): Int < Sync =
+        def walk(n: UI, depth: Int): Chunk[Int] < Sync =
+            n match
+                case e: UI.Ast.Element if e.attrs.cssClasses.contains(cls) => Chunk(depth)
+                case e: UI.Ast.Element                                     => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
+                case r: UI.Ast.Reactive[?]                                 => r.signal.current(using r.frame).map(walk(_, depth))
+                case f: UI.Ast.Fragment[?]                                 => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
+                case f: UI.Ast.Foreach[?, ?]                               =>
+                    f.applyTyped([T] =>
+                        (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                            signal.current(using f.frame).map { items =>
+                                Kyo.foreach(items.zipWithIndex) { (item, i) => walk(render(i, item), depth) }
+                                    .map(_.flattenChunk)
+                            }
+                    )
+                case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case m: UI.Ast.Mounted       =>
+                    m.placeholderUI match
+                        case Present(ui) => walk(ui, depth + 1)
+                        case Absent      => Chunk.empty
+                case _ => Chunk.empty
+        walk(node, 0).map(ds =>
+            if ds.isEmpty then throw new AssertionError(s"no element with class $cls") else ds.min
+        )
+    end mountsAbove
+
+    /** The cards on the page as it lives: a walk of the tree that, at a mount, reads what the mount publishes rather than its
+      * placeholder. A card the static render does not hold, or a second one the mount adds, shows here and nowhere else.
+      */
+    private[uic] def cardsOnPage(ui: UI)(using Frame): Chunk[UI.Ast.Element] < Async =
+        def walk(n: UI): Chunk[UI.Ast.Element] < (Abort[Any] & Async & Scope) =
+            n match
+                case e: UI.Ast.Element =>
+                    val own = if e.attrs.cssClasses.contains(UicTest.cardClass) then Chunk(e) else Chunk.empty
+                    Kyo.foreach(e.children)(walk).map(cs => own ++ cs.flattenChunk)
+                case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk)
+                case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk).map(_.flattenChunk)
+                case f: UI.Ast.Foreach[?, ?] =>
+                    f.applyTyped([T] =>
+                        (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                            signal.current(using f.frame).map { items =>
+                                Kyo.foreach(items.zipWithIndex) { (item, i) => walk(render(i, item)) }.map(_.flattenChunk)
+                            }
+                    )
+                case k: UI.Ast.KeyedChild[?] => walk(k.child)
+                case m: UI.Ast.Mounted       => m.effect.map(walk)
+                case _                       => Chunk.empty
+        headlessCommands.map { cmds =>
+            kyo.internal.UICommands.commands.let(Present(cmds)) {
+                Abort.run[Any](Scope.run(walk(ui))).map {
+                    case Result.Success(cards) => cards
+                    case other                 => throw new AssertionError(s"a mount failed: $other")
+                }
+            }
+        }
+    end cardsOnPage
+
     private[uic] def elementWithId(node: UI, id: String)(using Frame): UI.Ast.Element < Sync =
         elements(node).map(_.find(_.attrs.identifier.contains(id)).getOrElse(
             throw new AssertionError(s"no element with id $id")
@@ -630,5 +691,8 @@ object UicTest:
       * meet in a browser.
       */
     private[uic] val layout: Local[Map[String, UI.Rect]] = Local.init(Map.empty[String, UI.Rect])
+
+    /** The class a card carries. */
+    private[uic] val cardClass = "p-uic-key-error"
 
 end UicTest
