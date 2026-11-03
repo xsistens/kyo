@@ -24,7 +24,7 @@ import kyo.UI.*
   * empty shows `promptLabel`.
   */
 final case class Password private (
-    valueBinding: Maybe[TextValue] = Absent,
+    valueSlot: Slot[String] = Slot(),
     toggleMaskFlag: Boolean = false,
     feedbackFlag: Boolean = false,
     promptLabelV: TextValue = TextValue.Const("Enter a password"),
@@ -46,7 +46,6 @@ final case class Password private (
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
     onChangeSF: Maybe[String => UI.Action] = Absent,
-    onInputSF: Maybe[String => UI.Action] = Absent,
     onBlurSF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = Password
@@ -58,7 +57,7 @@ final case class Password private (
       * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
       * `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Password = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: String | Signal[String]): Password = copy(valueSlot = valueSlot.bind(v))
 
     /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
     def toggleMask(v: Boolean): Password = copy(toggleMaskFlag = v)
@@ -124,8 +123,8 @@ final case class Password private (
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
-    def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)))
-    def onInput(f: String => UI.Action)(using Frame): Password  = copy(onInputSF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo)
+    def onInput(f: String => UI.Action)(using Frame): Password  = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it: what the reader typed, also unbound or from a constant, with the
@@ -135,27 +134,19 @@ final case class Password private (
     def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
-        valueBinding match
-            // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the
-            // reader types is the field's to keep: from a constant (which a reveal would otherwise give back), and with
-            // the meter unbound too. Unbound without the meter, the field draws no value and the text stays the browser's.
-            case Present(ReactiveValue.Const(v)) if keepsText => owned(v)
-            case Absent if keepsText && feedbackFlag          => owned("")
-            case _                                            => drawn
+        // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the reader
+        // types is the field's to keep: from a constant (which a reveal would otherwise give back), and with the meter unbound
+        // too. Unbound without the meter, the field draws no value and the text stays the browser's. The page as first rendered
+        // draws the text as bound with nothing wired, since nothing is wired before the mount runs.
+        Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(keepsText && (feedbackFlag || valueSlot.binding.isDefined)))(s =>
+            copy(valueSlot = s).drawn
+        )(copy(valueSlot = Slot(valueSlot.binding), onChangeSF = Absent, onBlurSF = Absent).drawn)
     end render
 
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
       * reader can change.
       */
     private def keepsText: Boolean = (feedbackFlag || toggleMaskFlag) && !readonlyFlag.constTrue && !disabledFlag
-
-    /** The field over a text it keeps itself, starting at `initial`, drawn as a two-way binding of it. The page as first
-      * rendered draws the text as bound with nothing wired, since nothing is wired before the mount runs.
-      */
-    private def owned(initial: String)(using Frame): UI =
-        ReactiveValue.owned(initial)(own => copy(valueBinding = Present(own)).drawn)(
-            copy(onInputSF = Absent, onChangeSF = Absent, onBlurSF = Absent).drawn
-        )
 
     /** The field with its mask toggle, where it has one, over the text as bound. */
     private def drawn(using Frame): UI =
@@ -182,11 +173,11 @@ final case class Password private (
       * re-render per keystroke), and kyo-ui puts back an edit its owner did not take.
       */
     private def withValue(rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
-        valueBinding match
+        valueSlot.binding match
             case Present(ReactiveValue.Dyn(_)) if !feedbackFlag => body("", rev, validity)
             case Present(ReactiveValue.Dyn(sig))                => sig.render(v => body(v, rev, validity))
             case Present(ReactiveValue.Const(v))                => body(v, rev, validity)
-            case Absent                                         => body("", rev, validity)
+            case _                                              => body("", rev, validity)
 
     private def body(current: String, rev: Maybe[(SignalRef[Boolean], Boolean)], validity: FieldValidity)(using Frame): UI =
         val revealed = rev.exists(_._2)
@@ -203,29 +194,16 @@ final case class Password private (
             .fluid(fluidFlag)
             .invalid(validity.red)
             .unheardAs("Password", "onInput or onChange")
-        valueBinding match
+        valueSlot.binding match
             case Present(ReactiveVariable(r)) if !feedbackFlag => in = in.value(r)
             case Present(ReactiveVariable(_))                  => in = in.value(current)
-            case Present(slot)                                 => in = in.value(slot.bound)
-            case Absent                                        => ()
+            case Present(bound)                                => in = in.value(bound.bound)
+            case _                                             => ()
         end match
         // Under feedback the field re-renders per keystroke (the meter observes the
         // ref), so the ref writes back through the input handler instead of Bound.Ref.
-        valueBinding match
-            case Present(ReactiveVariable(r)) if feedbackFlag =>
-                in = in.onInput { s =>
-                    val user: UI.Action = onInputSF match
-                        case Present(f) => f(s)
-                        case Absent     => ()
-                    for
-                        _ <- r.set(s)
-                        x <- user
-                    yield x
-                    end for
-                }
-            case _ =>
-                onInputSF.foreach(f => in = in.onInput(f))
-        end match
+        if feedbackFlag && valueSlot.writable.isDefined then in = in.onInput(s => valueSlot.change(s))
+        else valueSlot.hearer.foreach(f => in = in.onInput(f))
         onChangeSF.foreach(f => in = in.onChange(f))
         onBlurSF.foreach(f => in = in.onBlur(f))
         placeholderText match
@@ -271,7 +249,7 @@ final case class Password private (
             .cssClass("p-inputwrapper")
         // Without the meter a ref binds the field directly and nothing draws again per keystroke, so the wrapper
         // follows the ref through a class channel; every other path draws from the text it renders.
-        el = valueBinding match
+        el = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) if !feedbackFlag => el.cssClass("p-inputwrapper-filled", sig.map(_.nonEmpty))
             case _                                                => el.cssClass("p-inputwrapper-filled", current.nonEmpty)
         if fluidFlag then el = el.cssClass("p-password-fluid")
