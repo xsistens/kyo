@@ -1,6 +1,7 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.*
 
 class SlotTest extends UicTest:
 
@@ -191,6 +192,136 @@ class SlotTest extends UicTest:
             assert(s.binding.exists(_.dyn.isDefined))
             assert(!s.fixed)
             assert(!s.deaf)
+        }
+    }
+
+    "the entry points" - {
+        val name = Slot.Name("X", "the thing", "a press", "onThing")
+        val cls  = "p-slot-body"
+
+        def body(s: Slot[Int])(using Frame): UI =
+            s.reading(-1).render(v =>
+                UI.div.cssClass(cls).cssClass(if s.binding.exists(_.writable.isDefined) then "own" else "other")(v.toString)
+            )
+
+        def shown(ui: UI)(using Frame): Chunk[String] < Sync = elementsWithClass(ui, cls).map(_.map(textOf))
+
+        "owned mints a ref for an unbound slot, and leaves anything bound" in {
+            for
+                own   <- Slot[Int]().owned(3)
+                stays <- Slot[Int]().bind(1).owned(3)
+                held  <- own.current(-1)
+            yield
+                assert(own.binding.exists(_.writable.isDefined))
+                assert(held == 3)
+                assert(stays.fixedAt(1))
+        }
+
+        "ownedFrom takes a constant as where it starts" in {
+            for
+                own  <- Slot[Int]().bind(5).ownedFrom(3)
+                none <- Slot[Int]().ownedFrom(3)
+                sig  <- Slot[Int]().bind(Signal.initConst(7)).ownedFrom(3)
+                a    <- own.current(-1)
+                b    <- none.current(-1)
+            yield
+                assert(own.binding.exists(_.writable.isDefined))
+                assert((a, b) == (5, 3))
+                assert(sig.binding.exists(b => b.dyn.isDefined && b.writable.isEmpty))
+        }
+
+        "owning mounts where nothing is bound, not where something is, and not where the switch is constant off" in {
+            for
+                own   <- mountsAbove(Slot.owning(Slot[Int](), 0)(body)(UI.div.cssClass(cls)("static")), cls)
+                bound <- mountsAbove(Slot.owning(Slot[Int]().bind(1), 0)(body)(UI.div.cssClass(cls)("static")), cls)
+                off   <- mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Const(false))(body)(UI.div.cssClass(cls)("static")), cls)
+            yield
+                assert(own == 1)
+                assert(bound == 0)
+                assert(off == 0)
+        }
+
+        "owning mounts under a signal switch whatever it holds now, so the state outlives it being off" in {
+            mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body)(UI.div.cssClass(cls)("static")), cls)
+                .map(n => assert(n == 1))
+        }
+
+        "owningFrom mints from a constant too" in {
+            for
+                first <- shown(Slot.owningFrom(Slot[Int]().bind(5), 0)(body)(UI.div.cssClass(cls)("static")))
+                n     <- mountsAbove(Slot.owningFrom(Slot[Int]().bind(5), 0)(body)(UI.div.cssClass(cls)("static")), cls)
+                off   <- mountsAbove(
+                    Slot.owningFrom(Slot[Int]().bind(5), 0, ReactiveValue.Const(false))(body)(UI.div.cssClass(cls)("static")),
+                    cls
+                )
+            yield
+                assert(first == Chunk("static"))
+                assert(n == 1)
+                assert(off == 0)
+        }
+
+        "draw shows the body over a stand-in before the mount runs, with no card" in {
+            for
+                page  <- shown(Slot.draw(Slot[Int](), name, 4)(body))
+                cards <- elementsWithClass(Slot.draw(Slot[Int](), name, 4)(body), UicTest.cardClass)
+            yield
+                assert(page == Chunk("4"))
+                assert(cards.isEmpty)
+        }
+
+        "draw puts the card of a slot nobody hears in front, only while the switch is on" in {
+            for
+                sw <- Signal.initRef(true)
+                deaf = Slot[Int]().bind(Signal.initConst(1))
+                ui   = Slot.draw(deaf, name, 0, ReactiveValue.Dyn(sw))(body)
+                on    <- elementsWithClass(ui, UicTest.cardClass)
+                _     <- sw.set(false)
+                off   <- elementsWithClass(ui, UicTest.cardClass)
+                _     <- sw.set(true)
+                back  <- elementsWithClass(ui, UicTest.cardClass)
+                still <- elementsWithClass(Slot.draw(deaf, name, 0, ReactiveValue.Const(false))(body), UicTest.cardClass)
+            yield
+                assert(on.size == 1)
+                assert(off.isEmpty)
+                assert(back.size == 1)
+                assert(still.isEmpty)
+        }
+
+        "drawField draws each binding the same way" in {
+            def field(s: Slot[Int])(using Frame): Slot.Field[Int] < Sync =
+                def walk(ui: UI): UI < Sync = ui match
+                    case r: UI.Ast.Reactive[?] => r.signal.current(using r.frame).map(walk)
+                    case other                 => other
+                val cap = new scala.collection.mutable.ArrayBuffer[Slot.Field[Int]]
+                walk(Slot.drawField(s, -1)(f =>
+                    cap += f; UI.div
+                )).map(_ => cap.last)
+            end field
+            for
+                ref   <- Signal.initRef(2)
+                two   <- field(Slot[Int]().bind(ref))
+                one   <- field(Slot[Int]().bind(ref.readOnly))
+                heard <- field(Slot[Int]().bind(5).hear(_ => ()))
+                fixed <- field(Slot[Int]().bind(5))
+                none  <- field(Slot[Int]())
+            yield
+                assert(two.value == 2 && two.native.equals(2) && two.edit.isDefined && !two.fixed)
+                assert(one.value == 2 && !one.native.equals(2) && one.edit.isEmpty && !one.fixed)
+                assert(heard.value == 5 && !heard.native.equals(5) && heard.edit.isDefined && !heard.fixed)
+                assert(fixed.value == 5 && fixed.native.equals(5) && fixed.edit.isEmpty && fixed.fixed)
+                assert(none.value == -1 && none.native.equals(-1) && none.edit.isEmpty && !none.fixed)
+            end for
+        }
+
+        "mapNative maps a value and a signal" in {
+            for
+                ref <- Signal.initRef(2)
+                v = Slot.mapNative[Int, Int](3)(_ + 1)
+                m = Slot.mapNative[Int, Int](ref.readOnly)(_ + 1)
+                a <- m.asInstanceOf[Signal[Int]].current
+            yield
+                assert(v.equals(4))
+                assert(a == 3)
         }
     }
 end SlotTest
