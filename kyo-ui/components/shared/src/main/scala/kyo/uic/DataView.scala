@@ -117,6 +117,11 @@ final case class DataView[A] private (
     def paginate(size: Int)(page: Int | Signal[Int]): DataView[A] =
         copy(pageSizeV = Present(math.max(1, size)), pageSlot = pageSlot.bind(page))
 
+    /** Slices the items into pages of `size` with the page the view's own, starting on the first: [[paginate]] for a page
+      * nobody else reads. [[onPageChange]] still hears every pick.
+      */
+    def paginate(size: Int): DataView[A] = copy(pageSizeV = Present(math.max(1, size)))
+
     /** Fired with the page the reader asked for, after a two-way [[paginate]] page is written. */
     def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = copy(pageSlot = pageSlot.hear(f))
 
@@ -131,12 +136,16 @@ final case class DataView[A] private (
 
     private given CanEqual[Chunk[A], Chunk[A]] = CanEqual.derived
 
+    private[uic] def render(using Frame): UI =
+        // Paginated with nothing bound, the page is the view's own.
+        Slot.owning(pageSlot, start = 0, on = ReactiveValue.Const(pageSizeV.isDefined))(s => copy(pageSlot = s).drawn)(drawn)
+
     /** Only the rows follow the page and the items. The header, the footer and the paginator are built once: each may
       * hold a control with a mount of its own (a sort SelectButton in the header, the paginator's dropdowns), and a
       * region around it would start that mount again on every page change. The paginator reads the page from the ref
       * and the total from the items, both in place.
       */
-    private[uic] def render(using Frame): UI =
+    private def drawn(using Frame): UI =
         val page: Reading[Int] = pageSlot.reading(0)
 
         // A list region; the empty state gets its OWN region over the narrowest projection there is (`isEmpty`), so
@@ -196,7 +205,7 @@ final case class DataView[A] private (
         el(
             UI.children(loadingOverlay ++ headerSlot ++ (content :: paginatorUI) ++ footerSlot)*
         )
-    end render
+    end drawn
 
     /** The rows of page `page` (clamped into the page count) of `items`, `size` to a page. */
     private def slice(items: List[A], page: Int, size: Int): List[A] =
