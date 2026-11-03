@@ -5,7 +5,7 @@ import kyo.UI.*
 
 class DiagnosticsTest extends UicTest:
 
-    private val cls = "p-uic-key-error"
+    private val cls = "p-uic-diagnostic"
 
     private def texts(cs: Chunk[UI])(using Frame): Chunk[String] < Sync =
         elementsWithClass(fragment(cs*), cls).map(_.map(textOf))

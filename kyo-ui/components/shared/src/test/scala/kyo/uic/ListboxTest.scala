@@ -123,7 +123,7 @@ class ListboxTest extends ReactiveValueContract:
     "onItemClick hears a selection bound one way, so it draws no card" in {
         for
             held  <- Signal.initRef(Set("b"))
-            byOld <- elementsWithClass(multiple.selection(held.readOnly).onItemClick(_ => ()).render, "p-uic-key-error")
+            byOld <- elementsWithClass(multiple.selection(held.readOnly).onItemClick(_ => ()).render, "p-uic-diagnostic")
         yield assert(byOld.isEmpty, s"onItemClick hears: ${byOld.map(textOf)}")
     }
 

@@ -251,7 +251,7 @@ class ColorPickerTest extends ReactiveValueContract:
     }
 
     "a color bound one way says nothing where it reaches somebody or nobody can pick: a ref, disabled" in {
-        def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-key-error")
+        def errors(c: uic.ColorPicker): Chunk[UI.Ast.Element] < Sync = elementsWithClass(c.render, "p-uic-diagnostic")
         for
             held   <- Signal.initRef(red)
             twoWay <- errors(uic.ColorPicker().inline(true).value(held))

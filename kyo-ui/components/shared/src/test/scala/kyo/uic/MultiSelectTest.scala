@@ -218,9 +218,9 @@ class MultiSelectTest extends ReactiveValueContract:
     "a selection a constant somebody hears, a ref holds, or a disabled field shows draws no card" in {
         for
             held   <- Signal.initRef(Set.empty[Fruit])
-            heard  <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-key-error"))
-            twoWay <- elementsWithClass(multi.selection(held).render, "p-uic-key-error")
-            off    <- elementsWithClass(multi.selection(held.readOnly).disabled(true).render, "p-uic-key-error")
+            heard  <- oneWay(_.selection(Set(fruit(0))).onChange(_ => ())).map(elementsWithClass(_, "p-uic-diagnostic"))
+            twoWay <- elementsWithClass(multi.selection(held).render, "p-uic-diagnostic")
+            off    <- elementsWithClass(multi.selection(held.readOnly).disabled(true).render, "p-uic-diagnostic")
         yield assert(
             heard.isEmpty && twoWay.isEmpty && off.isEmpty,
             s"somebody hears, or nobody can pick: ${(heard ++ twoWay ++ off).map(textOf)}"

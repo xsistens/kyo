@@ -76,7 +76,7 @@ private[uic] object Diagnostics:
     private def card(component: String, advice: String, keys: Seq[String])(using Frame): UI =
         val listed = if keys.isEmpty then "" else keys.take(5).mkString(" (", ", ", if keys.sizeIs > 5 then ", ...)" else ")")
         div
-            .cssClass("p-uic-key-error")
+            .cssClass("p-uic-diagnostic")
             .role("alert")(s"$component: $advice$listed")
     end card
 

@@ -194,7 +194,7 @@ class OrganizationChartTest extends ReactiveValueContract:
             heard <- elementsWithClass(
                 org.expanded(held.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                     .selection(held.readOnly).onNodeClick(_ => ()).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
             live = org.expanded(Set("ceo")).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single).selection(Set("ceo"))
                 .onNodeClick(_ => ()).render

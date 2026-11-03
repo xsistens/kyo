@@ -109,7 +109,7 @@ class TreeTableTest extends ReactiveValueContract:
             byOld <- elementsWithClass(
                 parentTable.expanded(e.readOnly).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                     .selection(s.readOnly).onRowClick(_ => ()).render,
-                "p-uic-key-error"
+                "p-uic-diagnostic"
             )
             live = parentTable.expanded(Set.empty[Row]).onNodeToggle(_ => ()).selectionMode(uic.SelectionMode.Single)
                 .selection(Set.empty[Row]).onRowClick(_ => ()).render

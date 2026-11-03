@@ -175,7 +175,7 @@ class PopoverTest extends ReactiveValueContract:
     "the card for a signal nobody hears names the popover, not the overlay it draws through" in {
         for
             held <- Signal.initRef(false)
-            deaf <- elementsWithClass(withTrigger.open(held.readOnly).render, "p-uic-key-error")
+            deaf <- elementsWithClass(withTrigger.open(held.readOnly).render, "p-uic-diagnostic")
         yield assert(deaf.size == 1 && textOf(deaf.head).contains("Popover"), s"nobody hears: ${deaf.map(textOf)}")
     }
 
