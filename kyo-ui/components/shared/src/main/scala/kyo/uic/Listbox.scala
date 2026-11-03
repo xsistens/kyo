@@ -391,7 +391,7 @@ final case class Listbox[K] private (
                      List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
                  else Nil)
         if unheard.isEmpty then list
-        else fragment((unheard.map(a => KeyDiagnostics.card("Listbox", a + ", or bind a SignalRef", Nil)) :+ list)*)
+        else fragment((unheard.map(a => Diagnostics.card("Listbox", a + ", or bind a SignalRef", Nil)) :+ list)*)
         end if
     end renderQuery
 

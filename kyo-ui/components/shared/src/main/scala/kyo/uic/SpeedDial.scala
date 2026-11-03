@@ -115,7 +115,7 @@ final case class SpeedDial private (
         if !ReactiveValue.deaf(openSlot, onOpenF) then dial
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "SpeedDial",
                     "the fan is bound open one way and nothing hears a toggle, so the reader cannot change it; add " +
                         "onOpenChange, or bind a SignalRef",

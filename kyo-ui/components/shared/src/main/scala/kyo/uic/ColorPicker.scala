@@ -136,7 +136,7 @@ final case class ColorPicker private (
             case Present(ReactiveValue.Const(v))                => body(Absent, v)
             case Absent                                         => body(Absent, ColorPicker.DefaultHex)
         val unheard = interactive && valueBinding.exists(_.dyn.isDefined) && !ReactiveValue.heard(valueBinding, onChangeF)
-        if unheard then fragment(field, KeyDiagnostics.unheard("ColorPicker", "value", "onChange")) else field
+        if unheard then fragment(field, Diagnostics.unheard("ColorPicker", "value", "onChange")) else field
     end renderResolved
 
     /** The picker over a colour it keeps itself, starting at `initial`, drawn as a two-way binding of it. The page as

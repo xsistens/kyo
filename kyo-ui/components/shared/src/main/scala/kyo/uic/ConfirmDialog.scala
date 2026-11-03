@@ -112,7 +112,7 @@ final case class ConfirmDialog private (
                 if unheard.isEmpty then drawn
                 else
                     fragment(
-                        KeyDiagnostics.card(
+                        Diagnostics.card(
                             "ConfirmDialog",
                             s"the visibility is bound one way and nothing hears ${unheard.mkString(" or ")}; add " +
                                 "onOpenChange, or bind a SignalRef",

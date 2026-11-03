@@ -100,7 +100,7 @@ final case class TieredMenu private (
         if !ReactiveValue.deaf(popupSlot, onPopupF) then menu
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "TieredMenu",
                     "the popup is bound one way and nothing hears a close, so the reader cannot close it; add " +
                         "onPopupChange, or bind a SignalRef",

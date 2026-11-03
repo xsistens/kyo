@@ -151,7 +151,7 @@ final case class OrganizationChart[K] private (
                          List("the selection is bound one way and nothing hears a click; add onSelectionChange")
                      else Nil)
             if unheard.isEmpty then withCursor
-            else fragment((unheard.map(a => KeyDiagnostics.card("OrganizationChart", a + ", or bind a SignalRef", Nil)) :+ withCursor)*)
+            else fragment((unheard.map(a => Diagnostics.card("OrganizationChart", a + ", or bind a SignalRef", Nil)) :+ withCursor)*)
             end if
         end if
     end render

@@ -325,7 +325,7 @@ final case class AutoComplete[A] private (
             else
                 fragment(
                     field,
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "AutoComplete",
                         "value is bound one way and an edit reaches nobody, so the reader cannot make it; add the event, or bind a SignalRef",
                         missing

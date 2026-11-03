@@ -201,7 +201,7 @@ final case class Dialog private (
             // A signal nobody hears: every close the reader asks for is painted away again.
             case _ if !quietFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "Dialog",
                         "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
                             "onOpenChange, or bind a SignalRef",

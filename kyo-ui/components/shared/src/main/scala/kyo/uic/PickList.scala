@@ -382,7 +382,7 @@ final case class PickList[A] private (
                 missing(targetSlot, onTargetItemsF, "targetItems", "onTargetItemsChange") ++
                 missing(sourceSelectedSlot, onSourceSelectionF, "sourceSelection", "onSourceSelectionChange") ++
                 missing(targetSelectedSlot, onTargetSelectionF, "targetSelection", "onTargetSelectionChange")
-        if all.isEmpty then Nil else List(KeyDiagnostics.card("PickList", "a binding the reader cannot move", all))
+        if all.isEmpty then Nil else List(Diagnostics.card("PickList", "a binding the reader cannot move", all))
     end unheard
 
     /** Runs `eff` and puts the highlight back on the row it was on in `after`, the column the move asks for.

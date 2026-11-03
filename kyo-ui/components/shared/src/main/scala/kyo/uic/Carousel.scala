@@ -190,7 +190,7 @@ final case class Carousel[A] private (
                 if !ReactiveValue.deaf(pageSlot, onPageChangeF) then carousel
                 else
                     fragment(
-                        KeyDiagnostics.card(
+                        Diagnostics.card(
                             "Carousel",
                             "the page is bound one way and nothing hears a turn, so the reader cannot change it; add " +
                                 "onPageChange, or bind a SignalRef",

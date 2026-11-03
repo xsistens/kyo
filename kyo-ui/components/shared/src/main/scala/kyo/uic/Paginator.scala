@@ -361,7 +361,7 @@ final case class Paginator private (
             val overruled =
                 if !jtpInputFlag || layout.contains(PaginatorElement.JumpToPageInput) then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "Paginator",
                         "the template is the layout and it does not name JumpToPageInput, so jumpToPageInput " +
                             "is not read; name it in the template or drop the flag",
@@ -370,7 +370,7 @@ final case class Paginator private (
             val bare =
                 if empty.isEmpty then Nil
                 else
-                    List(KeyDiagnostics.card(
+                    List(Diagnostics.card(
                         "Paginator",
                         "the template names an element with nothing behind it, so it renders nothing",
                         empty
@@ -399,7 +399,7 @@ final case class Paginator private (
         end rows
         val unheard = page ++ rows
         if unheard.isEmpty then Nil
-        else List(KeyDiagnostics.card("Paginator", "a binding the reader cannot move", unheard))
+        else List(Diagnostics.card("Paginator", "a binding the reader cannot move", unheard))
     end unheard
 
     /** A page pick: written if [[page]] binds two way, then reported. Targets are valid by construction: nav and page

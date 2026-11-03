@@ -417,7 +417,7 @@ final case class Select[A] private (
                          List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
                      else Nil)
             if unheard.isEmpty then renderLive
-            else fragment((unheard.map(a => KeyDiagnostics.card("Select", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
+            else fragment((unheard.map(a => Diagnostics.card("Select", a + ", or bind a SignalRef", Nil)) :+ renderLive)*)
             end if
         end if
     end render
@@ -520,7 +520,7 @@ final case class Select[A] private (
         val unknownCard: List[UI] =
             held match
                 case Present(a) if selIdx < 0 && !loading =>
-                    List(KeyDiagnostics.unknown("Select", Seq(labelF(a))))
+                    List(Diagnostics.unknown("Select", Seq(labelF(a))))
                 case _ => Nil
 
         /** Where an opening key lands: the selected option, or the first one a highlight may sit
@@ -699,7 +699,7 @@ final case class Select[A] private (
     private def unheardCard(using Frame): List[UI] =
         if disabledFlag || readonlyFlag || !choice.exists(_.deaf(onChangeF.orElse(onPickF))) then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "Select",
                 "the selection is bound one way and nothing hears a pick, so the reader cannot change it; add onChange or " +
                     "onPick, or bind a SignalRef",
@@ -900,14 +900,14 @@ final case class Select[A] private (
 
     /** The loud card shown at the top of the panel when the option keys collide, so
       * a duplicate-label data set cannot silently select the wrong row (see
-      * [[KeyDiagnostics]]). Empty in the healthy case, which is every existing
+      * [[Diagnostics]]). Empty in the healthy case, which is every existing
       * render.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = KeyDiagnostics.duplicates(items.map(key))
+        val dups = Diagnostics.duplicates(items.map(key))
         if dups.isEmpty then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "Select",
                 if keyF.isEmpty then
                     "option labels are not unique and optionKey is unset, so picks apply to the wrong option; set optionKey"

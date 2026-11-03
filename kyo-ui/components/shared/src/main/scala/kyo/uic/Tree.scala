@@ -210,7 +210,7 @@ final case class Tree[K] private (
             else List("selection is bound one way and nothing hears a click: add onSelectionChange, or bind a SignalRef")
         val unheard = expansion ++ selection
         if unheard.isEmpty then tree
-        else fragment(KeyDiagnostics.card("Tree", "a binding the reader cannot move", unheard), tree)
+        else fragment(Diagnostics.card("Tree", "a binding the reader cannot move", unheard), tree)
     end withUnheard
 
     /** A constant expansion nobody hears is fixed: the branches show it, and no toggle opens or closes one. */

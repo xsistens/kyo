@@ -312,7 +312,7 @@ final case class Overlay private (
         if quietFlag || !ReactiveValue.deaf(openSlot, onOpenF) then drawn
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     reportedAsV,
                     "the visibility is bound one way and nothing hears a dismissal, so the reader cannot close it; add " +
                         "onOpenChange, or bind a SignalRef",

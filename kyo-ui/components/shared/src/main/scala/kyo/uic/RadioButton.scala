@@ -97,7 +97,7 @@ final case class RadioButton private (
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
         val deaf  = checkedBinding.exists(b => b.dyn.isDefined && b.writable.isEmpty) && !ReactiveValue.heard(checkedBinding, onChangeF)
-        if deaf && !inert then fragment(field, KeyDiagnostics.unheard("RadioButton", "checked", "onChange")) else field
+        if deaf && !inert then fragment(field, Diagnostics.unheard("RadioButton", "checked", "onChange")) else field
     end render
 
     /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound

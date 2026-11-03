@@ -344,13 +344,13 @@ final case class SelectButton[A] private (
     end body
 
     /** The loud card rendered ahead of the fused buttons when the option keys
-      * collide (see [[KeyDiagnostics]]): two options sharing a key toggle together.
+      * collide (see [[Diagnostics]]): two options sharing a key toggle together.
       */
     private def keyCollisionCard(using Frame): List[UI] =
-        val dups = KeyDiagnostics.duplicates(items.map(key))
+        val dups = Diagnostics.duplicates(items.map(key))
         if dups.isEmpty then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "SelectButton",
                 if keyF.isEmpty then "option labels are not unique and optionKey is unset, so those options select together; set optionKey"
                 else "optionKey is not unique across the options, so those options select together",
@@ -368,7 +368,7 @@ final case class SelectButton[A] private (
             else single.exists(_.deaf(onChangeF.orElse(onPickF)))
         if !deaf || disabledFlag.constTrue then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "SelectButton",
                 "the selection is bound one way and nothing hears a click, so the reader cannot change it; add " +
                     (if multipleFlag then "onChange" else "onChange or onPick") + ", or bind a SignalRef",
@@ -382,9 +382,9 @@ final case class SelectButton[A] private (
         if multipleFlag then multi.exists(_.fixed(onChangeSetF))
         else single.exists(_.fixed(onChangeF.orElse(onPickF)))
 
-    /** The card naming held options no button carries (see [[KeyDiagnostics.unknown]]). */
+    /** The card naming held options no button carries (see [[Diagnostics.unknown]]). */
     private def unknownCard(unknown: List[A])(using Frame): List[UI] =
-        if unknown.isEmpty then Nil else List(KeyDiagnostics.unknown("SelectButton", unknown.map(labelF)))
+        if unknown.isEmpty then Nil else List(Diagnostics.unknown("SelectButton", unknown.map(labelF)))
 
     /** Clicking an option updates the bound selection (single replaces, multiple
       * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`

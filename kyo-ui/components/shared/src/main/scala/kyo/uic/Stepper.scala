@@ -179,7 +179,7 @@ final case class Stepper[K] private (
             // onActiveChange hears the click as well.
             val add = if valueSlot.isDefined then "onValueChange (or onActiveChange)" else "onActiveChange"
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "Stepper",
                     s"the active step is bound one way and nothing hears a click, so the reader cannot change it; add $add, " +
                         "or bind a SignalRef",

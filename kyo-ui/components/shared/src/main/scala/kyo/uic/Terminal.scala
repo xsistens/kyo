@@ -113,7 +113,7 @@ final case class Terminal private (
                 if !ReactiveValue.deaf(commandsSlot, onCommandsF) then terminal
                 else
                     fragment(
-                        KeyDiagnostics.card(
+                        Diagnostics.card(
                             "Terminal",
                             "the history is bound one way and nothing hears a command, so the reader's commit reaches nobody; " +
                                 "add onCommandsChange, or bind a SignalRef",

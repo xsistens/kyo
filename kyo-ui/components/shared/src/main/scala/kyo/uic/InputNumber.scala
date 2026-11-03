@@ -212,9 +212,9 @@ final case class InputNumber private (
         // A value bound one way that nothing hears: every change the reader makes is put back.
         val quiet = readonlyFlag || disabledFlag.constTrue
         if valueBinding.exists { case InputNumber.Value.Dyn(_) => true; case _ => false } && onChangeF.isEmpty && !quiet
-        then fragment(field, KeyDiagnostics.unheard("InputNumber", "value", "onChange"))
+        then fragment(field, Diagnostics.unheard("InputNumber", "value", "onChange"))
         else if valueBinding.exists { case InputNumber.Value.TextDyn(_) => true; case _ => false } && onTextF.isEmpty && !quiet
-        then fragment(field, KeyDiagnostics.unheard("InputNumber", "text", "onTextChange"))
+        then fragment(field, Diagnostics.unheard("InputNumber", "text", "onTextChange"))
         else field
         end if
     end renderLive

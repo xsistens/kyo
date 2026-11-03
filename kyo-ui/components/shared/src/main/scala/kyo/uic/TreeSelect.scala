@@ -213,7 +213,7 @@ final case class TreeSelect[K] private (
     end flatNodes
 
     /** The loud card shown at the top of the panel when two nodes share an id (see
-      * [[KeyDiagnostics]]). The ids are the selection keys, so a collision merges two
+      * [[Diagnostics]]). The ids are the selection keys, so a collision merges two
       * nodes into one selection entry, and [[options]] defaults the key to the label,
       * exactly the way [[Select.optionKey]] does, so the same duplicate-label data set
       * produces it.
@@ -223,7 +223,7 @@ final case class TreeSelect[K] private (
         val dups = ids.groupBy(identity).collect { case (id, seen) if seen.sizeIs > 1 => id }.toSeq.sortBy(ids.indexOf)
         if dups.isEmpty then Nil
         else
-            List(KeyDiagnostics.card(
+            List(Diagnostics.card(
                 "TreeSelect",
                 "node ids are not unique, so those nodes share one selection entry; give options an id " +
                     "projection, or distinct TreeNode ids",
@@ -237,7 +237,7 @@ final case class TreeSelect[K] private (
         if !ReactiveValue.deaf(openSlot, onOpenF) then renderLive
         else
             fragment(
-                KeyDiagnostics.card(
+                Diagnostics.card(
                     "TreeSelect",
                     "the panel is bound one way and nothing hears an open or a close, so the reader cannot change it; add " +
                         "onOpenChange, or bind a SignalRef",
@@ -342,7 +342,7 @@ final case class TreeSelect[K] private (
         val unknownCard: List[UI] =
             val strays = current.filterNot(known.contains).toList
             if strays.isEmpty || loading then Nil
-            else List(KeyDiagnostics.unknown("TreeSelect", strays.map(_.toString).sorted))
+            else List(Diagnostics.unknown("TreeSelect", strays.map(_.toString).sorted))
         end unknownCard
 
         /** Where an opening key lands: the first selected row, or the first row there is.
@@ -523,7 +523,7 @@ final case class TreeSelect[K] private (
                 (if disabledFlag || !ReactiveValue.deaf(expandedSlot, onExpandedF) then Nil
                  else List("expanded is bound one way and nothing hears a toggle: add onExpandedChange, or bind a SignalRef"))
         val cards = unknownCard ++
-            (if unheard.isEmpty then Nil else List(KeyDiagnostics.card("TreeSelect", "a binding the reader cannot move", unheard)))
+            (if unheard.isEmpty then Nil else List(Diagnostics.card("TreeSelect", "a binding the reader cannot move", unheard)))
         if cards.isEmpty then field else fragment((field :: cards)*)
     end bodyStatic
 end TreeSelect

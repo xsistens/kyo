@@ -99,7 +99,7 @@ final case class Toast private (
             // close button has nothing to hear.
             case _ if closableFlag && ReactiveValue.deaf(openSlot, onOpenF) =>
                 fragment(
-                    KeyDiagnostics.card(
+                    Diagnostics.card(
                         "Toast",
                         "the visibility is bound one way and nothing hears a close, so the reader cannot close it; add " +
                             "onOpenChange, or bind a SignalRef",
