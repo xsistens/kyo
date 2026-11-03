@@ -173,7 +173,8 @@ class SelectButtonTest extends ReactiveValueContract:
         control = options(_).map(_(1)),
         shows = pressed(_),
         answers = c => declaresClick(c) || c.attrs.onKeyDown.nonEmpty,
-        ready = Present(options(_).map(_.exists(declaresClick)))
+        ready = Present(options(_).map(_.exists(declaresClick))),
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     "several choices stay a group of toggle buttons, each its own tab stop" in {
@@ -296,7 +297,8 @@ class SelectButtonTest extends ReactiveValueContract:
             control = options(_).map(_(2)),
             shows = checkedSize(_),
             answers = presses,
-            ready = Present(answering(_))
+            ready = Present(answering(_)),
+            disable = Present((c, on) => c.disabled(on))
         )
 
     // A pick is reported to onChange, then to onPick: each of them hears it.

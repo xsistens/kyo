@@ -121,22 +121,24 @@ final case class ColorPicker private (
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         validity.follow(build(validity))
 
+    // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour the reader
+    // moves to is one it keeps, for as long as it is shown. It sits above the region over `disabled`, or a flip would end the mount
+    // that holds it. The page as first rendered draws the same anatomy at where it starts, with no handler, since nothing is wired
+    // before the mount runs.
     private[uic] def render(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
+        val start = valueSlot.binding.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
+        Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s => copy(valueSlot = s).resolved)(
+            BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).body(Present(Signal.initConst(start)), start, wire = false))
+        )
+    end render
+
+    private def resolved(using Frame): UI =
+        BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved)
 
     private def renderResolved(using Frame): UI =
         val field = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) => body(Present(sig), ColorPicker.DefaultHex)
-            // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour
-            // the reader moves to is one it keeps, for as long as it is shown. The page as first rendered draws the same
-            // anatomy at where it starts, with no handler, since nothing is wired before the mount runs.
-            case other if interactive =>
-                val start = other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
-                Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex)(s => copy(valueSlot = s).renderResolved)(
-                    body(Present(Signal.initConst(start)), start, wire = false)
-                )
-            case other => body(Absent, other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex))
+            case other                           => body(Absent, other.flatMap(_.const).getOrElse(ColorPicker.DefaultHex))
         Diagnostics.after(field)("ColorPicker")(Diagnostic.unheard(valueSlot, ColorPicker.valueName, on = interactive))
     end renderResolved
 

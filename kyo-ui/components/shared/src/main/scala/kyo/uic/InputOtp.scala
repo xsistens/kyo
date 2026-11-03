@@ -101,9 +101,14 @@ final case class InputOtp private (
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
+    // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code the reader asks
+    // for is the one they hold, which a ref the field keeps for as long as it is shown remembers. It sits above the region over
+    // `disabled`, or a flip would end the mount that holds it.
     private[uic] def render(using Frame): UI =
-        BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
+        Slot.owningFrom(valueSlot, unbound = "", on = BoolValue.Const(interactive))(s => copy(valueSlot = s).resolved)(resolved)
+
+    private def resolved(using Frame): UI =
+        BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved)
 
     private def renderResolved(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
@@ -121,13 +126,7 @@ final case class InputOtp private (
                     yield wired(sig, ids.toList, id => cmds.focusId(id))
                 }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), validity))))
             case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
-            // Unbound or started from a constant, the code is the field's own: the cells build it together, so a code
-            // the reader asks for is the one they hold, which a ref the field keeps for as long as it is shown remembers.
-            case other if interactive =>
-                Slot.owningFrom(valueSlot, unbound = "")(s => copy(valueSlot = s).renderResolved)(
-                    validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
-                )
-            case other => validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
+            case other                           => validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
         Diagnostics.after(field)("InputOtp")(Diagnostic.unheard(valueSlot, InputOtp.valueName, on = interactive))
     end renderResolved
 

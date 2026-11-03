@@ -17,7 +17,8 @@ class InputOtpTest extends ReactiveValueContract:
 
     /** The code the cells show: one character each, an empty cell a gap, trailing gaps dropped. */
     private def code(ui: UI)(using Frame): String < Sync =
-        cells(ui).map(cs => Kyo.foreach(cs)(textIn)).map(_.map(c => if c.isEmpty then " " else c).mkString.stripTrailing)
+        // Several published trees come newest first, and the three cells a tree draws are the newest tree's.
+        cells(ui).map(cs => Kyo.foreach(cs.take(3))(textIn)).map(_.map(c => if c.isEmpty then " " else c).mkString.stripTrailing)
 
     private def otp(using Frame) = uic.InputOtp().length(3)
 
@@ -30,7 +31,8 @@ class InputOtpTest extends ReactiveValueContract:
         render = _.render,
         start = "",
         next = "7",
-        control = t => cells(t).map(_.headOption.getOrElse(throw new AssertionError("no cell"))),
+        control = t =>
+            cells(t).map(cs => cs.find(_.attrs.identifier.isDefined).orElse(cs.headOption).getOrElse(throw new AssertionError("no cell"))),
         shows = code(_),
         gesture = (c: UI.Ast.Element) => typed(c, "7", commit = false),
         answers = editable,
@@ -38,9 +40,11 @@ class InputOtpTest extends ReactiveValueContract:
             case t: UI.Ast.TextInput => t.readOnly.contains(true)
             case _                   => false
         },
-        // The mount mints an id for every cell, which it needs to move the focus on; the static render has none.
-        ready = Present(t => cells(t).map(cs => cs.size == 3 && cs(1).attrs.identifier.isDefined)),
-        startText = Present("12")
+        // The mount mints an id for every cell, which it needs to move the focus on; the static render has none. The own state's
+        // mount and the id mount publish on their own, so the tree a gesture sees can hold both, whatever the order.
+        ready = Present(t => cells(t).map(_.exists(_.attrs.identifier.isDefined))),
+        startText = Present("12"),
+        disable = Present((c, on) => c.disabled(on))
     ))
 
     /** What `ui` reported to `seen` after the reader typed `first` into cell 1 and then `second` into cell 2. */
