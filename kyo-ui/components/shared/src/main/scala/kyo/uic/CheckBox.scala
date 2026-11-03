@@ -17,7 +17,7 @@ import kyo.UI.*
   */
 final case class CheckBox private (
     labelText: Maybe[String] = Absent,
-    checkedBinding: Maybe[BoolValue] = Absent,
+    checkedSlot: Slot[Boolean] = Slot(),
     disabledFlag: Maybe[BoolValue] = Absent,
     readonlyFlag: Maybe[Boolean] = Absent,
     requiredFlag: Maybe[Boolean] = Absent,
@@ -32,7 +32,6 @@ final case class CheckBox private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Boolean => UI.Action] = Absent,
     onBlurF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     tabbableFlag: Boolean = true
@@ -60,7 +59,7 @@ final case class CheckBox private (
       * [[onChange]], so the app writes its own state and the box follows. `ref.readOnly` opts a ref out. With no
       * [[onChange]], a card says the reader cannot change it.
       */
-    def checked(v: Boolean | Signal[Boolean]): CheckBox = copy(checkedBinding = Present(ReactiveValue(v)))
+    def checked(v: Boolean | Signal[Boolean]): CheckBox = copy(checkedSlot = checkedSlot.bind(v))
 
     /** Disables the box. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the root's
       * `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
@@ -106,7 +105,7 @@ final case class CheckBox private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CheckBox = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CheckBox = copy(accNameRefV = v)
 
-    def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = copy(checkedSlot = checkedSlot.hear(f))
 
     /** Fires on focus loss with the box's current checked state. Unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
@@ -115,15 +114,11 @@ final case class CheckBox private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field    = validity.follow(checkedBinding match
-            // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
-            case Absent =>
-                ReactiveValue.owned(false)(own => copy(checkedBinding = Present(own)).drawn(validity))(drawn(validity))
-            case _ => drawn(validity))
+        // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
+        val field = validity.follow(Slot.owning(checkedSlot, start = false)(s => copy(checkedSlot = s).drawn(validity))(drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue
-        val deaf  = checkedBinding.exists(b => b.dyn.isDefined && b.writable.isEmpty) && !ReactiveValue.heard(checkedBinding, onChangeF)
-        if deaf && !inert then fragment(field, Diagnostics.unheard("CheckBox", "checked", "onChange")) else field
+        Diagnostics.after(field)("CheckBox")(Diagnostic.unheard(checkedSlot, CheckBox.checkedName, on = !inert))
     end render
 
     /** The box over its binding. A toggle is wired only where it reaches somebody: a two-way binding, or onChange. Bound
@@ -132,18 +127,9 @@ final case class CheckBox private (
       * readable, with nothing to toggle.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        val toggle: Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
-            else Absent
-        checkedBinding match
-            case Present(ReactiveVariable(ref))  => ref.render(b => body(b, b, toggle, validity))
-            case Present(ReactiveValue.Dyn(sig)) => sig.render(b => body(b, sig, toggle, validity))
-            case Present(slot @ ReactiveValue.Const(v)) if ReactiveValue.heard(checkedBinding, onChangeF) =>
-                body(v, slot.native, toggle, validity)
-            case Present(ReactiveValue.Const(v)) => copy(readonlyFlag = Present(true)).body(v, v, Absent, validity)
-            case Absent                          => body(false, false, toggle, validity)
-        end match
-    end drawn
+        Slot.drawField(checkedSlot, unbound = false)(f =>
+            (if f.fixed then copy(readonlyFlag = Present(true)) else this).body(f.value, f.native, f.edit, validity)
+        )
 
     private def body(
         isChecked: Boolean,
@@ -184,7 +170,7 @@ final case class CheckBox private (
         if !blocked then
             box = onBlurF match
                 case Present(f) =>
-                    box.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
+                    box.onBlur(checkedSlot.current(false).map(f))
                 case Absent => box
         end if
 
@@ -216,6 +202,8 @@ final case class CheckBox private (
 end CheckBox
 
 object CheckBox:
+    private val checkedName = Slot.Name("CheckBox", "checked", "a change", "onChange")
+
     def apply(): CheckBox             = new CheckBox()
     def apply(text: String): CheckBox = new CheckBox(labelText = Present(text))
 end CheckBox

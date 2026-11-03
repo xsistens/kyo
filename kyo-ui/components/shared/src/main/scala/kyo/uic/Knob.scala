@@ -32,7 +32,7 @@ import scala.annotation.targetName
   * `valueColor`/`rangeColor`/`textColor` accept any CSS color or `var()`.
   */
 final case class Knob private (
-    valueBinding: Maybe[ReactiveValue[Double]] = Absent,
+    valueSlot: Slot[Double] = Slot(),
     minV: Double = 0.0,
     maxV: Double = 100.0,
     stepV: Double = 1.0,
@@ -50,7 +50,6 @@ final case class Knob private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => UI.Action] = Absent,
     onBlurF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
@@ -72,7 +71,7 @@ final case class Knob private (
       * one-way and is the better answer when the value is computed rather than user-edited.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Knob = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: Double | Signal[Double]): Knob = copy(valueSlot = valueSlot.bind(v))
 
     /** Lower bound (Prime default 0). */
     def min(v: Double): Knob = copy(minV = v)
@@ -125,7 +124,7 @@ final case class Knob private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back, or with the value asked for where the knob is bound one way. */
-    def onChange(f: Double => UI.Action)(using Frame): Knob = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Double => UI.Action)(using Frame): Knob = copy(valueSlot = valueSlot.hear(f))
 
     /** Fires on focus loss with the knob's current value; unlike onChange it fires even
       * when the dial was not moved. The validation layer's Blur trigger.
@@ -141,24 +140,21 @@ final case class Knob private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the knob keeps where the reader turns it itself.
-        if ReactiveValue.fixed(valueBinding, onChangeF) && !readonlyFlag then copy(readonlyFlag = true).render
-        else if valueBinding.isEmpty then ReactiveValue.owned(minV)(own => copy(valueBinding = Present(own)).renderLive)(renderLive)
-        else renderLive
+        if valueSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
+        else Slot.owning(valueSlot, start = minV)(s => copy(valueSlot = s).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is painted away again.
-        if ReactiveValue.deaf(valueBinding, onChangeF) && !readonlyFlag && !disabledFlag.constTrue
-        then fragment(field, Diagnostics.unheard("Knob", "value", "onChange"))
-        else field
+        Diagnostics.after(field)("Knob")(Diagnostic.unheard(valueSlot, Knob.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        valueBinding match
+        valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) => turnable(sig, validity)
             case Present(ReactiveValue.Const(v)) => turnable(Signal.initConst(v), validity)
-            case Absent                          => staticRoot(minV, validity)
+            case _                               => staticRoot(minV, validity)
         end match
     end renderResolved
 
@@ -189,7 +185,7 @@ final case class Knob private (
 
     /** A value the reader asked for: written where the binding is two-way, then reported to [[onChange]]. */
     private def commit(next: Double)(using Frame): UI.Action =
-        ReactiveValue.change(valueBinding, next, onChangeF)
+        valueSlot.change(next)
 
     /** The reactive svg dial (arcs + label + role=slider + keyboard). It carries
       * `p-uic-knob-dial` (pointer-events:none) so the drag pointer lands on the
@@ -266,6 +262,8 @@ end Knob
 
 object Knob:
     def apply(): Knob = new Knob()
+
+    private val valueName = Slot.Name("Knob", "value", "a change", "onChange")
 
     // === Prime's dial math (pure) =============================================
     // 240° sweep: zero at 4π/3 (lower left), full at −π/3 (lower right), radius

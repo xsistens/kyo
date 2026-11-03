@@ -40,8 +40,8 @@ end InputNumberButtonLayout
   * never inside the typed value, and no live digit-grouping mask is applied.
   */
 final case class InputNumber private (
-    valueBinding: Maybe[InputNumber.Value] = Absent,
-    onTextF: Maybe[String => UI.Action] = Absent,
+    numberSlot: Slot[Double] = Slot(),
+    textSlot: Slot[String] = Slot(),
     minV: Maybe[Double] = Absent,
     maxV: Maybe[Double] = Absent,
     stepV: Double = 1.0,
@@ -61,7 +61,6 @@ final case class InputNumber private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
-    onChangeF: Maybe[Double => UI.Action] = Absent,
     onBlurF: Maybe[Double => UI.Action] = Absent,
     integerFlag: Boolean = false,
     focusAutoFlag: Boolean = false
@@ -79,7 +78,7 @@ final case class InputNumber private (
       * carries what was typed rather than what parses.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): InputNumber = copy(valueBinding = Present(InputNumber.Value(v)))
+    def value(v: Double | Signal[Double]): InputNumber = copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.copy(binding = Absent))
 
     /** Binds the field's raw TEXT, for a caller that needs what was typed rather than a number. A `SignalRef` binds two
       * way and [[onTextChange]] hears every keystroke; a plain `Signal` binds one way, the field showing it and painted back
@@ -96,10 +95,10 @@ final case class InputNumber private (
       * exactly what the reader typed: the numeric change is not normalised back into it,
       * and the spin buttons step the text they find.
       */
-    def text(v: String | Signal[String]): InputNumber = copy(valueBinding = Present(InputNumber.textValue(v)))
+    def text(v: String | Signal[String]): InputNumber = copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.copy(binding = Absent))
 
     /** Fired with the raw text after every keystroke and spin of a [[text]]-bound field, after a two-way text is written. */
-    def onTextChange(f: String => UI.Action)(using Frame): InputNumber = copy(onTextF = Present(Callback.of(f)))
+    def onTextChange(f: String => UI.Action)(using Frame): InputNumber = copy(textSlot = textSlot.hear(f))
 
     /** Lower bound: native `min` plus the clamp floor for spins and commits. */
     def min(v: Double): InputNumber = copy(minV = Present(v))
@@ -170,7 +169,7 @@ final case class InputNumber private (
     def focusAuto(v: Boolean): InputNumber = copy(focusAutoFlag = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(numberSlot = numberSlot.hear(f))
 
     /** Fires on focus loss (native `blur`) with the field's current number: bound to
       * a ref, the number the ref holds (committed, clamped); otherwise the number in
@@ -191,72 +190,51 @@ final case class InputNumber private (
     end clamp
 
     private[uic] def render(using Frame): UI =
-        // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader types and spins
-        // itself, through the same text channel a text binding uses, so it starts empty as before.
-        val constant = valueBinding.exists { case InputNumber.Value.Const(_) => true; case _ => false }
-        if constant && onChangeF.isEmpty && !readonlyFlag then copy(readonlyFlag = true).render
-        else if valueBinding.isEmpty then
-            UI.owned("")(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive).placeholder(renderLive)
-        else
-            valueBinding match
-                // A constant text is the starting text: the field keeps what the reader types from it.
-                case Present(InputNumber.Value.TextConst(start)) =>
-                    UI.owned(start)(own => copy(valueBinding = Present(InputNumber.Value.Text(own))).renderLive).placeholder(renderLive)
-                case _ => renderLive
-        end if
-    end render
+        // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader types and spins itself,
+        // through the same text channel a text binding uses, so it starts empty; a constant text is where it starts.
+        if numberSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
+        else if numberSlot.binding.isDefined then renderLive
+        else Slot.owningFrom(textSlot, unbound = "")(s => copy(textSlot = s).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
         // A value bound one way that nothing hears: every change the reader makes is put back.
         val quiet = readonlyFlag || disabledFlag.constTrue
-        if valueBinding.exists { case InputNumber.Value.Dyn(_) => true; case _ => false } && onChangeF.isEmpty && !quiet
-        then fragment(field, Diagnostics.unheard("InputNumber", "value", "onChange"))
-        else if valueBinding.exists { case InputNumber.Value.TextDyn(_) => true; case _ => false } && onTextF.isEmpty && !quiet
-        then fragment(field, Diagnostics.unheard("InputNumber", "text", "onTextChange"))
-        else field
-        end if
+        Diagnostics.after(field)("InputNumber")(
+            Diagnostic.unheard(numberSlot, InputNumber.valueName, on = !quiet),
+            Diagnostic.unheard(textSlot, InputNumber.textName, on = !quiet)
+        )
     end renderLive
 
     private def renderResolved(validity: FieldValidity)(using Frame): UI =
-        valueBinding match
-            case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref), validity))
+        if numberSlot.binding.isDefined then
             // Bound one way, the native field follows the signal, so kyo-ui puts back a number the owner does not take. A constant
             // somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
-            case Present(InputNumber.Value.Dyn(sig)) =>
-                sig.render(v => body(Present(v), Absent, validity, native = Present(sig.map(InputNumber.format))))
-            case Present(InputNumber.Value.Const(v)) if onChangeF.isDefined =>
-                body(Present(v), Absent, validity, native = Present(Signal.initConst(InputNumber.format(v))))
-            case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent, validity)
-            // No `render` here on purpose: a text binding is kyo's own two-way channel on
-            // the field, so the value travels without a subscription. Re-rendering the
-            // field on each keystroke would rewrite what is being typed into it.
-            case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, validity, Present(ref))
-            // The static projection of a starting text: the mount takes it over as the field's own.
-            case Present(InputNumber.Value.TextConst(t)) => body(Absent, Absent, validity, textShown = Present(t))
-            // Text bound one way: the native field follows it, so kyo-ui puts back text the owner does not take.
-            case Present(InputNumber.Value.TextDyn(sig)) =>
-                sig.render(t => body(Absent, Absent, validity, textShown = Present(t), native = Present(sig)))
-            case Absent => body(Absent, Absent, validity)
-
-    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
-        val write: UI.Action = ref match
-            case Present(r) => r.set(next)
-            case Absent     => ()
-        val fire: UI.Action = onChangeF match
-            case Present(f) => f(next)
-            case Absent     => ()
-        for
-            _ <- write
-            r <- fire
-        yield r
-        end for
-    end commit
+            Slot.drawField(numberSlot, unbound = 0.0)(f =>
+                body(
+                    Present(f.value),
+                    validity,
+                    native = Slot.mapNative[Double, String](f.native)(InputNumber.format) match
+                        case s: Signal[String] @unchecked => Present(s)
+                        case _                            => Absent
+                )
+            )
+        else
+            textSlot.binding match
+                // No `render` here on purpose: a text binding is kyo's own two-way channel on the field, so the value travels
+                // without a subscription. Re-rendering the field on each keystroke would rewrite what is being typed into it.
+                case Present(ReactiveVariable(ref)) => body(Absent, validity, Present(ref))
+                // Text bound one way: the native field follows it, so kyo-ui puts back text the owner does not take.
+                case Present(ReactiveValue.Dyn(sig)) =>
+                    sig.render(t => body(Absent, validity, textShown = Present(t), native = Present(sig)))
+                // The static projection of a starting text: the mount takes it over as the field's own.
+                case Present(ReactiveValue.Const(t)) => body(Absent, validity, textShown = Present(t))
+                case _                               => body(Absent, validity)
+    end renderResolved
 
     private def body(
         value: Maybe[Double],
-        ref: Maybe[SignalRef[Double]],
         validity: FieldValidity,
         text: Maybe[SignalRef[String]] = Absent,
         // Text shown but not written: a one-way text binding, or a starting text before the mount takes it over.
@@ -298,7 +276,7 @@ final case class InputNumber private (
         end match
         // A text binding hears every keystroke: a ref is written by the field itself, so only the report is left; text
         // shown one way is reported, and kyo-ui puts the field back to what its owner holds.
-        def reportText(t: String): UI.Action = onTextF.fold[UI.Action](())(f => f(t))
+        def reportText(t: String): UI.Action = textSlot.hearer.fold[UI.Action](())(f => f(t))
         if interactive && text.isDefined then in = in.onInput(reportText)
         if interactive && textShown.isDefined then in = in.onInput(reportText)
         placeholderText match
@@ -318,17 +296,17 @@ final case class InputNumber private (
         // before the write-back (the browser only ENFORCES min/max on form submit). A
         // text-bound field is left out of it: its content is what the reader typed, and
         // normalising a Double back into it would rewrite `4.` to `4` under them.
-        if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref))
+        if interactive && text.isEmpty && textShown.isEmpty then in = in.onChangeNumeric(d => numberSlot.change(clamp(d)))
         // A field bound to a ref holds the number it committed, clamped, so the blur reports the ref as focus leaves.
         // Anywhere else only the field holds what the reader typed (a commit with no ref writes nowhere, and a one-way
         // owner's repaint can land after the blur), so the blur reports the text the field carries, read the way a spin
         // reads a text (no number is 0). Bound to a number it is clamped as a commit is; a text binding keeps the text.
         if interactive then
             onBlurF.foreach { f =>
-                in = ref match
-                    case Present(r)                => in.onBlur(r.use(f))
-                    case Absent if value.isDefined => in.onBlur((_, t) => f(clamp(t.toDoubleOption.getOrElse(0.0))))
-                    case Absent                    => in.onBlur((_, t) => f(t.toDoubleOption.getOrElse(0.0)))
+                in = numberSlot.writable match
+                    case Present(r)           => in.onBlur(r.use(f))
+                    case _ if value.isDefined => in.onBlur((_, t) => f(clamp(t.toDoubleOption.getOrElse(0.0))))
+                    case _                    => in.onBlur((_, t) => f(t.toDoubleOption.getOrElse(0.0)))
             }
         end if
 
@@ -340,17 +318,15 @@ final case class InputNumber private (
                 case Present(t) =>
                     t.get.map { cur =>
                         val next = clamp(cur.toDoubleOption.getOrElse(0.0) + dir * stepV)
-                        t.set(InputNumber.format(next)).andThen(reportText(InputNumber.format(next))).andThen(onChangeF match
-                            case Present(f) => f(next)
-                            case Absent     => ())
+                        textSlot.change(InputNumber.format(next)).andThen(numberSlot.hearer.fold[UI.Action](())(f => f(next)))
                     }
                 case Absent =>
                     textShown match
                         // Shown one way: the step is taken from the owner's text and only reported.
                         case Present(cur) =>
                             val next = clamp(cur.toDoubleOption.getOrElse(0.0) + dir * stepV)
-                            reportText(InputNumber.format(next)).andThen(onChangeF.fold[UI.Action](())(f => f(next)))
-                        case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref)
+                            reportText(InputNumber.format(next)).andThen(numberSlot.hearer.fold[UI.Action](())(f => f(next)))
+                        case Absent => numberSlot.change(clamp(value.getOrElse(clamp(0.0)) + dir * stepV))
 
         def spinButton(dir: Int, cls: String, glyph: IconGlyph): UI =
             var b = button
@@ -407,35 +383,6 @@ object InputNumber:
     private[uic] def format(v: Double): String =
         if v.isWhole && math.abs(v) < 1e15 then v.toLong.toString else v.toString
 
-    /** Const-or-ref carrier for the pending `value` (the Input pattern, Double-typed). */
-
-    /** How the field's number is bound. `Const`/`Ref`/`Dyn` mirror the three cases of
-      * [[ReactiveValue]]; `Text` is this control's own, and the reason the slot is a separate
-      * enum rather than a `ReactiveValue[Double]`: it binds the raw string instead.
-      */
-    private[uic] enum Value:
-        case Const(v: Double)
-        case Ref(ref: SignalRef[Double])
-        case Dyn(sig: Signal[Double])
-        case Text(ref: SignalRef[String])
-        // The starting text, kept by the field itself, the way a text field's constant value is.
-        case TextConst(v: String)
-        // Text bound one way: shown, typing only reported, and the field painted back to what the owner holds.
-        case TextDyn(sig: Signal[String])
-    end Value
-
-    /** The text case matching the union [[InputNumber.text]] takes; a writable ref first, since it IS a signal. */
-    private[uic] def textValue(t: String | Signal[String]): Value = t match
-        case r: SignalRef[String] @unchecked => Value.Text(r)
-        case s: Signal[String] @unchecked    => Value.TextDyn(s)
-        case c: String                       => Value.TextConst(c)
-
-    /** The `Const`/`Ref`/`Dyn` case matching the union a value setter takes. A writable
-      * `SignalRef` binds two-way, any other signal one-way; `SignalRef` is tested first because
-      * it IS a `Signal`.
-      */
-    private[uic] def Value(v: Double | Signal[Double]): Value = v match
-        case r: SignalRef[Double] @unchecked => Value.Ref(r)
-        case s: Signal[Double] @unchecked    => Value.Dyn(s)
-        case d: Double                       => Value.Const(d)
+    private val valueName = Slot.Name("InputNumber", "value", "a change", "onChange")
+    private val textName  = Slot.Name("InputNumber", "text", "a change", "onTextChange")
 end InputNumber

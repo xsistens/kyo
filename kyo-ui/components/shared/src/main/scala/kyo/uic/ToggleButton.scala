@@ -19,7 +19,7 @@ import kyo.UI.*
   * wires value, validity, message and the blur trigger in one call.
   */
 final case class ToggleButton private (
-    checkedBinding: Maybe[BoolValue] = Absent,
+    checkedSlot: Slot[Boolean] = Slot(),
     onLabelV: Maybe[TextValue] = Present(TextValue.Const("Yes")),
     offLabelV: Maybe[TextValue] = Present(TextValue.Const("No")),
     onIconV: Maybe[IconGlyph] = Absent,
@@ -33,7 +33,6 @@ final case class ToggleButton private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Boolean => UI.Action] = Absent,
     onBlurF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     contentV: Maybe[UI] = Absent,
@@ -69,7 +68,7 @@ final case class ToggleButton private (
       * reports through [[onChange]], so the app writes its own state and the button follows. `ref.readOnly` opts a
       * ref out. With no [[onChange]], a card says the reader cannot change it.
       */
-    def checked(v: Boolean | Signal[Boolean]): ToggleButton = copy(checkedBinding = Present(ReactiveValue(v)))
+    def checked(v: Boolean | Signal[Boolean]): ToggleButton = copy(checkedSlot = checkedSlot.bind(v))
 
     /** Label while checked (Prime default "Yes"). A `Signal[String]` re-renders it in place on emission.
       */
@@ -112,7 +111,7 @@ final case class ToggleButton private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleButton = copy(accNameRefV = v)
 
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
-    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(checkedSlot = checkedSlot.hear(f))
 
     /** Fires on focus loss with the button's current checked state; unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
@@ -121,15 +120,14 @@ final case class ToggleButton private (
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field    = validity.follow(checkedBinding match
-            // Unbound, the button keeps its own state, which starts unpressed: a ref it owns for as long as it is shown.
-            case Absent =>
-                ReactiveValue.owned(false)(own => copy(checkedBinding = Present(own)).drawn(validity))(drawn(validity))
-            case _ => drawn(validity))
+        // Unbound, the button keeps its own state, which starts unpressed: a ref it owns for as long as it is shown.
+        val field = validity.follow(Slot.owning(checkedSlot, start = false)(s => copy(checkedSlot = s).drawn(validity))(drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
-        val deaf = checkedBinding.exists(b => b.dyn.isDefined && b.writable.isEmpty) && !ReactiveValue.heard(checkedBinding, onChangeF)
-        if deaf && !readonlyFlag && !disabledFlag then fragment(field, Diagnostics.unheard("ToggleButton", "checked", "onChange"))
-        else field
+        Diagnostics.after(field)("ToggleButton")(Diagnostic.unheard(
+            checkedSlot,
+            ToggleButton.checkedName,
+            on = !readonlyFlag && !disabledFlag
+        ))
     end render
 
     /** The button over its binding. A click is wired only where it reaches somebody: a two-way binding, or onChange. A
@@ -137,16 +135,9 @@ final case class ToggleButton private (
       * its state itself, so a click its owner does not take leaves nothing to paint back.
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
-        val toggle: Maybe[Boolean => UI.Action] =
-            if ReactiveValue.heard(checkedBinding, onChangeF) then Present(b => ReactiveValue.change(checkedBinding, b, onChangeF))
-            else Absent
-        checkedBinding match
-            case Present(ReactiveValue.Dyn(sig))                    => sig.render(b => body(b, toggle, validity))
-            case Present(ReactiveValue.Const(v)) if toggle.nonEmpty => body(v, toggle, validity)
-            case Present(ReactiveValue.Const(v))                    => copy(readonlyFlag = true).body(v, Absent, validity)
-            case Absent                                             => body(false, toggle, validity)
-        end match
-    end drawn
+        Slot.drawField(checkedSlot, unbound = false)(f =>
+            (if f.fixed then copy(readonlyFlag = true) else this).body(f.value, f.edit, validity)
+        )
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
@@ -185,7 +176,7 @@ final case class ToggleButton private (
         // Blur fires even without a toggle: the validation layer's Blur trigger. Reads the
         // ref LIVE (the CheckBox shape), so it reports the state at blur time.
         onBlurF.foreach { f =>
-            el = el.onBlur(checkedBinding.fold(f(false))(_.current.map(f)))
+            el = el.onBlur(checkedSlot.current(false).map(f))
         }
 
         val contentChildren: List[UI] = contentV match
@@ -206,6 +197,8 @@ end ToggleButton
 
 object ToggleButton:
     def apply(): ToggleButton = new ToggleButton()
+
+    private val checkedName = Slot.Name("ToggleButton", "checked", "a change", "onChange")
 
     /** What a single-select [[SelectButton]] option is, beyond a toggle button: whether it holds
       * the group's one tab stop, and the group's key handler for moving within it.
