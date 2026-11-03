@@ -1943,7 +1943,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(using Frame): uic.OrganizationChart[String] = uic.OrganizationChart[String]().expanded(Set("a")).onExpandedChange(_ => ()).selection(Set("a")).onSelectionChange(_ => ())"""
         )
-        typeCheck(preamble + """def x: uic.OrganizationChart[String] = uic.OrganizationChart[String]().expanded()""")
+        typeCheck(preamble + """def x: uic.OrganizationChart[String] = uic.OrganizationChart[String]().expandable(true)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]): uic.OrganizationChart[String] = uic.OrganizationChart[String]().expandable(s)""")
+        typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().expanded()""")
         typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().nodes(uic.OrgChartNode("a", "a"))""")
     }
 
