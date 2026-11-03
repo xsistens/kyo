@@ -631,11 +631,10 @@ object Overlay:
       */
     private[uic] def gated(close: UI.Action): Overlay = new Overlay(Slot(), closeV = Present(close))
 
-    /** Package-internal: the panel of a host over the host's own open binding, reporting a dismissal to the host's
-      * callback. Quiet, since the host reports its binding itself.
+    /** Package-internal: the panel of a host over the host's own open slot, reporting a dismissal to whoever hears it.
+      * Quiet, since the host reports its binding itself.
       */
-    private[uic] def hosted(open: ReactiveValue[Boolean], report: Maybe[Boolean => UI.Action]): Overlay =
-        new Overlay(Slot(Present(open), report, quiet = true))
+    private[uic] def hosted(open: Slot[Boolean]): Overlay = new Overlay(open.quieted)
 
     /** Package-internal: the slot of a host that embeds this overlay, as the host wants it heard. */
     private[uic] def withOpen(slot: Slot[Boolean]): Overlay = new Overlay(slot)
