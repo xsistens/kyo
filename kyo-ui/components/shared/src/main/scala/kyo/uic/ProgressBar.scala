@@ -53,12 +53,7 @@ final case class ProgressBar private (
     private[uic] def render(using Frame): UI =
         modeV match
             case ProgressBarMode.Indeterminate => indeterminateBody
-            case ProgressBarMode.Determinate   =>
-                valueBinding match
-                    case Present(ReactiveVariable(ref))  => ref.render(determinateBody)
-                    case Present(ReactiveValue.Dyn(sig)) => sig.render(determinateBody)
-                    case Present(ReactiveValue.Const(v)) => determinateBody(v)
-                    case Absent                          => determinateBody(0)
+            case ProgressBarMode.Determinate   => valueBinding.getOrElse(ReactiveValue.Const(0)).render(determinateBody)
 
     private def root(using Frame) =
         var el = div

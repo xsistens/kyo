@@ -40,7 +40,7 @@ object StepScope:
     // The scope holds nothing of its own type, so one instance serves every `K`.
     private val scope = new StepScope[Any]
 
-    private[uic] def reading[K](entries: Seq[StepLiveEntry[K]])(using CanEqual[K, K], Frame): Reading[List[Step[K]]] =
+    private[uic] def reading[K](entries: Seq[StepLiveEntry[K]])(using CanEqual[K, K], Frame): ReactiveValue[List[Step[K]]] =
         Entry.reading(scope.asInstanceOf[StepScope[K]], entries)
 end StepScope
 
@@ -110,7 +110,7 @@ final case class Stepper[K] private (
     def steps(ss: StepLiveEntry[K]*): Stepper[K] = copy(stepSources = stepSources ++ ss)
 
     /** The steps as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[Step[K]]] = StepScope.reading(stepSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[Step[K]]] = StepScope.reading(stepSources)
 
     /** Binds the 0-based active step index (clamped at render). A `SignalRef` binds two way: a header click writes it,
       * then [[onActiveChange]] hears the index. A plain `Signal` binds one way: the stepper shows it and only reports. A
@@ -179,7 +179,7 @@ final case class Stepper[K] private (
         given CanEqual[K, K] = CanEqual.derived
         valueSlot.binding match
             case Present(v) =>
-                entries.and(Reading.of(v)).render((ss, held) => drawn(ss, math.max(ss.indexWhere(_.value.contains(held)), 0)))
+                entries.and(v).render((ss, held) => drawn(ss, math.max(ss.indexWhere(_.value.contains(held)), 0)))
             case _ => entries.and(activeSlot.reading(0)).render((ss, at) => drawn(ss, at))
         end match
     end shown

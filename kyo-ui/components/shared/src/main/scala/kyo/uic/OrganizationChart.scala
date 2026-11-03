@@ -179,10 +179,10 @@ final case class OrganizationChart[K] private (
     private def drawn(cursor: Maybe[OrganizationChart.Cursor[K]], ownsExpanded: Boolean)(using Frame): UI =
         given CanEqual[Set[K], Set[K]]     = CanEqual.derived
         given CanEqual[Maybe[K], Maybe[K]] = CanEqual.derived
-        val exp                            = Reading.optional(expandedSlot.binding)
+        val exp                            = ReactiveValue.optional(expandedSlot.binding)
         val sel                            = selectedSlot.reading(Set.empty[K])
-        val at                             = cursor.fold(Reading.Fixed(Maybe.empty[K]))(c => Reading.Live(c.ref))
-        val on                             = Reading.of(expandableOn)
+        val at                             = cursor.fold(ReactiveValue.Const(Maybe.empty[K]))(c => ReactiveValue.Dyn(c.ref))
+        val on                             = expandableOn
         exp.and(sel).and(at).and(on).render { case (((e, s), c), toggles) =>
             val applied = if toggles || !ownsExpanded then e else Absent
             body(id => applied.forall(_.contains(id)), s, c, cursor, toggles)

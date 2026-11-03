@@ -75,21 +75,21 @@ object MegaMenuItemScope:
     private[uic] def resolve(entries: Seq[MegaMenuItemEntry]): List[MegaMenuItem] = Entry.resolve(scope, entries)
 
     /** The root items as ONE reading, every reactive `disabled` below them resolved. */
-    private[uic] def reading(entries: Seq[MegaMenuItemLiveEntry])(using Frame): Reading[List[MegaMenuItem]] =
+    private[uic] def reading(entries: Seq[MegaMenuItemLiveEntry])(using Frame): ReactiveValue[List[MegaMenuItem]] =
         given CanEqual[List[MegaMenuItem], List[MegaMenuItem]] = CanEqual.derived
         Entry.reading(scope, entries) match
-            case Reading.Fixed(items) => MenuRender.readMegaDisabled(items)
-            case Reading.Live(sig)    => Reading.Live(sig.switchMap(items => MenuRender.readMegaDisabled(items).signal))
+            case ReactiveValue.Const(items) => MenuRender.readMegaDisabled(items)
+            case ReactiveValue.Dyn(sig)     => ReactiveValue.Dyn(sig.switchMap(items => MenuRender.readMegaDisabled(items).signal))
     end reading
 
     /** [[reading]] beside the RAW root items, which [[Anchored]] state is matched against (see
       * [[MenuRender.readRooted]] for why the pinned items cannot be).
       */
-    private[uic] def rooted(entries: Seq[MegaMenuItemLiveEntry])(using Frame): Reading[Rooted[MegaMenuItem]] =
+    private[uic] def rooted(entries: Seq[MegaMenuItemLiveEntry])(using Frame): ReactiveValue[Rooted[MegaMenuItem]] =
         Entry.reading(scope, entries) match
-            case Reading.Fixed(items) => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned))
-            case Reading.Live(sig)    =>
-                Reading.Live(sig.switchMap(items => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned)).signal))
+            case ReactiveValue.Const(items) => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned))
+            case ReactiveValue.Dyn(sig)     =>
+                ReactiveValue.Dyn(sig.switchMap(items => MenuRender.readMegaDisabled(items).map(pinned => Rooted(items, pinned)).signal))
         end match
     end rooted
 end MegaMenuItemScope
@@ -178,7 +178,7 @@ final case class MegaMenu private (
         base: String
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items, the highlight and the submenus
-        // are read as ONE region (see [[Reading]]): an activation writes the highlight and the submenus together, and a
+        // are read as ONE region (see [[ReactiveValue.and]]): an activation writes the highlight and the submenus together, and a
         // nested region would repaint the values it closed over.
         MegaMenuItemScope.rooted(entriesV).and(focus.reading).and(subs.reading).render {
             case ((Rooted(roots, items), f), open) =>

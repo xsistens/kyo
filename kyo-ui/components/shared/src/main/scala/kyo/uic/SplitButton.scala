@@ -111,7 +111,7 @@ final case class SplitButton private (
 
     /** The subscription tree over the menu state however it is bound. */
     private def wiredOver(hi: Anchored[Int], base: String)(using Frame): UI =
-        // The menu's items, its open state and its highlight are read here as ONE region (see [[Reading]]) and handed to
+        // The menu's items, its open state and its highlight are read here as ONE region (see [[ReactiveValue.and]]) and handed to
         // the hosted menu: leaving the menu writes the open state and the highlight together, and the menu's own region
         // nested in this one would repaint what it closed over.
         // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).

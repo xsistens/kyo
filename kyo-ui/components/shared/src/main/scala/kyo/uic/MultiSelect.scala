@@ -389,7 +389,7 @@ final case class MultiSelect[A] private (
         base: Maybe[String]
     )(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val panel    = Reading.Live(openFiltering(openSlot.reading(false).signal)).and(Reading.Live(hi)).and(q.reading(""))
+        val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = copy(optionsV = opts)
             self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
@@ -397,12 +397,12 @@ final case class MultiSelect[A] private (
     end wiredOver
 
     /** What the field shows whatever its panel does: the chosen options, whether the options are still loading, and the
-      * placeholder. Read beside the panel's state as ONE region (see [[Reading]]); the validity is stamped on the field,
+      * placeholder. Read beside the panel's state as ONE region (see [[ReactiveValue.and]]); the validity is stamped on the field,
       * never read here.
       */
-    private def shown(using Frame): Reading[(Set[A], Boolean, Maybe[String])] =
-        val held: Reading[Set[A]] = choice.fold(Reading.Fixed(Set.empty[A]))(_.reading)
-        held.and(Reading.optional(loadingV)).and(Reading.optional(placeholderV)).map { case ((h, ld), ph) =>
+    private def shown(using Frame): ReactiveValue[(Set[A], Boolean, Maybe[String])] =
+        val held: ReactiveValue[Set[A]] = choice.fold(ReactiveValue.Const(Set.empty[A]))(_.reading)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
             (h, ld.getOrElse(false), ph)
         }
     end shown

@@ -146,7 +146,7 @@ final case class DataView[A] private (
       * and the total from the items, both in place.
       */
     private def drawn(using Frame): UI =
-        val page: Reading[Int] = pageSlot.reading(0)
+        val page: ReactiveValue[Int] = pageSlot.reading(0)
 
         // A list region; the empty state gets its OWN region over the narrowest projection there is (`isEmpty`), so
         // `emptyContent` survives without putting the rows behind a region that repaints them whenever the list changes
@@ -166,7 +166,7 @@ final case class DataView[A] private (
             pageSizeV.fold(contentEl(itemsV))(size => page.render(p => contentEl(slice(itemsV, p, size))))
         ) { sig =>
             pageSizeV.fold(listed(sig))(size =>
-                Reading.Live(sig).and(page).render((items, p) => contentEl(slice(items.toList, p, size)))
+                ReactiveValue.Dyn(sig).and(page).render((items, p) => contentEl(slice(items.toList, p, size)))
             )
         }
 

@@ -48,7 +48,7 @@ object GalleriaItemScope:
 
     private[uic] def resolve(entries: Seq[GalleriaItemEntry]): List[GalleriaItem] = Entry.resolve(scope, entries)
 
-    private[uic] def reading(entries: Seq[GalleriaItemLiveEntry])(using Frame): Reading[List[GalleriaItem]] =
+    private[uic] def reading(entries: Seq[GalleriaItemLiveEntry])(using Frame): ReactiveValue[List[GalleriaItem]] =
         Entry.reading(scope, entries)
 end GalleriaItemScope
 
@@ -102,7 +102,7 @@ final case class Galleria private (
     def items(is: GalleriaItemLiveEntry*): Galleria = copy(itemSources = itemSources ++ is)
 
     /** The images as ONE reading: fixed unless one of them was handed over as a signal. */
-    private[uic] def entries(using Frame): Reading[List[GalleriaItem]] = GalleriaItemScope.reading(itemSources)
+    private[uic] def entries(using Frame): ReactiveValue[List[GalleriaItem]] = GalleriaItemScope.reading(itemSources)
 
     /** Binds the active image index (0-based, clamped at render). A `SignalRef` binds two way: a navigator, a thumbnail
       * or a dot writes it, then [[onActiveIndexChange]] hears the new index. A plain `Signal` binds one way: the gallery
@@ -163,7 +163,7 @@ final case class Galleria private (
       * were, which is a gallery whose dots and thumbnails are reachable by clicking.
       */
     private def shown(base: String, focus: String => UI.Action)(using Frame): UI =
-        // The images and the active index are ONE region (see [[Reading]]): a list that shrinks moves the clamp too.
+        // The images and the active index are ONE region (see [[ReactiveValue.and]]): a list that shrinks moves the clamp too.
         entries.and(activeSlot.reading(0)).render((items, i) => copy(itemList = items).body(i, base, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */

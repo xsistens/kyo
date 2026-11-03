@@ -167,7 +167,7 @@ final case class Panel private (
             case ReactiveValue.Const(true)  => List(div.cssClass("p-panel-header-actions")(collapse.render(toggleButton)))
             case ReactiveValue.Dyn(sig)     =>
                 // The switch and the collapse are read as ONE region: the actions come and go with the switch.
-                List(Reading.Live(sig).and(collapse).render((isOn, c) =>
+                List(ReactiveValue.Dyn(sig).and(collapse).render((isOn, c) =>
                     if isOn then div.cssClass("p-panel-header-actions")(toggleButton(c)) else UI.empty
                 ))
 
@@ -187,7 +187,7 @@ final case class Panel private (
             case ReactiveValue.Const(true)  => collapse.render(collapseContainer(_, contentInner))
             case ReactiveValue.Dyn(sig)     =>
                 // Off the panel is plain and its content shows; the collapse state is held, not applied.
-                Reading.Live(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c, contentInner) else containerBase)
+                ReactiveValue.Dyn(sig).and(collapse).render((isOn, c) => if isOn then collapseContainer(c, contentInner) else containerBase)
 
         shell(UI.children(headerUI :+ container)*)
     end body
