@@ -27,6 +27,11 @@ private[uic] object BoolValue:
         case Present(Const(b)) => Present(b)
         case _                 => Absent
 
+    /** A feature's switch: whether it may be on at some point. A signal may, whatever it holds now, so the state the feature
+      * keeps is minted under it and outlives the switch going off and on. Only a constant `false`, or no switch at all, may not.
+      */
+    def mayTurnOn(sw: Maybe[BoolValue]): Boolean = sw.exists(!_.const.contains(false))
+
     /** Resolve a possibly-reactive boolean slot before the host builds its element: if `bv` is
       * `Dyn`, re-render `rebuild` with the slot pinned to the current `Const(b)` on every
       * emission; otherwise build once. The host passes a `rebuild` that `copy`s the resolved

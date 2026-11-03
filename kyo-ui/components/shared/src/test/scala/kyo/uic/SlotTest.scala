@@ -341,7 +341,7 @@ class SlotTest extends UicTest:
                 ("TreeTable", uic.TreeTable[String]().selectionMode(uic.SelectionMode.Single).render, "p-treetable", 1),
                 (
                     "OrganizationChart",
-                    uic.OrganizationChart[String]().expanded().selectionMode(uic.SelectionMode.Single).render,
+                    uic.OrganizationChart[String]().expandable(true).selectionMode(uic.SelectionMode.Single).render,
                     "p-organizationchart",
                     1
                 ),
