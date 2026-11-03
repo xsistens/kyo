@@ -267,15 +267,16 @@ final case class DatePicker[A] private (
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
             val unheard =
-                (if bindingV.exists(_.deaf(valueHeard)) then List("the value is bound one way and nothing hears a pick; add onChange")
+                (if interactive && bindingV.exists(_.deaf(valueHeard)) then
+                     List("the value is bound one way and nothing hears a pick; add onChange")
                  else Nil) ++
-                    (if ReactiveValue.deaf(openSlot, onOpenF) then
+                    (if interactive && ReactiveValue.deaf(openSlot, onOpenF) then
                          List("the calendar is bound one way and nothing hears an open or a close; add onOpenChange")
                      else Nil) ++
-                    (if ReactiveValue.deaf(monthSlot, onMonthF) then
+                    (if interactive && ReactiveValue.deaf(monthSlot, onMonthF) then
                          List("the month is bound one way and nothing hears a page; add onMonthChange")
                      else Nil) ++
-                    (if ReactiveValue.deaf(currentViewSlot, onCurrentViewF) then
+                    (if interactive && ReactiveValue.deaf(currentViewSlot, onCurrentViewF) then
                          List("the view is bound one way and nothing hears a drill; add onCurrentViewChange")
                      else Nil)
             if unheard.isEmpty then renderLive

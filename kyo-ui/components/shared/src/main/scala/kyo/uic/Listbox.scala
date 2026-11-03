@@ -387,7 +387,7 @@ final case class Listbox[K] private (
         val unheard =
             (if deaf then List("the selection is bound one way and nothing hears a click, so the reader cannot change it; add onChange")
              else Nil) ++
-                (if ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
+                (if !disabledFlag && ReactiveValue.deaf(filterQuerySlot, onFilterQueryF) then
                      List("the filter query is bound one way and nothing hears the reader type; add onFilterQueryChange")
                  else Nil)
         if unheard.isEmpty then list
