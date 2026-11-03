@@ -208,7 +208,13 @@ sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange
     def group(using Frame): PassGroup < Sync = pass.map(up => new PassGroup(this, up, mutex))
 
     /** A caught mount that has not loaded; it settles with [[settle]] on the hold this returns. */
-    def load(using Frame): BoundaryHold < Sync = Sync.Unsafe.defer { discard(loading.incrementAndGet()); this }
+    def load(using Frame): BoundaryHold < Async = holdRanges.andThen(Sync.Unsafe.defer { discard(loading.incrementAndGet()); this })
+
+    /** Something below may load from now on, so the ranges of the passes it is part of keep showing what they show for as long as that
+      * takes, and take no event while dispatch resolves their new content. A boundary has no range of its own to hold: until it reveals,
+      * its placeholder takes the events.
+      */
+    private[internal] def holdRanges(using Frame): Unit < Async
 
     /** A caught mount that loaded, failed, or went away before either; the pass it happened in decides what follows. */
     def settle(using AllowUnsafe): Unit = discard(loading.decrementAndGet())
@@ -228,6 +234,14 @@ sealed abstract private[kyo] class BoundaryHold(mutex: Meter) extends UIExchange
         Abort.run[Closed](mutex.run(Sync.Unsafe.defer(v))).unit
 
     protected def due(using AllowUnsafe): Boolean = passes.get() > 0 || loading.get() > 0
+end BoundaryHold
+
+private[kyo] object BoundaryHold:
+
+    /** What a pass of the range at the given path does once it has subscribed what it shows and before it ends: nothing, except in a test
+      * that pauses a pass there, its paints still waiting, to send an event while it runs.
+      */
+    val duringPass: Local[Seq[String] => Unit < Async] = Local.init[Seq[String] => Unit < Async](_ => Kyo.unit)
 end BoundaryHold
 
 /** The hold of one pass of a region or a mount inside a waiting boundary.
@@ -252,14 +266,20 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
     // Unsafe: as for the hold's counters above.
     private val holding = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
 
-    /** What the pass paints, set once it knows. Until the group is through, the range shows what it showed before while dispatch
-      * already resolves the new content, so the range takes no event.
+    /** What the pass paints, set once it knows. A pass that loads nothing takes events the whole time, as a region outside any boundary
+      * does, since nothing marks its range inert and its paints are about to go out: an event reaches the live state.
       */
-    def paints(r: BoundaryRange)(using Frame): Unit < Sync =
-        Sync.Unsafe.defer {
-            range = Present(r)
-            holding.compareAndSet(false, true)
-        }.map(first => if first then root.dispatch.hold(r.path) else Kyo.unit)
+    def paints(r: BoundaryRange)(using Frame): Unit < Sync = Sync.Unsafe.defer { range = Present(r) }
+
+    // Under the lock, since a pass that ends releases its range and turns done in one step: a range held after that would stay held.
+    private[internal] def holdRanges(using Frame): Unit < Async =
+        locked {
+            if closed.get() then Kyo.unit
+            else if done then parent.holdRanges
+            else
+                val first = holding.compareAndSet(false, true)
+                (if first then range.fold(Kyo.unit)(r => root.dispatch.hold(r.path)) else Kyo.unit).andThen(parent.holdRanges)
+        }
 
     private def unhold(using Frame): Unit < Sync =
         Sync.Unsafe.defer(holding.compareAndSet(true, false)).map { was =>
@@ -294,7 +314,7 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
     // Once the group is through, what runs below it is due on the holds above, like the pass of any later sibling.
     override def pass(using Frame): BoundaryPass < Sync = if done then parent.pass else super.pass
 
-    override def load(using Frame): BoundaryHold < Sync = if done then parent.load else super.load
+    override def load(using Frame): BoundaryHold < Async = if done then parent.load else super.load
 
     override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async = parent.onHold(region, held)
 
@@ -398,6 +418,8 @@ final private[kyo] class BoundaryGate(
     private def policy: UI.PendingPolicy = node.settings.pending.getOrElse(UI.PendingPolicy.KeepLatest)
 
     def isRevealed: Boolean = revealed
+
+    private[internal] def holdRanges(using Frame): Unit < Async = Kyo.unit
 
     @volatile private var showingSnapshot = false
 

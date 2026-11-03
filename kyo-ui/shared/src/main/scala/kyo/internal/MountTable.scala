@@ -1525,6 +1525,10 @@ final private[kyo] class MountScope private[internal] (
     def left(path: Seq[String])(using Frame): Maybe[UI] < Sync =
         Sync.Unsafe.defer(entryIn(table.read).flatMap(_.handoff.get(path)))
 
+    /** Whether `identity` has an instance in the table, which a claim on it keeps rather than starts. */
+    def hasInstance(identity: MountIdentity)(using Frame): Boolean < Sync =
+        Sync.Unsafe.defer(table.read.instances.get(identity).nonEmpty)
+
     /** The claim of the keyed node `rui` of `pass` on `identity`: the report when the pass shows the identity in another place too;
       * the live instance when no other region shows it; otherwise, or while something is in transit and the instance is still to
       * start, what the node's `PendingPolicy` shows until the table's next cut decides. A subscription the table no longer follows
@@ -1693,11 +1697,19 @@ private[kyo] object MountRegions:
     )(using Frame): Unit < (Async & Scope) =
         def show(instance: MountInstance, follow: Boolean): Unit < (Async & Scope) =
             subscribeMountContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
+        // An effect may run from the moment it starts, before the content subscription counts it as loading, so what it may hold up takes
+        // no event from before that. A kept instance starts nothing.
+        def beforeStart: Unit < Async = exchange.gate.fold(Kyo.unit: Unit < Async)(_.holdRanges)
         mounts.current.map { follow =>
             spec.identity match
-                case Absent            => mounts.startKeyless(spec).map(show(_, follow))
+                case Absent            => beforeStart.andThen(mounts.startKeyless(spec)).map(show(_, follow))
                 case Present(identity) =>
-                    mounts.claim(rui, identity, spec, pass).map { view =>
+                    mounts.hasInstance(identity).map(kept => if kept then Kyo.unit else beforeStart).andThen(mounts.claim(
+                        rui,
+                        identity,
+                        spec,
+                        pass
+                    )).map { view =>
                         def showClaim(state: ClaimState): Unit < (Async & Scope) =
                             state match
                                 case ClaimState.Live(instance)     => show(instance, follow)
