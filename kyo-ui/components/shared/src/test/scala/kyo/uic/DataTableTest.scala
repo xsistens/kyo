@@ -3920,12 +3920,12 @@ class DataTableTest extends ReactiveValueContract:
             uic.column("Id")(_.id)
         )
 
-    // The rest of what columnWidths() and columnOrder() keep is the contract's (rule A, below).
-    "columnWidths() and columnOrder() turn the drags on from the page as first rendered, and a table asking for neither has none" in {
+    // The rest of what resizableColumns and reorderableColumns keep is the contract's (rule A, below).
+    "resizableColumns and reorderableColumns turn the drags on from the page as first rendered, and a table asking for neither has none" in {
         def movers(t: UI)(using Frame) = elementsWithClass(t, "p-datatable-reorderable-column")
         for
-            handles <- resizers(threeColumns.columnWidths().render)
-            headers <- movers(threeColumns.columnOrder().render)
+            handles <- resizers(threeColumns.resizableColumns(true).render)
+            headers <- movers(threeColumns.reorderableColumns(true).render)
             noWidth <- resizers(threeColumns.render)
             noOrder <- movers(threeColumns.render)
         yield
@@ -3935,17 +3935,14 @@ class DataTableTest extends ReactiveValueContract:
         end for
     }
 
-    "the last call wins between a ref and the table's own" in {
+    "a switch and a binding do not exclude each other: on over a binding, the binding is what holds the widths" in {
         for
-            held  <- Signal.initRef(Map(List("Name") -> 120.0))
-            card  <- elementsWithClass(threeColumns.columnWidths(held.readOnly).columnWidths().render, "p-uic-key-error")
-            bound <- elementsWithClass(threeColumns.columnWidths().columnWidths(held.readOnly).render, "p-uic-key-error")
+            held <- Signal.initRef(Map(List("Name") -> 120.0))
+            on   <- elementsWithClass(threeColumns.resizableColumns(true).columnWidths(held.readOnly).render, UicTest.cardClass)
+            back <- elementsWithClass(threeColumns.columnWidths(held.readOnly).resizableColumns(true).render, UicTest.cardClass)
         yield
-            assert(card.isEmpty, s"the table's own replaces the one-way binding: ${card.map(textOf)}")
-            assert(
-                bound.map(textOf).mkString.contains("onColumnWidthsChange"),
-                s"the binding replaces the table's own: ${bound.map(textOf)}"
-            )
+            assert(on.map(textOf).mkString.contains("onColumnWidthsChange"), s"a binding nobody hears: ${on.map(textOf)}")
+            assert(back.map(textOf).mkString.contains("onColumnWidthsChange"), s"in either order: ${back.map(textOf)}")
         end for
     }
 
@@ -3969,7 +3966,7 @@ class DataTableTest extends ReactiveValueContract:
     }
 
     "the page as first rendered draws a cell the table opens itself as the editable one it will be" in {
-        for cells <- cellsIn(editableBare.editingCell().render)
+        for cells <- cellsIn(editableBare.cellEditing(true).render)
         yield assert(
             cells.nonEmpty && cells.forall(_.attrs.cssClasses.contains("p-editable-column")),
             s"an unbound editing cell is the reader's: ${cells.map(_.attrs.cssClasses)}"
@@ -4239,7 +4236,7 @@ class DataTableTest extends ReactiveValueContract:
     // grows the one column it grabbed from the width the page measures it at.
     holds(new SlotCase[uic.DataTable[Item], Map[List[String], Double]](
         name = "columnWidths",
-        bare = Present(widths.columnWidths()),
+        bare = Present(widths.resizableColumns(true)),
         bind = widths.columnWidths(_),
         hear = (t, f) => t.onColumnWidthsChange(f),
         event = "onColumnWidthsChange",
@@ -4276,7 +4273,7 @@ class DataTableTest extends ReactiveValueContract:
     // a hundred pixels wide, so letting go at 190 drops the first column in front of the third.
     holds(new SlotCase[uic.DataTable[Item], List[List[String]]](
         name = "columnOrder",
-        bare = Present(ordered.columnOrder()),
+        bare = Present(ordered.reorderableColumns(true)),
         bind = ordered.columnOrder(_),
         hear = (t, f) => t.onColumnOrderChange(f),
         event = "onColumnOrderChange",
@@ -4412,7 +4409,7 @@ class DataTableTest extends ReactiveValueContract:
     // click picks.
     holds(new SlotCase[uic.DataTable[Item], Set[CellPath[Item]]](
         name = "selectedCells",
-        bare = Present(cellPicking.selectedCells()),
+        bare = Present(cellPicking.cellSelection(true)),
         bind = cellPicking.selectedCells(_),
         hear = (t, f) => t.onSelectedCellsChange(f),
         event = "onSelectedCellsChange",
@@ -4464,10 +4461,10 @@ class DataTableTest extends ReactiveValueContract:
         shows = expansionTexts(_).map(ts => items.filter(i => ts.contains(s"more ${i.name}")).toSet)
     ))
 
-    // A group's toggle is a button too, and expandedGroups() is what turns the collapsible groups on over the table's own.
+    // A group's toggle is a button too, and collapsibleGroups is what turns the collapsible groups on over the table's own.
     holds(new SlotCase[uic.DataTable[Item], Set[GroupPath]](
         name = "expandedGroups",
-        bare = Present(grouped.expandedGroups()),
+        bare = Present(grouped.collapsibleGroups(true)),
         bind = grouped.expandedGroups(_),
         hear = (t, f) => t.onExpandedGroupsChange(f),
         event = "onExpandedGroupsChange",
@@ -4487,7 +4484,7 @@ class DataTableTest extends ReactiveValueContract:
     // wires them: the page as first rendered has nothing for a click to write into.
     holds(new SlotCase[uic.DataTable[Item], Set[Item]](
         name = "editingRows",
-        bare = Present(editableBare.editingRows()),
+        bare = Present(editableBare.rowEditing(true)),
         bind = editableBare.editingRows(_),
         hear = (t, f) => t.onEditingRowsChange(f),
         event = "onEditingRowsChange",
@@ -4509,7 +4506,7 @@ class DataTableTest extends ReactiveValueContract:
     // A cell that opens is marked p-editable-column and takes the click; a fixed editing cell is one no cell opens.
     holds(new SlotCase[uic.DataTable[Item], Maybe[CellPath[Item]]](
         name = "editingCell",
-        bare = Present(editableBare.editingCell()),
+        bare = Present(editableBare.cellEditing(true)),
         bind = editableBare.editingCell(_),
         hear = (t, f) => t.onEditingCellChange(f),
         event = "onEditingCellChange",
@@ -4535,7 +4532,7 @@ class DataTableTest extends ReactiveValueContract:
 
     private def committing(using Frame) =
         uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))
-            .editingCell()
+            .cellEditing(true)
 
     private val renamed = Seq(items(0).copy(name = "Ada"), items(1))
 
@@ -4605,5 +4602,349 @@ class DataTableTest extends ReactiveValueContract:
             "t-rw2" -> UI.Rect(0, 80, 200, 40, 1000, 800)
         )
     ))
+
+    // ---- the switches ----
+
+    private def movers(t: UI)(using Frame) = elementsWithClass(t, "p-datatable-reorderable-column")
+
+    private val widthsHeld = Map(List("Name") -> 150.0)
+    private val orderHeld  = List(List("Price"), List("Name"), List("Id"))
+
+    /** Runs `ui` under the engine with `sw` at false and answers with what it published after the switch went on, and off, and
+      * on: a flip builds the table again in the one region that reads it.
+      */
+    private def flipped(ui: UI, sw: SignalRef[Boolean], until: UI => Boolean < Sync, act: UI => Any < Async = _ => Kyo.unit)(using
+        Frame,
+        kyo.test.AssertScope
+    ): Maybe[UI] < Async =
+        publishedAfterReady(ui, _ => true, until = until)(act, _ => setSettled(sw, false), _ => sw.set(true))
+
+    "resizableColumns" - {
+        "unset with a binding is on" in {
+            resizers(threeColumns.columnWidths(widthsHeld).onColumnWidthsChange(_ => ()).render).map(hs => assert(hs.size == 2))
+        }
+        "false over a binding keeps the layout and drops the handles" in {
+            val ui = threeColumns.columnWidths(widthsHeld).onColumnWidthsChange(_ => ()).resizableColumns(false).render
+            for
+                hs    <- resizers(ui)
+                table <- elementWithClass(ui, "p-uic-table-fixed")
+                cards <- elementsWithClass(ui, UicTest.cardClass)
+            yield
+                assert(hs.isEmpty, "no handle")
+                assert(table.attrs.cssClasses.contains("p-uic-table-fixed"), "the widths still lay the table out")
+                assert(cards.isEmpty, s"nothing to say: ${cards.map(textOf)}")
+            end for
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(widthsHeld).map(held =>
+                elementsWithClass(threeColumns.columnWidths(held.readOnly).resizableColumns(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the table's own" in {
+            resizers(threeColumns.resizableColumns(true).render).map(hs => assert(hs.size == 2))
+        }
+        "true over a binding is the binding" in {
+            Signal.initRef(widthsHeld).map(held =>
+                readyTree(threeColumns.id("t").columnWidths(held).resizableColumns(true).render)(resizers(_).map(_.nonEmpty))
+                    .map(t => resizers(t).map(hs => assert(hs.size == 2)))
+            )
+        }
+        "a signal switch draws the handles while on, and none while off" in {
+            for
+                sw  <- Signal.initRef(true)
+                on  <- resizers(threeColumns.resizableColumns(sw).render)
+                _   <- sw.set(false)
+                off <- resizers(threeColumns.resizableColumns(sw).render)
+            yield
+                assert(on.size == 2)
+                assert(off.isEmpty)
+            end for
+        }
+        "a signal switch going off and on loses nothing: the widths the reader dragged come back" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- UicTest.layout.let(Map(
+                    "t-h0" -> UI.Rect(0, 0, 220, 30, 1000, 800),
+                    "t-h1" -> UI.Rect(220, 0, 120, 30, 1000, 800),
+                    "t-h2" -> UI.Rect(340, 0, 60, 30, 1000, 800)
+                ))(flipped(
+                    widths.resizableColumns(sw).render,
+                    sw,
+                    until = t => firstColWidth(t).map(_.contains(270.0.px)),
+                    act = t => resizers(t).map(hs => drag(hs.head, 0, 50))
+                ))
+            yield assert(shown.nonEmpty, "the width the reader dragged did not come back with the switch")
+        }
+    }
+
+    "reorderableColumns" - {
+        "unset with a binding is on" in {
+            movers(threeColumns.columnOrder(Nil).onColumnOrderChange(_ => ()).render).map(ms => assert(ms.size == 3))
+        }
+        "false over a binding keeps the order and drops the drag" in {
+            val ui = threeColumns.columnOrder(orderHeld).onColumnOrderChange(_ => ()).reorderableColumns(false).render
+            for
+                ms <- movers(ui)
+                ts <- titles(ui)
+            yield
+                assert(ms.isEmpty, "no drag")
+                assert(ts.take(3).toList == List("Price", "Name", "Id"), s"the order still stands: $ts")
+            end for
+        }
+        "true unbound is the table's own" in {
+            movers(threeColumns.reorderableColumns(true).render).map(ms => assert(ms.size == 3))
+        }
+        "true over a binding is the binding" in {
+            Signal.initRef(orderHeld).map(held =>
+                titles(threeColumns.columnOrder(held).reorderableColumns(true).render).map(ts =>
+                    assert(ts.take(3).toList == List("Price", "Name", "Id"), s"$ts")
+                )
+            )
+        }
+        "off over the table's own order the columns stand as authored, and the order comes back with the switch" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- UicTest.layout.let(Map(
+                    "t-h0" -> UI.Rect(0, 0, 100, 30, 1000, 800),
+                    "t-h1" -> UI.Rect(100, 0, 100, 30, 1000, 800),
+                    "t-h2" -> UI.Rect(200, 0, 100, 30, 1000, 800)
+                ))(flipped(
+                    ordered.reorderableColumns(sw).render,
+                    sw,
+                    until = t => titles(t).map(_.take(3).toList == List("Price", "Name", "Id")),
+                    act = t =>
+                        firstHeader(t).map(c =>
+                            (c.attrs.onPointerDown, c.attrs.onPointerMove, c.attrs.onPointerUp) match
+                                case (Present(down), Present(move), Present(up)) =>
+                                    handled(down(pointerAt(10)).andThen(move(pointerAt(190))).andThen(up(pointerAt(190))))
+                                case _ => throw new AssertionError("the header declares no drag")
+                        )
+                ))
+            yield assert(shown.nonEmpty, "the order the reader dropped did not come back with the switch")
+        }
+    }
+
+    "collapsibleGroups" - {
+        "unset with a binding is on" in {
+            toggleButtons(grouped.expandedGroups(Set(GroupPath(List("A")))).onExpandedGroupsChange(_ => ()).render).map(ts =>
+                assert(ts.nonEmpty)
+            )
+        }
+        "false over a binding follows it with no toggle" in {
+            val ui = grouped.expandedGroups(Set.empty[GroupPath]).onExpandedGroupsChange(_ => ()).collapsibleGroups(false).render
+            for
+                ts   <- toggleButtons(ui)
+                rows <- elementsWithClass(ui, "p-datatable-row-group-header")
+            yield
+                assert(ts.isEmpty, "no toggle")
+                assert(rows.nonEmpty, "the group headers stay")
+            end for
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(Set.empty[GroupPath]).map(held =>
+                elementsWithClass(grouped.expandedGroups(held.readOnly).collapsibleGroups(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the table's own" in {
+            toggleButtons(grouped.collapsibleGroups(true).render).map(ts => assert(ts.nonEmpty))
+        }
+        "true over a binding is the binding" in {
+            Signal.initRef(Set(GroupPath(List("A")))).map(held =>
+                toggleButtons(grouped.expandedGroups(held).collapsibleGroups(true).render).map(ts =>
+                    assert(ts.headOption.exists(_.attrs.ariaAttrs.get("expanded").contains("true")))
+                )
+            )
+        }
+        "a signal switch going off and on keeps the groups the reader opened" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- flipped(
+                    grouped.collapsibleGroups(sw).render,
+                    sw,
+                    until = t => toggleButtons(t).map(_.headOption.exists(_.attrs.ariaAttrs.get("expanded").contains("true"))),
+                    act = t => toggleButtons(t).map(ts => click(ts.head))
+                )
+            yield assert(shown.nonEmpty, "the group the reader opened did not stay open across the switch")
+        }
+    }
+
+    "cellSelection" - {
+        "unset with a binding is on" in {
+            cellsIn(cellPicking.selectedCells(Set.empty[CellPath[Item]]).onSelectedCellsChange(_ => ()).render).map(cs =>
+                assert(cs.exists(declaresClick))
+            )
+        }
+        "false over a binding takes no click and shows no pick" in {
+            val ui =
+                cellPicking.selectedCells(Set(CellPath(items(0), List("Name")))).onSelectedCellsChange(_ => ()).cellSelection(false).render
+            for
+                picked <- elementsWithClass(ui, "p-uic-dt-cell-selected")
+                cs     <- cellsIn(ui)
+            yield
+                assert(picked.isEmpty, "off is off")
+                assert(cs.nonEmpty && cs.forall(c => !c.attrs.ariaAttrs.contains("selected")), "no cell says anything about a pick")
+            end for
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(Set.empty[CellPath[Item]]).map(held =>
+                elementsWithClass(cellPicking.selectedCells(held.readOnly).cellSelection(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the table's own" in {
+            readyTree(cellPicking.cellSelection(true).render)(cellsIn(_).map(_.exists(declaresClick))).map(t =>
+                cellsIn(t).map(cs => assert(cs.exists(declaresClick)))
+            )
+        }
+        "a signal switch going off and on keeps the cells the reader picked" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- flipped(
+                    cellPicking.cellSelection(sw).render,
+                    sw,
+                    until = t => elementsWithClass(t, "p-uic-dt-cell-selected").map(_.nonEmpty),
+                    act = t => cellsIn(t).map(cs => click(cs.head))
+                )
+            yield assert(shown.nonEmpty, "the cell the reader picked did not come back with the switch")
+        }
+    }
+
+    "rowEditing" - {
+        "unset with a binding is on" in {
+            elementsWithClass(editableBare.editingRows(Set.empty[Item]).onEditingRowsChange(_ => ()).render, "p-datatable-row-editor-init")
+                .map(es => assert(es.nonEmpty))
+        }
+        "false over a binding opens no row and draws no editor column" in {
+            val ui = editableBare.editingRows(Set(items(0))).onEditingRowsChange(_ => ()).rowEditing(false).render
+            for
+                es   <- elementsWithClass(ui, "p-datatable-row-editor-init")
+                open <- elementsWithClass(ui, "p-datatable-editing-row")
+            yield
+                assert(es.isEmpty, "no editor column")
+                assert(open.isEmpty, "off is off")
+            end for
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(Set.empty[Item]).map(held =>
+                elementsWithClass(editableBare.editingRows(held.readOnly).rowEditing(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the table's own" in {
+            elementsWithClass(editableBare.rowEditing(true).render, "p-datatable-row-editor-init").map(es => assert(es.nonEmpty))
+        }
+        "a signal switch going off and on keeps the row the reader opened" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- flipped(
+                    editableBare.rowEditing(sw).render,
+                    sw,
+                    until = t => elementsWithClass(t, "p-datatable-editing-row").map(_.nonEmpty),
+                    act = t => elementsWithClass(t, "p-datatable-row-editor-init").map(es => click(es.head))
+                )
+            yield assert(shown.nonEmpty, "the row the reader opened did not come back with the switch")
+        }
+    }
+
+    "cellEditing" - {
+        "unset with a binding is on" in {
+            cellsIn(editableBare.editingCell(Absent: Maybe[CellPath[Item]]).onEditingCellChange(_ => ()).render).map(cs =>
+                assert(cs.exists(_.attrs.cssClasses.contains("p-editable-column")))
+            )
+        }
+        "false over a binding opens no cell" in {
+            cellsIn(editableBare.editingCell(Present(CellPath(
+                items(0),
+                List("Name")
+            ))).onEditingCellChange(_ => ()).cellEditing(false).render).map(cs =>
+                assert(cs.nonEmpty && cs.forall(c =>
+                    !c.attrs.cssClasses.contains("p-editable-column") && !c.attrs.cssClasses.contains("p-cell-editing")
+                ))
+            )
+        }
+        "false over a signal nobody hears leaves no card" in {
+            Signal.initRef(Maybe.empty[CellPath[Item]]).map(held =>
+                elementsWithClass(editableBare.editingCell(held.readOnly).cellEditing(false).render, UicTest.cardClass)
+                    .map(cards => assert(cards.isEmpty, s"${cards.map(textOf)}"))
+            )
+        }
+        "true unbound is the table's own" in {
+            cellsIn(editableBare.cellEditing(true).render).map(cs => assert(cs.exists(_.attrs.cssClasses.contains("p-editable-column"))))
+        }
+        "a signal switch going off and on keeps the cell the reader opened" in {
+            for
+                sw    <- Signal.initRef(true)
+                shown <- flipped(
+                    editableBare.cellEditing(sw).render,
+                    sw,
+                    until = t => elementsWithClass(t, "p-cell-editing").map(_.nonEmpty),
+                    act = t =>
+                        elementsWithClass(t, "p-editable-column").map(cs =>
+                            cs.find(declaresClick).map(click).getOrElse(throw new AssertionError("no cell opens yet"))
+                        )
+                )
+            yield assert(shown.nonEmpty, "the cell the reader opened did not come back with the switch")
+        }
+    }
+
+    "a signal switch takes the card of a binding nobody hears with it, and brings it back" - {
+        def cases(sw: Signal[Boolean])(using Frame): Seq[(String, String, UI)] =
+            Seq(
+                (
+                    "resizableColumns",
+                    "onColumnWidthsChange",
+                    threeColumns.columnWidths(Signal.initConst(widthsHeld)).resizableColumns(sw).render
+                ),
+                (
+                    "reorderableColumns",
+                    "onColumnOrderChange",
+                    threeColumns.columnOrder(Signal.initConst(orderHeld)).reorderableColumns(sw).render
+                ),
+                (
+                    "collapsibleGroups",
+                    "onExpandedGroupsChange",
+                    grouped.expandedGroups(Signal.initConst(Set.empty[GroupPath])).collapsibleGroups(sw).render
+                ),
+                (
+                    "cellSelection",
+                    "onSelectedCellsChange",
+                    cellPicking.selectedCells(Signal.initConst(Set.empty[CellPath[Item]])).cellSelection(sw).render
+                ),
+                ("rowEditing", "onEditingRowsChange", editableBare.editingRows(Signal.initConst(Set.empty[Item])).rowEditing(sw).render),
+                (
+                    "cellEditing",
+                    "onEditingCellChange",
+                    editableBare.editingCell(Signal.initConst(Maybe.empty[CellPath[Item]])).cellEditing(sw).render
+                )
+            )
+        for (name, index) <- List(
+                "resizableColumns",
+                "reorderableColumns",
+                "collapsibleGroups",
+                "cellSelection",
+                "rowEditing",
+                "cellEditing"
+            ).zipWithIndex
+        do
+            name in {
+                for
+                    sw <- Signal.initRef(true)
+                    (_, event, ui) = cases(sw)(index)
+                    said           = (t: UI) => elementsWithClass(t, UicTest.cardClass).map(_.count(textOf(_).contains(event)))
+                    on   <- said(ui)
+                    _    <- sw.set(false)
+                    off  <- said(ui)
+                    _    <- sw.set(true)
+                    back <- said(ui)
+                yield
+                    assert(on == 1, s"on: $on")
+                    assert(off == 0, s"a stale card: $off")
+                    assert(back == 1, s"back: $back")
+                end for
+            }
+        end for
+    }
 
 end DataTableTest

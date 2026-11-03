@@ -170,6 +170,14 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def readyTree(ui: UI)(ready: UI => Boolean < Sync)(using Frame, kyo.test.AssertScope): UI < Async =
         drive(ui, ready, Nil, Nil)(d => Sync.defer(d.published).map(seen => if seen.isEmpty then ui else UI.fragment(seen*)))
 
+    /** Sets `ref` and waits until everything that observes it has handled the value and parked again, which is the barrier a
+      * test needs between two writes that must both be seen: a value the observers have not reached yet is overtaken by the
+      * next, and only the last is drawn. `settles` only turns a wait that never ends into an answer; it is not what passes a
+      * test.
+      */
+    private[uic] def setSettled[A](ref: Signal.SignalRef[A], a: A)(using Frame): Unit < Async =
+        ref.waiters.map(before => ref.set(a).andThen(settles(ref.waiters.map(_ >= before), 5.seconds)).unit)
+
     /** The first HTML a transport renders for `ui`, which is what a static page carries. */
     private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
         UI.runRender(ui).take(1).run.map(_.mkString)

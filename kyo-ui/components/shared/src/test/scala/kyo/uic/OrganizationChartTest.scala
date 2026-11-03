@@ -261,7 +261,7 @@ class OrganizationChartTest extends ReactiveValueContract:
                     until = t => toggles(t).map(_.headOption.exists(_.attrs.ariaAttrs.get("expanded").contains("false")))
                 )(
                     t => toggles(t).map(ts => click(ts.find(declaresClick).get)),
-                    _ => sw.set(false),
+                    _ => setSettled(sw, false),
                     _ => sw.set(true)
                 )
             yield assert(shown.nonEmpty, "what the reader collapsed did not come back with the switch")
