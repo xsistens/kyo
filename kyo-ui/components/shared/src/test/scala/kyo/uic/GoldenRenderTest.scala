@@ -2679,7 +2679,7 @@ class GoldenRenderTest extends UicTest:
                 "the grip column is sized like the other leading ones, or it takes an equal share"
             )
             assert(occurrences(grips, "<col ") == 2, "the grip column gets a col of its own")
-            assert(occurrences(grips, "<th") == 2, "and a header cell, or the body would be one column wider")
+            assert(occurrences(grips, "<th class") == 2, "and a header cell, or the body would be one column wider")
         end for
     }
 

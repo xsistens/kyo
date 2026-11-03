@@ -3175,13 +3175,19 @@ final case class DataTable[A] private (
             if sortSlot.isEmpty then Set.empty
             else leafPaths.collect { case (p, c) if sortsHere(c, p, flags) => p }.toSet
 
-        // One tr per header level. The leading expander and checkbox cells belong to the
+        // One tr per header level. The leading grip, expander and checkbox cells belong to the
         // top row and reach down through every other one, so they line up with a column
         // whatever depth the header has.
         val headRows: List[UI] =
             val matrix            = ColumnTree.spans(cols)
             val depth             = math.max(matrix.length, 1)
             val leading: List[UI] =
+                val handleTh: List[Ast.Th] =
+                    if !handleColumn then Nil
+                    else
+                        var cell = th.cssClass("p-datatable-header-cell")
+                        if depth > 1 then cell = cell.rowspan(depth)
+                        List(cell)
                 val expanderTh: List[Ast.Th] =
                     if !expanderColumn then Nil
                     else
@@ -3195,7 +3201,7 @@ final case class DataTable[A] private (
                         var cell = th.cssClass("p-datatable-header-cell")
                         if depth > 1 then cell = cell.rowspan(depth)
                         List(cell(part(_.selectAll)))
-                (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freezeLive(cell, head.widths, _.leadAt(i)))
+                (handleTh ++ expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freezeLive(cell, head.widths, _.leadAt(i)))
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
             // The editor-button column has no header of its own, but it still needs a cell,
