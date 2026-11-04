@@ -28,8 +28,10 @@ final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, Has
 
     type Self = Icon
 
-    def size(px: Int): Icon                                        = new Icon(s.copy(sizePx = px))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Icon = new Icon(s.copy(accNameV = v))
+    def size(px: Int): Icon = new Icon(s.copy(sizePx = px))
+
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Icon(s.copy(accessV = v))
 
     /** Shows the glyph name as a native tooltip (the `title` attribute). */
     def showTooltip(v: Boolean): Icon = new Icon(s.copy(showTooltipFlag = v))
@@ -67,7 +69,7 @@ final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, Has
         m match
             case IconMode.Image =>
                 val img = el.role("img")
-                accNameV match
+                accessV.nameV match
                     case Present(TextValue.Const(n)) => img.aria("label", n)
                     case Present(TextValue.Dyn(s))   => img.aria("label", s)
                     case Absent                      => img
@@ -76,7 +78,7 @@ final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, Has
                 el.role("presentation").aria("hidden", "true")
             case IconMode.Interactive =>
                 val btn      = el.role("button").tabIndex(0)
-                val withName = accNameV match
+                val withName = accessV.nameV match
                     case Present(TextValue.Const(n)) => btn.aria("label", n)
                     case Present(TextValue.Dyn(s))   => btn.aria("label", s)
                     case Absent                      => btn
@@ -86,7 +88,7 @@ final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, Has
       * `accessibleName` is set, interactive when an `onClick` is set.
       */
     private def implicitMode(el: Ast.SpanElement)(using Frame): Ast.SpanElement =
-        val withA11y = accNameV match
+        val withA11y = accessV.nameV match
             case Present(TextValue.Const(n)) => el.role("img").aria("label", n)
             case Present(TextValue.Dyn(s))   => el.role("img").aria("label", s)
             case Absent                      => el.aria("hidden", "true")
@@ -112,7 +114,7 @@ object Icon:
     final private[uic] case class State(
         glyph: IconGlyph,
         sizePx: Int = 16,
-        accNameV: Maybe[TextValue] = Absent,
+        accessV: Accessibility = Accessibility.none,
         showTooltipFlag: Boolean = false,
         modeV: Maybe[IconMode] = Absent,
         onClickEff: Maybe[UI.Action] = Absent

@@ -19,11 +19,8 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
 
     type Self = ToggleSwitch
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): ToggleSwitch = new ToggleSwitch(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleSwitch(s.copy(accessV = v))
 
     /** The checked state. A `SignalRef` binds TWO-WAY: a toggle writes it, and its changes update the switch. Any other
       * signal, or a constant, binds ONE-WAY: the switch shows it, and a toggle writes nothing and only reports through
@@ -59,9 +56,6 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
       */
     def handleIcon(checked: IconGlyph, unchecked: IconGlyph): ToggleSwitch =
         new ToggleSwitch(s.copy(handleIconsV = Present((checked, unchecked))))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleSwitch = new ToggleSwitch(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleSwitch = new ToggleSwitch(s.copy(accNameRefV = v))
 
     def onChange(f: Boolean => UI.Action)(using Frame): ToggleSwitch = new ToggleSwitch(s.copy(checkedSlot = checkedSlot.hear(f)))
 
@@ -107,16 +101,16 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
             .role("switch")
             .checked(native)
             .aria("checked", isChecked.toString)
-        box = idV.map(v => box.id(v)).getOrElse(box)
+        box = accessV.idV.map(v => box.id(v)).getOrElse(box)
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
-        box = accNameV match
+        box = accessV.nameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
-        box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = accessV.nameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
         // readonly keeps the switch FOCUSABLE and refuses to change: the client declines the
         // browser's own toggle (`preventActivation`) and the handler is not wired. Disabling the
         // native input instead took it out of the tab order, which made readonly and disabled the
@@ -163,10 +157,8 @@ object ToggleSwitch:
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         tooltipV: Maybe[TextValue] = Absent,
         handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
-        onBlurF: Maybe[Boolean => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Boolean => UI.Action] = Absent
     )
 
     private val checkedName = Slot.Name("ToggleSwitch", "checked", "a change", "onChange")

@@ -35,11 +35,8 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
     private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => UI.Action): ToggleButton =
         new ToggleButton(s.copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey))))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): ToggleButton = new ToggleButton(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleButton(s.copy(accessV = v))
 
     /** Package-internal content slot: SelectButton's `itemTemplate` replaces the
       * icon+label pair inside `.p-togglebutton-content` with arbitrary UI (the
@@ -87,10 +84,8 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
       */
     def readonly(v: Boolean): ToggleButton = new ToggleButton(s.copy(readonlyFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                    = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self            = new ToggleButton(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleButton = new ToggleButton(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleButton = new ToggleButton(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ToggleButton(s.copy(validityV = v))
 
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
     def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(s.copy(checkedSlot = checkedSlot.hear(f)))
@@ -126,7 +121,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         if isChecked then el = el.cssClass("p-togglebutton-checked")
         el = validity.mark(el)
         sizeV match
@@ -144,12 +139,12 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
                 if !disabledFlag && !readonlyFlag then el = el.onKeyDown(r.onKey)
             case Absent => el = el.aria("pressed", isChecked.toString)
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         if disabledFlag then el = el.disabled(true)
         // readonly keeps the normal look and focusability, but never toggles. It says so as
         // `aria-disabled`, not `aria-readonly`: this is a `role="button"`, and that role has no
@@ -192,10 +187,8 @@ object ToggleButton:
         disabledFlag: Boolean = false,
         readonlyFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,
-        idV: Maybe[String] = Absent,
         contentV: Maybe[UI] = Absent,
         radioV: Maybe[ToggleButton.RadioOption] = Absent
     )

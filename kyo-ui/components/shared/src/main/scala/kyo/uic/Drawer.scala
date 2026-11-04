@@ -119,8 +119,8 @@ final class Drawer private[uic] (private[uic] val s: Drawer.State) extends Node,
       */
     def preventFocusRestore(v: Boolean): Drawer = new Drawer(s.copy(preventFocusRestoreFlag = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Drawer = new Drawer(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Drawer = new Drawer(s.copy(accessibleNameRefV = v))
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Drawer(s.copy(accessV = v))
 
     /** Adds content children. */
     def apply(cs: UI*): Drawer = new Drawer(s.copy(kids = kids ++ cs))
@@ -192,14 +192,14 @@ final class Drawer private[uic] (private[uic] val s: Drawer.State) extends Node,
                 if !preventFocusRestoreFlag then box = box.focusRestore(true)
                 // A text header names the drawer when the caller gave it no name, as in Dialog.
                 val headerName: Maybe[TextValue] =
-                    if accessibleNameRefV.isDefined || headerContent.isDefined then Absent else headerText
-                val name: Maybe[TextValue] = accessibleNameV.orElse(headerName)
+                    if accessV.nameRefV.isDefined || headerContent.isDefined then Absent else headerText
+                val name: Maybe[TextValue] = accessV.nameV.orElse(headerName)
                 name match
                     case Present(TextValue.Const(n)) => box = box.aria("label", n)
                     case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
                     case Absent                      => ()
                 end match
-                accessibleNameRefV.foreach(n => box = box.aria("labelledby", n))
+                accessV.nameRefV.foreach(n => box = box.aria("labelledby", n))
                 if !fixed then
                     box = box.onKeyDown { e =>
                         e.key match
@@ -241,8 +241,7 @@ object Drawer:
         showCloseIconFlag: Boolean = true,
         preventInitialFocusFlag: Boolean = false,
         preventFocusRestoreFlag: Boolean = false,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

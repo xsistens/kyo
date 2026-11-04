@@ -144,16 +144,13 @@ final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends N
     /** Content after the root list (`div.p-megamenu-end`). */
     def end(ui: UI): MegaMenu = new MegaMenu(s.copy(endV = Present(ui)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): MegaMenu = new MegaMenu(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new MegaMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         val stat: UI =
             MegaMenuItemScope.reading(entriesV).render(items =>
-                new MegaMenu(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, idV)
+                new MegaMenu(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
             )
         UI.mounted {
             for
@@ -185,7 +182,7 @@ final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends N
                 // Both follow their root items over the roots shown ([[Anchored]]).
                 val fv = focus.view(f, roots)
                 val sv = subs.view(open, roots)
-                new MegaMenu(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)))
+                new MegaMenu(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
         }
     end wired
 
@@ -206,7 +203,7 @@ final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends N
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: UI.Action =
@@ -378,7 +375,7 @@ final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends N
             .cssClass("p-megamenu")
             .cssClass("p-component")
             .cssClass(s"p-megamenu-${orientationV.token}")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end MegaMenu
@@ -391,7 +388,7 @@ object MegaMenu:
         orientationV: Orientation = Orientation.Horizontal,
         startV: Maybe[UI] = Absent,
         endV: Maybe[UI] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     /** An empty mega menu; add root items via [[MegaMenu.items]]. */

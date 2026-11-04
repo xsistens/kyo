@@ -60,11 +60,8 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
 
     type Self = MultiSelect[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): MultiSelect[A] = new MultiSelect(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new MultiSelect(s.copy(accessV = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a list that changes
       * while the field is shown (read in the field's own region, so the field is not built again around it).
@@ -223,10 +220,8 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
     def fluid(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                      = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new MultiSelect(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelect[A] = new MultiSelect(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new MultiSelect(s.copy(validityV = v))
 
     /** Fired with the FULL set of options now held after every selection change (toggle,
       * select-all, chip remove, clear). A gesture that changes nothing fires nothing.
@@ -323,7 +318,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         UI.mounted {
             for
                 cmds <- UI.commands
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -516,7 +511,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label container: see
         // [[HasElementId]]. The panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
@@ -535,12 +530,12 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox follows the filter header, and follows it for the same
         // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
         // because `aria-activedescendant` is read off the focused element or off nothing at all.
@@ -859,10 +854,8 @@ object MultiSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeF: Maybe[Set[A] => UI.Action] = Absent,
-        idV: Maybe[String] = Absent,
         onBlurF: Maybe[Set[A] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         optionSources: List[OptionSource[A]] = Nil

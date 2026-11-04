@@ -48,9 +48,8 @@ final class Link private[uic] (private[uic] val s: Link.State) extends Node, Has
     /** ARIA role override: `Button` renders `role="button"` on the anchor. */
     def accessibleRole(v: LinkAccessibleRole): Link = new Link(s.copy(accessibleRoleV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Link = new Link(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Link = new Link(s.copy(accessibleNameRefV = v))
-
+    private[uic] def accessibility: Accessibility                         = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self            = new Link(s.copy(accessV = v))
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = new Link(s.copy(accessibleDescriptionV = v))
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
@@ -74,12 +73,12 @@ final class Link private[uic] (private[uic] val s: Link.State) extends Node, Has
     private def anchor(using Frame): Ast.Anchor =
         var el = a.cssClass("p-uic-link")
         if wrapFlag then el = el.cssClass("p-uic-link-wrap")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
         accessibleDescriptionV match
             case Present(TextValue.Const(d)) => el = el.aria("description", d)
             case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
@@ -133,8 +132,7 @@ object Link:
         targetV: Maybe[String] = Absent,
         tooltipV: Maybe[TextValue] = Absent,
         accessibleRoleV: LinkAccessibleRole = LinkAccessibleRole.Link,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         accessibleDescriptionV: Maybe[TextValue] = Absent,
         onClickEff: Maybe[UI.Action] = Absent,
         kids: List[UI] = Nil

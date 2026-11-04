@@ -123,15 +123,11 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
     /** Spans the full container width (`.p-inputnumber-fluid`). */
     def fluid(v: Boolean): InputNumber = new InputNumber(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                   = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self           = new InputNumber(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputNumber = new InputNumber(s.copy(accNameV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputNumber(s.copy(validityV = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputNumber = new InputNumber(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(s.copy(accessV = v))
 
     /** Restricts entry to whole numbers: the client keystroke filter (`inputFilter("int")`)
       * rejects the decimal separator before it reaches the field, so the bound value stays
@@ -229,7 +225,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
             .cssClass("p-inputtext")
             .cssClass("p-component")
             .filledClass("p-inputwrapper-filled", ".p-inputnumber")
-        idV.foreach(v => in = in.id(v))
+        accessV.idV.foreach(v => in = in.id(v))
         if focusAutoFlag then in = in.focusAuto(true)
         sizeV match
             case Size.Small  => in = in.cssClass("p-inputtext-sm")
@@ -266,7 +262,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
         if disabledFlag.constTrue then in = in.disabled(true)
         if readonlyFlag then in = in.readOnly(true)
         nameV.foreach(v => in = in.jsProp("name", v))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => in = in.aria("label", v)
             case Present(TextValue.Dyn(s))   => in = in.aria("label", s)
             case Absent                      => ()
@@ -372,8 +368,7 @@ object InputNumber:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[Double => UI.Action] = Absent,
         integerFlag: Boolean = false,
         focusAutoFlag: Boolean = false

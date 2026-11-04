@@ -55,17 +55,16 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
       */
     def end(ui: UI): Menubar = new Menubar(s.copy(endV = Present(ui)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Menubar = new Menubar(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         // The open submenus and the keyboard focus path, allocated by this effectful mount; static projections render the
         // closed anatomy inert.
         val stat: UI =
-            MenuRender.readItems(entriesV).render(items => new Menubar(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, idV))
+            MenuRender.readItems(entriesV).render(items =>
+                new Menubar(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
+            )
         UI.mounted {
             for
                 subs  <- Submenus.init()
@@ -94,7 +93,7 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).render { case ((Rooted(roots, items), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)
-            new Menubar(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)))
+            new Menubar(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
         }
     end wired
 
@@ -104,7 +103,7 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
@@ -137,7 +136,7 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
         val listUI: UI = list(UI.children(rowsUI)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div.cssClass("p-menubar").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end Menubar
@@ -149,7 +148,7 @@ object Menubar:
         entriesV: List[MenuItemLiveEntry] = Nil,
         startV: Maybe[UI] = Absent,
         endV: Maybe[UI] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     /** An empty menubar; add root items via [[Menubar.items]]. */

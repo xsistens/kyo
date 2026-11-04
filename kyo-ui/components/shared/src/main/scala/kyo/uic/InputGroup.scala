@@ -38,18 +38,15 @@ final class InputGroup private[uic] (private[uic] val s: InputGroup.State) exten
 
     type Self = InputGroup
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputGroup = new InputGroup(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputGroup(s.copy(accessV = v))
 
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
     def apply(cs: UI*): InputGroup = new InputGroup(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-inputgroup").cssClass("p-component")
-        el = idV.map(v => el.id(v)).getOrElse(el)
+        el = accessV.idV.map(v => el.id(v)).getOrElse(el)
         el(UI.children(kids)*)
     end render
 end InputGroup
@@ -57,7 +54,7 @@ end InputGroup
 object InputGroup:
     final private[uic] case class State(
         kids: List[UI] = Nil,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     def apply(): InputGroup = new InputGroup(State())

@@ -23,16 +23,16 @@ final class ProgressSpinner private[uic] (private[uic] val s: ProgressSpinner.St
     /** Size preset: `Small` (2rem) / `Normal` (Prime's 100px default) / `Large` (8rem). */
     def size(v: Size): ProgressSpinner = new ProgressSpinner(s.copy(sizeV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressSpinner = new ProgressSpinner(s.copy(accessibleNameV = v))
-
-    private[uic] def render(using Frame): UI =
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressSpinner(s.copy(accessV = v))
+    private[uic] def render(using Frame): UI                   =
         var el = div.cssClass("p-progressspinner").role("progressbar")
         sizeV match
             case Size.Small  => el = el.cssClass("p-uic-progressspinner-sm")
             case Size.Large  => el = el.cssClass("p-uic-progressspinner-lg")
             case Size.Normal => ()
         end match
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
@@ -57,7 +57,7 @@ end ProgressSpinner
 object ProgressSpinner:
     final private[uic] case class State(
         sizeV: Size = Size.Normal,
-        accessibleNameV: Maybe[TextValue] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     def apply(): ProgressSpinner = new ProgressSpinner(State())

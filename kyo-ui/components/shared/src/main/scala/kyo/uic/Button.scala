@@ -104,11 +104,8 @@ final class Button private[uic] (private[uic] val s: Button.State) extends Node,
     /** Icon rendered after the label. */
     def endIcon(glyph: IconGlyph): Button = new Button(s.copy(endIconV = Present(glyph)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Button = new Button(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Button(s.copy(accessV = v))
 
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal).
@@ -148,9 +145,6 @@ final class Button private[uic] (private[uic] val s: Button.State) extends Node,
 
     /** ARIA role override: `Link` renders `role="link"` on the native button. */
     def accessibleRole(v: ButtonAccessibleRole): Button = new Button(s.copy(accessibleRoleV = v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Button = new Button(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Button = new Button(s.copy(accessibleNameRefV = v))
 
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = new Button(s.copy(accessibleDescriptionV = v))
 
@@ -241,7 +235,7 @@ final class Button private[uic] (private[uic] val s: Button.State) extends Node,
                 Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
             case _ => ()
         end match
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         el = withExtraArias(el)
         el = el.jsProp("type", buttonTypeV.token.toLowerCase)
         if accessibleRoleV == ButtonAccessibleRole.Link then el = el.role("link")
@@ -249,12 +243,12 @@ final class Button private[uic] (private[uic] val s: Button.State) extends Node,
         tabIndexV.foreach(t => el = el.tabIndex(t))
         if focusSeedV then el = el.focusAuto(true).focusRestore(true)
         onKeyDownF.foreach(f => el = el.onKeyDown(f))
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
         accessibleDescriptionV match
             case Present(TextValue.Const(d)) => el = el.aria("description", d)
             case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
@@ -291,14 +285,14 @@ final class Button private[uic] (private[uic] val s: Button.State) extends Node,
                 Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
             case _ => ()
         end match
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         el = withExtraArias(el)
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
         accessibleDescriptionV match
             case Present(TextValue.Const(d)) => el = el.aria("description", d)
             case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
@@ -351,15 +345,13 @@ object Button:
         fluidFlag: Boolean = false,
         icon: Maybe[IconGlyph] = Absent,
         endIconV: Maybe[IconGlyph] = Absent,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         hrefV: Maybe[String] = Absent,
         disabledV: Maybe[BoolValue] = Absent,
         ariaDisabledV: Maybe[BoolValue] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         buttonTypeV: ButtonType = ButtonType.Button,
         accessibleRoleV: ButtonAccessibleRole = ButtonAccessibleRole.Button,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
         accessibleDescriptionV: Maybe[TextValue] = Absent,
         tooltipV: Maybe[TextValue] = Absent,
         formV: Maybe[String] = Absent,

@@ -39,11 +39,8 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
 
     type Self = Rating
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Rating = new Rating(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Rating(s.copy(accessV = v))
 
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
       * constant nobody hears is fixed, drawn read-only; one [[onChange]] hears is reported and the
@@ -101,8 +98,6 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
 
     /** Glyph for the options beyond the value (Prime default: the outline star). */
     def offIcon(glyph: IconGlyph): Rating = new Rating(s.copy(offIconV = Present(glyph)))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Rating = new Rating(s.copy(accNameV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Rating(s.copy(validityV = v))
@@ -192,7 +187,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
             nameV match
                 case Present(n) => hidden = hidden.name(n)
                 case Absent     => if i != tabStop then hidden = hidden.tabIndex(-1)
-            if i == tabStop then idV.foreach(v => hidden = hidden.id(v))
+            if i == tabStop then accessV.idV.foreach(v => hidden = hidden.id(v))
             // readonly keeps the stars FOCUSABLE and refuses to change: only `disabled` takes them
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
             // state of its own; the group below carries it.
@@ -221,7 +216,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
         if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
         el = validity.mark(el)
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
@@ -249,9 +244,8 @@ object Rating:
         onIconV: Maybe[IconGlyph] = Absent,
         offIconV: Maybe[IconGlyph] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        onBlurDoubleF: Maybe[Double => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurDoubleF: Maybe[Double => UI.Action] = Absent
     )
 
     def apply(): Rating = new Rating(State())
