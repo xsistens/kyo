@@ -23,31 +23,26 @@ end IconMode
   * it, or an `onClick` to make it interactive (button role + focusability).
   * An explicit [[mode]] overrides that implicit behaviour.
   */
-final case class Icon private (
-    glyph: IconGlyph,
-    sizePx: Int = 16,
-    accNameV: Maybe[TextValue] = Absent,
-    showTooltipFlag: Boolean = false,
-    modeV: Maybe[IconMode] = Absent,
-    onClickEff: Maybe[UI.Action] = Absent
-) extends Node, HasAccessibleName:
+final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, HasAccessibleName, Stated:
+    import s.*
+
     type Self = Icon
 
-    def size(px: Int): Icon                                        = copy(sizePx = px)
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Icon = copy(accNameV = v)
+    def size(px: Int): Icon                                        = new Icon(s.copy(sizePx = px))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Icon = new Icon(s.copy(accNameV = v))
 
     /** Shows the glyph name as a native tooltip (the `title` attribute). */
-    def showTooltip(v: Boolean): Icon = copy(showTooltipFlag = v)
+    def showTooltip(v: Boolean): Icon = new Icon(s.copy(showTooltipFlag = v))
 
     /** Explicit mode override. When unset, the mode is implicit: `Decorative` by
       * default, `Interactive` when an `onClick` is set (and `Image` semantics when
       * only an `accessibleName` is set).
       */
-    def mode(v: IconMode): Icon = copy(modeV = Present(v))
+    def mode(v: IconMode): Icon = new Icon(s.copy(modeV = Present(v)))
 
     /** Runs `action` when the icon is activated; makes the icon focusable with a button role. */
     def onClick(action: => UI.Action)(using Frame): Icon =
-        copy(onClickEff = Present(Callback(action)))
+        new Icon(s.copy(onClickEff = Present(Callback(action))))
 
     private[uic] def render(using Frame): UI =
         val svgIcon = Svg.svg
@@ -114,4 +109,14 @@ final case class Icon private (
 end Icon
 
 object Icon:
-    def apply(glyph: IconGlyph): Icon = new Icon(glyph)
+    final private[uic] case class State(
+        glyph: IconGlyph,
+        sizePx: Int = 16,
+        accNameV: Maybe[TextValue] = Absent,
+        showTooltipFlag: Boolean = false,
+        modeV: Maybe[IconMode] = Absent,
+        onClickEff: Maybe[UI.Action] = Absent
+    )
+
+    def apply(glyph: IconGlyph): Icon = new Icon(State(glyph))
+end Icon

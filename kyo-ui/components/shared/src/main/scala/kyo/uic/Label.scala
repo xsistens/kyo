@@ -17,22 +17,19 @@ import kyo.UI.*
   *     they can stamp classes on it: [[FloatLabel]], [[IftaLabel]], [[IconField]];
   *   - a container of already-built children in visual order: [[InputGroup]].
   */
-final case class Label private (
-    text: TextValue,
-    forIdV: Maybe[String] = Absent,
-    requiredFlag: Boolean = false,
-    showColon: Boolean = false
-) extends Node:
+final class Label private[uic] (private[uic] val s: Label.State) extends Node, Stated:
+    import s.*
+
     type Self = Label
 
-    def forId(id: String): Label     = copy(forIdV = Present(id))
-    def required(v: Boolean): Label  = copy(requiredFlag = v)
-    def showColon(v: Boolean): Label = copy(showColon = v)
+    def forId(id: String): Label     = new Label(s.copy(forIdV = Present(id)))
+    def required(v: Boolean): Label  = new Label(s.copy(requiredFlag = v))
+    def showColon(v: Boolean): Label = new Label(s.copy(showColon = v))
 
     private[uic] def render(using Frame): UI =
         val base = label.cssClass("p-uic-label")
         val b1   = if requiredFlag then base.cssClass("p-uic-label-required") else base
-        val b2   = if showColon then b1.cssClass("p-uic-label-colon") else b1
+        val b2   = if s.showColon then b1.cssClass("p-uic-label-colon") else b1
         val b3   = forIdV.map(b2.forId).getOrElse(b2)
         text match
             case TextValue.Const(t) => b3(t)
@@ -41,8 +38,15 @@ final case class Label private (
 end Label
 
 object Label:
+    final private[uic] case class State(
+        text: TextValue,
+        forIdV: Maybe[String] = Absent,
+        requiredFlag: Boolean = false,
+        showColon: Boolean = false
+    )
+
     /** A label showing `text`. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven
       * `I18n.t` leaf).
       */
-    def apply(v: String | Signal[String]): Label = new Label(ReactiveValue(v))
+    def apply(v: String | Signal[String]): Label = new Label(State(ReactiveValue(v)))
 end Label

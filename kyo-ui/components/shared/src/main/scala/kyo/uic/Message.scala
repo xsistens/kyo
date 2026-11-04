@@ -25,21 +25,13 @@ enum MessageVariant derives CanEqual:
   * `onClose`: `onClose` is reserved across this module for the surfaces that own
   * a visibility ref and close themselves ([[Dialog]], [[Drawer]], [[Toast]]).
   */
-final case class Message private (
-    severityV: SeverityValue = SeverityValue.Const(Severity.Info),
-    variantV: Maybe[MessageVariant] = Absent,
-    sizeV: Size = Size.Normal,
-    iconV: Maybe[IconGlyph] = Absent,
-    hideIconFlag: Boolean = false,
-    closableFlag: Boolean = false,
-    onDismissedEff: Maybe[UI.Action] = Absent,
-    idV: Maybe[String] = Absent,
-    kids: List[UI] = Nil
-) extends Node, HasElementId:
+final class Message private[uic] (private[uic] val s: Message.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = Message
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Message = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Message = new Message(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -49,24 +41,24 @@ final case class Message private (
       * back to the `info` skin). A `Signal[Severity]` swaps the class IN PLACE via the class channel and
       * re-renders the default leading icon in its own small sub-region, with no whole re-render.
       */
-    def severity(v: Severity | Signal[Severity]): Message = copy(severityV = ReactiveValue(v))
+    def severity(v: Severity | Signal[Severity]): Message = new Message(s.copy(severityV = ReactiveValue(v)))
 
     /** Rendering variant: `Outlined` (transparent body, colored border) or
       * `Simple` (borderless text-only); unset renders Prime's filled default.
       */
-    def variant(v: MessageVariant): Message = copy(variantV = Present(v))
+    def variant(v: MessageVariant): Message = new Message(s.copy(variantV = Present(v)))
 
     /** Size: `.p-message-sm` / default / `.p-message-lg`. */
-    def size(v: Size): Message = copy(sizeV = v)
+    def size(v: Size): Message = new Message(s.copy(sizeV = v))
 
     /** Custom leading icon, replacing the severity's default glyph. */
-    def icon(glyph: IconGlyph): Message = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): Message = new Message(s.copy(iconV = Present(glyph)))
 
     /** Hides the leading icon entirely (both an explicit one and the severity default). */
-    def hideIcon(v: Boolean): Message = copy(hideIconFlag = v)
+    def hideIcon(v: Boolean): Message = new Message(s.copy(hideIconFlag = v))
 
     /** Renders the close button (`.p-message-close-button`, hidden by default). */
-    def closable(v: Boolean): Message = copy(closableFlag = v)
+    def closable(v: Boolean): Message = new Message(s.copy(closableFlag = v))
 
     /** Runs `action` when the close button is pressed. Past tense on purpose: the
       * message has been dismissed by the user, and nothing has been hidden; remove
@@ -74,10 +66,10 @@ final case class Message private (
       * which fires after the component has already written its own visibility ref.
       */
     def onDismissed(action: => UI.Action)(using Frame): Message =
-        copy(onDismissedEff = Present(Callback(action)))
+        new Message(s.copy(onDismissedEff = Present(Callback(action))))
 
     /** Adds default-slot children (the message text). */
-    def apply(cs: UI*): Message = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Message = new Message(s.copy(kids = kids ++ cs))
 
     /** The `.p-message-<token>` suffix for a severity (Prime's message set; `Danger` is `error`). */
     private def messageToken(s: Severity): String = s match
@@ -161,4 +153,17 @@ final case class Message private (
 end Message
 
 object Message:
-    def apply(): Message = new Message()
+    final private[uic] case class State(
+        severityV: SeverityValue = SeverityValue.Const(Severity.Info),
+        variantV: Maybe[MessageVariant] = Absent,
+        sizeV: Size = Size.Normal,
+        iconV: Maybe[IconGlyph] = Absent,
+        hideIconFlag: Boolean = false,
+        closableFlag: Boolean = false,
+        onDismissedEff: Maybe[UI.Action] = Absent,
+        idV: Maybe[String] = Absent,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Message = new Message(State())
+end Message

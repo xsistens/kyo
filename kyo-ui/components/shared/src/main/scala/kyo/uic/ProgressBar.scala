@@ -21,13 +21,9 @@ enum ProgressBarMode derives CanEqual:
   * default (Prime's `showValue`); `valueTemplate` formats it, `showValue(false)`
   * hides it. Like Prime, a zero value renders no label.
   */
-final case class ProgressBar private (
-    valueBinding: Maybe[ReactiveValue[Int]] = Absent,
-    modeV: ProgressBarMode = ProgressBarMode.Determinate,
-    showValueFlag: Boolean = true,
-    valueTemplateV: Maybe[Int => String] = Absent,
-    accessibleNameV: Maybe[TextValue] = Absent
-) extends Node, HasAccessibleName:
+final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) extends Node, HasAccessibleName, Stated:
+    import s.*
+
     type Self = ProgressBar
 
     /** The percentage shown (clamped to 0 to 100 at render). A constant renders the bar statically; any
@@ -37,18 +33,18 @@ final case class ProgressBar private (
       * carry has nothing to write: it reads exactly like a one-way signal here. A derived signal
       * (`loaded.zip(total).map(pct)`) is the natural binding.
       */
-    def value(v: Int | Signal[Int]): ProgressBar = copy(valueBinding = Present(ReactiveValue(v)))
+    def value(v: Int | Signal[Int]): ProgressBar = new ProgressBar(s.copy(valueBinding = Present(ReactiveValue(v))))
 
     /** `Determinate` (default) or the endless `Indeterminate` slide. */
-    def mode(v: ProgressBarMode): ProgressBar = copy(modeV = v)
+    def mode(v: ProgressBarMode): ProgressBar = new ProgressBar(s.copy(modeV = v))
 
     /** Shows the value label inside the bar (default true, Prime semantics). */
-    def showValue(v: Boolean): ProgressBar = copy(showValueFlag = v)
+    def showValue(v: Boolean): ProgressBar = new ProgressBar(s.copy(showValueFlag = v))
 
     /** Formats the label from the current value (e.g. `v => s"$v/100"`). */
-    def valueTemplate(f: Int => String): ProgressBar = copy(valueTemplateV = Present(f))
+    def valueTemplate(f: Int => String): ProgressBar = new ProgressBar(s.copy(valueTemplateV = Present(f)))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressBar = copy(accessibleNameV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressBar = new ProgressBar(s.copy(accessibleNameV = v))
 
     private[uic] def render(using Frame): UI =
         modeV match
@@ -89,4 +85,13 @@ final case class ProgressBar private (
 end ProgressBar
 
 object ProgressBar:
-    def apply(): ProgressBar = new ProgressBar()
+    final private[uic] case class State(
+        valueBinding: Maybe[ReactiveValue[Int]] = Absent,
+        modeV: ProgressBarMode = ProgressBarMode.Determinate,
+        showValueFlag: Boolean = true,
+        valueTemplateV: Maybe[Int => String] = Absent,
+        accessibleNameV: Maybe[TextValue] = Absent
+    )
+
+    def apply(): ProgressBar = new ProgressBar(State())
+end ProgressBar
