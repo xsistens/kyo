@@ -32,25 +32,22 @@ enum DividerAlign derives CanEqual:
   * `inlineStyles` emit (unset → centered). Renders `role="separator"` with
   * `aria-orientation` like Prime.
   */
-final case class Divider private (
-    layoutV: DividerLayout = DividerLayout.Horizontal,
-    lineStyleV: DividerLineStyle = DividerLineStyle.Solid,
-    alignV: Maybe[DividerAlign] = Absent,
-    kids: List[UI] = Nil
-) extends Node:
+final class Divider private[uic] (private[uic] val s: Divider.State) extends Node, Stated:
+    import s.*
+
     type Self = Divider
 
     /** `Horizontal` (default) or `Vertical` flow. */
-    def layout(v: DividerLayout): Divider = copy(layoutV = v)
+    def layout(v: DividerLayout): Divider = new Divider(s.copy(layoutV = v))
 
     /** Line style: `Solid` (default) / `Dashed` / `Dotted` (Prime's `type`). */
-    def lineStyle(v: DividerLineStyle): Divider = copy(lineStyleV = v)
+    def lineStyle(v: DividerLineStyle): Divider = new Divider(s.copy(lineStyleV = v))
 
     /** Content alignment along the divider (Prime's `align`). */
-    def align(v: DividerAlign): Divider = copy(alignV = Present(v))
+    def align(v: DividerAlign): Divider = new Divider(s.copy(alignV = Present(v)))
 
     /** Adds default-slot children, rendered as `div.p-divider-content` on the line. */
-    def apply(cs: UI*): Divider = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Divider = new Divider(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         val layoutToken = layoutV match
@@ -93,4 +90,12 @@ final case class Divider private (
 end Divider
 
 object Divider:
-    def apply(): Divider = new Divider()
+    final private[uic] case class State(
+        layoutV: DividerLayout = DividerLayout.Horizontal,
+        lineStyleV: DividerLineStyle = DividerLineStyle.Solid,
+        alignV: Maybe[DividerAlign] = Absent,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Divider = new Divider(State())
+end Divider

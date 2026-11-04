@@ -20,35 +20,30 @@ enum SkeletonShape derives CanEqual:
   * style, here it lives in [[Theme.primeExtraCss]]. The box is `aria-hidden`
   * (Prime semantics: a skeleton is a purely visual placeholder).
   */
-final case class Skeleton private (
-    shapeV: SkeletonShape = SkeletonShape.Rectangle,
-    widthV: String = "100%",
-    heightV: String = "1rem",
-    sizeV: Maybe[String] = Absent,
-    borderRadiusV: Maybe[String] = Absent,
-    animationFlag: Boolean = true
-) extends Node:
+final class Skeleton private[uic] (private[uic] val s: Skeleton.State) extends Node, Stated:
+    import s.*
+
     type Self = Skeleton
 
     /** `Circle` renders `.p-skeleton-circle` (50% radius); default `Rectangle`. */
-    def shape(v: SkeletonShape): Skeleton = copy(shapeV = v)
+    def shape(v: SkeletonShape): Skeleton = new Skeleton(s.copy(shapeV = v))
 
     /** CSS width (inline style; default `100%`). */
-    def width(v: String): Skeleton = copy(widthV = v)
+    def width(v: String): Skeleton = new Skeleton(s.copy(widthV = v))
 
     /** CSS height (inline style; default `1rem`). */
-    def height(v: String): Skeleton = copy(heightV = v)
+    def height(v: String): Skeleton = new Skeleton(s.copy(heightV = v))
 
     /** Square convenience: one CSS length for both dimensions; wins over
       * `width`/`height` (Prime semantics).
       */
-    def size(v: String): Skeleton = copy(sizeV = Present(v))
+    def size(v: String): Skeleton = new Skeleton(s.copy(sizeV = Present(v)))
 
     /** CSS border radius (inline style), overriding the token radius. */
-    def borderRadius(v: String): Skeleton = copy(borderRadiusV = Present(v))
+    def borderRadius(v: String): Skeleton = new Skeleton(s.copy(borderRadiusV = Present(v)))
 
     /** The wave shimmer (default true); `false` renders `.p-skeleton-animation-none`. */
-    def animation(v: Boolean): Skeleton = copy(animationFlag = v)
+    def animation(v: Boolean): Skeleton = new Skeleton(s.copy(animationFlag = v))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-skeleton").cssClass("p-component").aria("hidden", "true")
@@ -68,4 +63,14 @@ final case class Skeleton private (
 end Skeleton
 
 object Skeleton:
-    def apply(): Skeleton = new Skeleton()
+    final private[uic] case class State(
+        shapeV: SkeletonShape = SkeletonShape.Rectangle,
+        widthV: String = "100%",
+        heightV: String = "1rem",
+        sizeV: Maybe[String] = Absent,
+        borderRadiusV: Maybe[String] = Absent,
+        animationFlag: Boolean = true
+    )
+
+    def apply(): Skeleton = new Skeleton(State())
+end Skeleton

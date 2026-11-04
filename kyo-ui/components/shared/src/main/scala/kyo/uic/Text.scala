@@ -12,20 +12,18 @@ import kyo.UI.*
   * `data-uic-max-lines` hook, 1 to 10); `emptyIndicatorMode(On)` shows a dash when
   * the text is empty.
   */
-final case class Text private (
-    emptyIndicatorModeV: TextEmptyIndicatorMode = TextEmptyIndicatorMode.Off,
-    maxLinesV: Maybe[Int] = Absent,
-    kids: List[UI] = Nil
-) extends Node:
+final class Text private[uic] (private[uic] val s: Text.State) extends Node, Stated:
+    import s.*
+
     type Self = Text
 
     /** Specifies if an empty indicator (dash) should be displayed when there is no text. */
-    def emptyIndicatorMode(v: TextEmptyIndicatorMode): Text = copy(emptyIndicatorModeV = v)
+    def emptyIndicatorMode(v: TextEmptyIndicatorMode): Text = new Text(s.copy(emptyIndicatorModeV = v))
 
     /** Clamps the text after `v` lines before truncating (1 to 10, CSS line-clamp). */
-    def maxLines(v: Int): Text = copy(maxLinesV = Present(math.max(1, math.min(10, v))))
+    def maxLines(v: Int): Text = new Text(s.copy(maxLinesV = Present(math.max(1, math.min(10, v)))))
 
-    def apply(cs: UI*): Text = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Text = new Text(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = span.cssClass("p-uic-text")
@@ -39,4 +37,11 @@ final case class Text private (
 end Text
 
 object Text:
-    def apply(): Text = new Text()
+    final private[uic] case class State(
+        emptyIndicatorModeV: TextEmptyIndicatorMode = TextEmptyIndicatorMode.Off,
+        maxLinesV: Maybe[Int] = Absent,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Text = new Text(State())
+end Text
