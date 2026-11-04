@@ -230,7 +230,7 @@ class DatePickerTest extends ReactiveValueContract:
         for
             vref <- Signal.initRef(value)
             // The mount starts its minted view ref at the grid the kind picks in, and so does this.
-            (rs, _) <- refs(open = open, month = month, cursor = cursor, view = dp.kind.view)
+            (rs, _) <- refs(open = open, month = month, cursor = cursor, view = dp.s.kind.view)
             moved   <- Signal.initRef(List.empty[String])
             ui = dp.value(vref).wired(rs, "dp", id => moved.updateAndGet(_ :+ id))
         yield (vref, rs.openRef, moved, ui)

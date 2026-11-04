@@ -53,63 +53,26 @@ import scala.annotation.targetName
   * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final case class Select[A] private (
-    // The rows the body draws, resolved from `optionSources` by the region that draws them.
-    optionsV: List[OptionItem[A]],
-    labelF: A => String,
-    keyF: Maybe[A => String] = Absent,
-    optionDisabledF: Maybe[A => Boolean] = Absent,
-    choice: Maybe[SingleChoice[A]] = Absent,
-    itemTemplateF: Maybe[A => UI] = Absent,
-    openSlot: Slot[Boolean] = Slot(),
-    placeholderV: Maybe[TextValue] = Absent,
-    filterableV: Maybe[BoolValue] = Absent,
-    filterF: Maybe[(A, String) => Boolean] = Absent,
-    filterQuerySlot: Slot[String] = Slot(),
-    showClearFlag: Boolean = false,
-    checkmarkFlag: Boolean = false,
-    emptyContentV: Maybe[EmptyContent] = Absent,
-    disabledFlag: Boolean = false,
-    readonlyFlag: Boolean = false,
-    requiredFlag: Boolean = false,
-    nameV: Maybe[String] = Absent,
-    tooltipV: Maybe[TextValue] = Absent,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    fluidFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
-    onPickF: Maybe[A => UI.Action] = Absent,
-    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
-    currentV: Maybe[Maybe[A]] = Absent,
-    loadingV: Maybe[BoolValue] = Absent,
-    extraClassesV: List[String] = Nil,
-    idV: Maybe[String] = Absent,
-    inputwrapperFlag: Boolean = false,
-    portalFlag: Boolean = false,
-    scrollV: Overlay.Scroll = Overlay.Scroll.Close,
-    optionSources: List[OptionSource[A]] = Nil
-) extends Node, ChoiceFormControl[A], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends Node, ChoiceFormControl[A], HasEmptyContent, HasTooltip,
+      HasPlaceholder, HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = Select[A]
 
     /** Package-internal class hook: hosts (Paginator) stamp Prime's contextual
       * class (`p-paginator-rpp-dropdown`) onto the field root.
       */
-    private[uic] def extraClass(cls: String): Select[A] = copy(extraClassesV = extraClassesV :+ cls)
+    private[uic] def extraClass(cls: String): Select[A] = new Select(s.copy(extraClassesV = extraClassesV :+ cls))
 
     /** Package-internal: FloatLabel stamps Prime's wrapper-state classes
       * (`p-inputwrapper` + `p-inputwrapper-filled` while a value is selected or a
       * non-empty placeholder shows text), stamped INSIDE the component's own
       * subscription so the filled state tracks the bound ref.
       */
-    private[uic] def inputwrapper: Select[A] = copy(inputwrapperFlag = true)
+    private[uic] def inputwrapper: Select[A] = new Select(s.copy(inputwrapperFlag = true))
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Select[A] = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Select[A] = new Select(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -118,20 +81,20 @@ final case class Select[A] private (
       * supply the resolved selection directly (no nested subscription; writes go
       * through `onChange`).
       */
-    private[uic] def current(v: Maybe[A]): Select[A] = copy(currentV = Present(v))
+    private[uic] def current(v: Maybe[A]): Select[A] = new Select(s.copy(currentV = Present(v)))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a list that changes
       * while the field is shown (read in the field's own region, so the field is not built again around it).
       */
     def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): Select[A] =
-        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
+        new Select(s.copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label))
 
     /** Convenience for plain string options (label = identity), a collection or a signal. */
     def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): Select[A] =
-        copy(
+        new Select(s.copy(
             optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
             labelF = a => ev.flip(a)
-        )
+        ))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their options
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -142,7 +105,7 @@ final case class Select[A] private (
       * option sequence they do without it.
       */
     def optionGroups(is: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]])(label: A => String): Select[A] =
-        copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label)
+        new Select(s.copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label))
 
     /** Stable per-option key: the value written into the bound ref.
       *
@@ -153,12 +116,12 @@ final case class Select[A] private (
       * renders a loud `.p-uic-diagnostic` card whenever the derived keys collide,
       * naming the offending keys.
       */
-    def optionKey(f: A => String): Select[A] = copy(keyF = Present(f))
+    def optionKey(f: A => String): Select[A] = new Select(s.copy(keyF = Present(f)))
 
     /** Renders matching options disabled (`.p-disabled` rows, shown in the panel
       * but not pickable; the keyboard highlight skips them).
       */
-    def optionDisabled(f: A => Boolean): Select[A] = copy(optionDisabledF = Present(f))
+    def optionDisabled(f: A => Boolean): Select[A] = new Select(s.copy(optionDisabledF = Present(f)))
 
     /** Appends `none` and then `is` as the options of a select over `Maybe[B]`: `Absent` first, labelled `none`, then
       * `Present(b)` for each value, labelled `label(b)`.
@@ -168,17 +131,17 @@ final case class Select[A] private (
       */
     def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): Select[A] =
         val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
-        copy(
+        new Select(s.copy(
             optionSources = optionSources :+ OptionSource.Fixed(all.map(m => OptionItem.Item(ev(m)))),
             labelF = a => ev.flip(a).fold(none)(label)
-        )
+        ))
     end optionsWithNone
 
     /** Custom option content: arbitrary UI drawn in each option row and, for the chosen option, in the trigger, in place of
       * the text projection. The label projection stays each row's accessible name and the text the filter and the
       * printable keys match, and through [[optionKey]] the key.
       */
-    def itemTemplate(f: A => UI): Select[A] = copy(itemTemplateF = Present(f))
+    def itemTemplate(f: A => UI): Select[A] = new Select(s.copy(itemTemplateF = Present(f)))
 
     /** Binds the selection to the option itself: the field shows the row whose [[optionKey]] the value carries, and a pick
       * writes the option. The value always holds an option, so there is no clear (`showClear` draws nothing).
@@ -187,7 +150,7 @@ final case class Select[A] private (
       * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       * With neither event set, a card says the reader cannot change it.
       */
-    def selection(v: A | Signal[A]): Select[A] = copy(choice = Present(SingleChoice.Value(ReactiveValue(v))))
+    def selection(v: A | Signal[A]): Select[A] = new Select(s.copy(choice = Present(SingleChoice.Value(ReactiveValue(v)))))
 
     /** Binds the selection to the option or none: `Absent` shows the placeholder, a pick writes `Present(option)`, the clear
       * writes `Absent`. Two-way and one-way as for the option binding above.Any other `Signal`, or a
@@ -197,7 +160,7 @@ final case class Select[A] private (
       * `@targetName` because both `selection` bindings erase to one signature.
       */
     @targetName("selectionMaybe")
-    def selection(v: Maybe[A] | Signal[Maybe[A]]): Select[A] = copy(choice = Present(SingleChoice.Optional(ReactiveValue(v))))
+    def selection(v: Maybe[A] | Signal[Maybe[A]]): Select[A] = new Select(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(v)))))
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick, Escape, Tab and an outside click
       * write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel follows it and the
@@ -207,15 +170,15 @@ final case class Select[A] private (
       * nothing beyond `aria-expanded`. Unbound, the select keeps the state itself, starting closed. A signal nothing hears
       * is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Select[A] = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): Select[A] = new Select(s.copy(openSlot = openSlot.bind(v)))
 
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Select[A] = new Select(s.copy(openSlot = openSlot.hear(f)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = copy(placeholderV = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = new Select(s.copy(placeholderV = v))
 
     /** Switches Prime's header filter (`div.p-select-header` > `input.p-select-filter`), over a query the select
       * allocates itself unless [[filterQuery]] hands it one; while it is on, the query starts fresh on every open.
@@ -227,14 +190,14 @@ final case class Select[A] private (
       * only its header comes and goes. Same word and same meaning on [[MultiSelect.filterable]] and
       * [[Listbox.filterable]].
       */
-    def filterable(v: Boolean | Signal[Boolean]): Select[A] = copy(filterableV = Present(ReactiveValue(v)))
+    def filterable(v: Boolean | Signal[Boolean]): Select[A] = new Select(s.copy(filterableV = Present(ReactiveValue(v))))
 
     /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query
       * as typed. [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by
       * either text. Without it the match is a case-insensitive contains on the label projection. Setting it turns the
       * header filter on unless [[filterable]] says otherwise.
       */
-    def filter(f: (A, String) => Boolean): Select[A] = copy(filterF = Present(f))
+    def filter(f: (A, String) => Boolean): Select[A] = new Select(s.copy(filterF = Present(f)))
 
     /** Renders the same header filter over a query the APP holds. A `SignalRef` binds two way: typing writes it, external
       * writes re-filter the panel, and [[onFilterQueryChange]] hears every change. A plain `Signal` binds one way: the panel
@@ -243,42 +206,42 @@ final case class Select[A] private (
       * signal nothing hears is reported in a card. Server-driven option lists bind this and re-`options` on emission; the
       * matching binding on [[Listbox.filterQuery]] takes the same shape.
       */
-    def filterQuery(v: String | Signal[String]): Select[A] = copy(filterQuerySlot = filterQuerySlot.bind(v))
+    def filterQuery(v: String | Signal[String]): Select[A] = new Select(s.copy(filterQuerySlot = filterQuerySlot.bind(v)))
 
     /** Fired with the query the reader types, and with the empty query a new open starts from. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): Select[A] = copy(filterQuerySlot = filterQuerySlot.hear(f))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): Select[A] = new Select(s.copy(filterQuerySlot = filterQuerySlot.hear(f)))
 
     /** Renders the clear affordance on the trigger while an option is chosen: it writes `Absent` into a `selection` over
       * `Maybe[A]` and fires `onChange(Absent)`. A `selection` over `A` cannot hold none, so it draws nothing there.
       */
-    def showClear(v: Boolean): Select[A] = copy(showClearFlag = v)
+    def showClear(v: Boolean): Select[A] = new Select(s.copy(showClearFlag = v))
 
     /** Whether the floating options panel (and its backdrop) re-home to `document.body`
       * ([[Overlay.portal]]), the escape from ancestor `overflow` clipping and `transform`
       * containing blocks, e.g. for a Select inside a ScrollPanel or DataTable cell (default false).
       */
-    def portal(v: Boolean): Select[A] = copy(portalFlag = v)
+    def portal(v: Boolean): Select[A] = new Select(s.copy(portalFlag = v))
 
     /** How the open options panel responds to scroll outside it (default
       * [[Overlay.Scroll.Close]], Prime's hide-on-scroll). See [[Overlay.Scroll]].
       */
-    def scroll(v: Overlay.Scroll): Select[A] = copy(scrollV = v)
+    def scroll(v: Overlay.Scroll): Select[A] = new Select(s.copy(scrollV = v))
 
     /** Renders Prime's option check column: the check glyph on the selected row
       * (`.p-select-option-check-icon`), a blank placeholder on the rest.
       */
-    def checkmark(v: Boolean): Select[A] = copy(checkmarkFlag = v)
+    def checkmark(v: Boolean): Select[A] = new Select(s.copy(checkmarkFlag = v))
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no option row
       * carries yet is shown from the value itself rather than reported. Without it, such an option is a mistake the field
       * names in a `.p-uic-diagnostic` card, since a typed value that matches no option can only mean the data and the
       * binding disagree. A `Signal[Boolean]` follows the load.
       */
-    def loading(v: Boolean | Signal[Boolean]): Select[A] = copy(loadingV = Present(ReactiveValue(v)))
+    def loading(v: Boolean | Signal[Boolean]): Select[A] = new Select(s.copy(loadingV = Present(ReactiveValue(v))))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Select[A] = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Select[A] = new Select(s.copy(emptyContentV = v))
 
-    def disabled(v: Boolean): Select[A] = copy(disabledFlag = v)
+    def disabled(v: Boolean): Select[A] = new Select(s.copy(disabledFlag = v))
 
     /** `readonly`: the field reports `aria-readonly`, answers no key and opens no
       * panel (`.p-uic-select-readonly`), but
@@ -286,49 +249,49 @@ final case class Select[A] private (
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
       */
-    def readonly(v: Boolean): Select[A] = copy(readonlyFlag = v)
+    def readonly(v: Boolean): Select[A] = new Select(s.copy(readonlyFlag = v))
 
     /** Marks the field required (`aria-required`). */
-    def required(v: Boolean): Select[A] = copy(requiredFlag = v)
+    def required(v: Boolean): Select[A] = new Select(s.copy(requiredFlag = v))
 
     /** HTML form participation: emits a hidden `<input name=...>` carrying the
       * current option key (the div trigger has no native form value).
       */
-    def name(v: String): Select[A] = copy(nameV = Present(v))
+    def name(v: String): Select[A] = new Select(s.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Select[A] = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): Select[A] = new Select(s.copy(tooltipV = v))
 
     /** Size: `.p-select-sm` / default / `.p-select-lg`. */
-    def size(v: Size): Select[A] = copy(sizeV = v)
+    def size(v: Size): Select[A] = new Select(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): Select[A] = copy(variantV = v)
+    def variant(v: FieldVariant): Select[A] = new Select(s.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-select-fluid`). */
-    def fluid(v: Boolean): Select[A] = copy(fluidFlag = v)
+    def fluid(v: Boolean): Select[A] = new Select(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Select[A]                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Select[A]                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Select[A] = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Select[A]                       = new Select(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): Select[A]                   = new Select(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Select[A] = new Select(s.copy(invalidMsgDynV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = new Select(s.copy(accNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = new Select(s.copy(accNameRefV = v))
 
     /** Fired with the option now chosen, after the write (`Absent` on clear). A pick of the option already chosen changes
       * nothing and fires nothing. Fires before [[onPick]].
       */
-    def onChange(f: Maybe[A] => UI.Action)(using Frame): Select[A] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): Select[A] = new Select(s.copy(onChangeF = Present(Callback.of(f))))
 
     /** Fired with the option picked, after a pick that changed what the field holds: the same moments as [[onChange]]
       * except a clear, which picks nothing. A field whose value is never empty reads its picks here without unwrapping a
       * `Maybe`, and a one-way [[selection]] writes its own state here. Fires after [[onChange]] when both are set.
       */
-    def onPick(f: A => UI.Action)(using Frame): Select[A] = copy(onPickF = Present(Callback.of(f)))
+    def onPick(f: A => UI.Action)(using Frame): Select[A] = new Select(s.copy(onPickF = Present(Callback.of(f))))
 
     /** Fires when the trigger loses focus, with the option held (`Absent` for none): the form-validation layer's Blur
       * trigger.
       */
-    def onBlur(f: Maybe[A] => UI.Action)(using Frame): Select[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): Select[A] = new Select(s.copy(onBlurF = Present(Callback.of(f))))
 
     /** Every pickable option in render order, groups flattened away. The value
       * binding, the key-collision check and the keyboard all work on this.
@@ -376,7 +339,7 @@ final case class Select[A] private (
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
     /** The wired interaction state, allocated per mount. */
-    final private case class State(
+    final private case class Wired(
         open: Slot[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
@@ -396,13 +359,13 @@ final case class Select[A] private (
     ):
         /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
         def setOpen(v: Boolean)(using Frame): UI.Action = open.change(v)
-    end State
+    end Wired
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only, reachable and readable with no panel to open. A panel fixed
         // closed is the same: nothing the reader does may open it.
         if (choice.exists(_.fixed(onChangeF.orElse(onPickF))) || openSlot.fixedAt(false)) && !readonlyFlag then
-            copy(readonlyFlag = true).render
+            new Select(s.copy(readonlyFlag = true)).render
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
             Diagnostics.before(renderLive)("Select")(
@@ -420,7 +383,7 @@ final case class Select[A] private (
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
             val (held, ld, ph) = s
-            copy(optionsV = opts).bodyStatic(held, Absent, ph, ld, validity)
+            new Select(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
         }
         UI.mounted {
             for
@@ -436,8 +399,8 @@ final case class Select[A] private (
                 own <-
                     if choice.isEmpty && currentV.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
-                self = own.fold(this)(r => copy(choice = Present(SingleChoice.Optional(ReactiveValue(r)))))
-            yield self.copy(openSlot = open).wiredOver(hi, q, Present(base))
+                self = own.fold(this)(r => new Select(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(r))))))
+            yield new Select(self.s.copy(openSlot = open)).wiredOver(hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -448,7 +411,7 @@ final case class Select[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
-        copy(openSlot = openSlot.bind(open)).wiredOver(hi, filterQuerySlot.bind(q), base)
+        new Select(s.copy(openSlot = openSlot.bind(open))).wiredOver(hi, filterQuerySlot.bind(q), base)
     end wired
 
     /** [[wired]] over the panel and query state however they are bound. */
@@ -460,8 +423,8 @@ final case class Select[A] private (
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
-            val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            val self = new Select(s.copy(optionsV = opts))
+            self.bodyStatic(held, Present(self.Wired(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -481,7 +444,7 @@ final case class Select[A] private (
 
     private def bodyStatic(
         held: Maybe[A],
-        st: Maybe[State],
+        st: Maybe[Wired],
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
@@ -513,18 +476,18 @@ final case class Select[A] private (
             if selIdx >= 0 then selIdx else all.indexWhere(a => !isOptionDisabled(a))
 
         // Writes the picked option, fires onChange where that changed it, closes the panel.
-        def pick(a: A)(s: State): UI.Action =
+        def pick(a: A)(s: Wired): UI.Action =
             write(Present(a)).andThen(s.setOpen(false))
 
         // Opens with the highlight seeded on the selected option and a fresh query.
-        def openPanel(s: State): UI.Action =
+        def openPanel(s: Wired): UI.Action =
             for
                 _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
                 _ <- s.setOpen(true)
             yield ()
 
-        def toggle(s: State): UI.Action =
+        def toggle(s: Wired): UI.Action =
             if s.isOpen then s.setOpen(false) else openPanel(s)
 
         // === closed trigger ======================================================
@@ -717,8 +680,8 @@ final case class Select[A] private (
         shown: Seq[A],
         navigable: List[Int],
         hiEff: Int,
-        s: State,
-        pick: A => State => UI.Action
+        s: Wired,
+        pick: A => Wired => UI.Action
     )(e: KeyboardEvent)(using Frame): UI.Action =
         val caretOwns = s.filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         if e.key == Keyboard.Tab then s.setOpen(false)
@@ -747,7 +710,7 @@ final case class Select[A] private (
       * Prime's select stops at the ends rather than cycling, so `wrap` is false wherever the
       * navigable list is read.
       */
-    private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
+    private def shownState(s: Wired): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
             if s.filtering && s.qV.nonEmpty then
                 val m = matcher
@@ -762,7 +725,7 @@ final case class Select[A] private (
       * [[Overlay]] primitive, holding the optional filter header and the option
       * list.
       */
-    private def overlayPanel(current: String, s: State, pick: A => State => UI.Action)(using Frame): UI =
+    private def overlayPanel(current: String, s: Wired, pick: A => Wired => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-select-option-group") { (a, i) =>
@@ -886,9 +849,51 @@ final case class Select[A] private (
 end Select
 
 object Select:
+    final private[uic] case class State[A](
+        // The rows the body draws, resolved from `optionSources` by the region that draws them.
+        optionsV: List[OptionItem[A]],
+        labelF: A => String,
+        keyF: Maybe[A => String] = Absent,
+        optionDisabledF: Maybe[A => Boolean] = Absent,
+        choice: Maybe[SingleChoice[A]] = Absent,
+        itemTemplateF: Maybe[A => UI] = Absent,
+        openSlot: Slot[Boolean] = Slot(),
+        placeholderV: Maybe[TextValue] = Absent,
+        filterableV: Maybe[BoolValue] = Absent,
+        filterF: Maybe[(A, String) => Boolean] = Absent,
+        filterQuerySlot: Slot[String] = Slot(),
+        showClearFlag: Boolean = false,
+        checkmarkFlag: Boolean = false,
+        emptyContentV: Maybe[EmptyContent] = Absent,
+        disabledFlag: Boolean = false,
+        readonlyFlag: Boolean = false,
+        requiredFlag: Boolean = false,
+        nameV: Maybe[String] = Absent,
+        tooltipV: Maybe[TextValue] = Absent,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        fluidFlag: Boolean = false,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        accNameRefV: Maybe[String] = Absent,
+        onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+        onPickF: Maybe[A => UI.Action] = Absent,
+        onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+        currentV: Maybe[Maybe[A]] = Absent,
+        loadingV: Maybe[BoolValue] = Absent,
+        extraClassesV: List[String] = Nil,
+        idV: Maybe[String] = Absent,
+        inputwrapperFlag: Boolean = false,
+        portalFlag: Boolean = false,
+        scrollV: Overlay.Scroll = Overlay.Scroll.Close,
+        optionSources: List[OptionSource[A]] = Nil
+    )
+
     private val openName      = Slot.Name("Select", "the panel", "an open or a close", "onOpenChange")
     private val queryName     = Slot.Name("Select", "the filter query", "the reader type", "onFilterQueryChange")
     private val selectionName = Slot.Name("Select", "the selection", "a pick", "onChange or onPick")
 
-    def apply[A](): Select[A] = new Select[A](Nil, _.toString)
+    def apply[A](): Select[A] = new Select[A](State(Nil, _.toString))
 end Select

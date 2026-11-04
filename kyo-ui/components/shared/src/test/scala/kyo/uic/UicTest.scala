@@ -371,7 +371,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     p :: loop(children, p)
                 case _ => Nil
             }
-        Entry.reading((), c.itemSources) match
+        Entry.reading((), c.s.itemSources) match
             case ReactiveValue.Const(roots) => loop(roots, Nil)
             case ReactiveValue.Dyn(_)       => throw new AssertionError("group paths are read from fixed roots")
     end groupPaths
