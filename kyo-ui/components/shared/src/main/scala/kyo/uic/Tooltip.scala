@@ -34,19 +34,16 @@ end TooltipPosition
   * The target children render inside the relative wrapper; keyboard users get
   * the same box via `:focus-within` when the target is focusable.
   */
-final case class Tooltip private (
-    textV: Maybe[TextValue],
-    contentV: Maybe[UI],
-    positionV: TooltipPosition = TooltipPosition.Top,
-    kids: List[UI] = Nil
-) extends Node:
+final class Tooltip private[uic] (private[uic] val s: Tooltip.State) extends Node, Stated:
+    import s.*
+
     type Self = Tooltip
 
     /** Which side the box opens on (default [[TooltipPosition.Top]]). */
-    def position(v: TooltipPosition): Tooltip = copy(positionV = v)
+    def position(v: TooltipPosition): Tooltip = new Tooltip(s.copy(positionV = v))
 
     /** Adds target children (the elements the tooltip attaches to). */
-    def apply(cs: UI*): Tooltip = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Tooltip = new Tooltip(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         val textUI: UI = contentV match
@@ -70,11 +67,18 @@ final case class Tooltip private (
 end Tooltip
 
 object Tooltip:
+    final private[uic] case class State(
+        textV: Maybe[TextValue],
+        contentV: Maybe[UI],
+        positionV: TooltipPosition = TooltipPosition.Top,
+        kids: List[UI] = Nil
+    )
+
     /** A tooltip showing `text`. A `Signal[String]` re-renders it in place on emission (e.g. a locale-
       * driven `I18n.t` leaf).
       */
-    def apply(text: String | Signal[String]): Tooltip = new Tooltip(Present(ReactiveValue(text)), Absent)
+    def apply(text: String | Signal[String]): Tooltip = new Tooltip(State(Present(ReactiveValue(text)), Absent))
 
     /** A tooltip with arbitrary `UI` content. */
-    def apply(content: UI): Tooltip = new Tooltip(Absent, Present(content))
+    def apply(content: UI): Tooltip = new Tooltip(State(Absent, Present(content)))
 end Tooltip

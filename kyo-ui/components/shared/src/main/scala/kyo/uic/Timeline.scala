@@ -45,14 +45,9 @@ end TimelineLayout
   *   .align(uic.TimelineAlign.Alternate)
   * }}}
   */
-final case class Timeline[A] private (
-    eventSources: List[List[A] | Signal[Seq[A]]] = Nil,
-    contentF: Maybe[A => UI] = Absent,
-    oppositeF: Maybe[A => UI] = Absent,
-    markerF: Maybe[A => UI] = Absent,
-    alignV: TimelineAlign = TimelineAlign.Left,
-    layoutV: TimelineLayout = TimelineLayout.Vertical
-) extends Node:
+final class Timeline[A] private[uic] (private[uic] val s: Timeline.State[A]) extends Node, Stated:
+    import s.*
+
     type Self = Timeline[A]
 
     /** Appends events, or a signal of events that change while the timeline is shown (the history of a record that is
@@ -62,30 +57,30 @@ final case class Timeline[A] private (
         val source: List[A] | Signal[Seq[A]] = es match
             case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
             case is             => is.asInstanceOf[Iterable[A]].toList
-        copy(eventSources = eventSources :+ source)
+        new Timeline(s.copy(eventSources = eventSources :+ source))
     end events
 
     /** The events as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[A]] = ReactiveValue.concat(eventSources)
 
     /** Content template, rendered in `div.p-timeline-event-content`. */
-    def content(f: A => UI): Timeline[A] = copy(contentF = Present(f))
+    def content(f: A => UI): Timeline[A] = new Timeline(s.copy(contentF = Present(f)))
 
     /** Opposite-side template, rendered in `div.p-timeline-event-opposite`. */
-    def opposite(f: A => UI): Timeline[A] = copy(oppositeF = Present(f))
+    def opposite(f: A => UI): Timeline[A] = new Timeline(s.copy(oppositeF = Present(f)))
 
     /** Custom marker replacing Prime's default token dot in
       * `div.p-timeline-event-marker`.
       */
-    def marker(f: A => UI): Timeline[A] = copy(markerF = Present(f))
+    def marker(f: A => UI): Timeline[A] = new Timeline(s.copy(markerF = Present(f)))
 
     /** Alignment: `Left` (default) / `Right` / `Alternate` for vertical,
       * `Top` / `Bottom` / `Alternate` for horizontal.
       */
-    def align(v: TimelineAlign): Timeline[A] = copy(alignV = v)
+    def align(v: TimelineAlign): Timeline[A] = new Timeline(s.copy(alignV = v))
 
     /** Orientation: `Vertical` (default) or `Horizontal`. */
-    def layout(v: TimelineLayout): Timeline[A] = copy(layoutV = v)
+    def layout(v: TimelineLayout): Timeline[A] = new Timeline(s.copy(layoutV = v))
 
     private[uic] def render(using Frame): UI =
         // The events of a live timeline share one region, so the last-child and odd/even rules still see one run of them.
@@ -122,4 +117,14 @@ final case class Timeline[A] private (
 end Timeline
 
 object Timeline:
-    def apply[A](): Timeline[A] = new Timeline[A]()
+    final private[uic] case class State[A](
+        eventSources: List[List[A] | Signal[Seq[A]]] = Nil,
+        contentF: Maybe[A => UI] = Absent,
+        oppositeF: Maybe[A => UI] = Absent,
+        markerF: Maybe[A => UI] = Absent,
+        alignV: TimelineAlign = TimelineAlign.Left,
+        layoutV: TimelineLayout = TimelineLayout.Vertical
+    )
+
+    def apply[A](): Timeline[A] = new Timeline[A](State())
+end Timeline
