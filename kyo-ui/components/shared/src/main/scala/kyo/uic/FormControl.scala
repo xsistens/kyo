@@ -18,10 +18,10 @@ import scala.annotation.targetName
   * behaviour once: a control cannot forget a member, and cannot describe one
   * differently from its neighbour.
   *
-  * A control supplies the three one-line WRITERS below instead of the setters; every
-  * control already stores the slots under the same three types, and `type Self = Input`
-  * fixes the return type, so a control opts in by adding the trait to its `extends`
-  * clause plus those writers.
+  * A control supplies the one-line reader and writer below instead of the setters: its state
+  * holds the slots as one `validityV` ([[FieldValidity.Slots]]), and `type Self = Input` fixes
+  * the return type, so a control opts in by adding the trait to its `extends` clause plus those
+  * two lines.
   *
   * `size` and `variant` are deliberately NOT here. They are design-system facts, not
   * validation: the PrimeOne sheet defines `.p-*-sm`/`-lg` and `.p-variant-filled`
@@ -29,24 +29,21 @@ import scala.annotation.targetName
   * a Slider or a Rating that Prime does not style that way.
   */
 trait FormControl extends Node, HasElementId:
-    /** Stores the resolved invalid slot. Implemented as `copy(invalidV = v)`. */
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Self
+    /** The slots as they are. Implemented as `validityV`. */
+    private[uic] def validitySlots: FieldValidity.Slots
 
-    /** Stores the constant invalid message. Implemented as `copy(invalidMsgV = v)`. */
-    private[uic] def withInvalidMessage(v: Maybe[String]): Self
-
-    /** Stores the reactive invalid message. Implemented as `copy(invalidMsgDynV = v)`. */
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self
+    /** Stores the slots. Implemented as `new Input(s.copy(validityV = v))`. */
+    private[uic] def withValidity(v: FieldValidity.Slots): Self
 
     /** Marks the control invalid (`.p-invalid` + `aria-invalid`). A `Signal[Boolean]` toggles the
       * invalid state on emission. Either form is the explicit override of the message-derived red
       * default: once `invalid` is set, it alone decides whether the control is red and whether a
       * message row shows.
       */
-    final def invalid(v: Boolean | Signal[Boolean]): Self = withInvalid(Present(ReactiveValue(v)))
+    final def invalid(v: Boolean | Signal[Boolean]): Self = withValidity(validitySlots.copy(invalid = Present(ReactiveValue(v))))
 
     /** Message rendered below the control while it is invalid (`div.p-uic-invalid-message`). */
-    final def invalidMessage(v: String): Self = withInvalidMessage(Present(v))
+    final def invalidMessage(v: String): Self = withValidity(validitySlots.copy(message = Present(v)))
 
     /** Reactive message: `Present` shows the row and (by default) turns the control red,
       * `Absent` clears both. This is what `bind` wires to the field's gated message.
@@ -56,7 +53,7 @@ trait FormControl extends Node, HasElementId:
       * optional message that can also clear the row. `String | Signal[Maybe[String]]` would be a
       * heterogeneous union, not the `A | Signal[A]` shape the rest of the module uses.
       */
-    final def invalidMessage(sig: Signal[Maybe[String]]): Self = withInvalidMessageDyn(Present(sig))
+    final def invalidMessage(sig: Signal[Maybe[String]]): Self = withValidity(validitySlots.copy(messageDyn = Present(sig)))
 
     // `id` comes from HasElementId. The form layer stamps each field's minted id there at
     // `bind` time so focus-first-invalid can address the control's focusable element

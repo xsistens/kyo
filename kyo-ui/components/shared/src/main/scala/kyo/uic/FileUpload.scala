@@ -100,9 +100,8 @@ final class FileUpload private[uic] (private[uic] val s: FileUpload.State) exten
     /** Disables the control: the button dims and the input locks. */
     def disabled(v: Boolean): FileUpload = new FileUpload(s.copy(disabledFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): FileUpload                       = new FileUpload(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): FileUpload                   = new FileUpload(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = new FileUpload(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new FileUpload(s.copy(validityV = v))
 
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size, mimeType, content) once a file is
       * chosen, after a two-way [[value]] is written.
@@ -138,7 +137,7 @@ final class FileUpload private[uic] (private[uic] val s: FileUpload.State) exten
                     case Absent                      => span.cssClass("p-fileupload-filelabel")("No file chosen")
 
     private def body(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // The choose affordance: a real <label for> wearing Prime's Button classes,
         // so the native file dialog opens without any JS lifecycle.
         var choose = label
@@ -195,9 +194,7 @@ object FileUpload:
         multipleFlag: Boolean = false,
         disabledFlag: Boolean = false,
         filesSlot: Slot[Seq[UI.FilePayload]] = Slot(),
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
     )
 

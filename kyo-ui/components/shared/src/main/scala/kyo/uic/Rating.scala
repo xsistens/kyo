@@ -104,9 +104,8 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Rating = new Rating(s.copy(accNameV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Rating                       = new Rating(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Rating                   = new Rating(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Rating = new Rating(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Rating(s.copy(validityV = v))
 
     /** Accepted for the [[NumberFormControl]] contract and satisfied by construction: a
       * star count is always whole, so the constraint has nothing left to enforce here.
@@ -152,7 +151,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
     private[uic] def wired(name: String)(using Frame): UI = new Rating(s.copy(nameV = Present(name))).renderNamed
 
     private def renderNamed(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(BoolValue.reactive(disabledFlag)(d => new Rating(s.copy(disabledFlag = d)).renderResolved(validity)))
 
     // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
@@ -249,9 +248,7 @@ object Rating:
         nameV: Maybe[String] = Absent,
         onIconV: Maybe[IconGlyph] = Absent,
         offIconV: Maybe[IconGlyph] = Absent,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         onBlurDoubleF: Maybe[Double => UI.Action] = Absent,
         idV: Maybe[String] = Absent

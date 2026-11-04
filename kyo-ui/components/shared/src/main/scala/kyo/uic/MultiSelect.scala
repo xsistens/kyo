@@ -223,10 +223,8 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
     def fluid(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): MultiSelect[A]                       = new MultiSelect(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): MultiSelect[A]                   = new MultiSelect(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): MultiSelect[A] = new MultiSelect(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                      = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self              = new MultiSelect(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelect[A] = new MultiSelect(s.copy(accNameRefV = v))
 
@@ -317,7 +315,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount; static projections render the same closed
         // anatomy inert (the Select precedent).
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
             val (held, ld, ph) = s
             new MultiSelect(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
@@ -359,7 +357,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         q: Slot[String],
         base: Maybe[String]
     )(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = new MultiSelect(s.copy(optionsV = opts))
@@ -860,9 +858,7 @@ object MultiSelect:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onChangeF: Maybe[Set[A] => UI.Action] = Absent,

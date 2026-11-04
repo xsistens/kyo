@@ -87,10 +87,8 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
       */
     def readonly(v: Boolean): ToggleButton = new ToggleButton(s.copy(readonlyFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): ToggleButton                       = new ToggleButton(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): ToggleButton                   = new ToggleButton(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ToggleButton = new ToggleButton(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                    = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self            = new ToggleButton(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleButton = new ToggleButton(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleButton = new ToggleButton(s.copy(accNameRefV = v))
 
@@ -103,7 +101,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // Unbound, the button keeps its own state, which starts unpressed: a ref it owns for as long as it is shown.
         val field = validity.follow(Slot.owning(
             checkedSlot,
@@ -193,9 +191,7 @@ object ToggleButton:
         fluidFlag: Boolean = false,
         disabledFlag: Boolean = false,
         readonlyFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,

@@ -84,9 +84,8 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = new Slider(s.copy(accNameV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Slider                       = new Slider(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Slider                   = new Slider(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = new Slider(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Slider(s.copy(validityV = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => UI.Action)(using Frame): Slider = new Slider(s.copy(valueSlot = valueSlot.hear(f)))
@@ -107,7 +106,7 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
         else Slot.owning(valueSlot, start = minV)(s => new Slider(this.s.copy(valueSlot = s)).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Slider(s.copy(disabledFlag = d)).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is put back.
         Diagnostics.after(field)("Slider")(Diagnostic.unheard(valueSlot, Slider.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
@@ -178,9 +177,7 @@ object Slider:
         orientationV: Orientation = Orientation.Horizontal,
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         onBlurF: Maybe[Double => UI.Action] = Absent,
         idV: Maybe[String] = Absent

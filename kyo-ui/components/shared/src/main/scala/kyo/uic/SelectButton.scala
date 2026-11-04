@@ -131,10 +131,8 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = new SelectButton(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): SelectButton[A]                       = new SelectButton(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): SelectButton[A]                   = new SelectButton(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): SelectButton[A] = new SelectButton(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new SelectButton(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = new SelectButton(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = new SelectButton(s.copy(accNameRefV = v))
 
@@ -195,7 +193,7 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
         renderNav(Present((base, focus)))
 
     private def renderNav(minted: Maybe[(String, String => UI.Action)])(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // The switches and the selection are read as ONE region (see [[ReactiveValue.and]]), pinned back into the slots as constants
         // so the body reads plain values.
         val read =
@@ -407,9 +405,7 @@ object SelectButton:
         allowEmptyFlag: Boolean = true,
         sizeV: Size = Size.Normal,
         disabledFlag: Maybe[BoolValue] = Absent,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
@@ -485,9 +481,8 @@ final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectBut
     private[uic] def withElementId(v: Maybe[String]): MultiSelectButton[A] = on(group.withElementId(v))
     private[uic] def elementId: Maybe[String]                              = group.elementId
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): MultiSelectButton[A]                       = on(group.withInvalid(v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): MultiSelectButton[A]                   = on(group.withInvalidMessage(v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): MultiSelectButton[A] = on(group.withInvalidMessageDyn(v))
+    private[uic] def validitySlots: FieldValidity.Slots                         = group.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): MultiSelectButton[A] = on(group.withValidity(v))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelectButton[A] = on(group.withAccessibleName(v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelectButton[A] = on(group.withAccessibleNameRef(v))

@@ -71,10 +71,8 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
     def variant(v: FieldVariant): InputOtp = new InputOtp(s.copy(variantV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): InputOtp                       = new InputOtp(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): InputOtp                   = new InputOtp(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputOtp = new InputOtp(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new InputOtp(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = new InputOtp(s.copy(accNameV = v))
 
     /** Fired with the FULL code after a cell write-back. */
@@ -102,7 +100,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
         BoolValue.reactive(disabledFlag)(d => new InputOtp(s.copy(disabledFlag = d)).renderResolved)
 
     private def renderResolved(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val field    = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) if interactive =>
                 // Auto-advance needs the session Commands and stable per-cell ids: mint
@@ -125,7 +123,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
     private[uic] def wired(code: Signal[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(code.render(v => body(v, Present(cellIds), focus, validity)))
     end wired
 
@@ -209,9 +207,7 @@ object InputOtp:
         readonlyFlag: Boolean = false,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         idV: Maybe[String] = Absent

@@ -57,10 +57,8 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): RadioButton = new RadioButton(s.copy(variantV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): RadioButton                       = new RadioButton(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): RadioButton                   = new RadioButton(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): RadioButton = new RadioButton(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                   = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self           = new RadioButton(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): RadioButton = new RadioButton(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): RadioButton = new RadioButton(s.copy(accNameRefV = v))
 
@@ -72,7 +70,7 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
     def onBlur(f: Boolean => UI.Action)(using Frame): RadioButton = new RadioButton(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
         val field = validity.follow(Slot.owning(
             checkedSlot,
@@ -161,9 +159,7 @@ object RadioButton:
         valueV: Maybe[String] = Absent,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,

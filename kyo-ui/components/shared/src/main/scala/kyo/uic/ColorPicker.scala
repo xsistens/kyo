@@ -93,9 +93,8 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): ColorPicker = new ColorPicker(s.copy(accNameV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): ColorPicker                       = new ColorPicker(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): ColorPicker                   = new ColorPicker(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ColorPicker = new ColorPicker(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ColorPicker(s.copy(validityV = v))
 
     /** Fired with the NEW hex after the ref write-back (one-way, with the hex the reader asked for). */
     def onChange(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(s.copy(valueSlot = valueSlot.hear(f)))
@@ -109,7 +108,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 
     /** Builds the picker once with its validity stamped on the root (`build` marks it), followed by the message row. */
     private def validated(build: FieldValidity => UI)(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(build(validity))
 
     // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour the reader
@@ -472,9 +471,7 @@ object ColorPicker:
         inlineFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         idV: Maybe[String] = Absent

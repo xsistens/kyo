@@ -161,10 +161,8 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
     def fluid(v: Boolean): TreeSelect[K] = new TreeSelect(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): TreeSelect[K]                       = new TreeSelect(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): TreeSelect[K]                   = new TreeSelect(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TreeSelect[K] = new TreeSelect(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                     = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self             = new TreeSelect(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeSelect[K] = new TreeSelect(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect[K] = new TreeSelect(s.copy(accNameRefV = v))
 
@@ -208,7 +206,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
     private def renderLive(using Frame): UI =
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val stat: UI = roots.and(shown).render { (rs, s) =>
             val (sel, ld, ph) = s
             new TreeSelect(this.s.copy(nodeList = rs)).bodyStatic(sel, Set.empty, false, Absent, ph, ld, validity)
@@ -249,7 +247,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         hi: SignalRef[Int],
         idBase: String
     )(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = openSlot.reading(false).and(exp.reading(Set.empty[K])).and(ReactiveValue.Dyn(hi))
         panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
             new TreeSelect(s.copy(nodeList =
@@ -483,9 +481,7 @@ object TreeSelect:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         idV: Maybe[String] = Absent,
