@@ -33,7 +33,7 @@ class EntriesTest extends UicTest:
 
     /** The rows a listbox keeps as sources, resolved the way its region resolves them. */
     private def options(lb: uic.Listbox[String])(using Frame): List[uic.OptionItem[uic.ListItem[String]]] =
-        uic.OptionItem.reading(lb.optionSources) match
+        uic.OptionItem.reading(lb.s.optionSources) match
             case uic.ReactiveValue.Const(rows) => rows
             case _                             => throw new AssertionError("sources without a signal were read as live")
 
