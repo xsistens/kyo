@@ -18,58 +18,47 @@ end LinkAccessibleRole
   * and exposes `aria-disabled` plus the `.p-disabled` skin (there is no native
   * `disabled` attribute on an anchor).
   */
-final case class Link private (
-    hrefV: Maybe[String] = Absent,
-    disabledFlag: Boolean = false,
-    wrapFlag: Boolean = false,
-    iconV: Maybe[IconGlyph] = Absent,
-    endIconV: Maybe[IconGlyph] = Absent,
-    targetV: Maybe[String] = Absent,
-    tooltipV: Maybe[TextValue] = Absent,
-    accessibleRoleV: LinkAccessibleRole = LinkAccessibleRole.Link,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent,
-    accessibleDescriptionV: Maybe[TextValue] = Absent,
-    onClickEff: Maybe[UI.Action] = Absent,
-    kids: List[UI] = Nil
-) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
+final class Link private[uic] (private[uic] val s: Link.State) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription,
+      PopupTrigger, Stated:
+    import s.*
+
     type Self = Link
 
-    def href(v: String): Link      = copy(hrefV = Present(v))
-    def disabled(v: Boolean): Link = copy(disabledFlag = v)
+    def href(v: String): Link      = new Link(s.copy(hrefV = Present(v)))
+    def disabled(v: Boolean): Link = new Link(s.copy(disabledFlag = v))
 
     /** Whether the link text wraps onto multiple lines (default false: stays on
       * one line, `.p-uic-link-wrap`).
       */
-    def wrap(v: Boolean): Link = copy(wrapFlag = v)
+    def wrap(v: Boolean): Link = new Link(s.copy(wrapFlag = v))
 
     /** Icon rendered before the link text. */
-    def icon(glyph: IconGlyph): Link = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): Link = new Link(s.copy(iconV = Present(glyph)))
 
     /** Icon rendered after the link text. */
-    def endIcon(glyph: IconGlyph): Link = copy(endIconV = Present(glyph))
+    def endIcon(glyph: IconGlyph): Link = new Link(s.copy(endIconV = Present(glyph)))
 
     /** Anchor `target` (e.g. `_blank`, `_self`). `_blank` automatically also gets
       * `rel="noopener"` so the opened page cannot script this one.
       */
-    def target(v: String): Link = copy(targetV = Present(v))
+    def target(v: String): Link = new Link(s.copy(targetV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Link = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): Link = new Link(s.copy(tooltipV = v))
 
     /** ARIA role override: `Button` renders `role="button"` on the anchor. */
-    def accessibleRole(v: LinkAccessibleRole): Link = copy(accessibleRoleV = v)
+    def accessibleRole(v: LinkAccessibleRole): Link = new Link(s.copy(accessibleRoleV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Link = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Link = copy(accessibleNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Link = new Link(s.copy(accessibleNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Link = new Link(s.copy(accessibleNameRefV = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = copy(accessibleDescriptionV = v)
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = new Link(s.copy(accessibleDescriptionV = v))
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
     def onClick(action: => UI.Action)(using Frame): Link =
-        copy(onClickEff = Present(Callback(action)))
+        new Link(s.copy(onClickEff = Present(Callback(action))))
 
     /** Adds default-slot children (typically the link text). */
-    def apply(cs: UI*): Link = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Link = new Link(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI = anchor
 
@@ -135,8 +124,24 @@ final case class Link private (
 end Link
 
 object Link:
-    def apply(): Link = new Link()
+    final private[uic] case class State(
+        hrefV: Maybe[String] = Absent,
+        disabledFlag: Boolean = false,
+        wrapFlag: Boolean = false,
+        iconV: Maybe[IconGlyph] = Absent,
+        endIconV: Maybe[IconGlyph] = Absent,
+        targetV: Maybe[String] = Absent,
+        tooltipV: Maybe[TextValue] = Absent,
+        accessibleRoleV: LinkAccessibleRole = LinkAccessibleRole.Link,
+        accessibleNameV: Maybe[TextValue] = Absent,
+        accessibleNameRefV: Maybe[String] = Absent,
+        accessibleDescriptionV: Maybe[TextValue] = Absent,
+        onClickEff: Maybe[UI.Action] = Absent,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Link = new Link(State())
 
     /** A link labelled `text` (placed in the default slot). */
-    def apply(text: String)(using Frame): Link = new Link(kids = List(stringToUI(text)))
+    def apply(text: String)(using Frame): Link = new Link(State(kids = List(stringToUI(text))))
 end Link

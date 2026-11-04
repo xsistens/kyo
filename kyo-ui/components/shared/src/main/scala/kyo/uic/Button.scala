@@ -27,51 +27,24 @@ end ButtonAccessibleRole
   * action); `variant` switches Filled/Outlined/Text/Link; while `loading` the
   * button shows a spinning glyph and is non-clickable like a disabled button.
   */
-final case class Button private (
-    label: Maybe[TextValue] = Absent,
-    severityV: SeverityValue = SeverityValue.Const(Severity.Primary),
-    variantV: ButtonVariant = ButtonVariant.Filled,
-    sizeV: Size = Size.Normal,
-    roundedFlag: Boolean = false,
-    raisedFlag: Boolean = false,
-    fluidFlag: Boolean = false,
-    icon: Maybe[IconGlyph] = Absent,
-    endIconV: Maybe[IconGlyph] = Absent,
-    idV: Maybe[String] = Absent,
-    hrefV: Maybe[String] = Absent,
-    disabledV: Maybe[BoolValue] = Absent,
-    ariaDisabledV: Maybe[BoolValue] = Absent,
-    loadingV: Maybe[BoolValue] = Absent,
-    buttonTypeV: ButtonType = ButtonType.Button,
-    accessibleRoleV: ButtonAccessibleRole = ButtonAccessibleRole.Button,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent,
-    accessibleDescriptionV: Maybe[TextValue] = Absent,
-    tooltipV: Maybe[TextValue] = Absent,
-    formV: Maybe[String] = Absent,
-    onClickEff: Maybe[UI.Action] = Absent,
-    onKeyDownF: Maybe[KeyboardEvent => UI.Action] = Absent,
-    extraChildren: List[UI] = Nil,
-    extraClassesV: List[String] = Nil,
-    extraAriasV: List[(String, String | Signal[String])] = Nil,
-    roleRawV: Maybe[String] = Absent,
-    tabIndexV: Maybe[Int] = Absent,
-    focusSeedV: Boolean = false
-) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
+final class Button private[uic] (private[uic] val s: Button.State) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef,
+      HasAccessibleDescription, PopupTrigger, Stated:
+    import s.*
+
     type Self = Button
 
     /** Package-internal class hook: hosts (SplitButton, SpeedDial) stamp Prime's
       * contextual classes (`p-splitbutton-button`, `p-speeddial-button`) onto the
       * button element.
       */
-    private[uic] def extraClass(cls: String): Button = copy(extraClassesV = extraClassesV :+ cls)
+    private[uic] def extraClass(cls: String): Button = new Button(s.copy(extraClassesV = extraClassesV :+ cls))
 
     /** Package-internal aria hook: hosts add popup semantics (`aria-haspopup`,
       * `aria-expanded`) not part of Button's own public surface. A signal is a channel,
       * patched in place.
       */
     private[uic] def ariaRaw(name: String, value: String | Signal[String]): Button =
-        copy(extraAriasV = extraAriasV :+ (name -> value))
+        new Button(s.copy(extraAriasV = extraAriasV :+ (name -> value)))
 
     // A button is a native control: its keys are its click, so `activate` has nothing left to answer.
     private[uic] def asPopupTrigger(
@@ -98,41 +71,41 @@ final case class Button private (
       * SpeedDial's fan is one `role="menu"` whose actions rove a single tab stop, are announced
       * as `menuitem`, answer arrows, and take the focus the fan seeds when it opens.
       */
-    private[uic] def roleRaw(v: String): Button       = copy(roleRawV = Present(v))
-    private[uic] def tabIndexRaw(v: Int): Button      = copy(tabIndexV = Present(v))
-    private[uic] def focusSeedRaw(v: Boolean): Button = copy(focusSeedV = v)
+    private[uic] def roleRaw(v: String): Button       = new Button(s.copy(roleRawV = Present(v)))
+    private[uic] def tabIndexRaw(v: Int): Button      = new Button(s.copy(tabIndexV = Present(v)))
+    private[uic] def focusSeedRaw(v: Boolean): Button = new Button(s.copy(focusSeedV = v))
 
     private[uic] def onKeyDownRaw(f: KeyboardEvent => UI.Action): Button =
-        copy(onKeyDownF = Present(f))
+        new Button(s.copy(onKeyDownF = Present(f)))
 
     /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
       * `Signal[Severity]` swaps the `.p-button-<token>` class IN PLACE via kyo-ui's class channel on
       * emission (no re-render), e.g. a save button going neutral to success.
       */
-    def severity(v: Severity | Signal[Severity]): Button = copy(severityV = ReactiveValue(v))
+    def severity(v: Severity | Signal[Severity]): Button = new Button(s.copy(severityV = ReactiveValue(v)))
 
     /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. */
-    def variant(v: ButtonVariant): Button = copy(variantV = v)
+    def variant(v: ButtonVariant): Button = new Button(s.copy(variantV = v))
 
     /** Size: `Small` / `Normal` (default) / `Large`. */
-    def size(v: Size): Button = copy(sizeV = v)
+    def size(v: Size): Button = new Button(s.copy(sizeV = v))
 
     /** Fully rounded corners (`.p-button-rounded`). */
-    def rounded(v: Boolean): Button = copy(roundedFlag = v)
+    def rounded(v: Boolean): Button = new Button(s.copy(roundedFlag = v))
 
     /** Adds a shadow to indicate elevation (`.p-button-raised`). */
-    def raised(v: Boolean): Button = copy(raisedFlag = v)
+    def raised(v: Boolean): Button = new Button(s.copy(raisedFlag = v))
 
     /** Spans the full width of its container (`.p-button-fluid`). */
-    def fluid(v: Boolean): Button = copy(fluidFlag = v)
+    def fluid(v: Boolean): Button = new Button(s.copy(fluidFlag = v))
 
-    def icon(glyph: IconGlyph): Button = copy(icon = Present(glyph))
+    def icon(glyph: IconGlyph): Button = new Button(s.copy(icon = Present(glyph)))
 
     /** Icon rendered after the label. */
-    def endIcon(glyph: IconGlyph): Button = copy(endIconV = Present(glyph))
+    def endIcon(glyph: IconGlyph): Button = new Button(s.copy(endIconV = Present(glyph)))
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Button = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Button = new Button(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -140,7 +113,7 @@ final case class Button private (
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal).
       */
-    def disabled(v: Boolean | Signal[Boolean]): Button = copy(disabledV = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): Button = new Button(s.copy(disabledV = Present(ReactiveValue(v))))
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
@@ -151,7 +124,7 @@ final case class Button private (
       * Tab keypress, so focus jumps PAST the button to the next control. With `aria-disabled` the
       * button never leaves the tab order, so the race disappears.
       */
-    def ariaDisabled(v: Boolean | Signal[Boolean]): Button = copy(ariaDisabledV = Present(ReactiveValue(v)))
+    def ariaDisabled(v: Boolean | Signal[Boolean]): Button = new Button(s.copy(ariaDisabledV = Present(ReactiveValue(v))))
 
     /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
       * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
@@ -166,46 +139,46 @@ final case class Button private (
       * fused with the spinner, aria-busy, icon-only layout and the effective disabled state rather than
       * patching a single attribute.
       */
-    def loading(v: Boolean | Signal[Boolean]): Button = copy(loadingV = Present(ReactiveValue(v)))
+    def loading(v: Boolean | Signal[Boolean]): Button = new Button(s.copy(loadingV = Present(ReactiveValue(v))))
 
     /** Form behaviour (native `type` attribute): `Button` (default, non-submitting),
       * `Submit`, or `Reset`.
       */
-    def buttonType(v: ButtonType): Button = copy(buttonTypeV = v)
+    def buttonType(v: ButtonType): Button = new Button(s.copy(buttonTypeV = v))
 
     /** ARIA role override: `Link` renders `role="link"` on the native button. */
-    def accessibleRole(v: ButtonAccessibleRole): Button = copy(accessibleRoleV = v)
+    def accessibleRole(v: ButtonAccessibleRole): Button = new Button(s.copy(accessibleRoleV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Button = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Button = copy(accessibleNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Button = new Button(s.copy(accessibleNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Button = new Button(s.copy(accessibleNameRefV = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = copy(accessibleDescriptionV = v)
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = new Button(s.copy(accessibleDescriptionV = v))
 
     /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's
       * SPA `Href.Path`) that keeps the full button skin (Prime's Button link mode).
       * Link semantics (native anchor role, focus) with button styling; form `type`
       * does not apply.
       */
-    def href(v: String): Button = copy(hrefV = Present(v))
+    def href(v: String): Button = new Button(s.copy(hrefV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Button = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): Button = new Button(s.copy(tooltipV = v))
 
     /** ID of the `<form>` to associate with. kyo-ui 1.0.0-RC5 exposes no `form`
       * attribute setter and the DOM `form` property is read-only, so this is
       * surfaced as `data-uic-form`: an association hint, not a native browser
       * form association.
       */
-    def form(v: String): Button = copy(formV = Present(v))
+    def form(v: String): Button = new Button(s.copy(formV = Present(v)))
 
     /** Runs `action` when the button is pressed. Mirrors kyo-ui's native event effect
       * (`Async`): a handler that can fail handles its own failure, the way a native
       * `onClick` does.
       */
     def onClick(action: => UI.Action)(using Frame): Button =
-        copy(onClickEff = Present(Callback(action)))
+        new Button(s.copy(onClickEff = Present(Callback(action))))
 
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
-    def apply(cs: UI*): Button = copy(extraChildren = extraChildren ++ cs)
+    def apply(cs: UI*): Button = new Button(s.copy(extraChildren = extraChildren ++ cs))
 
     // The three switches are read as ONE region (see [[ReactiveValue.and]]), pinned back into the slots as constants so the element reads
     // plain values. With none of them a signal the button draws no region and pays for no reading.
@@ -214,11 +187,11 @@ final case class Button private (
         else
             ReactiveValue.optional(disabledV).and(ReactiveValue.optional(ariaDisabledV)).and(ReactiveValue.optional(loadingV)).render {
                 case ((d, ad), l) =>
-                    copy(
+                    new Button(s.copy(
                         disabledV = d.map(BoolValue.Const(_)),
                         ariaDisabledV = ad.map(BoolValue.Const(_)),
                         loadingV = l.map(BoolValue.Const(_))
-                    ).renderResolved
+                    )).renderResolved
             }
 
     /** The resolved busy state, read after the reactive slots are pinned to their current constants. */
@@ -230,7 +203,7 @@ final case class Button private (
             case Absent     => renderButton
 
     private def iconOnly: Boolean =
-        label.isEmpty && extraChildren.isEmpty && (icon.isDefined || loadingNow)
+        label.isEmpty && extraChildren.isEmpty && (s.icon.isDefined || loadingNow)
 
     /** The `.p-button` class chain, shared verbatim by the button and anchor renderings. */
     private def buttonClasses: List[String] =
@@ -356,7 +329,7 @@ final case class Button private (
         val leading: List[UI] =
             if loadingNow then
                 List(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
-            else icon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-left"))
+            else s.icon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-left"))
         val textChild: List[UI] = label match
             case Present(TextValue.Const(t)) => List(span.cssClass("p-button-label")(t))
             case Present(TextValue.Dyn(s))   => List(span.cssClass("p-button-label")(s))
@@ -368,11 +341,43 @@ final case class Button private (
 end Button
 
 object Button:
+    final private[uic] case class State(
+        label: Maybe[TextValue] = Absent,
+        severityV: SeverityValue = SeverityValue.Const(Severity.Primary),
+        variantV: ButtonVariant = ButtonVariant.Filled,
+        sizeV: Size = Size.Normal,
+        roundedFlag: Boolean = false,
+        raisedFlag: Boolean = false,
+        fluidFlag: Boolean = false,
+        icon: Maybe[IconGlyph] = Absent,
+        endIconV: Maybe[IconGlyph] = Absent,
+        idV: Maybe[String] = Absent,
+        hrefV: Maybe[String] = Absent,
+        disabledV: Maybe[BoolValue] = Absent,
+        ariaDisabledV: Maybe[BoolValue] = Absent,
+        loadingV: Maybe[BoolValue] = Absent,
+        buttonTypeV: ButtonType = ButtonType.Button,
+        accessibleRoleV: ButtonAccessibleRole = ButtonAccessibleRole.Button,
+        accessibleNameV: Maybe[TextValue] = Absent,
+        accessibleNameRefV: Maybe[String] = Absent,
+        accessibleDescriptionV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[TextValue] = Absent,
+        formV: Maybe[String] = Absent,
+        onClickEff: Maybe[UI.Action] = Absent,
+        onKeyDownF: Maybe[KeyboardEvent => UI.Action] = Absent,
+        extraChildren: List[UI] = Nil,
+        extraClassesV: List[String] = Nil,
+        extraAriasV: List[(String, String | Signal[String])] = Nil,
+        roleRawV: Maybe[String] = Absent,
+        tabIndexV: Maybe[Int] = Absent,
+        focusSeedV: Boolean = false
+    )
+
     /** A button labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): Button = new Button(label = Present(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): Button = new Button(State(label = Present(ReactiveValue(label))))
 
     /** An empty button; add an icon and/or children via the setters. */
-    def apply(): Button = new Button()
+    def apply(): Button = new Button(State())
 end Button

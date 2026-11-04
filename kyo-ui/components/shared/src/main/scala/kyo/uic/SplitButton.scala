@@ -20,58 +20,46 @@ import kyo.UI.*
   * `disabled` pass through to BOTH segments (Button precedent). `open(ref)`
   * optionally exposes the panel visibility (self-managed otherwise).
   */
-final case class SplitButton private (
-    labelV: Maybe[TextValue] = Absent,
-    iconV: Maybe[IconGlyph] = Absent,
-    severityV: SeverityValue = SeverityValue.Const(Severity.Primary),
-    variantV: ButtonVariant = ButtonVariant.Filled,
-    sizeV: Size = Size.Normal,
-    roundedFlag: Boolean = false,
-    raisedFlag: Boolean = false,
-    fluidFlag: Boolean = false,
-    disabledFlag: Boolean = false,
-    dropdownIconV: Maybe[IconGlyph] = Absent,
-    entriesV: List[MenuItemLiveEntry] = Nil,
-    openSlot: Slot[Boolean] = Slot(),
-    onClickEff: Maybe[UI.Action] = Absent
-) extends Node:
+final class SplitButton private[uic] (private[uic] val s: SplitButton.State) extends Node, Stated:
+    import s.*
+
     type Self = SplitButton
 
     /** Semantic accent, passed to both segments. A `Signal[Severity]` is forwarded to the inner [[Button]]
       * and swapped IN PLACE via the class channel.
       */
-    def severity(v: Severity | Signal[Severity]): SplitButton = copy(severityV = ReactiveValue(v))
+    def severity(v: Severity | Signal[Severity]): SplitButton = new SplitButton(s.copy(severityV = ReactiveValue(v)))
 
     /** Rendering variant (Filled/Outlined/Text/Link), passed to both segments. */
-    def variant(v: ButtonVariant): SplitButton = copy(variantV = v)
+    def variant(v: ButtonVariant): SplitButton = new SplitButton(s.copy(variantV = v))
 
     /** Size, passed to both segments. */
-    def size(v: Size): SplitButton = copy(sizeV = v)
+    def size(v: Size): SplitButton = new SplitButton(s.copy(sizeV = v))
 
     /** Fully rounded outer corners (`.p-splitbutton-rounded`). */
-    def rounded(v: Boolean): SplitButton = copy(roundedFlag = v)
+    def rounded(v: Boolean): SplitButton = new SplitButton(s.copy(roundedFlag = v))
 
     /** Elevation shadow (`.p-splitbutton-raised`). */
-    def raised(v: Boolean): SplitButton = copy(raisedFlag = v)
+    def raised(v: Boolean): SplitButton = new SplitButton(s.copy(raisedFlag = v))
 
     /** Spans the full container width (`.p-splitbutton-fluid`). */
-    def fluid(v: Boolean): SplitButton = copy(fluidFlag = v)
+    def fluid(v: Boolean): SplitButton = new SplitButton(s.copy(fluidFlag = v))
 
     /** Disables both segments. */
-    def disabled(v: Boolean): SplitButton = copy(disabledFlag = v)
+    def disabled(v: Boolean): SplitButton = new SplitButton(s.copy(disabledFlag = v))
 
     /** Leading icon on the primary segment. */
-    def icon(glyph: IconGlyph): SplitButton = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): SplitButton = new SplitButton(s.copy(iconV = Present(glyph)))
 
     /** Glyph of the dropdown segment (default chevron-down). */
-    def dropdownIcon(glyph: IconGlyph): SplitButton = copy(dropdownIconV = Present(glyph))
+    def dropdownIcon(glyph: IconGlyph): SplitButton = new SplitButton(s.copy(dropdownIconV = Present(glyph)))
 
     /** The popup menu rows ([[MenuItem]], incl. `MenuItem.separator`), each built directly or from `_` (see [[MenuItemScope]]), or a
       * signal of rows for a list that changes while the page shows it (the requests a server holds, say). Read here, the list is
       * part of the button's one region: building the button again inside a region over the list would start its mount again with
       * every change, and with it its open state and highlight, and a click landing while it starts reaches nothing.
       */
-    def items(is: MenuItemLiveEntry*): SplitButton = copy(entriesV = entriesV ++ is)
+    def items(is: MenuItemLiveEntry*): SplitButton = new SplitButton(s.copy(entriesV = entriesV ++ is))
 
     /** Binds the menu visibility. A `SignalRef` binds two way: the dropdown segment, a pick, Tab, Escape and an outside
       * click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the menu follows it
@@ -79,14 +67,14 @@ final case class SplitButton private (
       * reachable, changes nothing. Unbound, the button keeps the state itself, starting closed. A signal nothing hears
       * is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): SplitButton = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): SplitButton = new SplitButton(s.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the menu visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): SplitButton = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): SplitButton = new SplitButton(s.copy(openSlot = openSlot.hear(f)))
 
     /** Runs `action` when the PRIMARY segment is pressed. */
     def onClick(action: => UI.Action)(using Frame): SplitButton =
-        copy(onClickEff = Present(Callback(action)))
+        new SplitButton(s.copy(onClickEff = Present(Callback(action))))
 
     private[uic] def render(using Frame): UI =
         // The panel visibility + keyboard highlight live in signals allocated by
@@ -99,7 +87,7 @@ final case class SplitButton private (
                 hi   <- Anchored.init(-1)
                 cmds <- UI.commands
                 base <- cmds.freshId
-            yield copy(openSlot = open).wiredOver(hi, base)
+            yield new SplitButton(s.copy(openSlot = open)).wiredOver(hi, base)
         }.placeholder(stat)
         // A signal nobody hears: every toggle and pick the reader makes is painted away again.
         Diagnostics.before(button)("SplitButton")(Diagnostic.unheard(openSlot, SplitButton.openName))
@@ -107,7 +95,7 @@ final case class SplitButton private (
 
     /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
-        copy(openSlot = openSlot.bind(open)).wiredOver(hi, base)
+        new SplitButton(s.copy(openSlot = openSlot.bind(open))).wiredOver(hi, base)
 
     /** The subscription tree over the menu state however it is bound. */
     private def wiredOver(hi: Anchored[Int], base: String)(using Frame): UI =
@@ -176,13 +164,29 @@ final case class SplitButton private (
 end SplitButton
 
 object SplitButton:
+    final private[uic] case class State(
+        labelV: Maybe[TextValue] = Absent,
+        iconV: Maybe[IconGlyph] = Absent,
+        severityV: SeverityValue = SeverityValue.Const(Severity.Primary),
+        variantV: ButtonVariant = ButtonVariant.Filled,
+        sizeV: Size = Size.Normal,
+        roundedFlag: Boolean = false,
+        raisedFlag: Boolean = false,
+        fluidFlag: Boolean = false,
+        disabledFlag: Boolean = false,
+        dropdownIconV: Maybe[IconGlyph] = Absent,
+        entriesV: List[MenuItemLiveEntry] = Nil,
+        openSlot: Slot[Boolean] = Slot(),
+        onClickEff: Maybe[UI.Action] = Absent
+    )
+
     /** A split button with `label` as its primary label. A `Signal[String]` re-renders it in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): SplitButton = new SplitButton(labelV = Present(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): SplitButton = new SplitButton(State(labelV = Present(ReactiveValue(label))))
 
     /** An empty split button; add an icon and items via the setters. */
-    def apply(): SplitButton = new SplitButton()
+    def apply(): SplitButton = new SplitButton(State())
 
     private val openName = Slot.Name("SplitButton", "the menu", "a toggle or a pick", "onOpenChange")
 end SplitButton

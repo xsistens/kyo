@@ -48,8 +48,8 @@ class EntriesTest extends UicTest:
         assert(rows(uic.Menubar().items(scoped*).entriesV) == direct)
         assert(rows(uic.TieredMenu().items(scoped*).entriesV) == direct)
         assert(rows(uic.ContextMenu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.SplitButton("Save").items(scoped*).entriesV) == direct)
-        assert(rows(uic.SpeedDial().items(scoped*).entriesV) == direct)
+        assert(rows(uic.SplitButton("Save").items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.SpeedDial().items(scoped*).s.entriesV) == direct)
         assert(uic.MenuItem("File").items(scoped*).itemsV == direct)
         assert(uic.MenuGroup("File").items(scoped*).itemsV == direct)
         assert(rows(uic.ContextMenu(scoped).entriesV) == direct)
@@ -69,8 +69,8 @@ class EntriesTest extends UicTest:
         )
         val prepared: Seq[uic.MenuItem] = Seq(uic.MenuItem("A"), uic.MenuItem("B"))
         val splat                       = uic.SplitButton("Save").items(prepared*)
-        assert(rows(mixed.entriesV) == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
-        assert(rows(splat.entriesV) == prepared.toList)
+        assert(rows(mixed.s.entriesV) == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
+        assert(rows(splat.s.entriesV) == prepared.toList)
     }
 
     "mega menu: root items and the groups of a column" in {
