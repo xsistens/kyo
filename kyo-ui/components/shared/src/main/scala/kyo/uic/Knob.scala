@@ -100,9 +100,8 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Knob = new Knob(s.copy(accNameV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Knob                       = new Knob(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Knob                   = new Knob(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = new Knob(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Knob(s.copy(validityV = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back, or with the value asked for where the knob is bound one way. */
     def onChange(f: Double => UI.Action)(using Frame): Knob = new Knob(s.copy(valueSlot = valueSlot.hear(f)))
@@ -125,7 +124,7 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
         else Slot.owning(valueSlot, start = minV)(s => new Knob(this.s.copy(valueSlot = s)).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Knob(s.copy(disabledFlag = d)).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is painted away again.
         Diagnostics.after(field)("Knob")(Diagnostic.unheard(valueSlot, Knob.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
@@ -257,9 +256,7 @@ object Knob:
         readonlyFlag: Boolean = false,
         integerFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         onBlurF: Maybe[Double => UI.Action] = Absent,
         idV: Maybe[String] = Absent

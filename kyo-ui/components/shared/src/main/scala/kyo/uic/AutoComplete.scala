@@ -159,10 +159,8 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
     def fluid(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): AutoComplete[A]                       = new AutoComplete(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): AutoComplete[A]                   = new AutoComplete(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): AutoComplete[A] = new AutoComplete(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new AutoComplete(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): AutoComplete[A] = new AutoComplete(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): AutoComplete[A] = new AutoComplete(s.copy(accNameRefV = v))
 
@@ -268,7 +266,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
 
     /** The closed anatomy over the text as bound, with nothing wired: what a static projection shows. */
     private def stat(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
             new AutoComplete(s.copy(optionsV = opts)).body(cur, Absent, validity)
         ))
@@ -324,7 +322,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
     )(
         using Frame
     ): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = ReactiveValue.Dyn(open).and(ReactiveValue.Dyn(hi)).and(ReactiveValue.Dyn(all))
         validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).render {
             case (((((o, h), a), cur), opts)) =>
@@ -575,9 +573,7 @@ object AutoComplete:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onInputF: Maybe[String => UI.Action] = Absent,

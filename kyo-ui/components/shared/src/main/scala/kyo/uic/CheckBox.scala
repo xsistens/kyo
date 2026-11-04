@@ -80,10 +80,8 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CheckBox = new CheckBox(s.copy(variantV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): CheckBox                       = new CheckBox(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): CheckBox                   = new CheckBox(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): CheckBox = new CheckBox(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new CheckBox(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CheckBox = new CheckBox(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CheckBox = new CheckBox(s.copy(accNameRefV = v))
 
@@ -95,7 +93,7 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
     def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
         val field = validity.follow(Slot.owning(
             checkedSlot,
@@ -199,9 +197,7 @@ object CheckBox:
         valueV: Maybe[String] = Absent,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,

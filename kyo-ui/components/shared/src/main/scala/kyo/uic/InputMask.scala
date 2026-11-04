@@ -65,10 +65,8 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): InputMask = new InputMask(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): InputMask                       = new InputMask(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): InputMask                   = new InputMask(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputMask = new InputMask(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                 = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self         = new InputMask(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputMask = new InputMask(s.copy(accNameV = v))
 
     /** Fired with the MASKED value on every change (native change commit). */
@@ -97,9 +95,7 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
             .inputMask(maskV)
             .size(sizeV)
             .variant(variantV)
-            .withInvalid(invalidV)
-            .withInvalidMessage(invalidMsgV)
-            .withInvalidMessageDyn(invalidMsgDynV)
+            .withValidity(validityV)
             .fluid(fluidFlag)
         in = disabledFlag.foldFlag(in)(in.disabled(_))
         in = readonlyFlag.foldFlag(in)(in.readonly(_))
@@ -147,9 +143,7 @@ object InputMask:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         idV: Maybe[String] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
