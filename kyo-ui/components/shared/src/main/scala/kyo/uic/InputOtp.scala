@@ -24,26 +24,13 @@ import kyo.UI.*
   * transport attaches) the cells carry no ids and focus stays put; Tab /
   * Shift-Tab and the pointer always work.
   */
-final case class InputOtp private (
-    valueSlot: Slot[String] = Slot(),
-    lengthV: Int = 4,
-    integerOnlyFlag: Boolean = false,
-    maskFlag: Boolean = false,
-    disabledFlag: Maybe[BoolValue] = Absent,
-    readonlyFlag: Boolean = false,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, TextFormControl, HasAccessibleName:
+final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends Node, TextFormControl, HasAccessibleName, Stated:
+    import s.*
+
     type Self = InputOtp
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputOtp = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): InputOtp = new InputOtp(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -54,10 +41,10 @@ final case class InputOtp private (
       * constant is the starting code. Unbound or from a constant, the field keeps the code itself, so a cell edit writes
       * there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): InputOtp = copy(valueSlot = valueSlot.bind(v))
+    def value(v: String | Signal[String]): InputOtp = new InputOtp(s.copy(valueSlot = valueSlot.bind(v)))
 
     /** Number of cells (Prime default 4). */
-    def length(n: Int): InputOtp = copy(lengthV = math.max(1, n))
+    def length(n: Int): InputOtp = new InputOtp(s.copy(lengthV = math.max(1, n)))
 
     /** Accepts only digits (Prime's `integerOnly`): other characters never reach
       * the BOUND value. Each cell carries the fork's client-local `inputFilter("int")`,
@@ -65,39 +52,39 @@ final case class InputOtp private (
       * matching Prime's client-side block. (A server-side `filter` still guards
       * the stored code as defense in depth.)
       */
-    def integerOnly(v: Boolean): InputOtp = copy(integerOnlyFlag = v)
+    def integerOnly(v: Boolean): InputOtp = new InputOtp(s.copy(integerOnlyFlag = v))
 
     /** Renders password-type cells (Prime's `mask`). */
-    def mask(v: Boolean): InputOtp = copy(maskFlag = v)
+    def mask(v: Boolean): InputOtp = new InputOtp(s.copy(maskFlag = v))
 
     /** Disables all cells; a `Signal[Boolean]` toggles it reactively (re-render). */
-    def disabled(v: Boolean | Signal[Boolean]): InputOtp = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): InputOtp = new InputOtp(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly` on every cell. */
-    def readonly(v: Boolean): InputOtp = copy(readonlyFlag = v)
+    def readonly(v: Boolean): InputOtp = new InputOtp(s.copy(readonlyFlag = v))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the cells (the
       * sheet widens the cells per size).
       */
-    def size(v: Size): InputOtp = copy(sizeV = v)
+    def size(v: Size): InputOtp = new InputOtp(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
-    def variant(v: FieldVariant): InputOtp = copy(variantV = v)
+    def variant(v: FieldVariant): InputOtp = new InputOtp(s.copy(variantV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): InputOtp                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): InputOtp                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputOtp = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): InputOtp                       = new InputOtp(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): InputOtp                   = new InputOtp(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputOtp = new InputOtp(s.copy(invalidMsgDynV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = copy(accNameV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = new InputOtp(s.copy(accNameV = v))
 
     /** Fired with the FULL code after a cell write-back. */
-    def onChange(f: String => UI.Action)(using Frame): InputOtp = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(s.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current value; unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): InputOtp = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(s.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
@@ -105,10 +92,14 @@ final case class InputOtp private (
     // for is the one they hold, which a ref the field keeps for as long as it is shown remembers. It sits above the region over
     // `disabled`, or a flip would end the mount that holds it.
     private[uic] def render(using Frame): UI =
-        Slot.owningFrom(valueSlot, unbound = "", on = BoolValue.Const(interactive))(s => copy(valueSlot = s).resolved)(resolved)
+        Slot.owningFrom(
+            valueSlot,
+            unbound = "",
+            on = BoolValue.Const(interactive)
+        )(s => new InputOtp(this.s.copy(valueSlot = s)).resolved)(resolved)
 
     private def resolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved)
+        BoolValue.reactive(disabledFlag)(d => new InputOtp(s.copy(disabledFlag = d)).renderResolved)
 
     private def renderResolved(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
@@ -209,7 +200,24 @@ final case class InputOtp private (
 end InputOtp
 
 object InputOtp:
-    def apply(): InputOtp = new InputOtp()
+    final private[uic] case class State(
+        valueSlot: Slot[String] = Slot(),
+        lengthV: Int = 4,
+        integerOnlyFlag: Boolean = false,
+        maskFlag: Boolean = false,
+        disabledFlag: Maybe[BoolValue] = Absent,
+        readonlyFlag: Boolean = false,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        onBlurF: Maybe[String => UI.Action] = Absent,
+        idV: Maybe[String] = Absent
+    )
+
+    def apply(): InputOtp = new InputOtp(State())
 
     private val valueName = Slot.Name("InputOtp", "value", "a change", "onChange")
 end InputOtp
