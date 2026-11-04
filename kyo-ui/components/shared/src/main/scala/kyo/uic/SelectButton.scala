@@ -29,37 +29,14 @@ import scala.annotation.targetName
   * single group (the first enabled one while nothing is selected), the first enabled option of a [[multiple]] one.
   * It moves with the selection, and that option's minted id gives way to it.
   */
-final case class SelectButton[A] private (
-    // The options the body draws, resolved from `optionSources` by the region that draws them.
-    items: List[A],
-    labelF: A => String,
-    keyF: Maybe[A => String] = Absent,
-    itemTemplateF: Maybe[A => UI] = Absent,
-    optionDisabledF: Maybe[A => Boolean] = Absent,
-    single: Maybe[SingleChoice[A]] = Absent,
-    multi: Maybe[MultiChoice[A]] = Absent,
-    multipleFlag: Boolean = false,
-    allowEmptyFlag: Boolean = true,
-    sizeV: Size = Size.Normal,
-    disabledFlag: Maybe[BoolValue] = Absent,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
-    onPickF: Maybe[A => UI.Action] = Absent,
-    onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,
-    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
-    onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
-    loadingV: Maybe[BoolValue] = Absent,
-    idV: Maybe[String] = Absent,
-    optionSources: List[OptionSource[A]] = Nil
-) extends Node, ChoiceFormControl[A], HasAccessibleNameRef:
+final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State[A]) extends Node, ChoiceFormControl[A],
+      HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = SelectButton[A]
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): SelectButton[A] = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): SelectButton[A] = new SelectButton(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -68,28 +45,28 @@ final case class SelectButton[A] private (
       * change while it is shown, read in the group's own region.
       */
     def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): SelectButton[A] =
-        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
+        new SelectButton(s.copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label))
 
     /** Convenience for plain string options (label = identity), a collection or a signal. */
     def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): SelectButton[A] =
-        copy(
+        new SelectButton(s.copy(
             optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
             labelF = a => ev.flip(a)
-        )
+        ))
 
     /** Stable per-option key: the value written into the bound ref(s); defaults
       * to the label projection.
       */
-    def optionKey(f: A => String): SelectButton[A] = copy(keyF = Present(f))
+    def optionKey(f: A => String): SelectButton[A] = new SelectButton(s.copy(keyF = Present(f)))
 
     /** Custom option content (Prime's option slot): arbitrary UI rendered inside
       * each fused button instead of the text projection. The label projection
       * stays the accessibility name and (via [[optionKey]]) the selection key.
       */
-    def itemTemplate(f: A => UI): SelectButton[A] = copy(itemTemplateF = Present(f))
+    def itemTemplate(f: A => UI): SelectButton[A] = new SelectButton(s.copy(itemTemplateF = Present(f)))
 
     /** Renders matching options disabled. */
-    def optionDisabled(f: A => Boolean): SelectButton[A] = copy(optionDisabledF = Present(f))
+    def optionDisabled(f: A => Boolean): SelectButton[A] = new SelectButton(s.copy(optionDisabledF = Present(f)))
 
     /** Appends `none` and then `is` as the options of a group over `Maybe[B]`: `Absent` first, labelled `none`, then
       * `Present(b)` for each value, labelled `label(b)`. An [[itemTemplate]] sees the none option too. Only a group whose
@@ -97,10 +74,10 @@ final case class SelectButton[A] private (
       */
     def optionsWithNone[B](none: String, is: Iterable[B])(label: B => String)(using ev: Maybe[B] =:= A): SelectButton[A] =
         val all: List[Maybe[B]] = (Absent: Maybe[B]) :: is.toList.map(b => Present(b): Maybe[B])
-        copy(
+        new SelectButton(s.copy(
             optionSources = optionSources :+ OptionSource.Fixed(all.map(m => OptionItem.Item(ev(m)))),
             labelF = a => ev.flip(a).fold(none)(label)
-        )
+        ))
     end optionsWithNone
 
     /** Binds the SINGLE selection to the option itself, matched by [[optionKey]]. The value always holds an option, so a
@@ -109,62 +86,71 @@ final case class SelectButton[A] private (
       * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       * With neither event set, a card says the reader cannot change it.
       */
-    def selection(v: A | Signal[A]): SelectButton[A] = copy(single = Present(SingleChoice.Value(ReactiveValue(v))))
+    def selection(v: A | Signal[A]): SelectButton[A] = new SelectButton(s.copy(single = Present(SingleChoice.Value(ReactiveValue(v)))))
 
     /** Binds the SINGLE selection to the option or none: a click on the chosen option clears it where [[allowEmpty]]
       * allows it. Two-way and one-way as for the option binding above.
       */
     @targetName("selectionMaybe")
     def selection(v: Maybe[A] | Signal[Maybe[A]]): SelectButton[A] =
-        copy(single = Present(SingleChoice.Optional(ReactiveValue(v))))
+        new SelectButton(s.copy(single = Present(SingleChoice.Optional(ReactiveValue(v)))))
 
     /** The same group with several options on at once: a [[MultiSelectButton]], which binds a `Set[A]`. What is set so far
       * (options, templates, state) carries over; a single-choice binding and its events do not, since they hold one option.
       */
     def multiple: MultiSelectButton[A] =
-        MultiSelectButton(copy(multipleFlag = true, single = Absent, onChangeF = Absent, onPickF = Absent, onBlurF = Absent))
+        MultiSelectButton(new SelectButton(s.copy(
+            multipleFlag = true,
+            single = Absent,
+            onChangeF = Absent,
+            onPickF = Absent,
+            onBlurF = Absent
+        )))
 
     /** Package-internal: the multi-choice half [[MultiSelectButton]] drives. */
-    private[uic] def withMulti(v: Set[A] | Signal[Set[A]]): SelectButton[A] = copy(multi = Present(MultiChoice(ReactiveValue[Set[A]](v))))
-    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeSetF = Present(Callback.of(f)))
-    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A]   = copy(onBlurSetF = Present(Callback.of(f)))
+    private[uic] def withMulti(v: Set[A] | Signal[Set[A]]): SelectButton[A] =
+        new SelectButton(s.copy(multi = Present(MultiChoice(ReactiveValue[Set[A]](v)))))
+    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A] =
+        new SelectButton(s.copy(onChangeSetF = Present(Callback.of(f))))
+    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): SelectButton[A] =
+        new SelectButton(s.copy(onBlurSetF = Present(Callback.of(f))))
 
     /** Says the options are still arriving (`aria-busy` on the group): a held option no button carries yet is left
       * alone rather than reported in a `.p-uic-diagnostic` card. Prime's SelectButton has no loading look, so none is drawn.
       */
-    def loading(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(loadingV = Present(ReactiveValue(v)))
+    def loading(v: Boolean | Signal[Boolean]): SelectButton[A] = new SelectButton(s.copy(loadingV = Present(ReactiveValue(v))))
 
     /** Whether clicking the selected option may clear the selection entirely
       * (Prime default true).
       */
-    def allowEmpty(v: Boolean): SelectButton[A] = copy(allowEmptyFlag = v)
+    def allowEmpty(v: Boolean): SelectButton[A] = new SelectButton(s.copy(allowEmptyFlag = v))
 
     /** Size of the fused buttons: `.p-togglebutton-sm` / default / `-lg`. */
-    def size(v: Size): SelectButton[A] = copy(sizeV = v)
+    def size(v: Size): SelectButton[A] = new SelectButton(s.copy(sizeV = v))
 
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively (re-render). */
-    def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = new SelectButton(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): SelectButton[A]                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): SelectButton[A]                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): SelectButton[A] = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): SelectButton[A]                       = new SelectButton(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): SelectButton[A]                   = new SelectButton(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): SelectButton[A] = new SelectButton(s.copy(invalidMsgDynV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = new SelectButton(s.copy(accNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = new SelectButton(s.copy(accNameRefV = v))
 
     /** Fired with the selection now held, after a click or an arrow changed it (`Absent` where a click cleared it).
       * A click that changes nothing fires nothing.
       */
-    def onChange(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = new SelectButton(s.copy(onChangeF = Present(Callback.of(f))))
 
     /** Fired with the option picked, after a click or an arrow that changed the selection to it: [[onChange]] without the
       * `Maybe` and without the clear, for a group that is never empty or a one-way [[selection]] that writes its own state
       * here. Fires after [[onChange]] when both are set.
       */
-    def onPick(f: A => UI.Action)(using Frame): SelectButton[A] = copy(onPickF = Present(Callback.of(f)))
+    def onPick(f: A => UI.Action)(using Frame): SelectButton[A] = new SelectButton(s.copy(onPickF = Present(Callback.of(f))))
 
     /** Fires on focus loss with the selection held (`Absent` for none): the validation layer's Blur trigger. */
-    def onBlur(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): SelectButton[A] = new SelectButton(s.copy(onBlurF = Present(Callback.of(f))))
 
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -182,9 +168,13 @@ final case class SelectButton[A] private (
     private[uic] def render(using Frame): UI =
         // Unbound, the group keeps what the reader presses itself.
         if multipleFlag && multi.isEmpty then
-            UI.owned(Set.empty[A])(own => copy(multi = Present(MultiChoice(ReactiveVariable(own)))).renderBound).placeholder(renderBound)
+            UI.owned(Set.empty[A])(own =>
+                new SelectButton(s.copy(multi = Present(MultiChoice(ReactiveVariable(own))))).renderBound
+            ).placeholder(renderBound)
         else if !multipleFlag && single.isEmpty then
-            UI.owned(Maybe.empty[A])(own => copy(single = Present(SingleChoice.Optional(ReactiveVariable(own)))).renderBound)
+            UI.owned(Maybe.empty[A])(own =>
+                new SelectButton(s.copy(single = Present(SingleChoice.Optional(ReactiveVariable(own))))).renderBound
+            )
                 .placeholder(renderBound)
         else renderBound
 
@@ -213,7 +203,11 @@ final case class SelectButton[A] private (
         validity.follow(read.render { case (((d, l), h), opts) =>
             val shownItems = OptionItem.flatten(opts)
             val nav: Nav   = minted.map((base, focus) => (shownItems.indices.map(i => s"$base-$i").toList, focus))
-            copy(items = shownItems, disabledFlag = d.map(BoolValue.Const(_)), loadingV = l.map(BoolValue.Const(_))).body(h, nav, validity)
+            new SelectButton(s.copy(
+                items = shownItems,
+                disabledFlag = d.map(BoolValue.Const(_)),
+                loadingV = l.map(BoolValue.Const(_))
+            )).body(h, nav, validity)
         })
     end renderNav
 
@@ -400,7 +394,36 @@ final case class SelectButton[A] private (
 end SelectButton
 
 object SelectButton:
-    def apply[A](): SelectButton[A] = new SelectButton[A](Nil, _.toString)
+    final private[uic] case class State[A](
+        // The options the body draws, resolved from `optionSources` by the region that draws them.
+        items: List[A],
+        labelF: A => String,
+        keyF: Maybe[A => String] = Absent,
+        itemTemplateF: Maybe[A => UI] = Absent,
+        optionDisabledF: Maybe[A => Boolean] = Absent,
+        single: Maybe[SingleChoice[A]] = Absent,
+        multi: Maybe[MultiChoice[A]] = Absent,
+        multipleFlag: Boolean = false,
+        allowEmptyFlag: Boolean = true,
+        sizeV: Size = Size.Normal,
+        disabledFlag: Maybe[BoolValue] = Absent,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        accNameRefV: Maybe[String] = Absent,
+        onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+        onPickF: Maybe[A => UI.Action] = Absent,
+        onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,
+        onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+        onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
+        loadingV: Maybe[BoolValue] = Absent,
+        idV: Maybe[String] = Absent,
+        optionSources: List[OptionSource[A]] = Nil
+    )
+
+    def apply[A](): SelectButton[A] = new SelectButton[A](State(Nil, _.toString))
+end SelectButton
 
 /** A [[SelectButton]] where several options may be on at once (Prime's `multiple`): a row of independent toggle buttons,
   * each its own tab stop, bound to the `Set[A]` of the options that are on. Made by [[SelectButton.multiple]], and a type
