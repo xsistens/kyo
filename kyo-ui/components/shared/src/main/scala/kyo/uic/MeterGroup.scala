@@ -33,76 +33,68 @@ import kyo.UI.*
   * per-item functions fit the library's typed template idiom; see
   * `Timeline.content`).
   */
-final case class MeterGroup private (
-    metersV: List[MeterGroup.Meter] = Nil,
-    maxV: Double = 100.0,
-    orientationV: Orientation = Orientation.Horizontal,
-    labelOrientationV: Orientation = Orientation.Horizontal,
-    labelPositionV: LabelPosition = LabelPosition.End,
-    startTemplateV: Maybe[UI] = Absent,
-    endTemplateV: Maybe[UI] = Absent,
-    meterTemplateV: Maybe[(MeterGroup.Meter, Double) => UI] = Absent,
-    labelTemplateV: Maybe[(MeterGroup.Meter, Double) => UI] = Absent
-) extends Node:
+final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) extends Node, Stated:
+    import s.*
+
     type Self = MeterGroup
 
     /** Appends one meter drawing its color from the default palette. A `Signal[String]` label
       * re-renders in place on emission; the trailing `(NN%)` follows the value either way.
       */
     def meter(label: String | Signal[String], value: Double): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter(label, value))
+        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value)))
 
     /** Appends one meter with an explicit CSS color (`#hex` or `var(--token)`). */
     def meter(label: String | Signal[String], value: Double, color: String): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color)))
+        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color))))
 
     /** Appends one meter whose label leads with `icon` instead of the color marker. */
     def meter(label: String | Signal[String], value: Double, icon: IconGlyph): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter(label, value, Absent, Present(icon)))
+        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Absent, Present(icon))))
 
     /** Appends one meter with an explicit CSS color and a leading label icon. */
     def meter(label: String | Signal[String], value: Double, color: String, icon: IconGlyph): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color), Present(icon)))
+        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color), Present(icon))))
 
     /** Appends the given meters. */
-    def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = copy(metersV = metersV ++ ms.toList)
+    def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = new MeterGroup(s.copy(metersV = metersV ++ ms.toList))
 
     /** The scale ceiling (default 100): each meter's size is `value / max`. */
-    def max(v: Double): MeterGroup = copy(maxV = v)
+    def max(v: Double): MeterGroup = new MeterGroup(s.copy(maxV = v))
 
     /** Meter-track orientation: `Vertical` renders `.p-metergroup-vertical`: the
       * track becomes a column and segments size by HEIGHT percent (the group needs
       * a height from the surrounding layout). Default `Horizontal`.
       */
-    def orientation(v: Orientation): MeterGroup = copy(orientationV = v)
+    def orientation(v: Orientation): MeterGroup = new MeterGroup(s.copy(orientationV = v))
 
     /** Label-list orientation (independent of the track, like Prime's
       * `labelOrientation`): `Vertical` stacks the labels. Default `Horizontal`.
       */
-    def labelOrientation(v: Orientation): MeterGroup = copy(labelOrientationV = v)
+    def labelOrientation(v: Orientation): MeterGroup = new MeterGroup(s.copy(labelOrientationV = v))
 
     /** Places the label list before (`Start`) or after (`End`, default) the meter
       * track (Prime's `labelPosition`).
       */
-    def labelPosition(v: LabelPosition): MeterGroup = copy(labelPositionV = v)
+    def labelPosition(v: LabelPosition): MeterGroup = new MeterGroup(s.copy(labelPositionV = v))
 
     /** Content rendered directly BEFORE the meter track (Prime's `start` slot). */
-    def startTemplate(content: UI): MeterGroup = copy(startTemplateV = Present(content))
+    def startTemplate(content: UI): MeterGroup = new MeterGroup(s.copy(startTemplateV = Present(content)))
 
     /** Content rendered directly AFTER the meter track (Prime's `end` slot). */
-    def endTemplate(content: UI): MeterGroup = copy(endTemplateV = Present(content))
+    def endTemplate(content: UI): MeterGroup = new MeterGroup(s.copy(endTemplateV = Present(content)))
 
     /** Replaces each meter segment with `(meter, percent) => UI` (Prime's `meter`
       * slot); the template renders for 0% meters too; skipping is its call.
       */
     def meterTemplate(f: (MeterGroup.Meter, Double) => UI): MeterGroup =
-        copy(meterTemplateV = Present(f))
+        new MeterGroup(s.copy(meterTemplateV = Present(f)))
 
     /** Replaces each label row's CONTENT with `(meter, percent) => UI`, keeping the
       * `li.p-metergroup-label` rows (Prime's `label` slot swaps the whole list).
       */
     def labelTemplate(f: (MeterGroup.Meter, Double) => UI): MeterGroup =
-        copy(labelTemplateV = Present(f))
+        new MeterGroup(s.copy(labelTemplateV = Present(f)))
 
     private def pct(v: Double): Double =
         if maxV <= 0 then 0.0 else math.max(0.0, math.min(100.0, v / maxV * 100.0))
@@ -175,7 +167,19 @@ final case class MeterGroup private (
 end MeterGroup
 
 object MeterGroup:
-    def apply(): MeterGroup = new MeterGroup()
+    final private[uic] case class State(
+        metersV: List[MeterGroup.Meter] = Nil,
+        maxV: Double = 100.0,
+        orientationV: Orientation = Orientation.Horizontal,
+        labelOrientationV: Orientation = Orientation.Horizontal,
+        labelPositionV: LabelPosition = LabelPosition.End,
+        startTemplateV: Maybe[UI] = Absent,
+        endTemplateV: Maybe[UI] = Absent,
+        meterTemplateV: Maybe[(MeterGroup.Meter, Double) => UI] = Absent,
+        labelTemplateV: Maybe[(MeterGroup.Meter, Double) => UI] = Absent
+    )
+
+    def apply(): MeterGroup = new MeterGroup(State())
 
     /** One meter: `label` + `value` (scaled against the group's `max`), an
       * optional CSS color (`#hex` or `var(--token)`; unset draws from the

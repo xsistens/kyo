@@ -22,52 +22,44 @@ enum FlexDirection derives CanEqual:
   * typed `FlexWrap` ADT has no reverse variant. `fitContainer` stretches the box
   * to `100%` of both parent dimensions via `p-uic-flex--fit`.
   */
-final case class FlexBox private (
-    directionV: Maybe[FlexDirection] = Absent,
-    gapV: Maybe[Length.Px | Length.Em] = Absent,
-    gapRaw: Maybe[String] = Absent,
-    justifyV: Maybe[Style.Justification] = Absent,
-    alignV: Maybe[Style.Alignment] = Absent,
-    wrapFlag: Boolean = false,
-    wrapReverseFlag: Boolean = false,
-    fitContainerV: Boolean = false,
-    kids: List[UI] = Nil
-) extends Node:
+final class FlexBox private[uic] (private[uic] val s: FlexBox.State) extends Node, Stated:
+    import s.*
+
     type Self = FlexBox
 
     /** Typed flow direction (default row). */
-    def direction(v: FlexDirection): FlexBox = copy(directionV = Present(v))
+    def direction(v: FlexDirection): FlexBox = new FlexBox(s.copy(directionV = Present(v)))
 
     /** Column direction (default is row); alias for `direction(Column/Row)`. */
     def vertical(v: Boolean): FlexBox =
-        copy(directionV = Present(if v then FlexDirection.Column else FlexDirection.Row))
+        new FlexBox(s.copy(directionV = Present(if v then FlexDirection.Column else FlexDirection.Row)))
 
-    def gap(px: Int): FlexBox = copy(gapV = Present(Length.Px(px)), gapRaw = Absent)
+    def gap(px: Int): FlexBox = new FlexBox(s.copy(gapV = Present(Length.Px(px)), gapRaw = Absent))
 
     /** Gap from a CSS length string (`"8px"`, `"0.5em"`, `"1rem"`, bare number as
       * px). An unparseable value is kept as a `data-uic-gap` hook only.
       */
     def gap(v: String): FlexBox =
         FlexBox.parseGap(v) match
-            case Present(len) => copy(gapV = Present(len), gapRaw = Absent)
-            case Absent       => copy(gapV = Absent, gapRaw = Present(v))
+            case Present(len) => new FlexBox(s.copy(gapV = Present(len), gapRaw = Absent))
+            case Absent       => new FlexBox(s.copy(gapV = Absent, gapRaw = Present(v)))
 
     def justify(f: Style.Justification.type => Style.Justification): FlexBox =
-        copy(justifyV = Present(f(Style.Justification)))
+        new FlexBox(s.copy(justifyV = Present(f(Style.Justification))))
 
     def align(f: Style.Alignment.type => Style.Alignment): FlexBox =
-        copy(alignV = Present(f(Style.Alignment)))
+        new FlexBox(s.copy(alignV = Present(f(Style.Alignment))))
 
-    def wrap(v: Boolean): FlexBox = copy(wrapFlag = v)
+    def wrap(v: Boolean): FlexBox = new FlexBox(s.copy(wrapFlag = v))
 
     /** Wraps lines in reverse stacking order (`flex-wrap: wrap-reverse`); wins over `wrap`. */
-    def wrapReverse(v: Boolean): FlexBox = copy(wrapReverseFlag = v)
+    def wrapReverse(v: Boolean): FlexBox = new FlexBox(s.copy(wrapReverseFlag = v))
 
     /** Stretches the box to 100% width and height of its container. */
-    def fitContainer(v: Boolean): FlexBox = copy(fitContainerV = v)
+    def fitContainer(v: Boolean): FlexBox = new FlexBox(s.copy(fitContainerV = v))
 
     /** Adds children. */
-    def apply(cs: UI*): FlexBox = copy(kids = kids ++ cs)
+    def apply(cs: UI*): FlexBox = new FlexBox(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var s = directionV.getOrElse(FlexDirection.Row) match
@@ -98,7 +90,19 @@ final case class FlexBox private (
 end FlexBox
 
 object FlexBox:
-    def apply(): FlexBox = new FlexBox()
+    final private[uic] case class State(
+        directionV: Maybe[FlexDirection] = Absent,
+        gapV: Maybe[Length.Px | Length.Em] = Absent,
+        gapRaw: Maybe[String] = Absent,
+        justifyV: Maybe[Style.Justification] = Absent,
+        alignV: Maybe[Style.Alignment] = Absent,
+        wrapFlag: Boolean = false,
+        wrapReverseFlag: Boolean = false,
+        fitContainerV: Boolean = false,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): FlexBox = new FlexBox(State())
 
     /** Parses a CSS gap string into the `Px | Em` union kyo's `Style.gap` accepts
       * (`rem` converts at the standard 16px root).

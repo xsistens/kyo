@@ -33,20 +33,19 @@ import kyo.UI.*
   * focusable, a `Form`-level error can target it (`form.check(code, focusId =
   * Present(id))`) and the focus-jump lands on the group's FIRST focusable field.
   */
-final case class InputGroup private (
-    kids: List[UI] = Nil,
-    idV: Maybe[String] = Absent
-) extends Node, HasElementId:
+final class InputGroup private[uic] (private[uic] val s: InputGroup.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = InputGroup
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputGroup = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): InputGroup = new InputGroup(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
 
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
-    def apply(cs: UI*): InputGroup = copy(kids = kids ++ cs)
+    def apply(cs: UI*): InputGroup = new InputGroup(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-inputgroup").cssClass("p-component")
@@ -56,7 +55,12 @@ final case class InputGroup private (
 end InputGroup
 
 object InputGroup:
-    def apply(): InputGroup = new InputGroup()
+    final private[uic] case class State(
+        kids: List[UI] = Nil,
+        idV: Maybe[String] = Absent
+    )
+
+    def apply(): InputGroup = new InputGroup(State())
 
     /** One addon cell (`span.p-inputgroupaddon`): text, an icon, or a Button
       * (the CSS strips the padding around a nested `.p-button`).
