@@ -9,15 +9,22 @@ import kyo.UI.*
   * conventionally is, and which an intermediate step with no page behind it may
   * also be. `target` maps onto the anchor's `target` attribute when it is one of
   * the standard `_self` / `_blank` / `_parent` / `_top` values.
+  *
+  * [[Breadcrumb.onItemClick]] hands the crumb over, and [[href]] is what a handler reads from it.
   */
-final case class BreadcrumbItem private[uic] (
-    text: TextValue,
-    href: Maybe[String],
-    target: Maybe[String],
-    icon: Maybe[IconGlyph]
-) derives CanEqual
+final class BreadcrumbItem private[uic] (private[uic] val s: BreadcrumbItem.State) extends Stated derives CanEqual:
+    /** Where this crumb links to, `Absent` for one that is plain text. */
+    def href: Maybe[String] = s.href
+end BreadcrumbItem
 
 object BreadcrumbItem:
+    final private[uic] case class State(
+        text: TextValue,
+        href: Maybe[String],
+        target: Maybe[String],
+        icon: Maybe[IconGlyph]
+    )
+
     /** Construct a crumb. A `Signal[String]` label re-renders in place on emission; the rest of
       * the crumb (href, target, icon) is static either way.
       */
@@ -26,7 +33,7 @@ object BreadcrumbItem:
         href: Maybe[String] = Absent,
         target: Maybe[String] = Absent,
         icon: Maybe[IconGlyph] = Absent
-    ): BreadcrumbItem = new BreadcrumbItem(ReactiveValue(text), href, target, icon)
+    ): BreadcrumbItem = new BreadcrumbItem(State(ReactiveValue(text), href, target, icon))
 end BreadcrumbItem
 
 /** A crumb, built directly or as `_.item(...)` (see [[BreadcrumbItemScope]]). */
@@ -150,12 +157,12 @@ final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) exten
         it.href match
             case Present(h) =>
                 anchor = anchor.href(Href.Path(h))
-                Breadcrumb.parseTarget(it.target).foreach(t => anchor = anchor.target(t))
+                Breadcrumb.parseTarget(it.s.target).foreach(t => anchor = anchor.target(t))
             case Absent =>
                 if isCurrent then anchor = anchor.aria("current", "page")
         end match
-        val iconSlot: List[UI]  = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
-        val labelSlot: List[UI] = it.text match
+        val iconSlot: List[UI]  = it.s.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
+        val labelSlot: List[UI] = it.s.text match
             case TextValue.Dyn(s)   => List(span.cssClass("p-breadcrumb-item-label")(s))
             case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))
         val linked = anchor(UI.children(iconSlot ++ labelSlot)*)

@@ -25,6 +25,27 @@ class NodeSurfaceTest extends UicTest:
         typeCheckFailure(preamble + e + ".canEqual(1)")
     end hidden
 
+    "the carriers a reader is handed show what a reader needs, and no more" in {
+        hidden("""uic.BreadcrumbItem("a")""")
+        typeCheck(preamble + """uic.BreadcrumbItem("a").href""")
+        typeCheckFailure(preamble + """uic.BreadcrumbItem("a").text""")
+        typeCheckFailure(preamble + """uic.BreadcrumbItem("a").target""")
+        typeCheckFailure(preamble + """uic.BreadcrumbItem("a").icon""")
+
+        hidden("""uic.MeterGroup.Meter("a", 1.0)""")
+        typeCheck(preamble + """uic.MeterGroup.Meter("a", 1.0).labelText""")
+        typeCheckFailure(preamble + """uic.MeterGroup.Meter("a", 1.0).label""")
+        typeCheckFailure(preamble + """uic.MeterGroup.Meter("a", 1.0).value""")
+        typeCheckFailure(preamble + """uic.MeterGroup.Meter("a", 1.0).color""")
+        typeCheckFailure(preamble + """uic.MeterGroup.Meter("a", 1.0).icon""")
+
+        hidden("""uic.Theme.brand("a", Nil)""")
+        typeCheck(preamble + """uic.Theme.brand("a", Nil).sheet""")
+        typeCheck(preamble + """uic.Theme.brand("a", Nil).attr""")
+        typeCheckFailure(preamble + """uic.Theme.brand("a", Nil).name""")
+        succeed
+    }
+
     "the display components show setters only" in {
         hidden("uic.Avatar()")
         hidden("uic.AvatarGroup()")
@@ -169,6 +190,25 @@ class NodeSurfaceTest extends UicTest:
         assert((uic.Input().accessibleName("a"): Any) != (uic.Input(): Any))
         assert((uic.Input().invalidMessage("a"): Any) == (uic.Input().invalidMessage("a"): Any))
         assert((uic.Input().invalidMessage("a"): Any) != (uic.Input().invalidMessage("b"): Any))
+    }
+
+    "the carriers compare by what they hold too" in {
+        given CanEqual[Any, Any] = CanEqual.derived
+        assert((uic.BreadcrumbItem("a", Present("/a")): Any) == (uic.BreadcrumbItem("a", Present("/a")): Any))
+        assert((uic.BreadcrumbItem("a", Present("/a")): Any) != (uic.BreadcrumbItem("a", Present("/b")): Any))
+        assert((uic.MeterGroup.Meter("a", 1.0): Any) == (uic.MeterGroup.Meter("a", 1.0): Any))
+        assert((uic.MeterGroup.Meter("a", 1.0): Any) != (uic.MeterGroup.Meter("a", 2.0): Any))
+        assert(uic.Theme.brand("a", Nil) == uic.Theme.brand("a", Nil))
+        assert(uic.Theme.brand("a", Nil) != uic.Theme.brand("b", Nil))
+    }
+
+    "the getters answer what was built" in {
+        assert(uic.BreadcrumbItem("a", Present("/a")).href == Present("/a"))
+        assert(uic.BreadcrumbItem("a").href == Absent)
+        assert(uic.MeterGroup.Meter("a", 1.0).labelText == "a")
+        assert(uic.MeterGroup.Meter(Signal.initConst("a"), 1.0).labelText == "")
+        assert(uic.Theme.brand("a", Nil).attr == "a")
+        assert(uic.Theme.brand("a", Nil).sheet.isEmpty)
     }
 
     "two classes holding the same component stay different" in {

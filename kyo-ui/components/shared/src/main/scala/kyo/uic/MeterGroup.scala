@@ -100,10 +100,10 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
         if maxV <= 0 then 0.0 else math.max(0.0, math.min(100.0, v / maxV * 100.0))
 
     private def colorOf(m: MeterGroup.Meter, index: Int): Style.Color =
-        m.color.flatMap(Style.Color.parse).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
+        m.s.color.flatMap(Style.Color.parse).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
 
     private[uic] def render(using Frame): UI =
-        val totalPct = math.round(pct(metersV.map(_.value).sum))
+        val totalPct = math.round(pct(metersV.map(_.s.value).sum))
         val root     = div
             .cssClass("p-metergroup")
             .cssClass("p-component")
@@ -116,13 +116,13 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
         // Like Prime, default segments rounding to 0% render no span at all; a
         // custom meterTemplate always renders (skipping is the template's call).
         val segments: List[UI] = metersV.zipWithIndex.collect {
-            case (m, i) if meterTemplateV.isDefined || math.round(pct(m.value)) != 0L =>
+            case (m, i) if meterTemplateV.isDefined || math.round(pct(m.s.value)) != 0L =>
                 meterTemplateV match
-                    case Present(f) => f(m, pct(m.value))
+                    case Present(f) => f(m, pct(m.s.value))
                     case Absent     =>
                         val sized: Style.type => Style = orientationV match
-                            case Orientation.Horizontal => _.width(Length.Pct(pct(m.value))).bg(colorOf(m, i))
-                            case Orientation.Vertical   => _.height(Length.Pct(pct(m.value))).bg(colorOf(m, i))
+                            case Orientation.Horizontal => _.width(Length.Pct(pct(m.s.value))).bg(colorOf(m, i))
+                            case Orientation.Vertical   => _.height(Length.Pct(pct(m.s.value))).bg(colorOf(m, i))
                         span.cssClass("p-metergroup-meter").style(sized)
         }
         val meters: UI = div.cssClass("p-metergroup-meters")(UI.children(segments)*)
@@ -132,23 +132,23 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
             .cssClass(s"p-metergroup-label-list-${labelOrientationV.token}")(
                 UI.children(metersV.zipWithIndex.map { (m, i) =>
                     val content: List[UI] = labelTemplateV match
-                        case Present(f) => List(f(m, pct(m.value)))
+                        case Present(f) => List(f(m, pct(m.s.value)))
                         case Absent     =>
-                            val lead: UI = m.icon match
+                            val lead: UI = m.s.icon match
                                 case Present(g) =>
                                     GlyphSvg.styled(g, _.color(colorOf(m, i)), "p-metergroup-label-icon")
                                 case Absent =>
                                     span.cssClass("p-metergroup-label-marker").style(_.bg(colorOf(m, i)))
-                            val labelText: UI = m.label match
+                            val labelText: UI = m.s.label match
                                 case TextValue.Dyn(sig) =>
                                     // The percentage is build-time (the meter value is not reactive), so the
                                     // whole label is a projection of the one string signal and goes in as a
                                     // text child, patched in place instead of rebuilding the span.
                                     span.cssClass("p-metergroup-label-text")(
-                                        sig.map(t => s"$t (${math.round(pct(m.value))}%)")
+                                        sig.map(t => s"$t (${math.round(pct(m.s.value))}%)")
                                     )
                                 case TextValue.Const(t) =>
-                                    span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)")
+                                    span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.s.value))}%)")
                             List(lead, labelText)
                     li.cssClass("p-metergroup-label")(UI.children(content)*)
                 })*
@@ -187,28 +187,32 @@ object MeterGroup:
       * marker, tinted with the meter color, Prime semantics). A reactive label
       * re-renders only its own text region; the `(NN%)` suffix follows the value.
       */
-    final case class Meter private[uic] (
-        label: TextValue,
-        value: Double,
-        color: Maybe[String],
-        icon: Maybe[IconGlyph]
-    ):
+    final class Meter private[uic] (private[uic] val s: Meter.State) extends Stated:
+        import s.*
+
         /** The label as plain text, `""` for a reactive one. What a [[MeterGroup.meterTemplate]] or
-          * [[MeterGroup.labelTemplate]] reads when it composes its own label string: the carrier itself is
-          * package-private, and a template that wants the reactive text should take the signal it
-          * built the meter from rather than read it back out here.
+          * [[MeterGroup.labelTemplate]] reads when it composes its own label string, and all it reads off the
+          * meter: the template is handed the percent, and a template that wants the reactive text should take
+          * the signal it built the meter from rather than read it back out here.
           */
         def labelText: String = label.constOrEmpty
     end Meter
 
     object Meter:
+        final private[uic] case class State(
+            label: TextValue,
+            value: Double,
+            color: Maybe[String],
+            icon: Maybe[IconGlyph]
+        )
+
         /** Construct a meter. A `Signal[String]` label re-renders in place on emission. */
         def apply(
             label: String | Signal[String],
             value: Double,
             color: Maybe[String] = Absent,
             icon: Maybe[IconGlyph] = Absent
-        ): Meter = new Meter(ReactiveValue(label), value, color, icon)
+        ): Meter = new Meter(State(ReactiveValue(label), value, color, icon))
     end Meter
 
     /** The rotating default segment palette (Prime theme tokens). */

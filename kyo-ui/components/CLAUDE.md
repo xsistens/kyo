@@ -48,9 +48,12 @@ no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sw
   anything else without deciding it first.
 - **A name the companion already used stays with its owner.** `ContextMenu.State` is public API, so that one state is
   `ContextMenu.Slots`. The wired per-mount state of the pickers is `Wired`.
+- **What a reader needs of the state gets a named public getter, and only that** (decided 2026-11-04). `BreadcrumbItem.href`,
+  since `onItemClick` hands the crumb over and a handler routes on it; `MeterGroup.Meter.labelText`, since a template composes its
+  label from it and is handed the percent; `Theme.Brand.sheet`, since emitting it is what a brand is for, beside `attr` from
+  `Palette`. A getter is a decision about the surface, so `NodeSurfaceTest` names each one.
 - **What stays a case class:** data people construct and match on (`FilterRule`, `SortKey`, `TableState`, `TreeNode`,
-  `ToastMessage`, ...), and three with a private constructor whose fields ARE their API: `Theme.Brand` (`name` and `sheet` are
-  what it is for), `MeterGroup.Meter` (a template reads it) and `BreadcrumbItem` (`onItemClick` hands it over).
+  `ToastMessage`, ...). Those are not components.
 
 ## kyo-ui is in-tree
 
@@ -1071,6 +1074,10 @@ is shown to the reader as the copy-paste source. Change both or neither.
 An API change here is not finished until that demo compiles against the new
 version. A rename with no counterpart in the demo is a rename that has not been
 carried through.
+
+Compiling is not all of it. The demo's `ApiMacro` reads a setter's BODY to fill the Default column of its tables: it follows
+`new X(s.copy(f = v))` and `withG(g.copy(f = v))` to the field and reads what an unconfigured component holds there. A setter that
+reaches its field another way prints no default or a wrong one, and nothing fails, since `CheckDocs` does not judge the text.
 
 ## Effect-as-value trap
 

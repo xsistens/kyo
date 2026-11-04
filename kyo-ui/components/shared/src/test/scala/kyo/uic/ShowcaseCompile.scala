@@ -422,7 +422,7 @@ object ShowcaseCompile:
                 .startTemplate(span("used"))
                 .endTemplate(span("of 100 GB"))
                 .meterTemplate((m, pc) => span.cssClass("seg")(m.labelText))
-                .labelTemplate((m, pc) => span(s"${m.label}: ${math.round(pc)}%"))
+                .labelTemplate((m, pc) => span(s"${m.labelText}: ${math.round(pc)}%"))
         )
 
     def featureGapPage(
