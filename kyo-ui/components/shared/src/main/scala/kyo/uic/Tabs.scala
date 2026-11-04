@@ -153,7 +153,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
 
     /** Appends a single tab from bare content children (ergonomic builder). */
     def tab(text: String | Signal[String], id: K)(content: UI*)(using Frame): Tabs[K] =
-        new Tabs(this.s.copy(tabSources =
+        new Tabs(s.copy(tabSources =
             tabSources :+ new Tab(Tab.State(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
         ))
 
