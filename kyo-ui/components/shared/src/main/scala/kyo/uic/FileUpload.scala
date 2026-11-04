@@ -47,7 +47,7 @@ final class FileUpload private[uic] (private[uic] val s: FileUpload.State) exten
     private[uic] def accessibility: Accessibility              = accessV
     private[uic] def withAccessibility(v: Accessibility): Self = new FileUpload(s.copy(accessV = v))
 
-    /** What the native input's id is: the one chosen, else the working default, so that it is addressable unasked. `id` and
+    /** What the native input's id is: the working default until one is chosen, so that it is addressable unasked. `id` and
       * [[inputId]] are the same slot: `bind` stamps the field's minted id here so focus-first-invalid lands on the native
       * input, and it is the same `for` target the choose label points at.
       */
@@ -178,7 +178,7 @@ end FileUpload
 
 object FileUpload:
     final private[uic] case class State(
-        accessV: Accessibility = Accessibility.none,
+        accessV: Accessibility = FileUpload.startingAccess,
         chooseLabelV: TextValue = TextValue.Const("Choose"),
         fileLabelV: Maybe[TextValue] = Absent,
         acceptV: List[FileAccept] = Nil,
@@ -195,6 +195,8 @@ object FileUpload:
       * [[FileUpload.elementId]] has to tell the default apart from a caller's choice.
       */
     private[uic] val defaultInputId = "p-uic-fileupload"
+
+    private val startingAccess = Accessibility(idV = Present(defaultInputId))
 
     private val filesName = Slot.Name("FileUpload", "the files", "a pick", "onChange", consequence = "the reader's choice reaches nobody")
 
