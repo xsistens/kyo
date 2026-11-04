@@ -44,19 +44,16 @@ end FloatLabelVariant
   * (Prime's empty-label look); a non-empty placeholder floats the label
   * permanently, like `input[placeholder]`.
   */
-final case class FloatLabel private (
-    hostV: FloatLabel.Host,
-    labelText: String,
-    variantV: FloatLabelVariant = FloatLabelVariant.Over,
-    forIdV: Maybe[String] = Absent
-) extends Node:
+final class FloatLabel private[uic] (private[uic] val s: FloatLabel.State) extends Node, Stated:
+    import s.*
+
     type Self = FloatLabel
 
     /** Float variant: `Over` (default), `In`, or `On`. */
-    def variant(v: FloatLabelVariant): FloatLabel = copy(variantV = v)
+    def variant(v: FloatLabelVariant): FloatLabel = new FloatLabel(s.copy(variantV = v))
 
     /** The label's native `for` binding (give the wrapped field the matching id). */
-    def forId(id: String): FloatLabel = copy(forIdV = Present(id))
+    def forId(id: String): FloatLabel = new FloatLabel(s.copy(forIdV = Present(id)))
 
     private[uic] def render(using Frame): UI =
         FloatLabel.renderWrapper(
@@ -68,6 +65,13 @@ final case class FloatLabel private (
 end FloatLabel
 
 object FloatLabel:
+    final private[uic] case class State(
+        hostV: FloatLabel.Host,
+        labelText: String,
+        variantV: FloatLabelVariant = FloatLabelVariant.Over,
+        forIdV: Maybe[String] = Absent
+    )
+
     /** The wrapped field (Input, TextArea, Select, or AutoComplete). */
     private[uic] enum Host:
         case In(i: Input)
@@ -77,21 +81,21 @@ object FloatLabel:
     end Host
 
     /** Wraps `input` with a floating `label`. */
-    def apply(input: Input, label: String): FloatLabel = new FloatLabel(Host.In(input), label)
+    def apply(input: Input, label: String): FloatLabel = new FloatLabel(State(Host.In(input), label))
 
     /** Wraps `textArea` with a floating `label`. */
-    def apply(textArea: TextArea, label: String): FloatLabel = new FloatLabel(Host.Ta(textArea), label)
+    def apply(textArea: TextArea, label: String): FloatLabel = new FloatLabel(State(Host.Ta(textArea), label))
 
     /** Wraps `select` with a floating `label` (floats while a value is selected;
       * an empty placeholder option keeps the closed field blank until a pick).
       */
-    def apply(select: Select[?], label: String): FloatLabel = new FloatLabel(Host.Sel(select), label)
+    def apply(select: Select[?], label: String): FloatLabel = new FloatLabel(State(Host.Sel(select), label))
 
     /** Wraps `autoComplete` with a floating `label` (floats via `.p-filled` on
       * the inner text input).
       */
     def apply(autoComplete: AutoComplete[?], label: String): FloatLabel =
-        new FloatLabel(Host.Ac(autoComplete), label)
+        new FloatLabel(State(Host.Ac(autoComplete), label))
 
     /** Shared FloatLabel/IftaLabel body: the field and the label. Each host carries
       * Prime's `.p-filled` / `.p-inputwrapper-filled` class itself.
@@ -142,15 +146,13 @@ end FloatLabel
   * Prime's own iftalabel sheet already carries the `textarea:focus` and
   * `.p-inputwrapper-focus` selectors the other three hosts need.
   */
-final case class IftaLabel private (
-    hostV: FloatLabel.Host,
-    labelText: String,
-    forIdV: Maybe[String] = Absent
-) extends Node:
+final class IftaLabel private[uic] (private[uic] val s: IftaLabel.State) extends Node, Stated:
+    import s.*
+
     type Self = IftaLabel
 
     /** The label's native `for` binding (give the wrapped field the matching id). */
-    def forId(id: String): IftaLabel = copy(forIdV = Present(id))
+    def forId(id: String): IftaLabel = new IftaLabel(s.copy(forIdV = Present(id)))
 
     private[uic] def render(using Frame): UI =
         FloatLabel.renderWrapper(
@@ -162,18 +164,24 @@ final case class IftaLabel private (
 end IftaLabel
 
 object IftaLabel:
+    final private[uic] case class State(
+        hostV: FloatLabel.Host,
+        labelText: String,
+        forIdV: Maybe[String] = Absent
+    )
+
     /** Wraps `input` with the infield top-aligned `label`. */
-    def apply(input: Input, label: String): IftaLabel = new IftaLabel(FloatLabel.Host.In(input), label)
+    def apply(input: Input, label: String): IftaLabel = new IftaLabel(State(FloatLabel.Host.In(input), label))
 
     /** Wraps `textArea` with the infield top-aligned `label`. */
-    def apply(textArea: TextArea, label: String): IftaLabel = new IftaLabel(FloatLabel.Host.Ta(textArea), label)
+    def apply(textArea: TextArea, label: String): IftaLabel = new IftaLabel(State(FloatLabel.Host.Ta(textArea), label))
 
     /** Wraps `select` with the infield top-aligned `label` (an empty placeholder
       * option keeps the closed field blank until a pick, as in [[FloatLabel]]).
       */
-    def apply(select: Select[?], label: String): IftaLabel = new IftaLabel(FloatLabel.Host.Sel(select), label)
+    def apply(select: Select[?], label: String): IftaLabel = new IftaLabel(State(FloatLabel.Host.Sel(select), label))
 
     /** Wraps `autoComplete` with the infield top-aligned `label`. */
     def apply(autoComplete: AutoComplete[?], label: String): IftaLabel =
-        new IftaLabel(FloatLabel.Host.Ac(autoComplete), label)
+        new IftaLabel(State(FloatLabel.Host.Ac(autoComplete), label))
 end IftaLabel

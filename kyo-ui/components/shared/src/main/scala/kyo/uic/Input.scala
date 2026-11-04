@@ -24,53 +24,30 @@ end InputType
   * Validation is Prime's `.p-invalid` model: `invalid(Boolean)` plus the
   * optional `invalidMessage(String)` row below the field.
   */
-final case class Input private (
-    valueSlot: Slot[String] = Slot(),
-    placeholderText: Maybe[TextValue] = Absent,
-    disabledFlag: Maybe[BoolValue] = Absent,
-    readonlyFlag: Maybe[BoolValue] = Absent,
-    requiredFlag: Maybe[Boolean] = Absent,
-    nameV: Maybe[String] = Absent,
-    maxLengthV: Maybe[Int] = Absent,
-    typeV: InputType = InputType.Text,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    fluidFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    accDescV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => UI.Action] = Absent,
-    onBlurF: Maybe[String => UI.Action] = Absent,
-    inputFilterV: Maybe[String] = Absent,
-    inputMaskV: Maybe[String] = Absent,
-    extraClassesV: List[String] = Nil,
-    idV: Maybe[String] = Absent,
-    focusAutoFlag: Boolean = false,
-    unheardAsV: Slot.Name = Input.valueName("Input", "onInput or onChange"),
-    filledUpV: Maybe[(String, String)] = Absent
-) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
+final class Input private[uic] (private[uic] val s: Input.State) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef,
+      HasAccessibleDescription, Stated:
+    import s.*
+
     type Self = Input
 
     /** Package-internal class hook: wrappers (FloatLabel/IftaLabel) stamp Prime's
       * state classes (`p-filled`) onto the field they wrap.
       */
-    private[uic] def extraClass(cls: String): Input = copy(extraClassesV = extraClassesV :+ cls)
+    private[uic] def extraClass(cls: String): Input = new Input(s.copy(extraClassesV = extraClassesV :+ cls))
 
     /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose
       * own events are what hear it ([[InputMask]]).
       */
-    private[uic] def unheardAs(component: String, events: String): Input = copy(unheardAsV = Input.valueName(component, events))
+    private[uic] def unheardAs(component: String, events: String): Input =
+        new Input(s.copy(unheardAsV = Input.valueName(component, events)))
 
     /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
       * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
       */
-    private[uic] def filledOn(cls: String, closest: String): Input = copy(filledUpV = Present((cls, closest)))
+    private[uic] def filledOn(cls: String, closest: String): Input = new Input(s.copy(filledUpV = Present((cls, closest))))
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Input = new Input(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -85,60 +62,61 @@ final case class Input private (
       * At most one focus-auto element is seeded per patch, so several fields appearing
       * together (a row of editors) hand focus to the first.
       */
-    def focusAuto(v: Boolean): Input = copy(focusAutoFlag = v)
+    def focusAuto(v: Boolean): Input = new Input(s.copy(focusAutoFlag = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal
       * binds ONE-WAY: the field shows it, and an edit writes nothing and only reports through [[onInput]] and
       * [[onChange]], so the app writes its own state and the field follows; with neither, a card says the reader cannot
       * change it. A constant is the starting text, which the reader edits freely. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Input = copy(valueSlot = valueSlot.bind(v))
+    def value(v: String | Signal[String]): Input = new Input(s.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = copy(placeholderText = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = new Input(s.copy(placeholderText = v))
 
     /** Disabled, constant or reactive: a `Signal[Boolean]` toggles the native `disabled` attribute IN
       * PLACE via kyo-ui's boolean-attribute channel (no re-render, so caret/focus survive), e.g. disable
       * until another field is valid; a plain `Boolean` sets it statically.
       */
-    def disabled(v: Boolean | Signal[Boolean]): Input = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): Input = new Input(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly` (focusable but not editable), constant or reactive: a `Signal[Boolean]` toggles
       * it IN PLACE via the boolean-attribute channel (no re-render, so caret/focus survive).
       */
-    def readonly(v: Boolean | Signal[Boolean]): Input = copy(readonlyFlag = Present(ReactiveValue(v)))
+    def readonly(v: Boolean | Signal[Boolean]): Input = new Input(s.copy(readonlyFlag = Present(ReactiveValue(v))))
 
     /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Input = copy(requiredFlag = Present(v))
+    def required(v: Boolean): Input = new Input(s.copy(requiredFlag = Present(v)))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): Input = copy(nameV = Present(v))
+    def name(v: String): Input = new Input(s.copy(nameV = Present(v)))
 
     /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Input = copy(maxLengthV = Present(math.max(0, n)))
+    def maxLength(n: Int): Input = new Input(s.copy(maxLengthV = Present(math.max(0, n))))
 
     /** Selects the native input type; defaults to [[InputType.Text]]. */
-    def inputType(t: InputType): Input = copy(typeV = t)
+    def inputType(t: InputType): Input = new Input(s.copy(typeV = t))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): Input = copy(sizeV = v)
+    def size(v: Size): Input = new Input(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): Input = copy(variantV = v)
+    def variant(v: FieldVariant): Input = new Input(s.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
-    def fluid(v: Boolean): Input = copy(fluidFlag = v)
+    def fluid(v: Boolean): Input = new Input(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Input                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Input                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Input = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Input                       = new Input(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): Input                   = new Input(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Input = new Input(s.copy(invalidMsgDynV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Input = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Input = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Input = new Input(s.copy(accNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Input = new Input(s.copy(accNameRefV = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = copy(accDescV = v)
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = new Input(s.copy(accDescV = v))
 
-    def onInput(f: String => UI.Action)(using Frame): Input  = copy(valueSlot = valueSlot.hear(f))
-    def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo)
+    def onInput(f: String => UI.Action)(using Frame): Input  = new Input(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: String => UI.Action)(using Frame): Input =
+        new Input(s.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it, which kyo-ui's blur carries (its two-parameter `onBlur`): what the reader typed,
@@ -146,7 +124,7 @@ final case class Input private (
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): Input = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: String => UI.Action)(using Frame): Input = new Input(s.copy(onBlurF = Present(Callback.of(f))))
 
     /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also
       * allows one separator, any other string is a whitelist charset. The client
@@ -157,7 +135,7 @@ final case class Input private (
       * The string stays this library's surface; kyo takes a typed
       * [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto.
       */
-    def inputFilter(pattern: String): Input = copy(inputFilterV = Present(pattern))
+    def inputFilter(pattern: String): Input = new Input(s.copy(inputFilterV = Present(pattern)))
 
     /** Client-local input mask (the fork's `inputMask`), e.g. `"(999) 999-9999"`:
       * `9` = digit, `a` = letter, `*` = alphanumeric; every other character is a
@@ -165,7 +143,7 @@ final case class Input private (
       * the MASKED value is what reaches `onInput`/`onChange`/the ref. Prefer the
       * dedicated [[InputMask]] component for phone/date/ssn fields.
       */
-    def inputMask(mask: String): Input = copy(inputMaskV = Present(mask))
+    def inputMask(mask: String): Input = new Input(s.copy(inputMaskV = Present(mask)))
 
     private[uic] def render(using Frame): UI =
         val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
@@ -295,7 +273,36 @@ final case class Input private (
 end Input
 
 object Input:
-    def apply(): Input = new Input()
+    final private[uic] case class State(
+        valueSlot: Slot[String] = Slot(),
+        placeholderText: Maybe[TextValue] = Absent,
+        disabledFlag: Maybe[BoolValue] = Absent,
+        readonlyFlag: Maybe[BoolValue] = Absent,
+        requiredFlag: Maybe[Boolean] = Absent,
+        nameV: Maybe[String] = Absent,
+        maxLengthV: Maybe[Int] = Absent,
+        typeV: InputType = InputType.Text,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        fluidFlag: Boolean = false,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        accNameRefV: Maybe[String] = Absent,
+        accDescV: Maybe[TextValue] = Absent,
+        onChangeF: Maybe[String => UI.Action] = Absent,
+        onBlurF: Maybe[String => UI.Action] = Absent,
+        inputFilterV: Maybe[String] = Absent,
+        inputMaskV: Maybe[String] = Absent,
+        extraClassesV: List[String] = Nil,
+        idV: Maybe[String] = Absent,
+        focusAutoFlag: Boolean = false,
+        unheardAsV: Slot.Name = Input.valueName("Input", "onInput or onChange"),
+        filledUpV: Maybe[(String, String)] = Absent
+    )
+
+    def apply(): Input = new Input(State())
 
     private[uic] def valueName(component: String, events: String) = Slot.Name(component, "value", "a change", events)
 
