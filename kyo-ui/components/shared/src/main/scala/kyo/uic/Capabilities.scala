@@ -112,7 +112,7 @@ end HasAccessibleNameRef
   * imply a description. See [[HasAccessibleName]] for why these traits exist.
   */
 private[uic] trait HasAccessibleDescription extends Node:
-    /** Stores the resolved description slot. Implemented as `copy(accDescV = v)`. */
+    /** Stores the resolved description slot. Implemented as `new Input(s.copy(accDescV = v))`. */
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Self
 
     /** Additional accessible description → `aria-description`. A `Signal[String]` patches the
@@ -126,7 +126,7 @@ end HasAccessibleDescription
   * empty. See [[HasAccessibleName]] for why these traits exist.
   */
 private[uic] trait HasPlaceholder extends Node:
-    /** Stores the resolved placeholder slot. Implemented as `copy(placeholderText = v)`. */
+    /** Stores the resolved placeholder slot. Implemented as `new Input(s.copy(placeholderText = v))`. */
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self
 
     /** Text shown while the bound value is empty. A `Signal[String]` tracks a downstream source
@@ -143,7 +143,7 @@ end HasPlaceholder
   * traits exist.
   */
 private[uic] trait HasTooltip extends Node:
-    /** Stores the resolved tooltip slot. Implemented as `copy(tooltipV = v)`. */
+    /** Stores the resolved tooltip slot. Implemented as `new Button(s.copy(tooltipV = v))`. */
     private[uic] def withTooltip(v: Maybe[TextValue]): Self
 
     /** Native tooltip (the `title` attribute). A `Signal[String]` patches `title` IN PLACE via
@@ -157,7 +157,7 @@ end HasTooltip
   * carries arbitrary UI and not only text.
   */
 private[uic] trait HasEmptyContent extends Node:
-    /** Stores the resolved empty slot. Implemented as `copy(emptyContentV = v)`. */
+    /** Stores the resolved empty slot. Implemented as `new Tree(s.copy(emptyContentV = v))`. */
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Self
 
     /** Text shown in place of the rows when there are none. A `Signal[String]` re-renders the
@@ -185,7 +185,7 @@ end HasEmptyContent
   * mask's spinner would sit on top of it.
   */
 private[uic] trait HasLoadingContent extends Node:
-    /** Stores the resolved loading slot. Implemented as `copy(loadingContentV = v)`. */
+    /** Stores the resolved loading slot. Implemented as `new DataTable(s.copy(loadingContentV = v))`. */
     private[uic] def withLoadingContent(v: Maybe[LoadingContent]): Self
 
     /** Text shown over the place of the rows that are coming. A `Signal[String]` patches the text in

@@ -5,6 +5,53 @@ Rules that bite repeatedly when building or extending components in
 The component catalog, the composition story and the parity notes are in this
 module's `README.md`.
 
+## A component is a class over its state
+
+```scala
+final class Input private[uic] (private[uic] val s: Input.State) extends Node, TextFormControl, Stated:
+    import s.*   // reads in the body stay as they are
+    type Self = Input
+
+    def size(v: Size): Input = new Input(s.copy(sizeV = v))
+
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(s.copy(validityV = v))
+    private[uic] def accessibility: Accessibility               = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(s.copy(accessV = v))
+end Input
+
+object Input:
+    final private[uic] case class State(
+        sizeV: Size = Size.Normal,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        accessV: Accessibility = Accessibility.none
+    )
+
+    def apply(): Input = new Input(State())
+end Input
+```
+
+So a reader typing `uic.Input().` outside this package is offered the setters and what every object has: no field, no `copy`,
+no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sweeps every component; a new one belongs in it.
+
+- **Every field lives in `State`.** A setter is `new X(s.copy(...))`. A component reads another's field through its state
+  (`button.s.labelV`), and so does a test, since `private[uic]` reaches subpackages.
+- **`Stated` gives back what a case class gave**: equality over the state and a `toString` (`Anchored` finds a menu item again
+  by equality). A wrapper over one component (`MultipleAccordion`, `MultiSelectButton`, `MultiDatePicker`, `RangeDatePicker`) has
+  no state of its own: it holds that component and is `Stated` over it.
+- **Three things `import s.*` does not settle.** A local named `s` hides the field, so a slot handed to a lambda reads
+  `(s => new X(this.s.copy(openSlot = s)).drawn)`. A setter named like its field wins over the import, so that read is
+  `s.icon`. A `copy` in the body without `s.` is the state's and hands back a `State`, which then fails to type.
+- **Two groups are shared, one case class each**, for every component that has those fields: `validityV`
+  (`FieldValidity.Slots`, what `FieldValidity(validityV)` resolves per render) and `accessV` (`Accessibility`, the name, its
+  reference and the id). The empty ones are shared values, so a component nobody marks stores nothing for them. Do not group
+  anything else without deciding it first.
+- **A name the companion already used stays with its owner.** `ContextMenu.State` is public API, so that one state is
+  `ContextMenu.Slots`. The wired per-mount state of the pickers is `Wired`.
+- **What stays a case class:** data people construct and match on (`FilterRule`, `SortKey`, `TableState`, `TreeNode`,
+  `ToastMessage`, ...), and three with a private constructor whose fields ARE their API: `Theme.Brand` (`name` and `sheet` are
+  what it is for), `MeterGroup.Meter` (a template reads it) and `BreadcrumbItem` (`onItemClick` hands it over).
+
 ## kyo-ui is in-tree
 
 - Components build against `kyo-ui` from the same build, not a published artifact.
@@ -78,8 +125,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
   bound to a number), since a commit with no ref writes nowhere and only the field holds what the reader typed.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) is a `Slot[A]`**
-  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `copy(xSlot = xSlot.bind(v))` and
-  `copy(xSlot = xSlot.hear(f))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
+  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `new X(s.copy(xSlot = xSlot.bind(v)))` and
+  `new X(s.copy(xSlot = xSlot.hear(f)))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
   and reports every change the reader asks for: the component goes through `slot.change` (a new value) or `slot.update` (a step
   from the value shown), where a two-way binding is written first, atomically for a step, then the `on<Slot>Change` callback hears
   the new value, whatever the binding (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the
@@ -175,8 +222,8 @@ companion, so a rename is one string.
 A slot several components carry is defined ONCE, in `FormControl.scala` (validity: `invalid`,
 `invalidMessage`) or `Capabilities.scala` (`HasAccessibleName`, `HasAccessibleNameRef`,
 `HasAccessibleDescription`, `HasPlaceholder`, `HasTooltip`, `HasEmptyContent`). The trait carries
-the setter and its scaladoc; a component supplies only the one-line `withX` writer, because the
-field names differ (`accNameV` in the field-shaped controls, `accessibleNameV` in the containers).
+the setter and its scaladoc; a component supplies only the one-line `withX` writer. The slots that form one group
+(validity, accessible name and id) have one reader and one writer for the whole group, see "A component is a class over its state".
 
 - **Adding a slot to a component that already has a trait for it means mixing the trait in**, not
   writing another setter. A second spelling of an existing slot is the drift these traits exist to
