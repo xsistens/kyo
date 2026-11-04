@@ -64,7 +64,7 @@ class ColumnTest extends UicTest:
 
     "the leaves keep the order they were written in, whatever the nesting" in {
         val tree = List[ColumnTree[R]](col("A"), grp("G")(grp("H")(col("B"), col("C")), col("D")))
-        assert(tree.flatMap(_.leaves).map(_.headerV) == List("A", "B", "C", "D"))
+        assert(tree.flatMap(_.leaves).map(_.s.headerV) == List("A", "B", "C", "D"))
     }
 
     // The path is what the sort spec addresses a column by, so a column in no group keeps
@@ -76,7 +76,7 @@ class ColumnTest extends UicTest:
             List("Sales", "2025", "Q1"),
             List("Sales", "Total")
         ))
-        assert(ColumnTree.leafPaths(tree).map(_._2.headerV) == List("Code", "Q1", "Total"))
+        assert(ColumnTree.leafPaths(tree).map(_._2.s.headerV) == List("Code", "Q1", "Total"))
     }
 
     // The same header under two groups is two paths, which is what lets a group carry the
@@ -167,8 +167,8 @@ class ColumnTest extends UicTest:
 
     "prune drops the columns it rejects, counting leaves in the order they were written" in {
         val tree = List[ColumnTree[R]](col("A"), grp("G")(col("B"), col("C")), col("D"))
-        assert(ColumnTree.prune(tree, i => i != 2).flatMap(_.leaves).map(_.headerV) == List("A", "B", "D"))
-        assert(ColumnTree.prune(tree, _ => true).flatMap(_.leaves).map(_.headerV) == List("A", "B", "C", "D"))
+        assert(ColumnTree.prune(tree, i => i != 2).flatMap(_.leaves).map(_.s.headerV) == List("A", "B", "D"))
+        assert(ColumnTree.prune(tree, _ => true).flatMap(_.leaves).map(_.s.headerV) == List("A", "B", "C", "D"))
         assert(ColumnTree.prune(tree, _ => false) == Nil)
     }
 

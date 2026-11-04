@@ -1188,7 +1188,7 @@ final case class DataTable[A] private (
       * what they are looking at has not said anything about what a file should hold.
       */
     def csv(rows: Seq[A]): String =
-        val cols  = leafPaths.map(_._2).filter(_.exportableFlag)
+        val cols  = leafPaths.map(_._2).filter(_.s.exportableFlag)
         val head  = cols.map(c => DataTable.csvField(c.exportTitle, csvSeparatorV))
         val lines = rows.toList.map(a => cols.map(c => DataTable.csvField(c.exportCell(a), csvSeparatorV)))
         (head :: lines).map(_.mkString(csvSeparatorV)).mkString("\n")
@@ -2034,8 +2034,8 @@ final case class DataTable[A] private (
       */
     private def resizable: Boolean =
         widthsOn && (resizeModeV match
-            case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
-            case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
+            case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.s.resizableFlag))
+            case ColumnResizeMode.Expand => leafCols.exists(_.s.resizableFlag))
 
     /** The visible columns with no width, which is what `Expand` cannot work without:
       * the table's own width is the sum of the columns, and a column with no width has
@@ -2064,7 +2064,7 @@ final case class DataTable[A] private (
       * otherwise.
       */
     private def widthOf(path: List[String], c: Column[A, FlatOnly], size: SizeState): Maybe[Double] =
-        Maybe.fromOption(size.widths.get(path)).orElse(c.widthV)
+        Maybe.fromOption(size.widths.get(path)).orElse(c.s.widthV)
 
     /** Whether the boundary to the RIGHT of visible leaf `i` is draggable. A boundary
       * moves two columns, so it needs both of them to allow it, and the last column has
@@ -2072,8 +2072,8 @@ final case class DataTable[A] private (
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        widthsOn && !widthsFixed && !switchOff(resizableColumnsV) && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
-            case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
+        widthsOn && !widthsFixed && !switchOff(resizableColumnsV) && leafCols.lift(i).exists(_.s.resizableFlag) && (resizeModeAt(size) match
+            case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).s.resizableFlag
             case ColumnResizeMode.Expand => true)
 
     /** The id one header cell carries so a grab can measure it. Every leaf header gets
@@ -2157,7 +2157,7 @@ final case class DataTable[A] private (
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
       */
-    private def hasWidths: Boolean = widthsOn || leafCols.exists(_.widthV.isDefined)
+    private def hasWidths: Boolean = widthsOn || leafCols.exists(_.s.widthV.isDefined)
 
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
@@ -2167,7 +2167,7 @@ final case class DataTable[A] private (
     /** Whether two columns are willing to trade places under an order the page asked for, whatever binds it. A fixed
       * order is one of them: its headers stand where it says and offer no drag, and it is no mistake.
       */
-    private def reorderable: Boolean = orderOn && leafCols.count(_.reorderableFlag) > 1
+    private def reorderable: Boolean = orderOn && leafCols.count(_.s.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2195,8 +2195,8 @@ final case class DataTable[A] private (
                 val label = leafPaths(i)._1.lift(parent.length)
                 i == under.head || leafPaths(i - 1)._1.lift(parent.length) != label
             }
-            val edges = leafCols.map(_.frozenV)
-            val free  = leafCols.map(_.reorderableFlag)
+            val edges = leafCols.map(_.s.frozenV)
+            val free  = leafCols.map(_.s.reorderableFlag)
             (starts :+ (under.last + 1)).filter { b =>
                 (b < from || b > until) &&
                 DataTable.adrift(DataTable.moveBlock(edges, from, until, b)).isEmpty &&
@@ -2209,7 +2209,7 @@ final case class DataTable[A] private (
       * table in a scroll container: a column can only be frozen against something that
       * scrolls, and a wide table with no cap on its height still scrolls sideways.
       */
-    private def frozenOn: Boolean = leafCols.exists(_.frozenV.isDefined)
+    private def frozenOn: Boolean = leafCols.exists(_.s.frozenV.isDefined)
 
     /** The component's own columns between the leading edge and the first data column,
       * as the CSS terms an offset reaching past them is written in.
@@ -2239,14 +2239,14 @@ final case class DataTable[A] private (
 
     /** The frozen columns with no width to compute an offset from. */
     private def unsizedFrozen(size: SizeState): List[List[String]] =
-        leafPaths.collect { case (p, c) if c.frozenV.isDefined && widthOf(p, c, size).isEmpty => p }
+        leafPaths.collect { case (p, c) if c.s.frozenV.isDefined && widthOf(p, c, size).isEmpty => p }
 
     /** The frozen columns a free one stands between and their edge, which is the
       * arrangement that cannot be rendered: the free column scrolls, and it would carry
       * the frozen one along or leave it standing over the gap it left.
       */
     private def adriftFrozen: List[List[String]] =
-        DataTable.adrift(leafCols.map(_.frozenV)).map(i => leafPaths(i)._1)
+        DataTable.adrift(leafCols.map(_.s.frozenV)).map(i => leafPaths(i)._1)
 
     /** The header groups spanning a frozen column and a free one, or two frozen against
       * opposite edges. One cell cannot half scroll, so the group says the columns under
@@ -2258,7 +2258,7 @@ final case class DataTable[A] private (
         }
 
     private def mixedEdges(from: Int, until: Int): Boolean =
-        val edges = (from until until).toList.map(i => leafCols(i).frozenV)
+        val edges = (from until until).toList.map(i => leafCols(i).s.frozenV)
         edges.exists(_.isDefined) && edges.distinct.length > 1
 
     /** Where every frozen cell of this table holds, or nothing at all.
@@ -2273,8 +2273,8 @@ final case class DataTable[A] private (
         if !frozenOn || unsizedFrozen(size).nonEmpty || adriftFrozen.nonEmpty || splitFrozenGroups.nonEmpty then
             FrozenPlan()
         else
-            val anyStart                                                 = leafCols.exists(_.frozenV.exists(_ == FrozenEdge.Start))
-            val anyEnd                                                   = leafCols.exists(_.frozenV.exists(_ == FrozenEdge.End))
+            val anyStart                                                 = leafCols.exists(_.s.frozenV.exists(_ == FrozenEdge.Start))
+            val anyEnd                                                   = leafCols.exists(_.s.frozenV.exists(_ == FrozenEdge.End))
             def widthPx(p: List[String], c: Column[A, FlatOnly]): Double = widthOf(p, c, size).getOrElse(0.0)
 
             // Every one of the component's own leading columns stands between the edge and
@@ -2282,12 +2282,12 @@ final case class DataTable[A] private (
             // the variable part of it is the same for all.
             val fromStart = leafPaths.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
                 case ((px, acc), (p, c)) =>
-                    if !c.frozenV.exists(_ == FrozenEdge.Start) then (px, acc :+ Absent)
+                    if !c.s.frozenV.exists(_ == FrozenEdge.Start) then (px, acc :+ Absent)
                     else (px + widthPx(p, c), acc :+ Present(FrozenSlot(FrozenEdge.Start, offset(px, leadTerms))))
             }._2
             val fromEnd = leafPaths.reverse.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
                 case ((px, acc), (p, c)) =>
-                    if !c.frozenV.exists(_ == FrozenEdge.End) then (px, Absent :: acc)
+                    if !c.s.frozenV.exists(_ == FrozenEdge.End) then (px, Absent :: acc)
                     else (px + widthPx(p, c), Present(FrozenSlot(FrozenEdge.End, offset(px, trailTerms))) :: acc)
             }._2
             FrozenPlan(
@@ -2320,7 +2320,7 @@ final case class DataTable[A] private (
         live: HeadLive
     )(using Frame): Ast.Th =
         val mine  = (from until until).toList
-        val stops = if !reorderOn || !mine.forall(i => leafCols(i).reorderableFlag) then Nil else dropStops(path, from, until)
+        val stops = if !reorderOn || !mine.forall(i => leafCols(i).s.reorderableFlag) then Nil else dropStops(path, from, until)
         var c     = cell
         // Whatever cell the pointer was over when it let go still owes the browser a
         // click, and after the drop that is not the cell the drag started on: the columns
@@ -2766,7 +2766,7 @@ final case class DataTable[A] private (
                     // One draft per filterable column, seeded when the menu opens. A row
                     // display never reads them, since one input is the whole filter.
                     drafts0 <- Kyo.foreach(filterableLeaves)((path, c) =>
-                        Signal.initRef(ColumnFilter.empty(c.filterV.map(_.default).getOrElse(MatchMode.Contains)))
+                        Signal.initRef(ColumnFilter.empty(c.s.filterV.map(_.default).getOrElse(MatchMode.Contains)))
                             .map(path -> _)
                     )
                     typed <- Kyo.foreach(filterableLeaves)((path, _) =>
@@ -3576,7 +3576,7 @@ final case class DataTable[A] private (
                 if query.isEmpty then rows
                 else
                     val q = query.toLowerCase
-                    rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
+                    rows.filter(a => leafCols.exists(c => c.s.textF.exists(f => f(a).toLowerCase.contains(q))))
             // 1b. Column filters: every bound one has to pass. A query this table cannot
             //     read as a value of its column's type filters nothing and says so on its
             //     own input, rather than emptying the table behind a typo.
@@ -3585,7 +3585,7 @@ final case class DataTable[A] private (
             //    first one ends up the primary key. Unsorted entries hold a slot in the
             //    priority order and contribute nothing here.
             SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-                allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
+                allPaths.find(_._1 == k.path).flatMap(_._2.s.orderingV.toOption) match
                     case Some(ord) =>
                         rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
                     case None => rs
@@ -3651,7 +3651,7 @@ final case class DataTable[A] private (
         if specs.isEmpty then Nil
         else
             leafPaths.flatMap { (path, c) =>
-                (Maybe.fromOption(specs.get(path)), c.filterV) match
+                (Maybe.fromOption(specs.get(path)), c.s.filterV) match
                     case (Present(f), Present(cf)) if f.active.nonEmpty => List((path, cf.predicate(f)))
                     case _                                              => Nil
             }
@@ -3670,7 +3670,7 @@ final case class DataTable[A] private (
       * nobody asked for.
       */
     private def canSortBy(c: Column[A, FlatOnly]): Boolean =
-        if lazyOn then c.sortableV.isDefined || c.orderingV.isDefined else c.orderingV.isDefined
+        if lazyOn then c.s.sortableV.isDefined || c.s.orderingV.isDefined else c.s.orderingV.isDefined
 
     /** Whether the READER may re-sort this column: one the spec can name, and one the flag
       * leaves free. A locked column still sorts by the spec, it only takes no clicks.
@@ -4040,12 +4040,12 @@ final case class DataTable[A] private (
       */
     private def footerCell(c: Column[A, FlatOnly], inFilter: List[A])(using Frame): Ast.Element =
         var cell = td
-        c.alignV match
+        c.s.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
         end match
-        val content: List[UI] = (c.footerTextV, c.footerF) match
+        val content: List[UI] = (c.s.footerTextV, c.s.footerF) match
             case (Present(t), _) => List(span.cssClass("p-datatable-column-footer")(t))
             case (_, Present(f)) => List(span.cssClass("p-datatable-column-footer")(f(inFilter)))
             case _               => Nil
@@ -4110,7 +4110,7 @@ final case class DataTable[A] private (
             if lazyOn then Nil
             else
                 leafPaths.collect {
-                    case (p, c) if c.orderingV.isEmpty && c.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
+                    case (p, c) if c.s.orderingV.isEmpty && c.s.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
                 }
         val emptyCard = Diagnostic.naming(
             "a headerGroup holds no column, so it renders nothing; give it columns or drop it",
@@ -4299,7 +4299,7 @@ final case class DataTable[A] private (
         Diagnostics.cards("DataTable")(
             Diagnostic(expansionF.isDefined && ReactiveValue.deaf(expandedTyped, onExpandedF), DataTable.expandedName.advice),
             Diagnostic(
-                groupsV.exists(_.showHeaderFlag) && !switchOff(collapsibleGroupsV) && ReactiveValue.deaf(
+                groupsV.exists(_.s.showHeaderFlag) && !switchOff(collapsibleGroupsV) && ReactiveValue.deaf(
                     expandedGroupsSlot,
                     onExpandedGroupsF
                 ),
@@ -4623,7 +4623,7 @@ final case class DataTable[A] private (
         Frame
     ): Ast.Element =
         val cell = th.cssClass("p-datatable-header-cell")
-        c.filterV match
+        c.s.filterV match
             case Absent      => cell
             case Present(cf) =>
                 given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
@@ -4650,7 +4650,7 @@ final case class DataTable[A] private (
                         .value(cur.query)
                         .fluid(true)
                         .invalid(unusable)
-                        .accessibleName(s"Filter by ${c.headerV}")
+                        .accessibleName(s"Filter by ${c.s.headerV}")
                     // A fixed filter is drawn, not removed: the field shows the query read-only and takes no keystroke.
                     if filtersFixed then input = input.readonly(true)
                     else
@@ -4695,7 +4695,7 @@ final case class DataTable[A] private (
                     .severity(Severity.Secondary)
                     .rounded(true)
                     .size(Size.Small)
-                    .accessibleName(s"Filter mode for ${c.headerV}")
+                    .accessibleName(s"Filter mode for ${c.s.headerV}")
                     .extraClass("p-datatable-column-filter-button")
                 onOpen.foreach(ref => b = b.onClick(ref.getAndUpdate(!_)))
                 b
@@ -4753,7 +4753,7 @@ final case class DataTable[A] private (
     ): List[UI] =
         if !filterMenuOn then Nil
         else
-            c.filterV match
+            c.s.filterV match
                 case Absent      => Nil
                 case Present(cf) =>
                     given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
@@ -4769,7 +4769,7 @@ final case class DataTable[A] private (
                             .severity(Severity.Secondary)
                             .rounded(true)
                             .size(Size.Small)
-                            .accessibleName(s"Filter by ${c.headerV}")
+                            .accessibleName(s"Filter by ${c.s.headerV}")
                             .extraClass("p-datatable-column-filter-button")
                         if cur.active.nonEmpty then b = b.extraClass("p-datatable-column-filter-button-active")
                         (open, openRef) match
@@ -4834,7 +4834,7 @@ final case class DataTable[A] private (
                 val pick = Select[FilterOperator]()
                     .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
                     .current(Present(d.operator))
-                    .accessibleName(s"Match mode for ${c.headerV}")
+                    .accessibleName(s"Match mode for ${c.s.headerV}")
                     .extraClass("p-datatable-filter-operator-dropdown")
                 List((if fixed then pick.readonly(true) else pick.onChange(operatorPicked(draft, d))).render)
 
@@ -4842,12 +4842,12 @@ final case class DataTable[A] private (
             val pick = Select[MatchMode]()
                 .options(cf.modes)(_.label)
                 .current(Present(rule.mode))
-                .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
+                .accessibleName(s"Condition ${i + 1} for ${c.s.headerV}")
             val modes = (if fixed then pick.readonly(true) else pick.onChange(modePicked(draft, d, i))).render
             val field = Input()
                 .value(rule.query)
                 .fluid(true)
-                .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
+                .accessibleName(s"Filter ${c.s.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
                     (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
@@ -5102,7 +5102,7 @@ final case class DataTable[A] private (
             else if resizeModeV == ColumnResizeMode.Expand then live.widths.map(w => resizableAt(index, size.copy(widths = w)))
             else ReactiveValue.Const(resizableAt(index, size))
         cell = classWhen(cell, "p-datatable-resizable-column", resizable)
-        c.alignV match
+        c.s.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
@@ -5164,7 +5164,7 @@ final case class DataTable[A] private (
 
         val content: UI =
             div.cssClass("p-datatable-column-header-content")(
-                UI.children((span.cssClass("p-datatable-column-title")(c.headerV): UI) ::
+                UI.children((span.cssClass("p-datatable-column-title")(c.s.headerV): UI) ::
                     sortMarks :: filterFunnel(path, c, filter, live))*
             )
         val grip: List[UI] =
@@ -5231,19 +5231,19 @@ final case class DataTable[A] private (
         levels match
             case Nil           => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
             case level :: rest =>
-                RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
+                RowGroup.runs(rows)((a, _) => level.s.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
                     val groupRows = run.map(_._1)
                     // A level without a header row has nowhere to put a toggle, so it can
                     // never be collapsed: collapsing it would hide its rows with no way
                     // back.
-                    val collapses = groupsOn && level.showHeaderFlag
+                    val collapses = groupsOn && level.s.showHeaderFlag
                     val open      = !collapses || openGroups.contains(groupPath)
                     // Switched off over a binding the groups follow it, with no toggle to change it.
                     val collapsible = collapses && !switchOff(collapsibleGroupsV)
 
                     val headerRow: List[RowSpec[A]] =
-                        if !level.showHeaderFlag then Nil
+                        if !level.s.showHeaderFlag then Nil
                         else List(RowSpec.GroupHead(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[RowSpec[A]] =
                         if !open then Nil
@@ -5266,7 +5266,7 @@ final case class DataTable[A] private (
                             )
                     val footerRow: List[RowSpec[A]] =
                         if !open then Nil
-                        else level.footerF.toList.map(f => RowSpec.GroupFoot(f, groupPath, groupRows, colCount))
+                        else level.s.footerF.toList.map(f => RowSpec.GroupFoot(f, groupPath, groupRows, colCount))
                     headerRow ++ innerRows ++ footerRow
                 }
     end groupSegments
@@ -5366,7 +5366,7 @@ final case class DataTable[A] private (
                 // Fixed open groups show their toggle, a button that says it opens or closes nothing.
                 b = if groupsFixed then b.aria("disabled", "true") else b.onClick(toggleGroup(path))
                 List(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
-        val content: UI = level.headerF match
+        val content: UI = level.s.headerF match
             case Present(f) => f(path, rows)
             case Absent     => stringToUI(path.key)
         tr.cssClass("p-datatable-row-group-header")(
@@ -5446,7 +5446,7 @@ final case class DataTable[A] private (
                     case Some(SpanCell.Head(n)) if n > 1 => cell = cell.rowspan(n)
                     case _                               => ()
                 end match
-                c.alignV match
+                c.s.alignV match
                     case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
                     case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
                     case ColumnAlign.Start  => ()
@@ -5501,9 +5501,9 @@ final case class DataTable[A] private (
                 val content: HtmlChildVal =
                     if editing then editorCell(here, a, c, nav, edit)
                     else
-                        c.bodyF match
+                        c.s.bodyF match
                             case Present(f) => f(a)
-                            case Absent     => stringToUI(c.textF.map(_(a)).getOrElse(""))
+                            case Absent     => stringToUI(c.s.textF.map(_(a)).getOrElse(""))
                 List(freeze(cell(content), frozen.at(i)))
             end if
         }
@@ -5836,7 +5836,7 @@ final case class DataTable[A] private (
     private def editorCell(cell: CellKey, row: A, c: Column[A, FlatOnly], nav: NavState[A], edit: EditState)(
         using Frame
     ): UI =
-        (c.editV, edit.draftOf(cell.column)) match
+        (c.s.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(draft)) =>
                 val params = EditorParams(
                     draft = draft,
@@ -5855,7 +5855,7 @@ final case class DataTable[A] private (
             case _ =>
                 // A draft map with no entry for this column means the table is rendering
                 // its placeholder (no mount, no refs), which is the static projection.
-                stringToUI(c.editV.map(_.show(row)).getOrElse(""))
+                stringToUI(c.s.editV.map(_.show(row)).getOrElse(""))
 
     // ---- keyboard navigation ----
 
@@ -6057,7 +6057,7 @@ final case class DataTable[A] private (
       * in a pure position and cannot write into anything.
       */
     private def seedDraft(row: A, path: List[String], c: Column[A, FlatOnly], edit: EditState)(using Frame): UI.Action =
-        (c.editV, edit.draftOf(path)) match
+        (c.s.editV, edit.draftOf(path)) match
             case (Present(ed), Present(ref)) => ref.set(ed.show(row))
             case _                           => ()
 
@@ -6165,7 +6165,7 @@ final case class DataTable[A] private (
     private def commitCell(cell: CellKey, row: A, c: Column[A, FlatOnly], edit: EditState)(using
         Frame
     ): Boolean < (Async & Abort[Any]) =
-        (c.editV, edit.draftOf(cell.column)) match
+        (c.s.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(ref)) =>
                 for
                     text <- ref.get
@@ -6212,7 +6212,7 @@ final case class DataTable[A] private (
                 case Nil               => Kyo.lift(Result.succeed((acc, changes.reverse)))
                 case (path, c) :: tail =>
                     val cell = CellKey(id, path)
-                    (c.editV, edit.draftOf(path)) match
+                    (c.s.editV, edit.draftOf(path)) match
                         case (Present(ed), Present(ref)) =>
                             for
                                 text <- ref.get
@@ -6228,7 +6228,7 @@ final case class DataTable[A] private (
                         case _ => loop(tail, acc, changes)
                     end match
         for
-            res <- loop(editableLeaves.filter((_, c) => c.editV.exists(_.when(row))), row, Nil)
+            res <- loop(editableLeaves.filter((_, c) => c.s.editV.exists(_.when(row))), row, Nil)
             out <- res match
                 case Result.Success((after, changes)) =>
                     val store: UI.Action = if changes.isEmpty then () else applyRow(id, after, changes)
