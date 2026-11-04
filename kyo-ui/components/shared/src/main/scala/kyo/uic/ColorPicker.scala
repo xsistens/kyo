@@ -64,11 +64,8 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 
     type Self = ColorPicker
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): ColorPicker = new ColorPicker(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ColorPicker(s.copy(accessV = v))
 
     /** The color. A `SignalRef` binds TWO-WAY: drags write the recomputed hex back, ref changes move the picker. Any
       * other signal binds ONE-WAY: the picker shows it, and a drag or key writes nothing and only reports the hex it asks
@@ -90,8 +87,6 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 
     /** Which corner the overlay panel opens from (overlay mode only; default below). */
     def anchor(v: OverlayAnchor): ColorPicker = new ColorPicker(s.copy(anchorV = v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ColorPicker = new ColorPicker(s.copy(accNameV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new ColorPicker(s.copy(validityV = v))
@@ -322,7 +317,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
                 wire = wire,
                 // Inline, the plane is the picker's first tab stop and so where the caller's id goes;
                 // in the overlay the swatch carries it, since the panel is not on the page until opened.
-                elementId = if panel.isEmpty then idV else Absent
+                elementId = if panel.isEmpty then accessV.idV else Absent
             )
         }
         val hueAxis: List[UI] = color.toList.filter(_ => interactive).map { r =>
@@ -362,10 +357,10 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
     private def shellRoot(validity: FieldValidity, ownsId: Boolean, extraClasses: String*)(using Frame): Ast.Div =
         var root = div.cssClass("p-colorpicker").cssClass("p-component")
         extraClasses.foreach(c => root = root.cssClass(c))
-        if ownsId then idV.foreach(v => root = root.id(v))
+        if ownsId then accessV.idV.foreach(v => root = root.id(v))
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
         root = validity.mark(root)
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => root = root.aria("label", n)
             case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
             case Absent                      => ()
@@ -392,9 +387,9 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
             .style(_.bg(Style.Color.hex(hex).getOrElse(Style.Color.rgb(0, 0, 0))))
             .onClick(onClickEff)
         // The swatch is the overlay picker's one tab stop, so it carries the caller's id.
-        idV.foreach(v => preview = preview.id(v))
+        accessV.idV.foreach(v => preview = preview.id(v))
         if disabledFlag.constTrue then preview = preview.disabled(true).cssClass("p-disabled")
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => preview = preview.aria("label", n)
             case Present(TextValue.Dyn(s))   => preview = preview.aria("label", s)
             case Absent                      => ()
@@ -472,9 +467,8 @@ object ColorPicker:
         disabledFlag: Maybe[BoolValue] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        onBlurF: Maybe[String => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[String => UI.Action] = Absent
     )
 
     private val valueName = Slot.Name("ColorPicker", "value", "a change", "onChange")

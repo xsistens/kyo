@@ -95,7 +95,8 @@ final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) exten
     /** Overrides the separator glyph (default the Prime chevron, [[Icons.chevronRight]]). */
     def separator(v: IconGlyph): Breadcrumb = new Breadcrumb(s.copy(separatorV = Present(v)))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Breadcrumb = new Breadcrumb(s.copy(accessibleNameV = v))
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Breadcrumb(s.copy(accessV = v))
 
     /** Fired with the item clicked, in addition to the anchor's native navigation. */
     def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb =
@@ -106,7 +107,7 @@ final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) exten
 
     private[uic] def render(using Frame): UI =
         val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
-        val labelled = accessibleNameV match
+        val labelled = accessV.nameV match
             case Present(TextValue.Const(v)) => navBase.aria("label", v)
             case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
             case Absent                      => navBase.aria("label", "Breadcrumb")
@@ -171,7 +172,7 @@ object Breadcrumb:
         homeV: Maybe[BreadcrumbItem] = Absent,
         itemSources: List[BreadcrumbItemLiveEntry] = Nil,
         separatorV: Maybe[IconGlyph] = Absent,
-        accessibleNameV: Maybe[TextValue] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onItemClickF: Maybe[BreadcrumbItem => UI.Action] = Absent
     )
 

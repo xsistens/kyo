@@ -28,11 +28,8 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
       */
     private[uic] def tabbable(v: Boolean): CheckBox = new CheckBox(s.copy(tabbableFlag = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): CheckBox = new CheckBox(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new CheckBox(s.copy(accessV = v))
 
     def text(v: String): CheckBox = new CheckBox(s.copy(labelText = Present(v)))
 
@@ -80,10 +77,8 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CheckBox = new CheckBox(s.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new CheckBox(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): CheckBox = new CheckBox(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): CheckBox = new CheckBox(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CheckBox(s.copy(validityV = v))
 
     def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(s.copy(checkedSlot = checkedSlot.hear(f)))
 
@@ -135,18 +130,18 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
 
         var box = checkbox.cssClass("p-checkbox-input").checked(native)
         if !tabbableFlag then box = box.tabIndex(-1)
-        box = idV.map(v => box.id(v)).getOrElse(box)
+        box = accessV.idV.map(v => box.id(v)).getOrElse(box)
         if isMixed then box = box.indeterminate(true).aria("checked", "mixed")
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
-        box = accNameV match
+        box = accessV.nameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
-        box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = accessV.nameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
         if blocked then box = box.preventActivation
         box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !blocked then box = onChg.map(box.onChange(_)).getOrElse(box)
@@ -198,10 +193,8 @@ object CheckBox:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,
-        idV: Maybe[String] = Absent,
         tabbableFlag: Boolean = true
     )
 

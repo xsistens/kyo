@@ -71,11 +71,8 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
       */
     private[uic] def inputwrapper: Select[A] = new Select(s.copy(inputwrapperFlag = true))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Select[A] = new Select(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Select(s.copy(accessV = v))
 
     /** Package-internal: hosts that already render inside their own subscription
       * supply the resolved selection directly (no nested subscription; writes go
@@ -270,10 +267,8 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
     /** Spans the full width of its container (`.p-select-fluid`). */
     def fluid(v: Boolean): Select[A] = new Select(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                 = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self         = new Select(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = new Select(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = new Select(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Select(s.copy(validityV = v))
 
     /** Fired with the option now chosen, after the write (`Absent` on clear). A pick of the option already chosen changes
       * nothing and fires nothing. Fires before [[onPick]].
@@ -386,7 +381,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         UI.mounted {
             for
                 cmds <- UI.commands
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the select keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -541,7 +536,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         // the combobox (or, with a filter header, the button that opens it), so this is what a
         // `Label.forId`, `Commands.focusId` and the form's focus-first-invalid have to reach. The
         // panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         extraClassesV.foreach(c => el = el.cssClass(c))
         if inputwrapperFlag then
             el = el.cssClass("p-inputwrapper")
@@ -567,12 +562,12 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox is decided by whether there is a filter header, and it is
         // decided once: the combobox is whatever holds focus while the list is open, because
         // `aria-activedescendant` is read off the focused element or off nothing at all. Without a
@@ -872,15 +867,13 @@ object Select:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
         currentV: Maybe[Maybe[A]] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         extraClassesV: List[String] = Nil,
-        idV: Maybe[String] = Absent,
         inputwrapperFlag: Boolean = false,
         portalFlag: Boolean = false,
         scrollV: Overlay.Scroll = Overlay.Scroll.Close,

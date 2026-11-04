@@ -36,11 +36,8 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
 
     type Self = Knob
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Knob = new Knob(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Knob(s.copy(accessV = v))
 
     /** The knob's value, in any of the three bindings a value slot holds. A writable `SignalRef[Double]`
       * binds TWO-WAY: drags and keyboard steps write the clamped value back, and ref changes redraw the
@@ -97,8 +94,6 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
       * reactively (re-renders this small control on change).
       */
     def disabled(v: Boolean | Signal[Boolean]): Knob = new Knob(s.copy(disabledFlag = Present(ReactiveValue(v))))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Knob = new Knob(s.copy(accNameV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Knob(s.copy(validityV = v))
@@ -206,12 +201,12 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
             .aria("valuemin", InputNumber.format(minV))
             .aria("valuemax", InputNumber.format(maxV))
             .aria("valuenow", InputNumber.format(value))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => dial = dial.aria("label", v)
             case Present(TextValue.Dyn(s))   => dial = dial.aria("label", s)
             case Absent                      => ()
         end match
-        idV.foreach(v => dial = dial.id(v))
+        accessV.idV.foreach(v => dial = dial.id(v))
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
         // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
@@ -257,9 +252,8 @@ object Knob:
         integerFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        onBlurF: Maybe[Double => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Double => UI.Action] = Absent
     )
 
     def apply(): Knob = new Knob(State())

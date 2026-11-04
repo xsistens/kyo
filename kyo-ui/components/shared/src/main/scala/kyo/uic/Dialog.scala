@@ -126,9 +126,8 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
       */
     def preventFocusRestore(v: Boolean): Dialog = new Dialog(s.copy(preventFocusRestoreFlag = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Dialog = new Dialog(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Dialog = new Dialog(s.copy(accessibleNameRefV = v))
-
+    private[uic] def accessibility: Accessibility                           = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self              = new Dialog(s.copy(accessV = v))
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Dialog = new Dialog(s.copy(accessibleDescriptionV = v))
 
     /** Id(s) of describing element(s), emitted as `aria-describedby`. */
@@ -159,7 +158,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
       * reference always wins.
       */
     private def headerName: Maybe[TextValue] =
-        if accessibleNameRefV.isDefined || headerContent.isDefined then Absent else headerText
+        if accessV.nameRefV.isDefined || headerContent.isDefined then Absent else headerText
 
     /** The severity's leading header glyph (shared vocabulary with Message's
       * design-derived defaults).
@@ -257,13 +256,13 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
                     }
                     if !preventInitialFocusFlag then box = box.focusAuto(true)
                     if !preventFocusRestoreFlag then box = box.focusRestore(true)
-                    val name: Maybe[TextValue] = accessibleNameV.orElse(headerName)
+                    val name: Maybe[TextValue] = accessV.nameV.orElse(headerName)
                     name match
                         case Present(TextValue.Const(n)) => box = box.aria("label", n)
                         case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
                         case Absent                      => ()
                     end match
-                    accessibleNameRefV.foreach(n => box = box.aria("labelledby", n))
+                    accessV.nameRefV.foreach(n => box = box.aria("labelledby", n))
                     accessibleDescriptionV match
                         case Present(TextValue.Const(n)) => box = box.aria("description", n)
                         case Present(TextValue.Dyn(s))   => box = box.aria("description", s)
@@ -383,8 +382,7 @@ object Dialog:
         initialFocusV: Maybe[String] = Absent,
         preventInitialFocusFlag: Boolean = false,
         preventFocusRestoreFlag: Boolean = false,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         accessibleDescriptionV: Maybe[TextValue] = Absent,
         accessibleDescriptionRefV: Maybe[String] = Absent,
         accessibleRoleV: PopupAccessibleRole = PopupAccessibleRole.Dialog,

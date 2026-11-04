@@ -63,9 +63,9 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
       */
     def metaKeySelection(v: Boolean): OrderList[A] = new OrderList(s.copy(metaKeyFlag = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): OrderList[A] = new OrderList(s.copy(accessibleNameV = v))
-
-    private def keyOf(a: A): String =
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new OrderList(s.copy(accessV = v))
+    private def keyOf(a: A): String                            =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
     private type Snapshot = ((Seq[A], Set[String]), Int)
@@ -176,7 +176,7 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
         selectedSlot.binding.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, selectedSlot.hearer)))
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)
             case Absent                      => ()
@@ -244,7 +244,7 @@ object OrderList:
         selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
         disabledFlag: Boolean = false,
         metaKeyFlag: Boolean = false,
-        accessibleNameV: Maybe[TextValue] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     private val itemsName        = Slot.Name("OrderList", "items", "a move", "onItemsChange")

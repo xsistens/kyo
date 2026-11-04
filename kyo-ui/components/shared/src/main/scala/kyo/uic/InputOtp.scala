@@ -29,11 +29,8 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
 
     type Self = InputOtp
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputOtp = new InputOtp(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputOtp(s.copy(accessV = v))
 
     /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
       * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
@@ -71,9 +68,8 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
     /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
     def variant(v: FieldVariant): InputOtp = new InputOtp(s.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new InputOtp(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = new InputOtp(s.copy(accNameV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputOtp(s.copy(validityV = v))
 
     /** Fired with the FULL code after a cell write-back. */
     def onChange(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(s.copy(valueSlot = valueSlot.hear(f)))
@@ -163,7 +159,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
                 .value(ch)
                 .accessibleName(s"Please enter OTP character ${i + 1}")
             cellIds.foreach(ids => cell = cell.id(ids(i)))
-            cell = if i == 0 then idV.map(v => cell.id(v)).getOrElse(cell) else cell
+            cell = if i == 0 then accessV.idV.map(v => cell.id(v)).getOrElse(cell) else cell
             if integerOnlyFlag then cell = cell.inputFilter("int")
             if disabledFlag.constTrue then cell = cell.disabled(true)
             if readonlyFlag then cell = cell.readonly(true)
@@ -188,7 +184,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
         }
 
         var el = div.cssClass("p-inputotp").cssClass("p-component")
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
@@ -208,9 +204,8 @@ object InputOtp:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        onBlurF: Maybe[String => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[String => UI.Action] = Absent
     )
 
     def apply(): InputOtp = new InputOtp(State())

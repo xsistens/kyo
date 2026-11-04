@@ -42,11 +42,8 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
 
     type Self = DatePicker[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): DatePicker[A] = new DatePicker(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new DatePicker(s.copy(accessV = v))
 
     /** Binds the held value two-way to `ref`, `Absent` while nothing is picked: a pick, the time picker, the button bar and a
       * typed text write it back.
@@ -154,10 +151,8 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
     def fluid(v: Boolean): DatePicker[A] = new DatePicker(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                     = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self             = new DatePicker(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker[A] = new DatePicker(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker[A] = new DatePicker(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new DatePicker(s.copy(validityV = v))
 
     /** Binds the calendar's visibility. A `SignalRef` binds two way: the field, the dropdown button, a completing pick,
       * the button bar, Escape and an outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal`
@@ -263,7 +258,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
                 for
                     cmds <- UI.commands
                     // A caller's own id is the base the grid and its cells derive from; a minted one stands in.
-                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     =>
@@ -308,7 +303,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
         val cursor                                                   = refs.cursor
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
-            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, accessV.idV)
         // Whether it is open, the month, the cursor, the seed flag, the view and the selection are read as ONE region (see
         // [[ReactiveValue]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
         // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
@@ -395,7 +390,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
     )(using Frame): UI =
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
         // The live render stamps `fieldId` below, which is this same id where the caller gave one.
-        i = idV.map(v => i.id(v)).getOrElse(i)
+        i = accessV.idV.map(v => i.id(v)).getOrElse(i)
         sizeV match
             case Size.Small  => i = i.cssClass("p-inputtext-sm")
             case Size.Large  => i = i.cssClass("p-inputtext-lg")
@@ -412,11 +407,11 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
         if readonlyFlag || !editable then i = i.readOnly(true)
         if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
         i = nameV.map(v => i.jsProp("name", v)).getOrElse(i)
-        i = accNameV match
+        i = accessV.nameV match
             case Present(TextValue.Const(v)) => i.aria("label", v)
             case Present(TextValue.Dyn(s))   => i.aria("label", s)
             case Absent                      => i
-        i = accNameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
+        i = accessV.nameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
         nav.foreach { n =>
             if editable && interactive then i = i.onChange(typed => commitText(typed, n))
             // The blur reports what is held, read from the bound refs, not the text in the field (which a blur could carry):
@@ -1370,8 +1365,7 @@ object DatePicker:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         openSlot: Slot[Boolean] = Slot(),
         referenceDateV: Maybe[A] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
@@ -1379,8 +1373,7 @@ object DatePicker:
         onRangeChangeF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
         onValuesBlurF: Maybe[Set[A] => UI.Action] = Absent,
-        onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent
     )
 
     private val valueName = Slot.Name("DatePicker", "the value", "a pick", "onChange")
@@ -1890,16 +1883,13 @@ final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker
     /** Spans the full width of its container. */
     def fluid(v: Boolean): Self = on(picker.fluid(v))
 
-    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
-    private[uic] def elementId: Maybe[String]              = picker.elementId
+    private[uic] def accessibility: Accessibility              = picker.accessibility
+    private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
     private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
 
     /** The seam golden tests render, as [[DatePicker.wired]]. */
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
@@ -1993,16 +1983,13 @@ final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker
     /** Spans the full width of its container. */
     def fluid(v: Boolean): Self = on(picker.fluid(v))
 
-    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
-    private[uic] def elementId: Maybe[String]              = picker.elementId
+    private[uic] def accessibility: Accessibility              = picker.accessibility
+    private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
     private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
 
     /** The seam golden tests render, as [[DatePicker.wired]]. */
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =

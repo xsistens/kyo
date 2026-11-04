@@ -24,17 +24,16 @@ final class Toolbar private[uic] (private[uic] val s: Toolbar.State) extends Nod
     /** Appends content to the trailing section (`.p-toolbar-end`). */
     def end(cs: UI*): Toolbar = new Toolbar(s.copy(endKids = endKids ++ cs))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Toolbar = new Toolbar(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Toolbar = new Toolbar(s.copy(accessibleNameRefV = v))
-
-    private[uic] def render(using Frame): UI =
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Toolbar(s.copy(accessV = v))
+    private[uic] def render(using Frame): UI                   =
         var bar = div.cssClass("p-toolbar").cssClass("p-component").role("toolbar")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => bar = bar.aria("label", n)
             case Present(TextValue.Dyn(s))   => bar = bar.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => bar = bar.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => bar = bar.aria("labelledby", r))
         bar(
             div.cssClass("p-toolbar-start")(UI.children(startKids)*),
             div.cssClass("p-toolbar-center")(UI.children(centerKids)*),
@@ -48,8 +47,7 @@ object Toolbar:
         startKids: List[UI] = Nil,
         centerKids: List[UI] = Nil,
         endKids: List[UI] = Nil,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     def apply(): Toolbar = new Toolbar(State())

@@ -16,11 +16,8 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
 
     type Self = RadioButton
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): RadioButton = new RadioButton(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new RadioButton(s.copy(accessV = v))
 
     def text(v: String): RadioButton = new RadioButton(s.copy(labelText = Present(v)))
 
@@ -57,10 +54,8 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): RadioButton = new RadioButton(s.copy(variantV = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                   = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self           = new RadioButton(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): RadioButton = new RadioButton(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): RadioButton = new RadioButton(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new RadioButton(s.copy(validityV = v))
 
     def onChange(f: Boolean => UI.Action)(using Frame): RadioButton = new RadioButton(s.copy(checkedSlot = checkedSlot.hear(f)))
 
@@ -102,17 +97,17 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
         val isReadonly = readonlyFlag.getOrElse(false)
 
         var box = radio.cssClass("p-radiobutton-input").checked(native)
-        box = idV.map(v => box.id(v)).getOrElse(box)
+        box = accessV.idV.map(v => box.id(v)).getOrElse(box)
         box = groupName.map(box.name(_)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
         if isReadonly then box = box.aria("disabled", "true")
-        box = accNameV match
+        box = accessV.nameV match
             case Present(TextValue.Const(v)) => box.aria("label", v)
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
-        box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = accessV.nameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
         // readonly keeps the radio FOCUSABLE and refuses to select it: the client declines the
         // browser's own selection (`preventActivation`) and the handler is not wired. Disabling the
         // native input instead took it out of the tab order (see CheckBox). Only `disabled` is
@@ -160,10 +155,8 @@ object RadioButton:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
-        onBlurF: Maybe[Boolean => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Boolean => UI.Action] = Absent
     )
 
     private val checkedName = Slot.Name("RadioButton", "checked", "a change", "onChange")
