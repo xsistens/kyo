@@ -99,7 +99,7 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
       * (options, templates, state) carries over; a single-choice binding and its events do not, since they hold one option.
       */
     def multiple: MultiSelectButton[A] =
-        MultiSelectButton(new SelectButton(s.copy(
+        new MultiSelectButton(new SelectButton(s.copy(
             multipleFlag = true,
             single = Absent,
             onChangeF = Absent,
@@ -433,11 +433,13 @@ end SelectButton
   * It renders through the group it was made from, so the two share every option, template and state setter and the
   * same anatomy.
   */
-final case class MultiSelectButton[A] private[uic] (private[uic] val group: SelectButton[A])
-    extends Node, MultiChoiceFormControl[A], HasAccessibleNameRef:
+final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectButton[A])
+    extends Node, MultiChoiceFormControl[A], HasAccessibleNameRef, Stated:
     type Self = MultiSelectButton[A]
 
-    private def on(g: SelectButton[A]): MultiSelectButton[A] = copy(group = g)
+    private[uic] def s: SelectButton[A] = group
+
+    private def on(g: SelectButton[A]): MultiSelectButton[A] = new MultiSelectButton(g)
 
     /** Appends typed options with their text projection, as [[SelectButton.options]]. */
     def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): MultiSelectButton[A] = on(group.options(is)(label))

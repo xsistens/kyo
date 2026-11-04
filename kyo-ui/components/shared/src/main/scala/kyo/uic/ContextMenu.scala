@@ -124,7 +124,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       * F-27 (a keyless mount reset by every enclosing emission) cannot arise in this form.
       */
     private def panelOnly(st: ContextMenu.State)(using Frame): UI =
-        val self = new ContextMenu(this.s.copy(idV = if idV.isDefined then idV else Present(st.base)))
+        val self = new ContextMenu(s.copy(idV = if idV.isDefined then idV else Present(st.base)))
         self.panelRegion(st.open, st.focus, st.at, st.submenus)
 
     private def wrapping(using Frame): UI =

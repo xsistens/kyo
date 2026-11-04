@@ -59,14 +59,14 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
       * the single-value binding and its `onChange` and `onBlur`, which hold one value and would never fire on a set.
       */
     def values(v: Set[A] | Signal[Set[A]])(using DateKind.Days[A]): MultiDatePicker[A] =
-        MultiDatePicker(new DatePicker(single.s.copy(bindingV = Present(DatePicker.Binding.Multi(ReactiveValue[Set[A]](v))))))
+        new MultiDatePicker(new DatePicker(single.s.copy(bindingV = Present(DatePicker.Binding.Multi(ReactiveValue[Set[A]](v))))))
 
     /** The same picker picking a range (Prime's `selectionMode="range"`): a [[RangeDatePicker]] bound two-way to the start
       * and end days. The first pick writes `start` (clearing `end`), a pick on or after it completes the range and closes the
       * panel, an earlier pick restarts. Everything set so far carries over except the single-value binding and its events.
       */
     def range(start: Maybe[A] | Signal[Maybe[A]], end: Maybe[A] | Signal[Maybe[A]])(using DateKind.Days[A]): RangeDatePicker[A] =
-        RangeDatePicker(new DatePicker(single.s.copy(bindingV =
+        new RangeDatePicker(new DatePicker(single.s.copy(bindingV =
             Present(DatePicker.Binding.Range(ReactiveValue[Maybe[A]](start), ReactiveValue[Maybe[A]](end)))
         )))
 
@@ -1821,11 +1821,13 @@ end DatePicker
   * It carries the validation vocabulary ([[FormControl]]) but is not a form-bindable control: the form layer's set-valued
   * trait binds through `selection`, and a second spelling of the binding `values` already made would be a slot with two names.
   */
-final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, Stated:
     type Self = MultiDatePicker[A]
 
-    private def on(p: DatePicker[A]): MultiDatePicker[A] = copy(picker = p)
+    private[uic] def s: DatePicker[A] = picker
+
+    private def on(p: DatePicker[A]): MultiDatePicker[A] = new MultiDatePicker(p)
 
     /** Fired with the set now held after a toggle or a clear changed it; the undo of an Escape fires nothing. */
     def onChange(f: Set[A] => UI.Action)(using Frame): MultiDatePicker[A] = on(picker.withChangeSet(f))
@@ -1923,11 +1925,13 @@ end MultiDatePicker
   *
   * It carries the validation vocabulary ([[FormControl]]) but no form binding, since no form field holds two refs.
   */
-final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, Stated:
     type Self = RangeDatePicker[A]
 
-    private def on(p: DatePicker[A]): RangeDatePicker[A] = copy(picker = p)
+    private[uic] def s: DatePicker[A] = picker
+
+    private def on(p: DatePicker[A]): RangeDatePicker[A] = new RangeDatePicker(p)
 
     /** Fired with the start and end now held after a pick or a clear changed either; the undo of an Escape fires nothing. */
     def onChange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): RangeDatePicker[A] = on(picker.withChangeRange(f))
