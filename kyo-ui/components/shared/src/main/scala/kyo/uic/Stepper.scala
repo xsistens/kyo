@@ -14,7 +14,6 @@ object Step:
         title: TextValue,
         value: Maybe[K],
         disabled: Boolean,
-        // No defaults: the synthetic companion `apply` would then also carry defaults and clash with the hand-written one.
         content: List[UI]
     )
 
