@@ -44,20 +44,20 @@ class EntriesTest extends UicTest:
             _.item.separator,
             _.item("Homepage").url("/")
         )
-        assert(rows(uic.Menu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.Menubar().items(scoped*).entriesV) == direct)
-        assert(rows(uic.TieredMenu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.ContextMenu().items(scoped*).entriesV) == direct)
+        assert(rows(uic.Menu().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.Menubar().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.TieredMenu().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.ContextMenu().items(scoped*).s.entriesV) == direct)
         assert(rows(uic.SplitButton("Save").items(scoped*).s.entriesV) == direct)
         assert(rows(uic.SpeedDial().items(scoped*).s.entriesV) == direct)
-        assert(uic.MenuItem("File").items(scoped*).itemsV == direct)
-        assert(uic.MenuGroup("File").items(scoped*).itemsV == direct)
-        assert(rows(uic.ContextMenu(scoped).entriesV) == direct)
+        assert(uic.MenuItem("File").items(scoped*).s.itemsV == direct)
+        assert(uic.MenuGroup("File").items(scoped*).s.itemsV == direct)
+        assert(rows(uic.ContextMenu(scoped).s.entriesV) == direct)
         assert(rows(uic.ContextMenu(Seq(
             _.item("Update").icon(uic.Icons.refresh),
             _.item.separator,
             _.item("Homepage").url("/")
-        )).entriesV) ==
+        )).s.entriesV) ==
             direct)
     }
 
@@ -77,7 +77,7 @@ class EntriesTest extends UicTest:
         val group = uic.MenuGroup("Laptops").items(_.item("Pro"))
         val item  = uic.MegaMenuItem("Products").column(_.group("Laptops").items(_.item("Pro")))
         assert(item == uic.MegaMenuItem("Products").column(group))
-        assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).entriesV) ==
+        assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).s.entriesV) ==
             uic.ReactiveValue.Const(List(uic.MegaMenuItem("Products"))))
     }
 

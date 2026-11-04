@@ -123,7 +123,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
       * buttons, the extracted sheet has no `.p-speeddial-separator` to style one, and rendering
       * it would have put an empty button in the menu.
       */
-    private def actions: List[MenuItem] = itemsV.filterNot(_.separatorFlag)
+    private def actions: List[MenuItem] = itemsV.filterNot(_.s.separatorFlag)
 
     private def body(isOpen: Boolean, live: Boolean, base: String, focus: String => UI.Action)(using
         Frame
@@ -138,7 +138,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
         val acts = actions
         // The positions the keyboard may land on: a disabled action is natively disabled, so it
         // is out of the tab order and an arrow steps over it.
-        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.disabledFlag.constTrue => i }
+        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.s.disabledFlag.constTrue => i }
         val first                  = navigable.headOption.getOrElse(-1)
         val listId                 = s"$base-list"
         def itemId(i: Int): String = s"$base-i$i"
@@ -183,7 +183,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
                         if !live then ()
                         else
                             for
-                                _ <- it.actionV match
+                                _ <- it.s.actionV match
                                     case Present(eff) => eff
                                     case Absent       => (): UI.Action
                                 _ <- close
@@ -192,13 +192,13 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
                         .rounded(true)
                         .severity(Severity.Secondary)
                         .size(Size.Small)
-                        .accessibleName(it.labelV.constOrEmpty)
-                        .tooltip(it.labelV.constOrEmpty)
-                        .disabled(it.disabledFlag.constTrue)
+                        .accessibleName(it.s.labelV.constOrEmpty)
+                        .tooltip(it.s.labelV.constOrEmpty)
+                        .disabled(it.s.disabledFlag.constTrue)
                         .roleRaw("menuitem")
                         .id(itemId(i))
-                    it.iconV.foreach(g => btn = btn.icon(g))
-                    if !it.disabledFlag.constTrue then
+                    it.s.iconV.foreach(g => btn = btn.icon(g))
+                    if !it.s.disabledFlag.constTrue then
                         // No action is in the tab sequence: the dial's one tab stop is the toggle,
                         // and focus reaches an action by opening the fan, which seeds it onto the
                         // first one. A tab stop here would be a second one, and Tab would then walk

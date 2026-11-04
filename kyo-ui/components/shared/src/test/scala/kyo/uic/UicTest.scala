@@ -349,7 +349,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
         def loop(items: List[MenuItem], prefix: List[Int]): List[List[Int]] =
             items.zipWithIndex.flatMap { (it, i) =>
                 val p = prefix :+ i
-                if it.itemsV.nonEmpty then p :: loop(it.itemsV, p) else Nil
+                if it.s.itemsV.nonEmpty then p :: loop(it.s.itemsV, p) else Nil
             }
         MenuItemScope.reading(entries) match
             case ReactiveValue.Const(items) => loop(items, Nil)
@@ -359,7 +359,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     /** The root indices of a MegaMenu that open a panel. */
     private[uic] def panelPaths(entries: List[MegaMenuItemLiveEntry])(using Frame): List[List[Int]] =
         MegaMenuItemScope.reading(entries) match
-            case ReactiveValue.Const(items) => items.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
+            case ReactiveValue.Const(items) => items.zipWithIndex.collect { case (it, i) if it.s.columnsV.nonEmpty => List(i) }
             case ReactiveValue.Dyn(_)       => throw new AssertionError("panel paths are read from fixed entries")
 
     /** Paths of every group of a CascadeSelect's options. */

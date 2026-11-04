@@ -31,8 +31,8 @@ private[uic] object MenuNav:
         def skip(n: N): Boolean
 
     given Nodes[MenuItem] with
-        def children(n: MenuItem): List[MenuItem] = n.itemsV
-        def skip(n: MenuItem): Boolean            = n.separatorFlag || n.disabledFlag.constTrue
+        def children(n: MenuItem): List[MenuItem] = n.s.itemsV
+        def skip(n: MenuItem): Boolean            = n.s.separatorFlag || n.s.disabledFlag.constTrue
 
     /** Root-level navigation axis. */
     enum Orientation derives CanEqual:

@@ -24,7 +24,7 @@ class MegaNavTest extends UicTest:
 
     private def k(focus: List[Int], key: Keyboard) = MegaNav.onKey(items, horizontal = true, focus, key)
 
-    private def lbl(it: MenuItem): String = it.labelV match
+    private def lbl(it: MenuItem): String = it.s.labelV match
         case TextValue.Const(t) => t
         case _                  => "?"
 
