@@ -130,8 +130,8 @@ class EntriesTest extends UicTest:
         assert(fixed(uic.Accordion[String]().panels(_.panel(label, content, "a")).entries) ==
             fixed(uic.Accordion[String]().panel(label, "a")(content).entries))
         // Tabs.tab wraps its content in a fragment; the label is what is compared here.
-        assert(fixed(uic.Tabs[String]().tabs(_.tab(label, content, "t")).entries).map(t => (t.text, t.id)) ==
-            fixed(uic.Tabs[String]().tab(label, "t")(content).entries).map(t => (t.text, t.id)))
+        assert(fixed(uic.Tabs[String]().tabs(_.tab(label, content, "t")).entries).map(t => (t.s.text, t.s.id)) ==
+            fixed(uic.Tabs[String]().tab(label, "t")(content).entries).map(t => (t.s.text, t.s.id)))
     }
 
     "`_` offers only what that setter takes" in {

@@ -81,25 +81,15 @@ end GalleriaItemScope
   * between the two components, inherited deliberately so the out-of-the-box look
   * matches the design system rather than a local convention.
   */
-final case class Galleria private (
-    // The images `body` draws, resolved from `itemSources` by the render.
-    itemList: List[GalleriaItem] = Nil,
-    itemSources: List[GalleriaItemLiveEntry] = Nil,
-    activeSlot: Slot[Int] = Slot(),
-    itemTemplateF: Maybe[GalleriaItem => UI] = Absent,
-    thumbnailTemplateF: Maybe[GalleriaItem => UI] = Absent,
-    circularFlag: Boolean = false,
-    showThumbnailsFlag: Boolean = true,
-    showIndicatorsFlag: Boolean = false,
-    showItemNavigatorsFlag: Boolean = false,
-    showThumbnailNavigatorsFlag: Boolean = true
-) extends Node:
+final class Galleria private[uic] (private[uic] val s: Galleria.State) extends Node, Stated:
+    import s.*
+
     type Self = Galleria
 
     /** Appends the given images, each built directly or from `_` (see [[GalleriaItemScope]]), or a signal of images that
       * change while the gallery is shown (see [[LiveEntry]]).
       */
-    def items(is: GalleriaItemLiveEntry*): Galleria = copy(itemSources = itemSources ++ is)
+    def items(is: GalleriaItemLiveEntry*): Galleria = new Galleria(s.copy(itemSources = itemSources ++ is))
 
     /** The images as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[GalleriaItem]] = GalleriaItemScope.reading(itemSources)
@@ -110,37 +100,37 @@ final case class Galleria private (
       * thumbnails and dots reachable and inert. Unbound, the gallery keeps the index itself, starting on the first image.
       * A signal nothing hears is reported in a card.
       */
-    def activeIndex(v: Int | Signal[Int]): Galleria = copy(activeSlot = activeSlot.bind(v))
+    def activeIndex(v: Int | Signal[Int]): Galleria = new Galleria(s.copy(activeSlot = activeSlot.bind(v)))
 
     /** Custom preview content, replacing the default full-width `img`. */
-    def itemTemplate(f: GalleriaItem => UI): Galleria = copy(itemTemplateF = Present(f))
+    def itemTemplate(f: GalleriaItem => UI): Galleria = new Galleria(s.copy(itemTemplateF = Present(f)))
 
     /** Custom thumbnail content, replacing the default thumbnail `img`. */
-    def thumbnailTemplate(f: GalleriaItem => UI): Galleria = copy(thumbnailTemplateF = Present(f))
+    def thumbnailTemplate(f: GalleriaItem => UI): Galleria = new Galleria(s.copy(thumbnailTemplateF = Present(f)))
 
     /** Wraps the navigators past the ends (default false: they disable). */
-    def circular(v: Boolean): Galleria = copy(circularFlag = v)
+    def circular(v: Boolean): Galleria = new Galleria(s.copy(circularFlag = v))
 
     /** Renders the thumbnail strip (default true, like Prime). */
-    def showThumbnails(v: Boolean): Galleria = copy(showThumbnailsFlag = v)
+    def showThumbnails(v: Boolean): Galleria = new Galleria(s.copy(showThumbnailsFlag = v))
 
     /** Renders the indicator dots below the preview. Default false, which is
       * PrimeVue/PrimeReact's own Galleria default; [[Carousel.showIndicators]] is
       * the same feature defaulted to true because Prime's Carousel does that.
       */
-    def showIndicators(v: Boolean): Galleria = copy(showIndicatorsFlag = v)
+    def showIndicators(v: Boolean): Galleria = new Galleria(s.copy(showIndicatorsFlag = v))
 
     /** Renders the prev/next navigators on the preview. Default false, Prime's own
       * Galleria default; [[Carousel.showItemNavigators]] is the same feature under
       * the same name, defaulted to true after Prime's Carousel.
       */
-    def showItemNavigators(v: Boolean): Galleria = copy(showItemNavigatorsFlag = v)
+    def showItemNavigators(v: Boolean): Galleria = new Galleria(s.copy(showItemNavigatorsFlag = v))
 
     /** Renders the thumbnail-strip navigators (default true, like Prime). */
-    def showThumbnailNavigators(v: Boolean): Galleria = copy(showThumbnailNavigatorsFlag = v)
+    def showThumbnailNavigators(v: Boolean): Galleria = new Galleria(s.copy(showThumbnailNavigatorsFlag = v))
 
     /** Fired with the index the reader asks for after any navigation, after a two-way [[activeIndex]] is written. */
-    def onActiveIndexChange(f: Int => UI.Action)(using Frame): Galleria = copy(activeSlot = activeSlot.hear(f))
+    def onActiveIndexChange(f: Int => UI.Action)(using Frame): Galleria = new Galleria(s.copy(activeSlot = activeSlot.hear(f)))
 
     /** A constant nobody hears is fixed: the gallery stays on that image, and nothing navigates. */
     private def fixed: Boolean = activeSlot.fixed
@@ -151,7 +141,7 @@ final case class Galleria private (
                 cmds <- UI.commands
                 base <- cmds.freshId
                 // Unbound, the gallery keeps the active image itself, starting on the first.
-                self <- activeSlot.owned(0).map(s => copy(activeSlot = s))
+                self <- activeSlot.owned(0).map(s => new Galleria(this.s.copy(activeSlot = s)))
             yield self.shown(base, id => cmds.focusId(id))
         }.placeholder(shown("", _ => ()))
         // An index bound one way that nothing hears: every navigation is painted away again.
@@ -164,7 +154,7 @@ final case class Galleria private (
       */
     private def shown(base: String, focus: String => UI.Action)(using Frame): UI =
         // The images and the active index are ONE region (see [[ReactiveValue.and]]): a list that shrinks moves the clamp too.
-        entries.and(activeSlot.reading(0)).render((items, i) => copy(itemList = items).body(i, base, focus))
+        entries.and(activeSlot.reading(0)).render((items, i) => new Galleria(s.copy(itemList = items)).body(i, base, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI = shown(base, focus)
@@ -391,5 +381,20 @@ final case class Galleria private (
 end Galleria
 
 object Galleria:
+    final private[uic] case class State(
+        // The images `body` draws, resolved from `itemSources` by the render.
+        itemList: List[GalleriaItem] = Nil,
+        itemSources: List[GalleriaItemLiveEntry] = Nil,
+        activeSlot: Slot[Int] = Slot(),
+        itemTemplateF: Maybe[GalleriaItem => UI] = Absent,
+        thumbnailTemplateF: Maybe[GalleriaItem => UI] = Absent,
+        circularFlag: Boolean = false,
+        showThumbnailsFlag: Boolean = true,
+        showIndicatorsFlag: Boolean = false,
+        showItemNavigatorsFlag: Boolean = false,
+        showThumbnailNavigatorsFlag: Boolean = true
+    )
+
     private val activeName = Slot.Name("Galleria", "the active image", "a navigation", "onActiveIndexChange")
-    def apply(): Galleria  = new Galleria()
+    def apply(): Galleria  = new Galleria(State())
+end Galleria

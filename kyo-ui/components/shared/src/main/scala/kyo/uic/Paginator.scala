@@ -41,26 +41,15 @@ end PaginatorElement
   * sheet styles none). A rows change repositions to the page that keeps the first
   * visible record visible, and reports that page as a page change.
   */
-final case class Paginator private (
-    totalV: ReactiveValue[Int] = ReactiveValue.Const(0),
-    rowsSlot: Slot[Int] = Slot(),
-    pageSlot: Slot[Int] = Slot(),
-    currentPageV: Maybe[Int] = Absent,
-    pageLinkSizeV: Int = 5,
-    rppOptionsV: List[Int] = Nil,
-    reportTemplateV: Maybe[String] = Absent,
-    jtpInputFlag: Boolean = false,
-    templateV: Maybe[List[PaginatorElement]] = Absent,
-    hostClassesV: List[String] = Nil,
-    // What a host calls the rows event, so the card for a one-way rows count names the setter its caller has.
-    rowsEventName: String = "onRowsChange"
-) extends Node:
+final class Paginator private[uic] (private[uic] val s: Paginator.State) extends Node, Stated:
+    import s.*
+
     type Self = Paginator
 
     /** Total number of records to page over. A `Signal[Int]` (a filtered count, say) changes the page count in place,
       * without building the paginator again.
       */
-    def totalRecords(n: Int | Signal[Int]): Paginator = copy(totalV = ReactiveValue(n))
+    def totalRecords(n: Int | Signal[Int]): Paginator = new Paginator(s.copy(totalV = ReactiveValue(n)))
 
     /** Records per page (floored at 1; the page count is `ceil(totalRecords / rows)`).
       *
@@ -70,12 +59,12 @@ final case class Paginator private (
       * dropdown is drawn read-only. Unbound, the paginator keeps the count the reader picks itself, starting at the first
       * [[rowsPerPageOptions]] entry (at one where there are none).
       */
-    def rows(n: Int | Signal[Int]): Paginator = copy(rowsSlot = rowsSlot.bind(n))
+    def rows(n: Int | Signal[Int]): Paginator = new Paginator(s.copy(rowsSlot = rowsSlot.bind(n)))
 
     /** Package-internal: a host that owns the page size hands a constant one, dropping any binding a caller made, since
       * a dropdown writing a ref the host does not page by would page a list nobody is looking at.
       */
-    private[uic] def fixedRows(n: Int): Paginator = copy(rowsSlot = Slot[Int]().bind(math.max(1, n)))
+    private[uic] def fixedRows(n: Int): Paginator = new Paginator(s.copy(rowsSlot = Slot[Int]().bind(math.max(1, n))))
 
     /** The 0-based page index (clamped at render).
       *
@@ -84,32 +73,32 @@ final case class Paginator private (
       * held in a route or a parent is moved. A one-way page with no [[onPageChange]] cannot move and is reported in a
       * card.
       */
-    def page(n: Int | Signal[Int]): Paginator = copy(pageSlot = pageSlot.bind(n))
+    def page(n: Int | Signal[Int]): Paginator = new Paginator(s.copy(pageSlot = pageSlot.bind(n)))
 
     /** At most this many page links render, centered on the current page (Prime's
       * `pageLinkSize`, default 5); all pages render when they fit the window.
       */
-    def pageLinkSize(n: Int): Paginator = copy(pageLinkSizeV = math.max(1, n))
+    def pageLinkSize(n: Int): Paginator = new Paginator(s.copy(pageLinkSizeV = math.max(1, n)))
 
     /** Renders Prime's rows-per-page Select (`.p-paginator-rpp-dropdown`) after
       * the nav buttons. A pick changes the [[rows]] (as that slot binds them) and
       * repositions to the page that keeps the first visible record visible.
       */
     def rowsPerPageOptions(opts: Seq[Int]): Paginator =
-        copy(rppOptionsV = opts.toList.filter(_ >= 1))
+        new Paginator(s.copy(rppOptionsV = opts.toList.filter(_ >= 1)))
 
     /** Renders Prime's current-page report (`span.p-paginator-current`) from a
       * template with the placeholders `{currentPage}` `{totalPages}` `{first}`
       * `{last}` `{rows}` `{totalRecords}` (Prime's default template is
       * `"({currentPage} of {totalPages})"`).
       */
-    def currentPageReport(template: String): Paginator = copy(reportTemplateV = Present(template))
+    def currentPageReport(template: String): Paginator = new Paginator(s.copy(reportTemplateV = Present(template)))
 
     /** Renders Prime's jump-to-page input (`span.p-paginator-jtp-input` wrapping
       * the field): committing a number (change event) navigates to that 1-based
       * page, clamped to the valid range.
       */
-    def jumpToPageInput(v: Boolean): Paginator = copy(jtpInputFlag = v)
+    def jumpToPageInput(v: Boolean): Paginator = new Paginator(s.copy(jtpInputFlag = v))
 
     /** Which elements render, and in which order (Prime's `paginatorTemplate`).
       *
@@ -127,37 +116,37 @@ final case class Paginator private (
       * Without a template the layout is Prime's default order, with the optional
       * elements appended in the order Prime appends them.
       */
-    def template(elements: PaginatorElement*): Paginator = copy(templateV = Present(elements.toList))
+    def template(elements: PaginatorElement*): Paginator = new Paginator(s.copy(templateV = Present(elements.toList)))
 
     /** Fired with the page the reader asked for, after a two-way [[page]] is written: a page link, a navigation button,
       * either jump control, and the page a rows-per-page pick moves to.
       */
-    def onPageChange(f: Int => UI.Action)(using Frame): Paginator = copy(pageSlot = pageSlot.hear(f))
+    def onPageChange(f: Int => UI.Action)(using Frame): Paginator = new Paginator(s.copy(pageSlot = pageSlot.hear(f)))
 
     /** Fired with the rows per page the reader picked, after a two-way [[rows]] is written, and before the page the
       * pick moves to is reported.
       */
-    def onRowsChange(f: Int => UI.Action)(using Frame): Paginator = copy(rowsSlot = rowsSlot.hear(f))
+    def onRowsChange(f: Int => UI.Action)(using Frame): Paginator = new Paginator(s.copy(rowsSlot = rowsSlot.hear(f)))
 
     /** Package-internal: host components (DataTable/DataView) stamp their
       * positional class (`p-datatable-paginator-bottom`, ...) on the root.
       */
-    private[uic] def hostClass(cls: String): Paginator = copy(hostClassesV = hostClassesV :+ cls)
+    private[uic] def hostClass(cls: String): Paginator = new Paginator(s.copy(hostClassesV = hostClassesV :+ cls))
 
     /** Package-internal: hosts that already render inside their own page-ref
       * subscription supply the resolved page directly (no nested subscription).
       */
-    private[uic] def currentPage(cur: Int): Paginator = copy(currentPageV = Present(cur))
+    private[uic] def currentPage(cur: Int): Paginator = new Paginator(s.copy(currentPageV = Present(cur)))
 
     /** Package-internal: a host that owns the page (a table, a data view) hands its binding and its own page event over. An
       * event the caller set on the paginator itself stays where the host has none.
       */
     private[uic] def hostPage(v: ReactiveValue[Int], report: Maybe[Int => UI.Action]): Paginator =
-        copy(pageSlot = Slot(Present(v), report.orElse(pageSlot.hearer)))
+        new Paginator(s.copy(pageSlot = Slot(Present(v), report.orElse(pageSlot.hearer))))
 
     /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
     private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
-        copy(rowsSlot = Slot(Present(v), report.orElse(rowsSlot.hearer)), rowsEventName = eventName)
+        new Paginator(s.copy(rowsSlot = Slot(Present(v), report.orElse(rowsSlot.hearer)), rowsEventName = eventName))
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
@@ -201,7 +190,7 @@ final case class Paginator private (
                 for
                     page <- if ownsPage then pageSlot.owned(0) else Kyo.lift(pageSlot)
                     rows <- rowsSlot.owned(rowsStart)
-                yield copy(pageSlot = page, rowsSlot = rows).renderLive
+                yield new Paginator(s.copy(pageSlot = page, rowsSlot = rows)).renderLive
             }.placeholder(renderLive)
         end if
     end render
@@ -403,5 +392,21 @@ final case class Paginator private (
 end Paginator
 
 object Paginator:
+    final private[uic] case class State(
+        totalV: ReactiveValue[Int] = ReactiveValue.Const(0),
+        rowsSlot: Slot[Int] = Slot(),
+        pageSlot: Slot[Int] = Slot(),
+        currentPageV: Maybe[Int] = Absent,
+        pageLinkSizeV: Int = 5,
+        rppOptionsV: List[Int] = Nil,
+        reportTemplateV: Maybe[String] = Absent,
+        jtpInputFlag: Boolean = false,
+        templateV: Maybe[List[PaginatorElement]] = Absent,
+        hostClassesV: List[String] = Nil,
+        // What a host calls the rows event, so the card for a one-way rows count names the setter its caller has.
+        rowsEventName: String = "onRowsChange"
+    )
+
     private val pageName   = Slot.Name("Paginator", "page", "a click", "onPageChange")
-    def apply(): Paginator = new Paginator()
+    def apply(): Paginator = new Paginator(State())
+end Paginator
