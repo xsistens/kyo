@@ -133,7 +133,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
     def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
-        new Accordion(this.s.copy(panelSources =
+        new Accordion(s.copy(panelSources =
             panelSources :+ new AccordionPanel(AccordionPanel.State(ReactiveValue(header), content, id, false, Absent))
         ))
 
@@ -151,7 +151,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
       */
     @targetName("valueMultiple")
     def value(v: Set[K] | Signal[Set[K]]): MultipleAccordion[K] =
-        MultipleAccordion(new Accordion(s.copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v))))
+        new MultipleAccordion(new Accordion(s.copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v))))
 
     /** Fired with the panel now open (`Absent` once all are closed) after a header click, after a two-way [[value]] is
       * written and before [[onToggle]].
@@ -386,10 +386,12 @@ end Accordion
   * toggle membership. It has exactly one value event, over the set, so no single-value callback can be set that never
   * fires; every other setter is the accordion's own.
   */
-final case class MultipleAccordion[K] private[uic] (private[uic] val accordion: Accordion[K]) extends Node:
+final class MultipleAccordion[K] private[uic] (private[uic] val accordion: Accordion[K]) extends Node, Stated:
     type Self = MultipleAccordion[K]
 
-    private def on(a: Accordion[K]): MultipleAccordion[K] = copy(accordion = a)
+    private[uic] def s: Accordion[K] = accordion
+
+    private def on(a: Accordion[K]): MultipleAccordion[K] = new MultipleAccordion(a)
 
     /** Fired with the panels now open after a header click, after a two-way value is written and before [[onToggle]]. */
     def onValueChange(f: Set[K] => UI.Action)(using Frame): MultipleAccordion[K] = on(accordion.withValuesChange(f))
