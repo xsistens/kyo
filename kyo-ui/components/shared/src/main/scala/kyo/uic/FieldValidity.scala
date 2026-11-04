@@ -69,10 +69,22 @@ end FieldValidity
 
 private[uic] object FieldValidity:
 
-    /** Resolves a control's three validity fields. */
-    def apply(invalid: Maybe[BoolValue], message: Maybe[String], messageDyn: Maybe[Signal[Maybe[String]]])(using
-        Frame
-    ): FieldValidity =
+    /** What a control holds of its validity, as its setters stored it (the slots [[FormControl]] offers). The one field
+      * `validityV` of a control's state; [[apply]] resolves it per render.
+      */
+    final case class Slots(
+        invalid: Maybe[BoolValue] = Absent,
+        message: Maybe[String] = Absent,
+        messageDyn: Maybe[Signal[Maybe[String]]] = Absent
+    )
+
+    object Slots:
+        /** A control with nothing set, shared so that a control nobody marks stores nothing of its own for it. */
+        val empty: Slots = Slots()
+
+    /** Resolves a control's validity slots. */
+    def apply(slots: Slots)(using Frame): FieldValidity =
+        val Slots(invalid, message, messageDyn) = slots
         (invalid.dynSig, messageDyn) match
             case (Present(red), Present(msg)) => Live(red, redFromMessage = false, Present(msg))
             case (Present(red), _)            =>
@@ -82,6 +94,8 @@ private[uic] object FieldValidity:
                 Live(Signal.initConst(invalid.constTrue), redFromMessage = false, Present(msg))
             case (_, Present(msg)) => Live(msg.map(_.isDefined), redFromMessage = true, Present(msg))
             case _                 => Fixed(invalid.constTrue, message)
+        end match
+    end apply
 
     private def row(m: String)(using Frame): UI = div.cssClass("p-uic-invalid-message")(m)
 

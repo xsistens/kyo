@@ -105,10 +105,8 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): Input = new Input(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Input                       = new Input(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Input                   = new Input(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Input = new Input(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots             = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self     = new Input(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Input = new Input(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Input = new Input(s.copy(accNameRefV = v))
 
@@ -146,7 +144,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
     def inputMask(mask: String): Input = new Input(s.copy(inputMaskV = Present(mask)))
 
     private[uic] def render(using Frame): UI =
-        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity  = FieldValidity(validityV)
         val built: UI = typeV match
             case InputType.Text =>
                 buildField(
@@ -285,9 +283,7 @@ object Input:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         accDescV: Maybe[TextValue] = Absent,

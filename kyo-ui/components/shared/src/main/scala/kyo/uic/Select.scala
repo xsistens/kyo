@@ -270,10 +270,8 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
     /** Spans the full width of its container (`.p-select-fluid`). */
     def fluid(v: Boolean): Select[A] = new Select(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Select[A]                       = new Select(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Select[A]                   = new Select(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Select[A] = new Select(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                 = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self         = new Select(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = new Select(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = new Select(s.copy(accNameRefV = v))
 
@@ -380,7 +378,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         // by this effectful mount. Static projections (SSG, the SSR page GET,
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
             val (held, ld, ph) = s
             new Select(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
@@ -420,7 +418,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         q: Slot[String],
         base: Maybe[String]
     )(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = new Select(s.copy(optionsV = opts))
@@ -873,9 +871,7 @@ object Select:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,

@@ -73,10 +73,8 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
     /** Spans the full width of its container (`.p-textarea-fluid`). */
     def fluid(v: Boolean): TextArea = new TextArea(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): TextArea                       = new TextArea(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): TextArea                   = new TextArea(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TextArea = new TextArea(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new TextArea(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TextArea = new TextArea(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): TextArea = new TextArea(s.copy(accNameRefV = v))
 
@@ -91,7 +89,7 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
     def onBlur(f: String => UI.Action)(using Frame): TextArea = new TextArea(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         Diagnostics.after(validity.follow(body(validity)))("TextArea")(
             Diagnostic.unheard(valueSlot, TextArea.valueName, on = !readonlyFlag.constTrue && !disabledFlag.constTrue)
         )
@@ -155,9 +153,7 @@ object TextArea:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onChangeF: Maybe[String => UI.Action] = Absent,

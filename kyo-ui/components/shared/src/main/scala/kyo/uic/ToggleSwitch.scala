@@ -50,10 +50,8 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
     /** Native `name` for HTML form participation. */
     def name(v: String): ToggleSwitch = new ToggleSwitch(s.copy(nameV = Present(v)))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): ToggleSwitch                       = new ToggleSwitch(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): ToggleSwitch                   = new ToggleSwitch(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ToggleSwitch = new ToggleSwitch(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots             = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self     = new ToggleSwitch(s.copy(validityV = v))
     private[uic] def withTooltip(v: Maybe[TextValue]): ToggleSwitch = new ToggleSwitch(s.copy(tooltipV = v))
 
     /** Prime's handle slot: a glyph rendered inside the sliding
@@ -73,7 +71,7 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = new ToggleSwitch(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
         val field = validity.follow(Slot.owning(
             checkedSlot,
@@ -162,9 +160,7 @@ object ToggleSwitch:
         readonlyFlag: Maybe[Boolean] = Absent,
         requiredFlag: Maybe[Boolean] = Absent,
         nameV: Maybe[String] = Absent,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         tooltipV: Maybe[TextValue] = Absent,
         handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
         accNameV: Maybe[TextValue] = Absent,

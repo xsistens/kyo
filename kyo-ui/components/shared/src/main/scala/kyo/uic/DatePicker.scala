@@ -154,10 +154,8 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
     def fluid(v: Boolean): DatePicker[A] = new DatePicker(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): DatePicker[A]                       = new DatePicker(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): DatePicker[A]                   = new DatePicker(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): DatePicker[A] = new DatePicker(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                     = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self             = new DatePicker(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker[A] = new DatePicker(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker[A] = new DatePicker(s.copy(accNameRefV = v))
 
@@ -337,7 +335,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
         panel: UI,
         openSignal: Maybe[ReactiveValue[Boolean]] = Absent
     )(using Frame): UI =
-        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity  = FieldValidity(validityV)
         val field: UI = bindingV match
             case Present(single @ DatePicker.Binding.Single(_)) =>
                 // The typed text and a rejected draft are read together, as one region: the draft is what puts a rejected
@@ -1371,9 +1369,7 @@ object DatePicker:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         openSlot: Slot[Boolean] = Slot(),
@@ -1899,9 +1895,8 @@ final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
+    private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
@@ -2003,9 +1998,8 @@ final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
+    private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))

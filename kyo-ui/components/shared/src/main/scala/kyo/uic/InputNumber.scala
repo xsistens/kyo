@@ -123,10 +123,8 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
     /** Spans the full container width (`.p-inputnumber-fluid`). */
     def fluid(v: Boolean): InputNumber = new InputNumber(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): InputNumber                       = new InputNumber(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): InputNumber                   = new InputNumber(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputNumber = new InputNumber(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                   = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self           = new InputNumber(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputNumber = new InputNumber(s.copy(accNameV = v))
 
     /** Stores the element id. */
@@ -177,7 +175,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
         else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.s.copy(textSlot = s)).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val field    =
             validity.follow(BoolValue.reactive(disabledFlag)(d => new InputNumber(s.copy(disabledFlag = d)).renderResolved(validity)))
         // A value bound one way that nothing hears: every change the reader makes is put back.
@@ -373,9 +371,7 @@ object InputNumber:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         idV: Maybe[String] = Absent,
         onBlurF: Maybe[Double => UI.Action] = Absent,

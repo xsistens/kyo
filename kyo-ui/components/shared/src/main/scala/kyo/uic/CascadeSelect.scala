@@ -164,10 +164,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
     /** Spans the full width of its container (`.p-cascadeselect-fluid`). */
     def fluid(v: Boolean): CascadeSelect[A] = new CascadeSelect(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): CascadeSelect[A]                       = new CascadeSelect(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): CascadeSelect[A]                   = new CascadeSelect(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): CascadeSelect[A] =
-        new CascadeSelect(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CascadeSelect(s.copy(validityV = v))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(s.copy(accNameV = v))
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = new CascadeSelect(s.copy(accNameRefV = v))
@@ -216,7 +214,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
     private def renderLive(using Frame): UI =
         // One open/closed signal for the root panel plus the open groups, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val stat: UI = roots.and(shown).render { (rs, s) =>
             val (held, ld, ph) = s
             new CascadeSelect(this.s.copy(items = rs)).bodyStatic(held, false, Set.empty, Absent, ph, ld, validity)
@@ -259,7 +257,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         focus: Anchored[List[Int]],
         base: Maybe[String]
     )(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = openSlot.reading(false).and(subs.reading).and(focus.reading)
         panel.and(shown).and(roots).render { case ((((o, openSet), f), (held, ld, ph)), rs) =>
             // The open groups and the highlight follow their root options over the roots shown ([[Anchored]]).
@@ -582,9 +580,7 @@ object CascadeSelect:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         accNameRefV: Maybe[String] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,

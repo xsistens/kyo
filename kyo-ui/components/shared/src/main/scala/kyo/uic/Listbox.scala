@@ -275,9 +275,8 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
       */
     def disabled(v: Boolean): Listbox[K] = new Listbox(s.copy(disabledFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Listbox[K]                       = new Listbox(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Listbox[K]                   = new Listbox(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox[K] = new Listbox(s.copy(invalidMsgDynV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Listbox(s.copy(validityV = v))
 
     /** Fires on focus loss with the current selection: the validation layer's Blur
       * trigger.
@@ -317,7 +316,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
     private[uic] def resolved(sel: Set[K], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
@@ -329,7 +328,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
         // A constant selection nobody hears is fixed: the list shows it, read-only, and its options pick nothing.
         val fixed = selectionModeV != SelectionMode.None && selectedRef.exists(_.fixed(onChangeF.orElse(onItemClickF)))
         // A host that asked for a fixed list keeps it fixed, whatever the list's own binding says.
-        new Listbox(s.copy(fixedFlag = fixedFlag || fixed)).renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
+        new Listbox(s.copy(fixedFlag = fixedFlag || fixed)).renderQuery(FieldValidity(validityV))
     end render
 
     /** One mount for the two signals this listbox owns: the keyboard highlight, and the
@@ -642,9 +641,7 @@ object Listbox:
         checkmarkFlag: Boolean = false,
         disabledFlag: Boolean = false,
         fixedFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         emptyContentV: Maybe[EmptyContent] = Absent,
         accessibleNameV: Maybe[TextValue] = Absent,
         accessibleNameRefV: Maybe[String] = Absent,

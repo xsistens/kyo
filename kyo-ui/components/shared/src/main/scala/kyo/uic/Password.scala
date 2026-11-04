@@ -90,10 +90,8 @@ final class Password private[uic] (private[uic] val s: Password.State) extends N
     /** Spans the full container width (`.p-password-fluid`). */
     def fluid(v: Boolean): Password = new Password(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Password                       = new Password(s.copy(invalidV = v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Password                   = new Password(s.copy(invalidMsgV = v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Password = new Password(s.copy(invalidMsgDynV = v))
-
+    private[uic] def validitySlots: FieldValidity.Slots                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new Password(s.copy(validityV = v))
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Password = new Password(s.copy(accNameV = v))
 
     /** Stores the element id. */
@@ -144,7 +142,7 @@ final class Password private[uic] (private[uic] val s: Password.State) extends N
 
     /** The field built once with its validity handed to `build`, followed by the message row. */
     private def validated(build: FieldValidity => UI)(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(build(validity))
 
     /** Resolves the bound value: the meter needs the CURRENT text, so with
@@ -278,9 +276,7 @@ object Password:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
-        invalidV: Maybe[BoolValue] = Absent,
-        invalidMsgV: Maybe[String] = Absent,
-        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accNameV: Maybe[TextValue] = Absent,
         idV: Maybe[String] = Absent,
         onChangeSF: Maybe[String => UI.Action] = Absent,
