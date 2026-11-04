@@ -29,26 +29,13 @@ import scala.annotation.targetName
   * overlapping native inputs fighting for the same pointer surface, so it is deferred
   * rather than approximated.
   */
-final case class Slider private (
-    valueSlot: Slot[Double] = Slot(),
-    minV: Double = 0.0,
-    maxV: Double = 100.0,
-    stepV: Double = 1.0,
-    integerFlag: Boolean = false,
-    orientationV: Orientation = Orientation.Horizontal,
-    disabledFlag: Maybe[BoolValue] = Absent,
-    readonlyFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    onBlurF: Maybe[Double => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, NumberFormControl, HasAccessibleName:
+final class Slider private[uic] (private[uic] val s: Slider.State) extends Node, NumberFormControl, HasAccessibleName, Stated:
+    import s.*
+
     type Self = Slider
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Slider = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): Slider = new Slider(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -64,50 +51,50 @@ final case class Slider private (
       * the better answer when the value is computed rather than user-edited.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Slider = copy(valueSlot = valueSlot.bind(v))
+    def value(v: Double | Signal[Double]): Slider = new Slider(s.copy(valueSlot = valueSlot.bind(v)))
 
     /** Lower bound (Prime default 0). */
-    def min(v: Double): Slider = copy(minV = v)
+    def min(v: Double): Slider = new Slider(s.copy(minV = v))
 
     /** Upper bound (Prime default 100). */
-    def max(v: Double): Slider = copy(maxV = v)
+    def max(v: Double): Slider = new Slider(s.copy(maxV = v))
 
     /** Drag/keyboard increment (Prime default 1). */
-    def step(v: Double): Slider = copy(stepV = if v <= 0 then 1.0 else v)
+    def step(v: Double): Slider = new Slider(s.copy(stepV = if v <= 0 then 1.0 else v))
 
     /** Constrains committed values to whole numbers: the value written back is rounded,
       * and the native input steps in whole units. The form layer flips this on for a
       * whole-valued (`Int`/`Long`) [[kyo.uic.form.NumberField]], so a slider bound to one
       * cannot hand it a fraction.
       */
-    def integer(v: Boolean): Slider = copy(integerFlag = v)
+    def integer(v: Boolean): Slider = new Slider(s.copy(integerFlag = v))
 
     /** Track orientation: `.p-slider-horizontal` (default) or `.p-slider-vertical`. */
-    def orientation(v: Orientation): Slider = copy(orientationV = v)
+    def orientation(v: Orientation): Slider = new Slider(s.copy(orientationV = v))
 
     /** Disables the control (`.p-disabled` + native disabled input); a `Signal[Boolean]`
       * toggles it reactively (re-renders this small control on change).
       */
-    def disabled(v: Boolean | Signal[Boolean]): Slider = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): Slider = new Slider(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** `readonly`: the slider keeps its value and its normal look and stays reachable, so a reader can land on it and read
       * it, and no drag or key moves it. The browser's own move is declined in the client, like a readonly CheckBox.
       */
-    def readonly(v: Boolean): Slider = copy(readonlyFlag = v)
+    def readonly(v: Boolean): Slider = new Slider(s.copy(readonlyFlag = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = copy(accNameV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = new Slider(s.copy(accNameV = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Slider                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Slider                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Slider                       = new Slider(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): Slider                   = new Slider(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = new Slider(s.copy(invalidMsgDynV = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => UI.Action)(using Frame): Slider = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: Double => UI.Action)(using Frame): Slider = new Slider(s.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the slider's current value; unlike onChange it fires even
       * when the handle was not moved. The validation layer's Blur trigger.
       */
-    def onBlur(f: Double => UI.Action)(using Frame): Slider = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Double => UI.Action)(using Frame): Slider = new Slider(s.copy(onBlurF = Present(Callback.of(f))))
 
     /** Clamps into range, and rounds to a whole number under [[integer]]. */
     private def clamp(v: Double): Double =
@@ -116,12 +103,12 @@ final case class Slider private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
-        if valueSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
-        else Slot.owning(valueSlot, start = minV)(s => copy(valueSlot = s).renderLive)(renderLive)
+        if valueSlot.fixed && !readonlyFlag then new Slider(s.copy(readonlyFlag = true)).render
+        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.s.copy(valueSlot = s)).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Slider(s.copy(disabledFlag = d)).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is put back.
         Diagnostics.after(field)("Slider")(Diagnostic.unheard(valueSlot, Slider.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
@@ -182,7 +169,24 @@ final case class Slider private (
 end Slider
 
 object Slider:
-    def apply(): Slider = new Slider()
+    final private[uic] case class State(
+        valueSlot: Slot[Double] = Slot(),
+        minV: Double = 0.0,
+        maxV: Double = 100.0,
+        stepV: Double = 1.0,
+        integerFlag: Boolean = false,
+        orientationV: Orientation = Orientation.Horizontal,
+        disabledFlag: Maybe[BoolValue] = Absent,
+        readonlyFlag: Boolean = false,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        onBlurF: Maybe[Double => UI.Action] = Absent,
+        idV: Maybe[String] = Absent
+    )
+
+    def apply(): Slider = new Slider(State())
 
     private val valueName = Slot.Name("Slider", "value", "a change", "onChange")
 end Slider

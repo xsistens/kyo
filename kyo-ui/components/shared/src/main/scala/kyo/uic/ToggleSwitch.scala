@@ -13,26 +13,14 @@ import kyo.UI.*
   * handle slot with a per-state glyph riding inside the sliding handle. The `checked`
   * binding mirrors [[CheckBox]].
   */
-final case class ToggleSwitch private (
-    checkedSlot: Slot[Boolean] = Slot(),
-    disabledFlag: Maybe[BoolValue] = Absent,
-    readonlyFlag: Maybe[Boolean] = Absent,
-    requiredFlag: Maybe[Boolean] = Absent,
-    nameV: Maybe[String] = Absent,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    tooltipV: Maybe[TextValue] = Absent,
-    handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    onBlurF: Maybe[Boolean => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, BooleanFormControl, HasTooltip, HasAccessibleNameRef:
+final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) extends Node, BooleanFormControl, HasTooltip,
+      HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = ToggleSwitch
 
     /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): ToggleSwitch = copy(idV = v)
+    private[uic] def withElementId(v: Maybe[String]): ToggleSwitch = new ToggleSwitch(s.copy(idV = v))
 
     /** Reads it back. */
     private[uic] def elementId: Maybe[String] = idV
@@ -42,52 +30,55 @@ final case class ToggleSwitch private (
       * [[onChange]], so the app writes its own state and the switch follows. `ref.readOnly` opts a ref out. With no
       * [[onChange]], a card says the reader cannot change it.
       */
-    def checked(v: Boolean | Signal[Boolean]): ToggleSwitch = copy(checkedSlot = checkedSlot.bind(v))
+    def checked(v: Boolean | Signal[Boolean]): ToggleSwitch = new ToggleSwitch(s.copy(checkedSlot = checkedSlot.bind(v)))
 
     /** Disables the switch. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the
       * root's `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
       */
-    def disabled(v: Boolean | Signal[Boolean]): ToggleSwitch = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): ToggleSwitch = new ToggleSwitch(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** `readonly`: the switch reports `aria-readonly` and refuses to change, but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
       */
-    def readonly(v: Boolean): ToggleSwitch = copy(readonlyFlag = Present(v))
+    def readonly(v: Boolean): ToggleSwitch = new ToggleSwitch(s.copy(readonlyFlag = Present(v)))
 
     /** Marks the switch required (`aria-required` + native constraint). */
-    def required(v: Boolean): ToggleSwitch = copy(requiredFlag = Present(v))
+    def required(v: Boolean): ToggleSwitch = new ToggleSwitch(s.copy(requiredFlag = Present(v)))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): ToggleSwitch = copy(nameV = Present(v))
+    def name(v: String): ToggleSwitch = new ToggleSwitch(s.copy(nameV = Present(v)))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): ToggleSwitch                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): ToggleSwitch                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ToggleSwitch = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): ToggleSwitch                       = new ToggleSwitch(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): ToggleSwitch                   = new ToggleSwitch(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ToggleSwitch = new ToggleSwitch(s.copy(invalidMsgDynV = v))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): ToggleSwitch = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): ToggleSwitch = new ToggleSwitch(s.copy(tooltipV = v))
 
     /** Prime's handle slot: a glyph rendered inside the sliding
       * `.p-toggleswitch-handle`, `checked` while on, `unchecked` while off.
       */
     def handleIcon(checked: IconGlyph, unchecked: IconGlyph): ToggleSwitch =
-        copy(handleIconsV = Present((checked, unchecked)))
+        new ToggleSwitch(s.copy(handleIconsV = Present((checked, unchecked))))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleSwitch = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleSwitch = copy(accNameRefV = v)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleSwitch = new ToggleSwitch(s.copy(accNameV = v))
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleSwitch = new ToggleSwitch(s.copy(accNameRefV = v))
 
-    def onChange(f: Boolean => UI.Action)(using Frame): ToggleSwitch = copy(checkedSlot = checkedSlot.hear(f))
+    def onChange(f: Boolean => UI.Action)(using Frame): ToggleSwitch = new ToggleSwitch(s.copy(checkedSlot = checkedSlot.hear(f)))
 
     /** Fires on focus loss with the switch's current state. Unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleSwitch = new ToggleSwitch(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
         // Unbound, the box keeps its own state, which starts off: a ref it owns for as long as it is shown.
-        val field = validity.follow(Slot.owning(checkedSlot, start = false)(s => copy(checkedSlot = s).drawn(validity))(drawn(validity)))
+        val field = validity.follow(Slot.owning(
+            checkedSlot,
+            start = false
+        )(s => new ToggleSwitch(this.s.copy(checkedSlot = s)).drawn(validity))(drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("ToggleSwitch")(Diagnostic.unheard(checkedSlot, ToggleSwitch.checkedName, on = !inert))
@@ -100,7 +91,7 @@ final case class ToggleSwitch private (
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
         Slot.drawField(checkedSlot, unbound = false)(f =>
-            (if f.fixed then copy(readonlyFlag = Present(true)) else this).body(f.value, f.native, f.edit, validity)
+            (if f.fixed then new ToggleSwitch(s.copy(readonlyFlag = Present(true))) else this).body(f.value, f.native, f.edit, validity)
         )
 
     private def body(
@@ -165,7 +156,24 @@ final case class ToggleSwitch private (
 end ToggleSwitch
 
 object ToggleSwitch:
+    final private[uic] case class State(
+        checkedSlot: Slot[Boolean] = Slot(),
+        disabledFlag: Maybe[BoolValue] = Absent,
+        readonlyFlag: Maybe[Boolean] = Absent,
+        requiredFlag: Maybe[Boolean] = Absent,
+        nameV: Maybe[String] = Absent,
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        tooltipV: Maybe[TextValue] = Absent,
+        handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
+        accNameV: Maybe[TextValue] = Absent,
+        accNameRefV: Maybe[String] = Absent,
+        onBlurF: Maybe[Boolean => UI.Action] = Absent,
+        idV: Maybe[String] = Absent
+    )
+
     private val checkedName = Slot.Name("ToggleSwitch", "checked", "a change", "onChange")
 
-    def apply(): ToggleSwitch = new ToggleSwitch()
+    def apply(): ToggleSwitch = new ToggleSwitch(State())
 end ToggleSwitch

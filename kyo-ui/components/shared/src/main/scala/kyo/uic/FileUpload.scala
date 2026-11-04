@@ -34,25 +34,15 @@ import kyo.UI.*
   * `display:none`, so it keeps its tab stop: Space or Enter on it opens the file dialog, and the choose button
   * shows its focus ring.
   */
-final case class FileUpload private (
-    inputIdV: String = FileUpload.defaultInputId,
-    chooseLabelV: TextValue = TextValue.Const("Choose"),
-    fileLabelV: Maybe[TextValue] = Absent,
-    acceptV: List[FileAccept] = Nil,
-    multipleFlag: Boolean = false,
-    disabledFlag: Boolean = false,
-    filesSlot: Slot[Seq[UI.FilePayload]] = Slot(),
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
-) extends Node, FileFormControl:
+final class FileUpload private[uic] (private[uic] val s: FileUpload.State) extends Node, FileFormControl, Stated:
+    import s.*
+
     type Self = FileUpload
 
     /** DOM id of the native file input (the label's `for` target). Give every
       * FileUpload on a page its own id.
       */
-    def inputId(v: String): FileUpload = copy(inputIdV = v)
+    def inputId(v: String): FileUpload = new FileUpload(s.copy(inputIdV = v))
 
     /** The one implementor of [[HasElementId]] whose storage is not `Maybe[String]`:
       * `inputIdV` is a plain `String` with a working default, because the native input needs
@@ -85,7 +75,7 @@ final case class FileUpload private (
       * is fixed: the control stays reachable and opens no dialog. Unbound, the control keeps the pick itself. A signal
       * nothing hears is reported in a card.
       */
-    def value(v: Seq[UI.FilePayload] | Signal[Seq[UI.FilePayload]]): FileUpload = copy(filesSlot = filesSlot.bind(v))
+    def value(v: Seq[UI.FilePayload] | Signal[Seq[UI.FilePayload]]): FileUpload = new FileUpload(s.copy(filesSlot = filesSlot.bind(v)))
 
     /** A constant nobody hears is fixed: the control stays reachable and opens no dialog. */
     private def fixed: Boolean = filesSlot.fixed
@@ -93,41 +83,44 @@ final case class FileUpload private (
     /** Label of the choose button (default "Choose", Prime's locale default). A `Signal[String]` re-renders
       * it in place on emission.
       */
-    def chooseLabel(v: String | Signal[String]): FileUpload = copy(chooseLabelV = ReactiveValue(v))
+    def chooseLabel(v: String | Signal[String]): FileUpload = new FileUpload(s.copy(chooseLabelV = ReactiveValue(v)))
 
     /** Empty-state text of the `span.p-fileupload-filelabel` (default "No file chosen"). Once a file is
       * picked, the label shows the chosen name(s). A `Signal[String]` re-renders the empty-state text in
       * place on emission.
       */
-    def fileLabel(v: String | Signal[String]): FileUpload = copy(fileLabelV = Present(ReactiveValue(v)))
+    def fileLabel(v: String | Signal[String]): FileUpload = new FileUpload(s.copy(fileLabelV = Present(ReactiveValue(v))))
 
     /** Native `accept` filter (kyo's typed [[kyo.UI.FileAccept]] vocabulary). */
-    def accept(vs: FileAccept*): FileUpload = copy(acceptV = acceptV ++ vs.toList)
+    def accept(vs: FileAccept*): FileUpload = new FileUpload(s.copy(acceptV = acceptV ++ vs.toList))
 
     /** Allow selecting several files (native `multiple`); the label joins names. */
-    def multiple(v: Boolean): FileUpload = copy(multipleFlag = v)
+    def multiple(v: Boolean): FileUpload = new FileUpload(s.copy(multipleFlag = v))
 
     /** Disables the control: the button dims and the input locks. */
-    def disabled(v: Boolean): FileUpload = copy(disabledFlag = v)
+    def disabled(v: Boolean): FileUpload = new FileUpload(s.copy(disabledFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): FileUpload                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): FileUpload                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = copy(invalidMsgDynV = v)
+    private[uic] def withInvalid(v: Maybe[BoolValue]): FileUpload                       = new FileUpload(s.copy(invalidV = v))
+    private[uic] def withInvalidMessage(v: Maybe[String]): FileUpload                   = new FileUpload(s.copy(invalidMsgV = v))
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = new FileUpload(s.copy(invalidMsgDynV = v))
 
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size, mimeType, content) once a file is
       * chosen, after a two-way [[value]] is written.
       */
-    def onChange(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(filesSlot = filesSlot.hear(f))
+    def onChange(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = new FileUpload(s.copy(filesSlot = filesSlot.hear(f)))
 
     /** Fires on focus loss with the files the control holds: the validation layer's Blur trigger. Unbound that is what the
       * reader picked, an empty Seq before any pick.
       */
-    def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = new FileUpload(s.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         // The chosen-name label is reactive over the files. Unbound, the mount holds what the reader picks; the page as first
         // rendered shows the empty-state label until the transport attaches.
-        Diagnostics.before(Slot.owning(filesSlot, start = Seq.empty)(s => copy(filesSlot = s).body)(body))("FileUpload")(
+        Diagnostics.before(Slot.owning(
+            filesSlot,
+            start = Seq.empty
+        )(s => new FileUpload(this.s.copy(filesSlot = s)).body)(body))("FileUpload")(
             Diagnostic.unheard(filesSlot, FileUpload.filesName)
         )
     end render
@@ -194,7 +187,21 @@ final case class FileUpload private (
 end FileUpload
 
 object FileUpload:
-    def apply(): FileUpload = new FileUpload()
+    final private[uic] case class State(
+        inputIdV: String = FileUpload.defaultInputId,
+        chooseLabelV: TextValue = TextValue.Const("Choose"),
+        fileLabelV: Maybe[TextValue] = Absent,
+        acceptV: List[FileAccept] = Nil,
+        multipleFlag: Boolean = false,
+        disabledFlag: Boolean = false,
+        filesSlot: Slot[Seq[UI.FilePayload]] = Slot(),
+        invalidV: Maybe[BoolValue] = Absent,
+        invalidMsgV: Maybe[String] = Absent,
+        invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+        onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
+    )
+
+    def apply(): FileUpload = new FileUpload(State())
 
     /** The native input's id when nobody has chosen one. Named rather than inlined because
       * [[FileUpload.elementId]] has to tell the default apart from a caller's choice.
