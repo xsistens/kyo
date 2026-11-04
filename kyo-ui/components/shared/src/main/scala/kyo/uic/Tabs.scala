@@ -49,8 +49,6 @@ object Tab:
         icon: Maybe[IconGlyph],
         additionalText: Maybe[String],
         disabled: Boolean,
-        // No default: the synthetic companion `apply` would then also carry defaults and
-        // clash with the hand-written one below.
         urlV: Maybe[String]
     )
 

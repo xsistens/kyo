@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 
 /** Base type of every uic component.
   *
-  * A component is a plain immutable builder, NOT a `kyo.UI`. The kyo HTML AST
+  * A component is a plain immutable builder over its state ([[Stated]]), NOT a `kyo.UI`. The kyo HTML AST
   * (`UI` / `Element` / `HtmlContent`) is `sealed` and cannot be extended from
   * outside `kyo/UI.scala`, so a component instead renders itself into a `UI` on
   * demand and is auto-lifted at placement, mirroring how kyo lifts a bare

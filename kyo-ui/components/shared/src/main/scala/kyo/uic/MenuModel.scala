@@ -86,8 +86,7 @@ final class MenuItem private[uic] (private[uic] val s: MenuItem.State) extends S
     private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = new MenuItem(s.copy(actionV = eff))
 
     /** Package-internal: [[MenuRender.readDisabled]] pins the resolved slot back in.
-      * A writer rather than `copy`, because the constructor is private and `MenuRender`
-      * is not this class.
+      * A writer, so that `MenuRender` need not know the state.
       */
     private[uic] def withDisabled(v: Maybe[BoolValue]): MenuItem = new MenuItem(s.copy(disabledFlag = v))
 

@@ -34,7 +34,7 @@ private[uic] object BoolValue:
 
     /** Resolve a possibly-reactive boolean slot before the host builds its element: if `bv` is
       * `Dyn`, re-render `rebuild` with the slot pinned to the current `Const(b)` on every
-      * emission; otherwise build once. The host passes a `rebuild` that `copy`s the resolved
+      * emission; otherwise build once. The host passes a `rebuild` that writes the resolved
       * slot back in and re-invokes its render.
       */
     def reactive(bv: Maybe[BoolValue])(rebuild: Maybe[BoolValue] => UI)(using Frame): UI =
