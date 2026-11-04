@@ -161,8 +161,8 @@ final class Tree[K] private[uic] (private[uic] val s: Tree.State[K]) extends Nod
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree[K] = new Tree(s.copy(emptyContentV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree[K] = new Tree(s.copy(accessibleNameV = v))
-
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tree(s.copy(accessV = v))
     // A node id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
     private given CanEqual[K, K] = CanEqual.derived
 
@@ -245,7 +245,7 @@ final class Tree[K] private[uic] (private[uic] val s: Tree.State[K]) extends Nod
                 )
             else Nil
         var list = ul.cssClass("p-tree-root-children").role("tree")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => list = list.aria("label", v)
             case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
             case Absent                      => ()
@@ -520,7 +520,7 @@ object Tree:
         selectionModeV: SelectionMode = SelectionMode.None,
         metaKeyFlag: Boolean = false,
         emptyContentV: Maybe[EmptyContent] = Absent,
-        accessibleNameV: Maybe[TextValue] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     private val expandedName  = Slot.Name("Tree", "expanded", "a toggle", "onExpandedChange")

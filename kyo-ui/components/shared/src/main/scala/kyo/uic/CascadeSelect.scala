@@ -86,11 +86,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
 
     type Self = CascadeSelect[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): CascadeSelect[A] = new CascadeSelect(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new CascadeSelect(s.copy(accessV = v))
 
     /** Appends typed option-tree roots with the leaf text projection: a collection, or a signal of roots for a tree
       * that changes while the field is shown, read in the field's own region.
@@ -167,9 +164,6 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new CascadeSelect(s.copy(validityV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = new CascadeSelect(s.copy(accNameRefV = v))
-
     /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing.
       * Fires before [[onPick]].
       */
@@ -226,7 +220,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
-                base  <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base  <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the field keeps the leaf the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
@@ -407,7 +401,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         var el = div.cssClass("p-cascadeselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label text inside it: see
         // [[HasElementId]]. The chain's parts derive from the same value.
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")
@@ -425,12 +419,12 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         st.flatMap(_.idBase).foreach { b =>
             el = el.aria("controls", listId(b))
@@ -581,11 +575,9 @@ object CascadeSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
-        idV: Maybe[String] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         // A root is not a function, so each one is an entry of its own and a signal one list of them (see [[LiveEntry]]).

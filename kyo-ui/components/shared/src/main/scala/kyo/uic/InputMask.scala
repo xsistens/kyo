@@ -40,11 +40,8 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = new InputMask(s.copy(placeholderText = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): InputMask = new InputMask(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(s.copy(accessV = v))
 
     /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
       * (no re-render).
@@ -65,9 +62,8 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): InputMask = new InputMask(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                 = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self         = new InputMask(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputMask = new InputMask(s.copy(accNameV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputMask(s.copy(validityV = v))
 
     /** Fired with the MASKED value on every change (native change commit). */
     def onChange(f: String => UI.Action)(using Frame): InputMask = new InputMask(s.copy(valueSlot = valueSlot.hear(f)))
@@ -99,8 +95,8 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
             .fluid(fluidFlag)
         in = disabledFlag.foldFlag(in)(in.disabled(_))
         in = readonlyFlag.foldFlag(in)(in.readonly(_))
-        idV.foreach(v => in = in.id(v))
-        accNameV match
+        accessV.idV.foreach(v => in = in.id(v))
+        accessV.nameV match
             case Present(TextValue.Const(v)) => in = in.accessibleName(v)
             case Present(TextValue.Dyn(s))   => in = in.accessibleName(s)
             case Absent                      => ()
@@ -144,8 +140,7 @@ object InputMask:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[String => UI.Action] = Absent,
         onCompleteF: Maybe[String => UI.Action] = Absent
     )

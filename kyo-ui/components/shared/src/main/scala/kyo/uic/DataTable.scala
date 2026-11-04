@@ -589,11 +589,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
 
     type Self = DataTable[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): DataTable[A] = new DataTable(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new DataTable(s.copy(accessV = v))
 
     /** The rows. A second call replaces the first.
       *
@@ -1483,9 +1480,6 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * so both forms see the same value and a caller may bind either or both.
       */
     def onSelectionChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onSelectionF = Present(Callback.of(f))))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): DataTable[A] = new DataTable(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): DataTable[A] = new DataTable(s.copy(accNameRefV = v))
 
     /** Toolbar slot above the table (`div.p-datatable-header`), the place for a
       * global-filter input, a title, or action buttons.
@@ -2682,7 +2676,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     // so the derived part ids (headers, rows, the frozen group) work unasked
                     // but are addressable when the caller cares. Same rule as Menu's base.
                     minted <- cmds.freshId
-                    prefix = idV.getOrElse(minted)
+                    prefix = accessV.idV.getOrElse(minted)
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
@@ -2765,7 +2759,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             // so the column set and the editable/filterable leaves are read at mount time.
             // Anything that must change afterwards belongs in a `Signal`, which is what `rows`,
             // `sort`, `page` and the bound refs already are.
-            idV match
+            accessV.idV match
                 case Present(id) => mount.keyed(id)
                 case Absent      => mount
             end match
@@ -2984,7 +2978,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     private def rootElement(order: ReactiveValue[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
         var root = div.cssClass("p-datatable").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
         // rows react to clicks.
         if selectionModeV != SelectionMode.None || onRowClickF.isDefined then
@@ -3241,12 +3235,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 case ReactiveValue.Dyn(sig)  => tbl = tbl.inlineStyle(sig)
             end match
         end if
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
         // The header carries an id only where a frozen row needs to hold at its height,
         // which is the one thing about this table nothing can be told and nothing can work
         // out on its own.
@@ -6279,8 +6273,7 @@ object DataTable:
         emptyContentV: Maybe[EmptyContent] = Absent,
         loadingContentV: Maybe[LoadingContent] = Absent,
         onRowClickF: Maybe[A => UI.Action] = Absent,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         headerV: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
@@ -6321,7 +6314,6 @@ object DataTable:
         reorderRowsFlag: Boolean = false,
         onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
         orderedPaths: List[List[String]] = Nil,
-        idV: Maybe[String] = Absent,
         anchorSlot: Maybe[ReactiveValue[Maybe[A]]] = Absent,
         onAnchorF: Maybe[Maybe[A] => UI.Action] = Absent
     )

@@ -42,31 +42,22 @@ final class FileUpload private[uic] (private[uic] val s: FileUpload.State) exten
     /** DOM id of the native file input (the label's `for` target). Give every
       * FileUpload on a page its own id.
       */
-    def inputId(v: String): FileUpload = new FileUpload(s.copy(inputIdV = v))
+    def inputId(v: String): FileUpload = new FileUpload(s.copy(accessV = accessV.copy(idV = Present(v))))
 
-    /** The one implementor of [[HasElementId]] whose storage is not `Maybe[String]`:
-      * `inputIdV` is a plain `String` with a working default, because the native input needs
-      * a `for` target whether or not a caller named one. So an `Absent` here means "keep the
-      * default", not "clear it", which is why this writer is spelled out rather than being
-      * the `copy(idV = v)` every other implementor supplies.
-      *
-      * `id` and [[inputId]] are the same slot: `bind` stamps the field's minted id here so
-      * focus-first-invalid lands on the native input, and it is the same `for` target the
-      * choose label points at.
-      */
-    private[uic] def withElementId(v: Maybe[String]): FileUpload =
-        v.map(inputId).getOrElse(this)
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new FileUpload(s.copy(accessV = v))
 
-    /** Reads it back; `Absent` while the id is still the untouched default.
-      *
-      * The family's odd one out, because `inputIdV` is a plain `String` that always has a
-      * value ([[inputId]]'s working default, so the native input is addressable unasked).
-      * A reader answering `Present` for that default would tell `form.bind` that every
-      * FileUpload it ever meets already carries a caller's id. What the reader is FOR is
-      * "did someone choose this", and nobody chose the default.
+    /** What the native input's id is: the one chosen, else the working default, so that it is addressable unasked. `id` and
+      * [[inputId]] are the same slot: `bind` stamps the field's minted id here so focus-first-invalid lands on the native
+      * input, and it is the same `for` target the choose label points at.
       */
-    private[uic] def elementId: Maybe[String] =
-        if inputIdV == FileUpload.defaultInputId then Absent else Present(inputIdV)
+    private def inputIdV: String = accessV.idV.getOrElse(FileUpload.defaultInputId)
+
+    /** `Absent` while the id is still the untouched default. The family's odd one out: a reader answering `Present` for that
+      * default would tell `form.bind` that every FileUpload it ever meets already carries a caller's id. What the reader is FOR
+      * is "did someone choose this", and nobody chose the default.
+      */
+    override private[uic] def elementId: Maybe[String] = accessV.idV.filter(_ != FileUpload.defaultInputId)
 
     /** Binds the picked files, as [[kyo.UI.FilePayload]] metadata (name, size, MIME type, content). A `SignalRef` binds
       * two way: a pick writes it, then [[onChange]] hears the files, and a write of an empty Seq clears the label back to
@@ -187,7 +178,7 @@ end FileUpload
 
 object FileUpload:
     final private[uic] case class State(
-        inputIdV: String = FileUpload.defaultInputId,
+        accessV: Accessibility = Accessibility.none,
         chooseLabelV: TextValue = TextValue.Const("Choose"),
         fileLabelV: Maybe[TextValue] = Absent,
         acceptV: List[FileAccept] = Nil,

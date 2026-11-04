@@ -90,15 +90,11 @@ final class Password private[uic] (private[uic] val s: Password.State) extends N
     /** Spans the full container width (`.p-password-fluid`). */
     def fluid(v: Boolean): Password = new Password(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new Password(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Password = new Password(s.copy(accNameV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(s.copy(validityV = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Password = new Password(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Password(s.copy(accessV = v))
 
     def onChange(f: String => UI.Action)(using Frame): Password =
         new Password(s.copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
@@ -194,12 +190,12 @@ final class Password private[uic] (private[uic] val s: Password.State) extends N
         if requiredFlag then in = in.required(true)
         nameV.foreach(v => in = in.name(v))
         maxLengthV.foreach(n => in = in.maxLength(n))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => in = in.accessibleName(v)
             case Present(TextValue.Dyn(s))   => in = in.accessibleName(s)
             case Absent                      => ()
         end match
-        idV.foreach(v => in = in.id(v))
+        accessV.idV.foreach(v => in = in.id(v))
 
         // === the eye toggle =====================================================
         val toggle: List[UI] = rev.toList.map { (ref, isRevealed) =>
@@ -277,8 +273,7 @@ object Password:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeSF: Maybe[String => UI.Action] = Absent,
         onBlurSF: Maybe[String => UI.Action] = Absent
     )

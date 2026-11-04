@@ -60,11 +60,8 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
     // allocates for itself needs that said.
     private given CanEqual[K, K] = CanEqual.derived
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): TreeSelect[K] = new TreeSelect(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new TreeSelect(s.copy(accessV = v))
 
     /** Appends typed root options in the picker family's shape, the values themselves serving as node ids: `label`
       * projects one to its visible text and `children` to its sub-options, so the tree structure arrives as a projection
@@ -161,10 +158,8 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
     def fluid(v: Boolean): TreeSelect[K] = new TreeSelect(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                     = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self             = new TreeSelect(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeSelect[K] = new TreeSelect(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect[K] = new TreeSelect(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TreeSelect(s.copy(validityV = v))
 
     /** Fired with the FULL updated node id set after every selection change. */
     @targetName("onChangeSet")
@@ -215,7 +210,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
             for
                 cmds <- UI.commands
                 // A caller's own id is the base the tree's parts derive from; a minted one stands in.
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 exp  <- expandedSlot.owned(Set.empty[K])
@@ -392,7 +387,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         var el = div.cssClass("p-treeselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label container: see
         // [[HasElementId]]. The tree's row and list ids derive from the same value.
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")
@@ -410,12 +405,12 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         st.foreach { s =>
             el = el.aria("controls", Tree.rootListId(s.idBase))
@@ -482,9 +477,7 @@ object TreeSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[Set[K] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         nodeSources: List[TreeSelect.NodeSource[K]] = Nil

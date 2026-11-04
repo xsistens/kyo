@@ -54,11 +54,8 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
     // The options are compared as a list where they are read as a signal; the rows are matched by key, never by `==`.
     private given CanEqual[A, A] = CanEqual.derived
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): AutoComplete[A] = new AutoComplete(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new AutoComplete(s.copy(accessV = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of suggestions for a list that
       * changes while the field is shown (a server's answer to the query, say), read in the field's own region.
@@ -159,10 +156,8 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
     def fluid(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new AutoComplete(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): AutoComplete[A] = new AutoComplete(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): AutoComplete[A] = new AutoComplete(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new AutoComplete(s.copy(validityV = v))
 
     /** Fired on every keystroke with the current text. */
     def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(s.copy(onInputF = Present(Callback.of(f))))
@@ -282,7 +277,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
             val field = UI.mounted {
                 for
                     cmds <- UI.commands
-                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     open <- Signal.initRef(false)
                     hi   <- Signal.initRef(-1)
                     all  <- Signal.initRef(false)
@@ -382,7 +377,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
         // The FIELD carries the base id. A caller's own `id` already landed here and is the base;
         // a minted one had nowhere to go, which left the dropdown trigger with nothing to hand
         // focus to.
-        idV.foreach(v => f = f.id(v))
+        accessV.idV.foreach(v => f = f.id(v))
         st.flatMap(_.idBase).foreach(b => f = f.id(b))
         sizeV match
             case Size.Small  => f = f.cssClass("p-inputtext-sm")
@@ -401,11 +396,11 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
         if readonlyFlag then f = f.readOnly(true)
         if requiredFlag then f = f.aria("required", "true").jsProp("required", "true")
         f = nameV.map(v => f.jsProp("name", v)).getOrElse(f)
-        f = accNameV match
+        f = accessV.nameV match
             case Present(TextValue.Const(v)) => f.aria("label", v)
             case Present(TextValue.Dyn(s))   => f.aria("label", s)
             case Absent                      => f
-        f = accNameRefV.map(v => f.aria("labelledby", v)).getOrElse(f)
+        f = accessV.nameRefV.map(v => f.aria("labelledby", v)).getOrElse(f)
         // A text box that opens a list of suggestions IS a combobox. This one keeps DOM focus in
         // the input the whole time (the panel is `seedFocus(false)`), so the input is also where
         // `aria-activedescendant` belongs: on the suggestion list it named the right option but
@@ -574,12 +569,10 @@ object AutoComplete:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onInputF: Maybe[String => UI.Action] = Absent,
         onSelectF: Maybe[A => UI.Action] = Absent,
         stampFilledFlag: Boolean = false,
-        idV: Maybe[String] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         optionSources: List[OptionSource[A]] = Nil
     )

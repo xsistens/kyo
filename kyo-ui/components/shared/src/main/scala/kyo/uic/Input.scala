@@ -46,11 +46,8 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
       */
     private[uic] def filledOn(cls: String, closest: String): Input = new Input(s.copy(filledUpV = Present((cls, closest))))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Input = new Input(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Input(s.copy(accessV = v))
 
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
@@ -105,10 +102,8 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): Input = new Input(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots             = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self     = new Input(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Input = new Input(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Input = new Input(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(s.copy(validityV = v))
 
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = new Input(s.copy(accDescV = v))
 
@@ -210,7 +205,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
     )(using Frame): UI =
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
-        idV.foreach(v => b = b.id(v))
+        accessV.idV.foreach(v => b = b.id(v))
         if focusAutoFlag then b = b.focusAuto(true)
         sizeV match
             case Size.Small  => b = b.cssClass("p-inputtext-sm")
@@ -239,11 +234,11 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
         if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
         b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
         b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
-        b = accNameV match
+        b = accessV.nameV match
             case Present(TextValue.Const(v)) => b.aria("label", v)
             case Present(TextValue.Dyn(s))   => b.aria("label", s)
             case Absent                      => b
-        b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
+        b = accessV.nameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
         b = accDescV match
             case Present(TextValue.Const(v)) => b.aria("description", v)
             case Present(TextValue.Dyn(s))   => b.aria("description", s)
@@ -284,15 +279,13 @@ object Input:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         accDescV: Maybe[TextValue] = Absent,
         onChangeF: Maybe[String => UI.Action] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         inputFilterV: Maybe[String] = Absent,
         inputMaskV: Maybe[String] = Absent,
         extraClassesV: List[String] = Nil,
-        idV: Maybe[String] = Absent,
         focusAutoFlag: Boolean = false,
         unheardAsV: Slot.Name = Input.valueName("Input", "onInput or onChange"),
         filledUpV: Maybe[(String, String)] = Absent

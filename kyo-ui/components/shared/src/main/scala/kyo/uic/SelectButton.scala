@@ -35,11 +35,8 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
 
     type Self = SelectButton[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): SelectButton[A] = new SelectButton(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new SelectButton(s.copy(accessV = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a group whose choices
       * change while it is shown, read in the group's own region.
@@ -131,10 +128,8 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = new SelectButton(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def validitySlots: FieldValidity.Slots                       = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new SelectButton(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = new SelectButton(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = new SelectButton(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new SelectButton(s.copy(validityV = v))
 
     /** Fired with the selection now held, after a click or an arrow changed it (`Absent` where a click cleared it).
       * A click that changes nothing fires nothing.
@@ -276,12 +271,12 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
                         case Absent     => f(Absent)
                 )
         blurHandler.foreach(h => el = el.onBlur(h))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
 
         // The positions an arrow may land on: a disabled option is out of the tab order, so the
         // movement steps over it.
@@ -302,7 +297,7 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
         // id an arrow targets is always the one the option is rendered with.
         val idAt: Int                      = if multipleFlag then navigable.headOption.getOrElse(0) else tabStop
         val optionIds: Maybe[List[String]] = nav.map { (ids, _) =>
-            idV match
+            accessV.idV match
                 case Present(v) if ids.isDefinedAt(idAt) => ids.updated(idAt, v)
                 case _                                   => ids
         }
@@ -329,8 +324,8 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
                     // the one tab stop the attached group is, on the option that carries the id.
                     case _ =>
                         tb = tb.asRadioOption(i == tabStop, _ => ())
-                        if i == idAt then idV.foreach(v => tb = tb.id(v))
-            else if i == idAt then idV.foreach(v => tb = tb.id(v))
+                        if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
+            else if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
             end if
             tb.render
         }
@@ -406,15 +401,13 @@ object SelectButton:
         sizeV: Size = Size.Normal,
         disabledFlag: Maybe[BoolValue] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
         onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
         onBlurSetF: Maybe[Set[A] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
-        idV: Maybe[String] = Absent,
         optionSources: List[OptionSource[A]] = Nil
     )
 
@@ -478,14 +471,11 @@ final class MultiSelectButton[A] private[uic] (private[uic] val group: SelectBut
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively. */
     def disabled(v: Boolean | Signal[Boolean]): MultiSelectButton[A] = on(group.disabled(v))
 
-    private[uic] def withElementId(v: Maybe[String]): MultiSelectButton[A] = on(group.withElementId(v))
-    private[uic] def elementId: Maybe[String]                              = group.elementId
+    private[uic] def accessibility: Accessibility                              = group.accessibility
+    private[uic] def withAccessibility(v: Accessibility): MultiSelectButton[A] = on(group.withAccessibility(v))
 
     private[uic] def validitySlots: FieldValidity.Slots                         = group.validitySlots
     private[uic] def withValidity(v: FieldValidity.Slots): MultiSelectButton[A] = on(group.withValidity(v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelectButton[A] = on(group.withAccessibleName(v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelectButton[A] = on(group.withAccessibleNameRef(v))
 
     private[uic] def render(using Frame): UI = group.render
 end MultiSelectButton

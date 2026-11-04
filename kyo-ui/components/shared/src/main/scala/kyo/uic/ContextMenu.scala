@@ -108,11 +108,8 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       */
     def targetless(state: ContextMenu.State): ContextMenu = new ContextMenu(s.copy(stateV = Present(state)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): ContextMenu = new ContextMenu(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ContextMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         stateV match
@@ -124,7 +121,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       * F-27 (a keyless mount reset by every enclosing emission) cannot arise in this form.
       */
     private def panelOnly(st: ContextMenu.State)(using Frame): UI =
-        val self = new ContextMenu(s.copy(idV = if idV.isDefined then idV else Present(st.base)))
+        val self = new ContextMenu(s.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(st.base))))
         self.panelRegion(st.open, st.focus, st.at, st.submenus)
 
     private def wrapping(using Frame): UI =
@@ -159,7 +156,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
         // read at mount time. Anything that must change afterwards belongs in a `Signal`,
         // which is what `MenuItem`'s reactive label and `disabled` are for, and what
         // `Overlay` already assumes by keying its own panel on the same id.
-        idV match
+        accessV.idV match
             case Present(id) => mount.keyed(id)
             case Absent      => mount
         end match
@@ -190,7 +187,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
         // whenever that signal moved. Measured on a twenty-row keyed list under a menu whose label
         // counts the rows: one row changed, eighty-one rendered. So the shell and the right-click
         // that opens it are built once, out here, and only the panel is placed reactively.
-        val self = new ContextMenu(s.copy(idV = if idV.isDefined then idV else Present(base)))
+        val self = new ContextMenu(s.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(base))))
         self.targetShell(Present(self.openHandler(Present(openRef), Present(focus), Present(subs), Present(at)))) {
             List(self.panelRegion(openRef, focus, at, subs))
         }
@@ -240,7 +237,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
             .aria("haspopup", "menu")
         // The wrapped region is this component's root, so the element id lands here (HasElementId),
         // and the panel's derived id hangs off it.
-        idV.foreach(b => target = target.id(b))
+        accessV.idV.foreach(b => target = target.id(b))
         onOpen.foreach(h => target = target.onContextMenu(h))
         target(UI.children(kids ++ content)*)
     end targetShell
@@ -315,10 +312,10 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
                         focused = if focus.isEmpty then Absent else Present(focus),
                         onLeafActivate = Present(closeMenu),
                         roving = true,
-                        idBase = idV
+                        idBase = accessV.idV
                     )
                     var listEl = ul.cssClass("p-contextmenu-root-list").role("menu")
-                    if focus.nonEmpty then idV.foreach(b => listEl = listEl.aria("activedescendant", s"$b-active"))
+                    if focus.nonEmpty then accessV.idV.foreach(b => listEl = listEl.aria("activedescendant", s"$b-active"))
                     // The LIST is what focus goes to, not the panel around it: the list is the
                     // `role="menu"` and the thing carrying `aria-activedescendant`, and that
                     // attribute is read off the focused element or off nothing at all. Escape is
@@ -344,7 +341,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
                     // and a panel id the measure can address. The id is derived rather than minted
                     // because a mount that published this panel would freeze its rows (see
                     // Overlay.pointerRepositionTrigger), and by `wired` there is always one.
-                    (at, idV) match
+                    (at, accessV.idV) match
                         case (Present(pt), Present(b)) =>
                             ov = ov
                                 .pointerAnchor(pt)
@@ -367,7 +364,7 @@ object ContextMenu:
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
         kids: List[UI] = Nil,
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         stateV: Maybe[ContextMenu.State] = Absent
     )
 

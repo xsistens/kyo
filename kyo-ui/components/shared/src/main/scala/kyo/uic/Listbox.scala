@@ -160,11 +160,8 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
 
     type Self = Listbox[K]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Listbox[K] = new Listbox(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Listbox(s.copy(accessV = v))
 
     /** Chords the HOST claims, tried before the list's own machine sees them.
       *
@@ -286,9 +283,6 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox[K] = new Listbox(s.copy(emptyContentV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox[K] = new Listbox(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox[K] = new Listbox(s.copy(accessibleNameRefV = v))
-
     /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
       * [[FieldValidity]]; without one, an app-owned [[filterQuery]] turns it on.
       */
@@ -320,7 +314,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
-            new Listbox(s.copy(optionsV = opts)).body(sel, query, Slot(), hi, idV, focused)(validity)
+            new Listbox(s.copy(optionsV = opts)).body(sel, query, Slot(), hi, accessV.idV, focused)(validity)
         ))
     end resolved
 
@@ -349,7 +343,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
                 // The id the highlight is announced through. A caller's own `id` wins, and where
                 // there is none a minted one stands in, so `aria-activedescendant` is not
                 // something a reader has to opt into to be told which option is highlighted.
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 hi   <- Signal.initRef(-1)
                 q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
@@ -491,7 +485,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
         var list = ul.cssClass("p-listbox-list").role("listbox")
         // The id goes on the list, the listbox that holds the one tab stop, so a `Label.forId` and
         // the form's focus-first-invalid reach it; the options derive theirs from the same value.
-        idV.foreach(v => list = list.id(v))
+        accessV.idV.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
         // A fixed list is read-only, not disabled: it stays the one tab stop, so a reader still reaches what it holds, and
@@ -512,12 +506,12 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
         if interactive then
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus).onBlur(leaveList)
             if focused >= 0 then idBase.foreach(base => list = list.aria("activedescendant", optionId(base, focused)))
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => list = list.aria("label", v)
             case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(v => list = list.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => list = list.aria("labelledby", v))
         val listUI: UI = list(UI.children(rows ++ emptyRow)*)
 
         def header: UI =
@@ -643,11 +637,9 @@ object Listbox:
         fixedFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         emptyContentV: Maybe[EmptyContent] = Absent,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onBlurF: Maybe[Set[K] => UI.Action] = Absent,
         onChangeF: Maybe[Set[K] => UI.Action] = Absent,
-        idV: Maybe[String] = Absent,
         hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
     )
 

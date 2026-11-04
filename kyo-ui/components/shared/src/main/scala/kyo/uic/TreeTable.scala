@@ -185,8 +185,8 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
     def onRowClick(f: A => UI.Action)(using Frame): TreeTable[A] =
         new TreeTable(s.copy(onRowClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeTable[A] = new TreeTable(s.copy(accNameV = v))
-
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new TreeTable(s.copy(accessV = v))
     // ---- render ----
 
     private def keyOf(a: A, fallback: => String): String =
@@ -366,7 +366,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
             case SelectionMode.Multiple | SelectionMode.Checkbox => tbl = tbl.aria("multiselectable", "true")
             case _                                               => ()
         if colGroupUI.nonEmpty then tbl = tbl.cssClass("p-uic-table-fixed")
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
             case Absent                      => ()
@@ -731,7 +731,7 @@ object TreeTable:
         emptyContentV: Maybe[EmptyContent] = Absent,
         onNodeToggleF: Maybe[A => UI.Action] = Absent,
         onRowClickF: Maybe[A => UI.Action] = Absent,
-        accNameV: Maybe[TextValue] = Absent,
+        accessV: Accessibility = Accessibility.none,
         hiddenCols: List[Column[A, AnyTable]] = Nil
     )
 

@@ -34,11 +34,8 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
 
     type Self = Slider
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Slider = new Slider(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Slider(s.copy(accessV = v))
 
     /** The slider's value, in any of the three bindings a value slot holds. A constant nobody hears is
       * fixed, drawn read-only; one [[onChange]] hears is reported and the thumb put back where the
@@ -81,8 +78,6 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
       * it, and no drag or key moves it. The browser's own move is declined in the client, like a readonly CheckBox.
       */
     def readonly(v: Boolean): Slider = new Slider(s.copy(readonlyFlag = v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = new Slider(s.copy(accNameV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Slider(s.copy(validityV = v))
@@ -139,8 +134,8 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
             .max(maxV)
             .step(if integerFlag then math.max(1.0, math.rint(stepV)) else stepV)
             .value(native)
-        idV.foreach(v => in = in.id(v))
-        accNameV match
+        accessV.idV.foreach(v => in = in.id(v))
+        accessV.nameV match
             case Present(TextValue.Const(v)) => in = in.aria("label", v)
             case Present(TextValue.Dyn(s))   => in = in.aria("label", s)
             case Absent                      => ()
@@ -178,9 +173,8 @@ object Slider:
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        onBlurF: Maybe[Double => UI.Action] = Absent,
-        idV: Maybe[String] = Absent
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Double => UI.Action] = Absent
     )
 
     def apply(): Slider = new Slider(State())

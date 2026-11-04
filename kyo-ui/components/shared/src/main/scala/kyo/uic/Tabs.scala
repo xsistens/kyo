@@ -199,11 +199,8 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
       */
     def lazyPanels(v: Boolean): Tabs[K] = new Tabs(s.copy(lazyPanelsFlag = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Tabs[K] = new Tabs(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tabs(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         val strip = renderLive
@@ -223,7 +220,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
             UI.commands.map { cmds =>
                 // A caller's base wins, and only without one does the mount mint it. Same rule as [[Menu]]'s base: the ARIA
                 // and focus wiring works unasked, and a caller who wants to address a header can.
-                val base: String < Sync = idV match
+                val base: String < Sync = accessV.idV match
                     case Present(b) => b
                     case Absent     => cmds.freshId
                 // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
@@ -238,7 +235,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
             // too: a golden render, an SSG page and the live tree then agree on the header
             // ids instead of only the live one having any. Arrow-key focus still needs the
             // mount, which is what the no-op focus says here.
-            .placeholder(body(idV, _ => ()))
+            .placeholder(body(accessV.idV, _ => ()))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
@@ -369,7 +366,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
         // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
         // because a derived name is a different string (GAPS.md F-34).
         var root = div.cssClass("p-tabs").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         val headers = listed.render { (ts, sel) =>
             new Tabs(s.copy(tabList = ts)).tablistWith(resolveIn(ts, sel), base, focus)
         }
@@ -444,7 +441,7 @@ object Tabs:
         tabSources: List[TabLiveEntry[K]] = Nil,
         // Over `Maybe[K]`, since the strip's own state may start with no tab to name: a live list can be empty at mount.
         selectedSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         lazyPanelsFlag: Boolean = false
     )
 

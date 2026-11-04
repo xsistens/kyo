@@ -34,11 +34,8 @@ final class Fieldset private[uic] (private[uic] val s: Fieldset.State) extends N
 
     type Self = Fieldset
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Fieldset = new Fieldset(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Fieldset(s.copy(accessV = v))
 
     /** Legend text, rendered inside `.p-fieldset-legend`. A `Signal[String]` re-renders it in place on
       * emission, e.g. a locale-driven `I18n.t` leaf.
@@ -86,7 +83,7 @@ final class Fieldset private[uic] (private[uic] val s: Fieldset.State) extends N
             case _                           => Absent
 
         var shell = fieldset.cssClass("p-fieldset").cssClass("p-component")
-        idV.foreach(v => shell = shell.id(v))
+        accessV.idV.foreach(v => shell = shell.id(v))
         val on = toggleOn
         on match
             case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-fieldset-toggleable")
@@ -166,7 +163,7 @@ object Fieldset:
         legendV: Maybe[TextValue] = Absent,
         toggleableV: Maybe[BoolValue] = Absent,
         collapsedSlot: Slot[Boolean] = Slot(),
-        idV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

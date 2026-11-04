@@ -55,8 +55,8 @@ final class Card private[uic] (private[uic] val s: Card.State) extends Node, Has
     /** Footer slot rendered as `div.p-card-footer` at the body's end (Prime's footer slot). */
     def footer(v: UI): Card = new Card(s.copy(footerV = Present(v)))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Card = new Card(s.copy(accessibleNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Card = new Card(s.copy(accessibleNameRefV = v))
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Card(s.copy(accessV = v))
 
     /** Adds content children (rendered inside `div.p-card-content`). */
     def apply(cs: UI*): Card = new Card(s.copy(kids = kids ++ cs))
@@ -71,13 +71,13 @@ final class Card private[uic] (private[uic] val s: Card.State) extends Node, Has
             div.cssClass("p-card-body")(UI.children(captionArea ++ (contentUI :: footerUI))*)
 
         var el = div.cssClass("p-card").cssClass("p-component")
-        if accessibleNameV.isDefined || accessibleNameRefV.isDefined then el = el.role("region")
-        accessibleNameV match
+        if accessV.nameV.isDefined || accessV.nameRefV.isDefined then el = el.role("region")
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
         el(UI.children(headerUI :+ body)*)
     end render
 
@@ -147,8 +147,7 @@ object Card:
         onHeaderClickEff: Maybe[UI.Action] = Absent,
         customHeaderV: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
-        accessibleNameV: Maybe[TextValue] = Absent,
-        accessibleNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

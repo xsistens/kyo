@@ -44,9 +44,9 @@ final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) ext
     /** Formats the label from the current value (e.g. `v => s"$v/100"`). */
     def valueTemplate(f: Int => String): ProgressBar = new ProgressBar(s.copy(valueTemplateV = Present(f)))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressBar = new ProgressBar(s.copy(accessibleNameV = v))
-
-    private[uic] def render(using Frame): UI =
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressBar(s.copy(accessV = v))
+    private[uic] def render(using Frame): UI                   =
         modeV match
             case ProgressBarMode.Indeterminate => indeterminateBody
             case ProgressBarMode.Determinate   => valueBinding.getOrElse(ReactiveValue.Const(0)).render(determinateBody)
@@ -58,7 +58,7 @@ final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) ext
             .role("progressbar")
             .aria("valuemin", "0")
             .aria("valuemax", "100")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
@@ -90,7 +90,7 @@ object ProgressBar:
         modeV: ProgressBarMode = ProgressBarMode.Determinate,
         showValueFlag: Boolean = true,
         valueTemplateV: Maybe[Int => String] = Absent,
-        accessibleNameV: Maybe[TextValue] = Absent
+        accessV: Accessibility = Accessibility.none
     )
 
     def apply(): ProgressBar = new ProgressBar(State())

@@ -21,11 +21,8 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
       */
     private[uic] def extraClass(cls: String): TextArea = new TextArea(s.copy(extraClassesV = extraClassesV :+ cls))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): TextArea = new TextArea(s.copy(idV = v))
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new TextArea(s.copy(accessV = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the textarea. Any other signal
       * binds ONE-WAY: the textarea shows it, and an edit writes nothing and only reports through [[onInput]] and
@@ -73,10 +70,8 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
     /** Spans the full width of its container (`.p-textarea-fluid`). */
     def fluid(v: Boolean): TextArea = new TextArea(s.copy(fluidFlag = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots                = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new TextArea(s.copy(validityV = v))
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): TextArea = new TextArea(s.copy(accNameV = v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): TextArea = new TextArea(s.copy(accNameRefV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(s.copy(validityV = v))
 
     def onInput(f: String => UI.Action)(using Frame): TextArea  = new TextArea(s.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): TextArea =
@@ -98,7 +93,7 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
     private def body(validity: FieldValidity)(using Frame): UI =
         var b = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
-        idV.foreach(v => b = b.id(v))
+        accessV.idV.foreach(v => b = b.id(v))
         sizeV match
             case Size.Small  => b = b.cssClass("p-textarea-sm")
             case Size.Large  => b = b.cssClass("p-textarea-lg")
@@ -126,11 +121,11 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
         if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
         b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
         b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
-        b = accNameV match
+        b = accessV.nameV match
             case Present(TextValue.Const(v)) => b.aria("label", v)
             case Present(TextValue.Dyn(s))   => b.aria("label", s)
             case Absent                      => b
-        b = accNameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
+        b = accessV.nameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
         b = valueSlot.hearer.map(f => b.onInput(f)).getOrElse(b)
         b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
@@ -154,12 +149,10 @@ object TextArea:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accNameV: Maybe[TextValue] = Absent,
-        accNameRefV: Maybe[String] = Absent,
+        accessV: Accessibility = Accessibility.none,
         onChangeF: Maybe[String => UI.Action] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
-        extraClassesV: List[String] = Nil,
-        idV: Maybe[String] = Absent
+        extraClassesV: List[String] = Nil
     )
 
     def apply(): TextArea = new TextArea(State())
