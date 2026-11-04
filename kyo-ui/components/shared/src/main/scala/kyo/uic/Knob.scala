@@ -31,35 +31,13 @@ import scala.annotation.targetName
   * `--p-knob-range-background`, `--p-knob-text-color`) and follow the theme;
   * `valueColor`/`rangeColor`/`textColor` accept any CSS color or `var()`.
   */
-final case class Knob private (
-    valueSlot: Slot[Double] = Slot(),
-    minV: Double = 0.0,
-    maxV: Double = 100.0,
-    stepV: Double = 1.0,
-    sizeV: Int = 100,
-    strokeWidthV: Double = 14.0,
-    showValueFlag: Boolean = true,
-    valueTemplateV: Maybe[Double => String] = Absent,
-    valueColorV: Maybe[String] = Absent,
-    rangeColorV: Maybe[String] = Absent,
-    textColorV: Maybe[String] = Absent,
-    readonlyFlag: Boolean = false,
-    integerFlag: Boolean = false,
-    disabledFlag: Maybe[BoolValue] = Absent,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    onBlurF: Maybe[Double => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, NumberFormControl, HasAccessibleName:
+final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, NumberFormControl, HasAccessibleName, Stated:
+    import s.*
+
     type Self = Knob
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Knob = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Knob(s.copy(accessV = v))
 
     /** The knob's value, in any of the three bindings a value slot holds. A writable `SignalRef[Double]`
       * binds TWO-WAY: drags and keyboard steps write the clamped value back, and ref changes redraw the
@@ -71,65 +49,62 @@ final case class Knob private (
       * one-way and is the better answer when the value is computed rather than user-edited.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Knob = copy(valueSlot = valueSlot.bind(v))
+    def value(v: Double | Signal[Double]): Knob = new Knob(s.copy(valueSlot = valueSlot.bind(v)))
 
     /** Lower bound (Prime default 0). */
-    def min(v: Double): Knob = copy(minV = v)
+    def min(v: Double): Knob = new Knob(s.copy(minV = v))
 
     /** Upper bound (Prime default 100). */
-    def max(v: Double): Knob = copy(maxV = v)
+    def max(v: Double): Knob = new Knob(s.copy(maxV = v))
 
     /** Keyboard increment (Prime default 1). */
-    def step(v: Double): Knob = copy(stepV = if v <= 0 then 1.0 else v)
+    def step(v: Double): Knob = new Knob(s.copy(stepV = if v <= 0 then 1.0 else v))
 
     /** Constrains committed values to whole numbers: every keyboard step and drag lands on
       * a rounded value. The form layer flips this on for a whole-valued (`Int`/`Long`)
       * [[kyo.uic.form.NumberField]], so a knob bound to one cannot hand it a fraction.
       */
-    def integer(v: Boolean): Knob = copy(integerFlag = v)
+    def integer(v: Boolean): Knob = new Knob(s.copy(integerFlag = v))
 
     /** Rendered size in px (width = height; Prime default 100). */
-    def size(px: Int): Knob = copy(sizeV = math.max(20, px))
+    def size(px: Int): Knob = new Knob(s.copy(sizeV = math.max(20, px)))
 
     /** Arc stroke width in viewBox units (Prime default 14). */
-    def strokeWidth(v: Double): Knob = copy(strokeWidthV = math.max(1.0, v))
+    def strokeWidth(v: Double): Knob = new Knob(s.copy(strokeWidthV = math.max(1.0, v)))
 
     /** Shows the center value label (Prime default true). */
-    def showValue(v: Boolean): Knob = copy(showValueFlag = v)
+    def showValue(v: Boolean): Knob = new Knob(s.copy(showValueFlag = v))
 
     /** Formats the center label from the current value. */
-    def valueTemplate(f: Double => String): Knob = copy(valueTemplateV = Present(f))
+    def valueTemplate(f: Double => String): Knob = new Knob(s.copy(valueTemplateV = Present(f)))
 
     /** Value-arc color: any CSS color or `var()` (default the knob value token). */
-    def valueColor(v: String): Knob = copy(valueColorV = Present(v))
+    def valueColor(v: String): Knob = new Knob(s.copy(valueColorV = Present(v)))
 
     /** Background-arc color (default the knob range token). */
-    def rangeColor(v: String): Knob = copy(rangeColorV = Present(v))
+    def rangeColor(v: String): Knob = new Knob(s.copy(rangeColorV = Present(v)))
 
     /** Center-label color (default the knob text token). */
-    def textColor(v: String): Knob = copy(textColorV = Present(v))
+    def textColor(v: String): Knob = new Knob(s.copy(textColorV = Present(v)))
 
     /** Keeps the look but stops reacting (no keyboard writes). */
-    def readonly(v: Boolean): Knob = copy(readonlyFlag = v)
+    def readonly(v: Boolean): Knob = new Knob(s.copy(readonlyFlag = v))
 
     /** Disables the control (`.p-disabled`, unfocusable); a `Signal[Boolean]` toggles it
       * reactively (re-renders this small control on change).
       */
-    def disabled(v: Boolean | Signal[Boolean]): Knob = copy(disabledFlag = Present(ReactiveValue(v)))
+    def disabled(v: Boolean | Signal[Boolean]): Knob = new Knob(s.copy(disabledFlag = Present(ReactiveValue(v))))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Knob = copy(accNameV = v)
-
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Knob                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Knob                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = copy(invalidMsgDynV = v)
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Knob(s.copy(validityV = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back, or with the value asked for where the knob is bound one way. */
-    def onChange(f: Double => UI.Action)(using Frame): Knob = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: Double => UI.Action)(using Frame): Knob = new Knob(s.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the knob's current value; unlike onChange it fires even
       * when the dial was not moved. The validation layer's Blur trigger.
       */
-    def onBlur(f: Double => UI.Action)(using Frame): Knob = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Double => UI.Action)(using Frame): Knob = new Knob(s.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
@@ -140,12 +115,12 @@ final case class Knob private (
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the knob keeps where the reader turns it itself.
-        if valueSlot.fixed && !readonlyFlag then copy(readonlyFlag = true).render
-        else Slot.owning(valueSlot, start = minV)(s => copy(valueSlot = s).renderLive)(renderLive)
+        if valueSlot.fixed && !readonlyFlag then new Knob(s.copy(readonlyFlag = true)).render
+        else Slot.owning(valueSlot, start = minV)(s => new Knob(this.s.copy(valueSlot = s)).renderLive)(renderLive)
 
     private def renderLive(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
-        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => copy(disabledFlag = d).renderResolved(validity)))
+        val validity = FieldValidity(validityV)
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Knob(s.copy(disabledFlag = d)).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is painted away again.
         Diagnostics.after(field)("Knob")(Diagnostic.unheard(valueSlot, Knob.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
@@ -226,12 +201,12 @@ final case class Knob private (
             .aria("valuemin", InputNumber.format(minV))
             .aria("valuemax", InputNumber.format(maxV))
             .aria("valuenow", InputNumber.format(value))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => dial = dial.aria("label", v)
             case Present(TextValue.Dyn(s))   => dial = dial.aria("label", s)
             case Absent                      => ()
         end match
-        idV.foreach(v => dial = dial.id(v))
+        accessV.idV.foreach(v => dial = dial.id(v))
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
         // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
@@ -261,7 +236,27 @@ final case class Knob private (
 end Knob
 
 object Knob:
-    def apply(): Knob = new Knob()
+    final private[uic] case class State(
+        valueSlot: Slot[Double] = Slot(),
+        minV: Double = 0.0,
+        maxV: Double = 100.0,
+        stepV: Double = 1.0,
+        sizeV: Int = 100,
+        strokeWidthV: Double = 14.0,
+        showValueFlag: Boolean = true,
+        valueTemplateV: Maybe[Double => String] = Absent,
+        valueColorV: Maybe[String] = Absent,
+        rangeColorV: Maybe[String] = Absent,
+        textColorV: Maybe[String] = Absent,
+        readonlyFlag: Boolean = false,
+        integerFlag: Boolean = false,
+        disabledFlag: Maybe[BoolValue] = Absent,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Double => UI.Action] = Absent
+    )
+
+    def apply(): Knob = new Knob(State())
 
     private val valueName = Slot.Name("Knob", "value", "a change", "onChange")
 

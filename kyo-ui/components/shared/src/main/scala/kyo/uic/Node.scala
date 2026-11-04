@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 
 /** Base type of every uic component.
   *
-  * A component is a plain immutable builder, NOT a `kyo.UI`. The kyo HTML AST
+  * A component is a plain immutable builder over its state ([[Stated]]), NOT a `kyo.UI`. The kyo HTML AST
   * (`UI` / `Element` / `HtmlContent`) is `sealed` and cannot be extended from
   * outside `kyo/UI.scala`, so a component instead renders itself into a `UI` on
   * demand and is auto-lifted at placement, mirroring how kyo lifts a bare
@@ -76,3 +76,25 @@ object Node:
       */
     implicit def nodeToUI(c: Node)(using Frame): UI = c.render
 end Node
+
+/** A builder that shows its setters and nothing else, and is compared by what it holds.
+  *
+  * A component is a `final class` whose one constructor parameter `s` is a `private[uic]` case class in its companion, so
+  * outside this package completion offers the setters and no field, `copy`, `_1` or `product*`. What a case class gave for
+  * free and something relies on comes back here: two builders of one class holding equal state are equal. `Anchored` finds a
+  * menu item again by that, when a signal emits the list anew.
+  *
+  * A wrapper over another component ([[MultipleAccordion]], [[MultiSelectButton]], [[MultiDatePicker]], [[RangeDatePicker]])
+  * holds that component as its state, which is why classes are compared as well.
+  */
+private[uic] trait Stated:
+    private[uic] def s: Any
+
+    override def equals(other: Any): Boolean = other match
+        case that: Stated => getClass.equals(that.getClass) && s.equals(that.s)
+        case _            => false
+
+    override def hashCode: Int = s.hashCode
+
+    override def toString: String = s"${getClass.getSimpleName}($s)"
+end Stated

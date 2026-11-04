@@ -62,51 +62,46 @@ end SpeedDialDirection
   * no outside-click dismissal (the fan is not an Overlay; close with Escape or
   * by toggling).
   */
-final case class SpeedDial private (
-    // The actions `body` draws, resolved from `entriesV` by the render.
-    itemsV: List[MenuItem] = Nil,
-    entriesV: List[MenuItemLiveEntry] = Nil,
-    directionV: SpeedDialDirection = SpeedDialDirection.Up,
-    openSlot: Slot[Boolean] = Slot(),
-    disabledFlag: Boolean = false,
-    accNameV: Maybe[String] = Absent
-) extends Node:
+final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends Node, Stated:
+    import s.*
+
     type Self = SpeedDial
 
     /** Appends actions ([[MenuItem]]: `icon` + `label` + `onSelect`), each built directly or from `_` (see [[MenuItemScope]]), or a
       * signal of actions that change while the dial is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): SpeedDial = copy(entriesV = entriesV ++ is)
+    def items(is: MenuItemLiveEntry*): SpeedDial = new SpeedDial(s.copy(entriesV = entriesV ++ is))
 
     /** Fan direction (default `Up`). */
-    def direction(v: SpeedDialDirection): SpeedDial = copy(directionV = v)
+    def direction(v: SpeedDialDirection): SpeedDial = new SpeedDial(s.copy(directionV = v))
 
     /** Binds the fan visibility. A `SignalRef` binds two way: the toggle, the arrow into the fan, an action, Escape and
       * Tab write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the fan follows it and
       * only reports. A constant nobody hears is fixed: the fan stays as it is and the toggle, still reachable, changes
       * nothing. Unbound, the dial keeps the state itself, starting closed. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): SpeedDial = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): SpeedDial = new SpeedDial(s.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the fan visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): SpeedDial = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): SpeedDial = new SpeedDial(s.copy(openSlot = openSlot.hear(f)))
 
     /** Disables the toggle (and thereby the fan). */
-    def disabled(v: Boolean): SpeedDial = copy(disabledFlag = v)
+    def disabled(v: Boolean): SpeedDial = new SpeedDial(s.copy(disabledFlag = v))
 
     /** Accessible name of the toggle button (`aria-label`). */
-    def accessibleName(v: String): SpeedDial = copy(accNameV = Present(v))
+    def accessibleName(v: String): SpeedDial = new SpeedDial(s.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
 
     private[uic] def render(using Frame): UI =
         val shownAt  = openSlot.binding.flatMap(_.const).getOrElse(false)
-        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(shownAt, live = false, "", _ => ()))
-        val dial     = UI.mounted {
+        val stat: UI =
+            MenuRender.readItems(entriesV).render(items => new SpeedDial(s.copy(itemsV = items)).body(shownAt, live = false, "", _ => ()))
+        val dial = UI.mounted {
             for
                 cmds <- UI.commands
                 base <- cmds.freshId
                 // Unbound, the dial keeps the fan state itself, starting closed.
                 open <- openSlot.owned(false)
-            yield copy(openSlot = open).wiredOver(base, id => cmds.focusId(id))
+            yield new SpeedDial(s.copy(openSlot = open)).wiredOver(base, id => cmds.focusId(id))
         }.placeholder(stat)
         // A signal nobody hears: every toggle the reader makes is painted away again.
         Diagnostics.before(dial)("SpeedDial")(Diagnostic.unheard(openSlot, SpeedDial.openName))
@@ -114,21 +109,21 @@ final case class SpeedDial private (
 
     /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
-        copy(openSlot = openSlot.bind(open)).wiredOver(base, focus)
+        new SpeedDial(s.copy(openSlot = openSlot.bind(open))).wiredOver(base, focus)
 
     /** The subscription tree over the fan state however it is bound. */
     private def wiredOver(base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
         // ONE region (see [[ReactiveValue.and]]).
         MenuRender.readItems(entriesV).and(openSlot.reading(false)).render((items, o) =>
-            copy(itemsV = items).body(o, live = true, base, focus)
+            new SpeedDial(s.copy(itemsV = items)).body(o, live = true, base, focus)
         )
 
     /** The actions the fan actually fans out: a separator has no place in a row of round icon
       * buttons, the extracted sheet has no `.p-speeddial-separator` to style one, and rendering
       * it would have put an empty button in the menu.
       */
-    private def actions: List[MenuItem] = itemsV.filterNot(_.separatorFlag)
+    private def actions: List[MenuItem] = itemsV.filterNot(_.s.separatorFlag)
 
     private def body(isOpen: Boolean, live: Boolean, base: String, focus: String => UI.Action)(using
         Frame
@@ -143,7 +138,7 @@ final case class SpeedDial private (
         val acts = actions
         // The positions the keyboard may land on: a disabled action is natively disabled, so it
         // is out of the tab order and an arrow steps over it.
-        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.disabledFlag.constTrue => i }
+        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.s.disabledFlag.constTrue => i }
         val first                  = navigable.headOption.getOrElse(-1)
         val listId                 = s"$base-list"
         def itemId(i: Int): String = s"$base-i$i"
@@ -153,7 +148,7 @@ final case class SpeedDial private (
             .rounded(true)
             .extraClass("p-speeddial-button")
             .extraClass("p-speeddial-rotate")
-            .accessibleName(accNameV.getOrElse("Toggle actions"))
+            .accessibleName(accessV.nameV.map(_.constOrEmpty).getOrElse("Toggle actions"))
             .ariaRaw("haspopup", "menu")
             .ariaRaw("expanded", isOpen.toString)
             .disabled(disabledFlag)
@@ -188,7 +183,7 @@ final case class SpeedDial private (
                         if !live then ()
                         else
                             for
-                                _ <- it.actionV match
+                                _ <- it.s.actionV match
                                     case Present(eff) => eff
                                     case Absent       => (): UI.Action
                                 _ <- close
@@ -197,13 +192,13 @@ final case class SpeedDial private (
                         .rounded(true)
                         .severity(Severity.Secondary)
                         .size(Size.Small)
-                        .accessibleName(it.labelV.constOrEmpty)
-                        .tooltip(it.labelV.constOrEmpty)
-                        .disabled(it.disabledFlag.constTrue)
+                        .accessibleName(it.s.labelV.constOrEmpty)
+                        .tooltip(it.s.labelV.constOrEmpty)
+                        .disabled(it.s.disabledFlag.constTrue)
                         .roleRaw("menuitem")
                         .id(itemId(i))
-                    it.iconV.foreach(g => btn = btn.icon(g))
-                    if !it.disabledFlag.constTrue then
+                    it.s.iconV.foreach(g => btn = btn.icon(g))
+                    if !it.s.disabledFlag.constTrue then
                         // No action is in the tab sequence: the dial's one tab stop is the toggle,
                         // and focus reaches an action by opening the fan, which seeds it onto the
                         // first one. A tab stop here would be a second one, and Tab would then walk
@@ -259,8 +254,18 @@ final case class SpeedDial private (
 end SpeedDial
 
 object SpeedDial:
+    final private[uic] case class State(
+        // The actions `body` draws, resolved from `entriesV` by the render.
+        itemsV: List[MenuItem] = Nil,
+        entriesV: List[MenuItemLiveEntry] = Nil,
+        directionV: SpeedDialDirection = SpeedDialDirection.Up,
+        openSlot: Slot[Boolean] = Slot(),
+        disabledFlag: Boolean = false,
+        accessV: Accessibility = Accessibility.none
+    )
+
     /** An empty speed dial; add actions via [[SpeedDial.items]]. */
-    def apply(): SpeedDial = new SpeedDial()
+    def apply(): SpeedDial = new SpeedDial(State())
 
     private val openName = Slot.Name("SpeedDial", "the fan", "a toggle", "onOpenChange")
 end SpeedDial

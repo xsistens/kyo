@@ -7,20 +7,21 @@ import kyo.UI.*
   * [[Stepper.value]] binding holds while this step is active), an unconditional `disabled`, and the panel `content`.
   * Built as `uic.Step("Account")(form)`, or as `_.step(...)` (see [[StepScope]]) with the same slots.
   */
-final case class Step[+K] private[uic] (
-    title: TextValue,
-    value: Maybe[K],
-    disabled: Boolean,
-    // No defaults: the synthetic companion `apply` would then also carry defaults and clash with the hand-written one.
-    content: List[UI]
-) derives CanEqual
+final class Step[+K] private[uic] (private[uic] val s: Step.State[K]) extends Stated derives CanEqual
 
 object Step:
+    final private[uic] case class State[+K](
+        title: TextValue,
+        value: Maybe[K],
+        disabled: Boolean,
+        content: List[UI]
+    )
+
     /** A step with a constant or reactive `title`. A `Signal[String]` title re-renders the header in place on emission
       * (e.g. a locale-driven `I18n.t` leaf).
       */
     def apply[K](title: String | Signal[String], value: Maybe[K] = Absent, disabled: Boolean = false)(content: UI*): Step[K] =
-        new Step(ReactiveValue(title), value, disabled, content.toList)
+        new Step(State(ReactiveValue(title), value, disabled, content.toList))
 end Step
 
 /** A step, built directly or as `_.step(...)` (see [[StepScope]]). */
@@ -75,15 +76,9 @@ end StepScope
   * the first step and an index past the last shows the last, until the signal brings the step they name. A header's
   * id is the mount's base and its position, `s"$base-$index"`, so a step the signal adds needs nothing minted.
   */
-final case class Stepper[K] private (
-    // The steps the headers draw, resolved from `stepSources` by the render.
-    stepList: List[Step[K]] = Nil,
-    stepSources: List[StepLiveEntry[K]] = Nil,
-    activeSlot: Slot[Int] = Slot(),
-    valueSlot: Slot[K] = Slot[K](),
-    linearFlag: Boolean = false,
-    verticalFlag: Boolean = false
-) extends Node:
+final class Stepper[K] private[uic] (private[uic] val s: Stepper.State[K]) extends Node, Stated:
+    import s.*
+
     type Self = Stepper[K]
 
     // Step values compare by `equals`, the identity an app's own type already has.
@@ -101,13 +96,13 @@ final case class Stepper[K] private (
     def step(title: String | Signal[String], value: Maybe[K] = Absent, disabled: Boolean = false)(
         content: UI*
     ): Stepper[K] =
-        copy(stepSources = stepSources :+ Step(title, value, disabled)(content*))
+        new Stepper(s.copy(stepSources = stepSources :+ Step(title, value, disabled)(content*)))
 
     /** Appends the given steps, each built directly or from `_` (see [[StepScope]]), or a signal of steps that change
       * while the stepper is shown (see [[LiveEntry]]). A `_` builder needs `K` settled before it: bind [[value]] first,
       * or hand `uic.Step(...)` values, which settle it as a step's `value` does.
       */
-    def steps(ss: StepLiveEntry[K]*): Stepper[K] = copy(stepSources = stepSources ++ ss)
+    def steps(ss: StepLiveEntry[K]*): Stepper[K] = new Stepper(s.copy(stepSources = stepSources ++ ss))
 
     /** The steps as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[Step[K]]] = StepScope.reading(stepSources)
@@ -117,7 +112,7 @@ final case class Stepper[K] private (
       * constant nobody hears is fixed: the stepper stays on that step, its headers reachable and inert. Unbound, the
       * stepper keeps the active step itself, starting on the first. A signal nothing hears is reported in a card.
       */
-    def active(v: Int | Signal[Int]): Stepper[K] = copy(activeSlot = activeSlot.bind(v))
+    def active(v: Int | Signal[Int]): Stepper[K] = new Stepper(s.copy(activeSlot = activeSlot.bind(v)))
 
     /** Binds the ACTIVE STEP VALUE (Prime's `v-model:value`), bound like [[active]]: a header click asks for the step's
       * value (a step with no value asks for nothing) and [[onValueChange]] hears it; a value no step carries falls back to
@@ -125,10 +120,10 @@ final case class Stepper[K] private (
       */
     // `Signal[K]` first: with `K` still open (`uic.Stepper().value(ref)`), the solver then reads `K` off the ref's own type
     // instead of taking the whole ref as `K`.
-    def value(v: Signal[K] | K): Stepper[K] = copy(valueSlot = valueSlot.bind(v))
+    def value(v: Signal[K] | K): Stepper[K] = new Stepper(s.copy(valueSlot = valueSlot.bind(v)))
 
     /** Fired with the step value the reader asks for, after a two-way [[value]] is written and before [[onActiveChange]]. */
-    def onValueChange(f: K => UI.Action)(using Frame): Stepper[K] = copy(valueSlot = valueSlot.hear(f))
+    def onValueChange(f: K => UI.Action)(using Frame): Stepper[K] = new Stepper(s.copy(valueSlot = valueSlot.hear(f)))
 
     /** A constant nobody hears is fixed: the stepper stays on that step, and every header is inert. */
     private def fixed: Boolean = if valueSlot.binding.isDefined then valueSlot.fixed else activeSlot.fixed
@@ -136,17 +131,18 @@ final case class Stepper[K] private (
     /** Linear mode: header clicks cannot jump AHEAD of the active step
       * (backward stays allowed); advance by writing the bound ref.
       */
-    def linear(v: Boolean): Stepper[K] = copy(linearFlag = v)
+    def linear(v: Boolean): Stepper[K] = new Stepper(s.copy(linearFlag = v))
 
     /** Vertical layout (Prime's StepItem composition): each step's panel renders
       * inline UNDER its header with the vertical connecting separator.
       */
-    def vertical(v: Boolean): Stepper[K] = copy(verticalFlag = v)
+    def vertical(v: Boolean): Stepper[K] = new Stepper(s.copy(verticalFlag = v))
 
     /** Fired with the index of the step the reader asks for after a header click, after a two-way [[active]] or
       * [[value]] is written. One event carries the step, whichever binding moved.
       */
-    def onActiveChange(f: Int => UI.Action)(using Frame): Stepper[K] = copy(activeSlot = activeSlot.hear(f), valueSlot = valueSlot.heardToo)
+    def onActiveChange(f: Int => UI.Action)(using Frame): Stepper[K] =
+        new Stepper(s.copy(activeSlot = activeSlot.hear(f), valueSlot = valueSlot.heardToo))
 
     private[uic] def render(using Frame): UI =
         val stepper = UI.mounted {
@@ -155,7 +151,7 @@ final case class Stepper[K] private (
                 base <- cmds.freshId
                 // Unbound, the stepper keeps the active step itself, starting on the first.
                 self <-
-                    if valueSlot.binding.isEmpty then activeSlot.owned(0).map(s => copy(activeSlot = s))
+                    if valueSlot.binding.isEmpty then activeSlot.owned(0).map(s => new Stepper(this.s.copy(activeSlot = s)))
                     else Kyo.lift(this)
             yield self.wired(base, id => cmds.focusId(id))
         }.placeholder(shown(Absent, _ => ()))
@@ -174,12 +170,12 @@ final case class Stepper[K] private (
       */
     private def shown(base: Maybe[String], focus: String => UI.Action)(using Frame): UI =
         def drawn(ss: List[Step[K]], active: Int): UI =
-            copy(stepList = ss).body(active, base.fold(Nil)(b => ss.indices.toList.map(i => s"$b-$i")), focus)
+            new Stepper(s.copy(stepList = ss)).body(active, base.fold(Nil)(b => ss.indices.toList.map(i => s"$b-$i")), focus)
         // Steps carry values the app compares by its own equality.
         given CanEqual[K, K] = CanEqual.derived
         valueSlot.binding match
             case Present(v) =>
-                entries.and(v).render((ss, held) => drawn(ss, math.max(ss.indexWhere(_.value.contains(held)), 0)))
+                entries.and(v).render((ss, held) => drawn(ss, math.max(ss.indexWhere(_.s.value.contains(held)), 0)))
             case _ => entries.and(activeSlot.reading(0)).render((ss, at) => drawn(ss, at))
         end match
     end shown
@@ -191,7 +187,7 @@ final case class Stepper[K] private (
       * over. Linear mode blocks everything past the current step.
       */
     private def navigableSteps(cur: Int): List[Int] =
-        stepList.indices.toList.filterNot(i => stepList(i).disabled || (linearFlag && i > cur))
+        stepList.indices.toList.filterNot(i => stepList(i).s.disabled || (linearFlag && i > cur))
 
     /** Moves focus between headers, and does nothing else: a header IS a `<button>`, so Enter and
       * Space already reach it once, and a third activation from here would be one too many.
@@ -229,7 +225,7 @@ final case class Stepper[K] private (
         // Linear: only backward (and re-clicking the current step) is reachable
         // via the headers; forward jumps go through the bound ref (a Next button).
         // A per-step disabled blocks the header unconditionally.
-        val blocked = st.disabled || (linearFlag && i > cur)
+        val blocked = st.s.disabled || (linearFlag && i > cur)
 
         var header = button
             .cssClass("p-step-header")
@@ -247,7 +243,7 @@ final case class Stepper[K] private (
                 header = header.id(ids(i)).onKeyDown(headerMove(ids, navigableSteps(cur), i, axis, focus))
             end if
         end if
-        val titleSlot: UI = st.title match
+        val titleSlot: UI = st.s.title match
             case TextValue.Const(t) => span.cssClass("p-step-title")(t): UI
             case TextValue.Dyn(s)   => span.cssClass("p-step-title")(s)
         val headerEl: UI = header(
@@ -287,7 +283,7 @@ final case class Stepper[K] private (
         var p = div.cssClass("p-steppanel").role("tabpanel")
         if animated then
             p = p.cssClass("p-uic-steppanel-anim").enterTransition("p-uic-enter-fade").leaveTransition("p-uic-leave-fade")
-        p(UI.children(st.content)*)
+        p(UI.children(st.s.content)*)
     end horizontalPanel
 
     /** Wraps the active panel in a step-keyed mount so a step change animates it:
@@ -325,7 +321,7 @@ final case class Stepper[K] private (
                 else
                     val sep: List[UI] =
                         if i < stepList.length - 1 then List(span.cssClass("p-stepper-separator")) else Nil
-                    val wrapperChildren = sep :+ div.cssClass("p-steppanel-content")(UI.children(st.content)*)
+                    val wrapperChildren = sep :+ div.cssClass("p-steppanel-content")(UI.children(st.s.content)*)
                     List(
                         animatedPanel(
                             cur,
@@ -349,7 +345,7 @@ final case class Stepper[K] private (
       */
     private def activate(i: Int)(using Frame): UI.Action =
         if valueSlot.binding.isDefined then
-            val asked: UI.Action = stepList(i).value match
+            val asked: UI.Action = stepList(i).s.value match
                 case Present(v) => valueSlot.change(v)
                 case Absent     => ()
             asked.andThen(activeSlot.hearer.fold[UI.Action](())(f => f(i)))
@@ -358,6 +354,16 @@ final case class Stepper[K] private (
 end Stepper
 
 object Stepper:
+    final private[uic] case class State[K](
+        // The steps the headers draw, resolved from `stepSources` by the render.
+        stepList: List[Step[K]] = Nil,
+        stepSources: List[StepLiveEntry[K]] = Nil,
+        activeSlot: Slot[Int] = Slot(),
+        valueSlot: Slot[K] = Slot[K](),
+        linearFlag: Boolean = false,
+        verticalFlag: Boolean = false
+    )
+
     private def activeName(event: String) = Slot.Name("Stepper", "the active step", "a click", event)
 
     /** An empty stepper whose steps may carry values of type `K`.
@@ -369,5 +375,5 @@ object Stepper:
       * accepted at some placeholder type the stepper would never read. Spelling a placeholder (`Stepper[String]()`
       * beside `active`) is what to avoid: it admits values nothing binds.
       */
-    def apply[K](): Stepper[K] = new Stepper[K]()
+    def apply[K](): Stepper[K] = new Stepper[K](State())
 end Stepper

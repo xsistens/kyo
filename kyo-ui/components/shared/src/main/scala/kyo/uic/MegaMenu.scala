@@ -9,32 +9,27 @@ import kyo.UI.*
   * columns render `.p-megamenu-col-6`, three `.p-megamenu-col-4`, ...). An item
   * without columns is a plain row (activate via `onSelect`/`url`).
   */
-final case class MegaMenuItem private (
-    labelV: TextValue,
-    iconV: Maybe[IconGlyph] = Absent,
-    disabledFlag: Boolean = false,
-    urlV: Maybe[String] = Absent,
-    actionV: Maybe[UI.Action] = Absent,
-    columnsV: List[List[MenuGroup]] = Nil
-):
+final class MegaMenuItem private[uic] (private[uic] val s: MegaMenuItem.State) extends Stated:
+    import s.*
+
     /** Leading icon (`.p-megamenu-item-icon`). */
-    def icon(glyph: IconGlyph): MegaMenuItem = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): MegaMenuItem = new MegaMenuItem(s.copy(iconV = Present(glyph)))
 
     /** Renders the root row non-interactive (`.p-disabled`). */
-    def disabled(v: Boolean): MegaMenuItem = copy(disabledFlag = v)
+    def disabled(v: Boolean): MegaMenuItem = new MegaMenuItem(s.copy(disabledFlag = v))
 
     /** Navigation target for a column-less root row (real `<a href=...>`). */
-    def url(v: String): MegaMenuItem = copy(urlV = Present(v))
+    def url(v: String): MegaMenuItem = new MegaMenuItem(s.copy(urlV = Present(v)))
 
     /** Runs `action` when a column-less root row is selected. */
     def onSelect(action: => UI.Action)(using Frame): MegaMenuItem =
-        copy(actionV = Present(Callback(action)))
+        new MegaMenuItem(s.copy(actionV = Present(Callback(action))))
 
     /** Appends one panel column holding the given groups, each built directly or from `_` (see [[MenuGroupScope]]). */
-    def column(groups: MenuGroupEntry*): MegaMenuItem = copy(columnsV = columnsV :+ MenuGroupScope.resolve(groups))
+    def column(groups: MenuGroupEntry*): MegaMenuItem = new MegaMenuItem(s.copy(columnsV = columnsV :+ MenuGroupScope.resolve(groups)))
 
     /** Package-internal: replaces the columns wholesale (see [[MenuItem.withItems]]). */
-    private[uic] def withColumns(cs: List[List[MenuGroup]]): MegaMenuItem = copy(columnsV = cs)
+    private[uic] def withColumns(cs: List[List[MenuGroup]]): MegaMenuItem = new MegaMenuItem(s.copy(columnsV = cs))
 
     /** The equivalent plain [[MenuItem]] of a column-less root row. */
     private[uic] def asMenuItem: MenuItem =
@@ -47,13 +42,22 @@ final case class MegaMenuItem private (
 end MegaMenuItem
 
 object MegaMenuItem:
+    final private[uic] case class State(
+        labelV: TextValue,
+        iconV: Maybe[IconGlyph] = Absent,
+        disabledFlag: Boolean = false,
+        urlV: Maybe[String] = Absent,
+        actionV: Maybe[UI.Action] = Absent,
+        columnsV: List[List[MenuGroup]] = Nil
+    )
+
     // Lets a host's one region skip a resolution that pins the slots it already drew.
     private[uic] given CanEqual[MegaMenuItem, MegaMenuItem] = CanEqual.derived
 
     /** A root item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): MegaMenuItem = new MegaMenuItem(ReactiveValue(label))
+    def apply(label: String | Signal[String]): MegaMenuItem = new MegaMenuItem(State(ReactiveValue(label)))
 
 end MegaMenuItem
 
@@ -121,40 +125,33 @@ end MegaMenuItemScope
   *
   * Honest deferrals: no mobile/hamburger mode; typeahead is not implemented.
   */
-final case class MegaMenu private (
-    // The root items `body` draws, resolved from `entriesV` by the render.
-    itemsV: List[MegaMenuItem] = Nil,
-    entriesV: List[MegaMenuItemLiveEntry] = Nil,
-    orientationV: Orientation = Orientation.Horizontal,
-    startV: Maybe[UI] = Absent,
-    endV: Maybe[UI] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, HasElementId:
+final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = MegaMenu
 
     /** Appends root items ([[MegaMenuItem]]), each built directly or from `_` (see [[MegaMenuItemScope]]), or a signal of
       * root items that change while the bar is shown (see [[LiveEntry]]).
       */
-    def items(is: MegaMenuItemLiveEntry*): MegaMenu = copy(entriesV = entriesV ++ is)
+    def items(is: MegaMenuItemLiveEntry*): MegaMenu = new MegaMenu(s.copy(entriesV = entriesV ++ is))
 
     /** Bar orientation: `Horizontal` (default) or the sheet's `Vertical` variant. */
-    def orientation(v: Orientation): MegaMenu = copy(orientationV = v)
+    def orientation(v: Orientation): MegaMenu = new MegaMenu(s.copy(orientationV = v))
 
     /** Content before the root list (`div.p-megamenu-start`). */
-    def start(ui: UI): MegaMenu = copy(startV = Present(ui))
+    def start(ui: UI): MegaMenu = new MegaMenu(s.copy(startV = Present(ui)))
 
     /** Content after the root list (`div.p-megamenu-end`). */
-    def end(ui: UI): MegaMenu = copy(endV = Present(ui))
+    def end(ui: UI): MegaMenu = new MegaMenu(s.copy(endV = Present(ui)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): MegaMenu = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new MegaMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         val stat: UI =
-            MegaMenuItemScope.reading(entriesV).render(items => copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
+            MegaMenuItemScope.reading(entriesV).render(items =>
+                new MegaMenu(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
+            )
         UI.mounted {
             for
                 subs  <- Submenus.init()
@@ -185,7 +182,7 @@ final case class MegaMenu private (
                 // Both follow their root items over the roots shown ([[Anchored]]).
                 val fv = focus.view(f, roots)
                 val sv = subs.view(open, roots)
-                copy(itemsV = items).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)))
+                new MegaMenu(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
         }
     end wired
 
@@ -206,7 +203,7 @@ final case class MegaMenu private (
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: UI.Action =
@@ -238,9 +235,9 @@ final case class MegaMenu private (
                             step.focus match
                                 case r :: c :: i :: Nil =>
                                     val col = MegaNav.colItems(itemsV, r, c)
-                                    if i >= 0 && i < col.size then col(i).actionV else Absent
+                                    if i >= 0 && i < col.size then col(i).s.actionV else Absent
                                 case r :: Nil =>
-                                    if r >= 0 && r < itemsV.size then itemsV(r).asMenuItem.actionV else Absent
+                                    if r >= 0 && r < itemsV.size then itemsV(r).asMenuItem.s.actionV else Absent
                                 case _ => Absent
                     for
                         _ <- step.open match
@@ -269,30 +266,30 @@ final case class MegaMenu private (
         def columnGroups(r: Int, c: Int, groups: List[MenuGroup]): List[UI] =
             var navIdx = 0
             groups.map { g =>
-                val heading: UI = g.labelV match
+                val heading: UI = g.s.labelV match
                     case TextValue.Const(t) => li.cssClass("p-megamenu-submenu-label").role("presentation")(t)
                     case TextValue.Dyn(s)   =>
                         li.cssClass("p-megamenu-submenu-label").role("presentation")(s)
-                val rows: List[UI] = g.itemsV.map { it =>
-                    if it.separatorFlag then li.cssClass("p-megamenu-separator").role("separator")
+                val rows: List[UI] = g.s.itemsV.map { it =>
+                    if it.s.separatorFlag then li.cssClass("p-megamenu-separator").role("separator")
                     else
                         val myIdx = navIdx
-                        if !it.disabledFlag.constTrue then navIdx += 1
+                        if !it.s.disabledFlag.constTrue then navIdx += 1
                         var row = MenuRender.markCurrent(li.cssClass("p-megamenu-item").role("menuitem"), it)
-                        if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                        if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus").scrollAuto(true)
                             partBase.foreach(b => row = row.id(s"$b-active"))
                         end if
                         def activate: UI.Action =
                             for
-                                _ <- it.actionV match
+                                _ <- it.s.actionV match
                                     case Present(eff) => eff
                                     case Absent       => (): UI.Action
                                 _ <- onActivated
                             yield ()
                         val act: Maybe[UI.Action] =
-                            if subs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
+                            if subs.isDefined && !it.s.disabledFlag.constTrue then Present(activate) else Absent
                         row(MenuRender.itemContent("megamenu", it, act, Absent, roving = true))
                 }
                 ul.cssClass("p-megamenu-submenu").role("menu")(UI.children(heading :: rows)*)
@@ -301,7 +298,7 @@ final case class MegaMenu private (
 
         val rowUIs: List[UI] = itemsV.zipWithIndex.map { (it, i) =>
             val p = List(i)
-            if it.columnsV.nonEmpty then
+            if it.s.columnsV.nonEmpty then
                 val isOpen            = open(p)
                 def toggle: UI.Action =
                     subs match
@@ -316,9 +313,9 @@ final case class MegaMenu private (
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
-                if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.s.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val act: Maybe[UI.Action] =
-                    if subs.isDefined && !it.disabledFlag then Present(toggle) else Absent
+                    if subs.isDefined && !it.s.disabledFlag then Present(toggle) else Absent
                 val subIcon = if orientationV == Orientation.Vertical then Icons.angleRight else Icons.angleDown
                 val content =
                     MenuRender.itemContent("megamenu", it.asMenuItem, act, Present(subIcon), roving = true)
@@ -330,8 +327,8 @@ final case class MegaMenu private (
                         val anchor =
                             if orientationV == Orientation.Vertical then OverlayAnchor.RightStart
                             else OverlayAnchor.BottomStart
-                        val cols: List[UI] = it.columnsV.zipWithIndex.map { (groups, c) =>
-                            div.cssClass(colClass(it.columnsV.size))(UI.children(columnGroups(i, c, groups))*)
+                        val cols: List[UI] = it.s.columnsV.zipWithIndex.map { (groups, c) =>
+                            div.cssClass(colClass(it.s.columnsV.size))(UI.children(columnGroups(i, c, groups))*)
                         }
                         List(
                             Overlay.gated(s.close(p))
@@ -350,17 +347,17 @@ final case class MegaMenu private (
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
-                if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.s.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val plain               = it.asMenuItem
                 def activate: UI.Action =
                     for
-                        _ <- plain.actionV match
+                        _ <- plain.s.actionV match
                             case Present(eff) => eff
                             case Absent       => (): UI.Action
                         _ <- onActivated
                     yield ()
                 val act: Maybe[UI.Action] =
-                    if subs.isDefined && !it.disabledFlag then Present(activate) else Absent
+                    if subs.isDefined && !it.s.disabledFlag then Present(activate) else Absent
                 row(MenuRender.itemContent("megamenu", plain, act, Absent, roving = true))
             end if
         }
@@ -378,11 +375,22 @@ final case class MegaMenu private (
             .cssClass("p-megamenu")
             .cssClass("p-component")
             .cssClass(s"p-megamenu-${orientationV.token}")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end MegaMenu
 
 object MegaMenu:
+    final private[uic] case class State(
+        // The root items `body` draws, resolved from `entriesV` by the render.
+        itemsV: List[MegaMenuItem] = Nil,
+        entriesV: List[MegaMenuItemLiveEntry] = Nil,
+        orientationV: Orientation = Orientation.Horizontal,
+        startV: Maybe[UI] = Absent,
+        endV: Maybe[UI] = Absent,
+        accessV: Accessibility = Accessibility.none
+    )
+
     /** An empty mega menu; add root items via [[MegaMenu.items]]. */
-    def apply(): MegaMenu = new MegaMenu()
+    def apply(): MegaMenu = new MegaMenu(State())
+end MegaMenu

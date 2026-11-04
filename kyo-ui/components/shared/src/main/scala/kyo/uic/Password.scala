@@ -23,31 +23,10 @@ import kyo.UI.*
   * digit] and â¥ 6 chars; strong = all three and â¥ 8 chars; anything else weak;
   * empty shows `promptLabel`.
   */
-final case class Password private (
-    valueSlot: Slot[String] = Slot(),
-    toggleMaskFlag: Boolean = false,
-    feedbackFlag: Boolean = false,
-    promptLabelV: TextValue = TextValue.Const("Enter a password"),
-    weakLabelV: TextValue = TextValue.Const("Weak"),
-    mediumLabelV: TextValue = TextValue.Const("Medium"),
-    strongLabelV: TextValue = TextValue.Const("Strong"),
-    placeholderText: Maybe[TextValue] = Absent,
-    disabledFlag: Boolean = false,
-    readonlyFlag: Maybe[BoolValue] = Absent,
-    requiredFlag: Boolean = false,
-    nameV: Maybe[String] = Absent,
-    maxLengthV: Maybe[Int] = Absent,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    fluidFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    idV: Maybe[String] = Absent,
-    onChangeSF: Maybe[String => UI.Action] = Absent,
-    onBlurSF: Maybe[String => UI.Action] = Absent
-) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
+final class Password private[uic] (private[uic] val s: Password.State) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
+      Stated:
+    import s.*
+
     type Self = Password
 
     /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter
@@ -57,81 +36,76 @@ final case class Password private (
       * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
       * `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Password = copy(valueSlot = valueSlot.bind(v))
+    def value(v: String | Signal[String]): Password = new Password(s.copy(valueSlot = valueSlot.bind(v)))
 
     /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
-    def toggleMask(v: Boolean): Password = copy(toggleMaskFlag = v)
+    def toggleMask(v: Boolean): Password = new Password(s.copy(toggleMaskFlag = v))
 
     /** Shows the strength meter below the field (inline; see the class doc). */
-    def feedback(v: Boolean): Password = copy(feedbackFlag = v)
+    def feedback(v: Boolean): Password = new Password(s.copy(feedbackFlag = v))
 
     /** Meter label while the value is empty (Prime default "Enter a password"). A `Signal[String]` re-
       * renders it in place on emission.
       */
-    def promptLabel(v: String | Signal[String]): Password = copy(promptLabelV = ReactiveValue(v))
+    def promptLabel(v: String | Signal[String]): Password = new Password(s.copy(promptLabelV = ReactiveValue(v)))
 
     /** Meter label for weak values (Prime default "Weak"). A `Signal[String]` re-renders it in place on
       * emission.
       */
-    def weakLabel(v: String | Signal[String]): Password = copy(weakLabelV = ReactiveValue(v))
+    def weakLabel(v: String | Signal[String]): Password = new Password(s.copy(weakLabelV = ReactiveValue(v)))
 
     /** Meter label for medium values (Prime default "Medium"). A `Signal[String]` re-renders it in place on
       * emission.
       */
-    def mediumLabel(v: String | Signal[String]): Password = copy(mediumLabelV = ReactiveValue(v))
+    def mediumLabel(v: String | Signal[String]): Password = new Password(s.copy(mediumLabelV = ReactiveValue(v)))
 
     /** Meter label for strong values (Prime default "Strong"). A `Signal[String]` re-renders it in place on
       * emission.
       */
-    def strongLabel(v: String | Signal[String]): Password           = copy(strongLabelV = ReactiveValue(v))
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = copy(placeholderText = v)
+    def strongLabel(v: String | Signal[String]): Password           = new Password(s.copy(strongLabelV = ReactiveValue(v)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = new Password(s.copy(placeholderText = v))
 
-    def disabled(v: Boolean): Password = copy(disabledFlag = v)
+    def disabled(v: Boolean): Password = new Password(s.copy(disabledFlag = v))
 
     /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
       * PLACE via kyo-ui's boolean attribute channel (no re-render).
       */
-    def readonly(v: Boolean | Signal[Boolean]): Password = copy(readonlyFlag = Present(ReactiveValue(v)))
+    def readonly(v: Boolean | Signal[Boolean]): Password = new Password(s.copy(readonlyFlag = Present(ReactiveValue(v))))
 
     /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Password = copy(requiredFlag = v)
+    def required(v: Boolean): Password = new Password(s.copy(requiredFlag = v))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): Password = copy(nameV = Present(v))
+    def name(v: String): Password = new Password(s.copy(nameV = Present(v)))
 
     /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Password = copy(maxLengthV = Present(math.max(0, n)))
+    def maxLength(n: Int): Password = new Password(s.copy(maxLengthV = Present(math.max(0, n))))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
-    def size(v: Size): Password = copy(sizeV = v)
+    def size(v: Size): Password = new Password(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
-    def variant(v: FieldVariant): Password = copy(variantV = v)
+    def variant(v: FieldVariant): Password = new Password(s.copy(variantV = v))
 
     /** Spans the full container width (`.p-password-fluid`). */
-    def fluid(v: Boolean): Password = copy(fluidFlag = v)
+    def fluid(v: Boolean): Password = new Password(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Password                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Password                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Password = copy(invalidMsgDynV = v)
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(s.copy(validityV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Password = copy(accNameV = v)
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Password(s.copy(accessV = v))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Password = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
-
-    def onChange(f: String => UI.Action)(using Frame): Password = copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo)
-    def onInput(f: String => UI.Action)(using Frame): Password  = copy(valueSlot = valueSlot.hear(f))
+    def onChange(f: String => UI.Action)(using Frame): Password =
+        new Password(s.copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
+    def onInput(f: String => UI.Action)(using Frame): Password = new Password(s.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it: what the reader typed, also unbound or from a constant, with the
       * meter and the reveal on or off. Unlike `onChange` it fires even when the value
       * was not edited. The form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): Password = copy(onBlurSF = Present(Callback.of(f)))
+    def onBlur(f: String => UI.Action)(using Frame): Password = new Password(s.copy(onBlurSF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the reader
@@ -139,8 +113,8 @@ final case class Password private (
         // too. Unbound without the meter, the field draws no value and the text stays the browser's. The page as first rendered
         // draws the text as bound with nothing wired, since nothing is wired before the mount runs.
         Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(keepsText && (feedbackFlag || valueSlot.binding.isDefined)))(s =>
-            copy(valueSlot = s).drawn
-        )(copy(valueSlot = Slot(valueSlot.binding), onChangeSF = Absent, onBlurSF = Absent).drawn)
+            new Password(this.s.copy(valueSlot = s)).drawn
+        )(new Password(s.copy(valueSlot = Slot(valueSlot.binding), onChangeSF = Absent, onBlurSF = Absent)).drawn)
     end render
 
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
@@ -164,7 +138,7 @@ final case class Password private (
 
     /** The field built once with its validity handed to `build`, followed by the message row. */
     private def validated(build: FieldValidity => UI)(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         validity.follow(build(validity))
 
     /** Resolves the bound value: the meter needs the CURRENT text, so with
@@ -216,12 +190,12 @@ final case class Password private (
         if requiredFlag then in = in.required(true)
         nameV.foreach(v => in = in.name(v))
         maxLengthV.foreach(n => in = in.maxLength(n))
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => in = in.accessibleName(v)
             case Present(TextValue.Dyn(s))   => in = in.accessibleName(s)
             case Absent                      => ()
         end match
-        idV.foreach(v => in = in.id(v))
+        accessV.idV.foreach(v => in = in.id(v))
 
         // === the eye toggle =====================================================
         val toggle: List[UI] = rev.toList.map { (ref, isRevealed) =>
@@ -281,7 +255,30 @@ final case class Password private (
 end Password
 
 object Password:
-    def apply(): Password = new Password()
+    final private[uic] case class State(
+        valueSlot: Slot[String] = Slot(),
+        toggleMaskFlag: Boolean = false,
+        feedbackFlag: Boolean = false,
+        promptLabelV: TextValue = TextValue.Const("Enter a password"),
+        weakLabelV: TextValue = TextValue.Const("Weak"),
+        mediumLabelV: TextValue = TextValue.Const("Medium"),
+        strongLabelV: TextValue = TextValue.Const("Strong"),
+        placeholderText: Maybe[TextValue] = Absent,
+        disabledFlag: Boolean = false,
+        readonlyFlag: Maybe[BoolValue] = Absent,
+        requiredFlag: Boolean = false,
+        nameV: Maybe[String] = Absent,
+        maxLengthV: Maybe[Int] = Absent,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        fluidFlag: Boolean = false,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        accessV: Accessibility = Accessibility.none,
+        onChangeSF: Maybe[String => UI.Action] = Absent,
+        onBlurSF: Maybe[String => UI.Action] = Absent
+    )
+
+    def apply(): Password = new Password(State())
 
     /** Prime's default strength rules as pure predicates: 0 = empty (prompt),
       * 1 = weak, 2 = medium (two of [a-z, A-Z, 0-9] and length â¥ 6),

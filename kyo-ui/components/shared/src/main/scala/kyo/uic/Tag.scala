@@ -15,39 +15,30 @@ import kyo.UI.*
   * chip a control, `role="button"` and one tab stop answering Enter and Space,
   * since an action only the mouse can reach is not an action for everyone.
   */
-final case class Tag private (
-    labelV: Maybe[TextValue] = Absent,
-    severityV: Maybe[SeverityValue] = Absent,
-    roundedFlag: Boolean = false,
-    iconV: Maybe[IconGlyph] = Absent,
-    onClickEff: Maybe[UI.Action] = Absent,
-    idV: Maybe[String] = Absent,
-    kids: List[UI] = Nil
-) extends Node, HasElementId:
+final class Tag private[uic] (private[uic] val s: Tag.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = Tag
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Tag = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tag(s.copy(accessV = v))
 
     /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
       * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
       */
-    def severity(v: Severity | Signal[Severity]): Tag = copy(severityV = Present(ReactiveValue(v)))
+    def severity(v: Severity | Signal[Severity]): Tag = new Tag(s.copy(severityV = Present(ReactiveValue(v))))
 
     /** Fully rounded pill corners (`.p-tag-rounded`). */
-    def rounded(v: Boolean): Tag = copy(roundedFlag = v)
+    def rounded(v: Boolean): Tag = new Tag(s.copy(roundedFlag = v))
 
     /** Leading icon (`.p-tag-icon`), inheriting the chip's text color. */
-    def icon(glyph: IconGlyph): Tag = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): Tag = new Tag(s.copy(iconV = Present(glyph)))
 
     /** Runs `action` when the tag is clicked (kyo extension; adds the pointer cursor). */
-    def onClick(action: => UI.Action)(using Frame): Tag = copy(onClickEff = Present(Callback(action)))
+    def onClick(action: => UI.Action)(using Frame): Tag = new Tag(s.copy(onClickEff = Present(Callback(action))))
 
     /** Adds default-slot children after the label. */
-    def apply(cs: UI*): Tag = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Tag = new Tag(s.copy(kids = kids ++ cs))
 
     /** The `.p-tag-<token>` suffix for a severity; `Primary`/`Help` render the unsuffixed base skin. */
     private def tagToken(s: Severity): Maybe[String] = s match
@@ -61,7 +52,7 @@ final case class Tag private (
 
     private[uic] def render(using Frame): UI =
         var el = span.cssClass("p-tag").cssClass("p-component")
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         severityV match
             case Present(SeverityValue.Const(s)) => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t"))
             case Present(SeverityValue.Dyn(sig)) =>
@@ -98,11 +89,21 @@ final case class Tag private (
 end Tag
 
 object Tag:
+    final private[uic] case class State(
+        labelV: Maybe[TextValue] = Absent,
+        severityV: Maybe[SeverityValue] = Absent,
+        roundedFlag: Boolean = false,
+        iconV: Maybe[IconGlyph] = Absent,
+        onClickEff: Maybe[UI.Action] = Absent,
+        accessV: Accessibility = Accessibility.none,
+        kids: List[UI] = Nil
+    )
+
     /** A tag labelled `label`. A `Signal[String]` patches the label text IN PLACE on emission (kyo-ui's text
       * channel: no region, no re-render of the label span), e.g. a locale-driven `I18n.t` leaf or a counter.
       */
-    def apply(label: String | Signal[String]): Tag = new Tag(labelV = Present(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): Tag = new Tag(State(labelV = Present(ReactiveValue(label))))
 
     /** An empty tag; fill the default slot via `apply(cs*)`. */
-    def apply(): Tag = new Tag()
+    def apply(): Tag = new Tag(State())
 end Tag

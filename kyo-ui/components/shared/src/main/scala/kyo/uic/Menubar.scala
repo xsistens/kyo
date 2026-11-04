@@ -37,39 +37,34 @@ import kyo.UI.*
   * Honest deferrals: no mobile/hamburger breakpoint mode; typeahead is not
   * implemented.
   */
-final case class Menubar private (
-    // The root rows `body` draws, resolved from `entriesV` by the render.
-    itemsV: List[MenuItem] = Nil,
-    entriesV: List[MenuItemLiveEntry] = Nil,
-    startV: Maybe[UI] = Absent,
-    endV: Maybe[UI] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, HasElementId:
+final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = Menubar
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus), each built directly or from `_` (see
       * [[MenuItemScope]]), or a signal of items for a bar whose entries change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): Menubar = copy(entriesV = entriesV ++ is)
+    def items(is: MenuItemLiveEntry*): Menubar = new Menubar(s.copy(entriesV = entriesV ++ is))
 
     /** Content before the root list (`div.p-menubar-start`, the logo slot). */
-    def start(ui: UI): Menubar = copy(startV = Present(ui))
+    def start(ui: UI): Menubar = new Menubar(s.copy(startV = Present(ui)))
 
     /** Content after the root list (`div.p-menubar-end`, pushed to the far
       * edge by the sheet's `margin-left: auto`).
       */
-    def end(ui: UI): Menubar = copy(endV = Present(ui))
+    def end(ui: UI): Menubar = new Menubar(s.copy(endV = Present(ui)))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Menubar = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         // The open submenus and the keyboard focus path, allocated by this effectful mount; static projections render the
         // closed anatomy inert.
-        val stat: UI = MenuRender.readItems(entriesV).render(items => copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
+        val stat: UI =
+            MenuRender.readItems(entriesV).render(items =>
+                new Menubar(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
+            )
         UI.mounted {
             for
                 subs  <- Submenus.init()
@@ -98,7 +93,7 @@ final case class Menubar private (
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).render { case ((Rooted(roots, items), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)
-            copy(itemsV = items).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)))
+            new Menubar(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
         }
     end wired
 
@@ -108,7 +103,7 @@ final case class Menubar private (
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
@@ -141,14 +136,24 @@ final case class Menubar private (
         val listUI: UI = list(UI.children(rowsUI)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div.cssClass("p-menubar").cssClass("p-component")
-        idV.foreach(v => root = root.id(v))
+        accessV.idV.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end Menubar
 
 object Menubar:
+    final private[uic] case class State(
+        // The root rows `body` draws, resolved from `entriesV` by the render.
+        itemsV: List[MenuItem] = Nil,
+        entriesV: List[MenuItemLiveEntry] = Nil,
+        startV: Maybe[UI] = Absent,
+        endV: Maybe[UI] = Absent,
+        accessV: Accessibility = Accessibility.none
+    )
+
     /** An empty menubar; add root items via [[Menubar.items]]. */
-    def apply(): Menubar = new Menubar()
+    def apply(): Menubar = new Menubar(State())
+end Menubar
 
 /** Package-internal recursive tree renderer shared by Menubar and TieredMenu
   * (`p-<prefix>-*` anatomy with nested [[Overlay]] submenus).
@@ -186,11 +191,11 @@ private[uic] object MenuTree:
                 case Absent     => ()
 
         its.zipWithIndex.map { (it, i) =>
-            if it.separatorFlag then
+            if it.s.separatorFlag then
                 li.cssClass(s"p-$prefix-separator").role("separator")
             else
                 val p = path :+ i
-                if it.itemsV.nonEmpty then
+                if it.s.itemsV.nonEmpty then
                     val isOpen            = open(p)
                     def toggle: UI.Action =
                         subs match
@@ -219,9 +224,9 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     val act: Maybe[UI.Action] =
-                        if subs.isDefined && !it.disabledFlag.constTrue then Present(toggle) else Absent
+                        if subs.isDefined && !it.s.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
                     // The enclosing wired render already reads the open submenus (Submenus.reading), so the overlay is
                     // host-gated: rendered only while open, via the single-subscription renderOpen form, and closing its
@@ -238,7 +243,7 @@ private[uic] object MenuTree:
                                 .role("menu")(
                                     UI.children(items(
                                         prefix,
-                                        it.itemsV,
+                                        it.s.itemsV,
                                         p,
                                         open,
                                         subs,
@@ -270,10 +275,10 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     def activate: UI.Action =
                         for
-                            _ <- it.actionV match
+                            _ <- it.s.actionV match
                                 case Present(eff) => eff
                                 case Absent       => (): UI.Action
                             _ <- closeAll
@@ -282,7 +287,7 @@ private[uic] object MenuTree:
                                 case Absent       => (): UI.Action
                         yield ()
                     val act: Maybe[UI.Action] =
-                        if subs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
+                        if subs.isDefined && !it.s.disabledFlag.constTrue then Present(activate) else Absent
                     row(MenuRender.itemContent(prefix, it, act, Absent, roving))
                 end if
         }

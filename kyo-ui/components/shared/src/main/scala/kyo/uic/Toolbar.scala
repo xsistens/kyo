@@ -10,35 +10,30 @@ import kyo.UI.*
   * model: `start`/`center`/`end` each append content to their region, and the
   * root's `justify-content: space-between` spreads them.
   */
-final case class Toolbar private (
-    startKids: List[UI] = Nil,
-    centerKids: List[UI] = Nil,
-    endKids: List[UI] = Nil,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent
-) extends Node, HasAccessibleNameRef:
+final class Toolbar private[uic] (private[uic] val s: Toolbar.State) extends Node, HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = Toolbar
 
     /** Appends content to the leading section (`.p-toolbar-start`). */
-    def start(cs: UI*): Toolbar = copy(startKids = startKids ++ cs)
+    def start(cs: UI*): Toolbar = new Toolbar(s.copy(startKids = startKids ++ cs))
 
     /** Appends content to the middle section (`.p-toolbar-center`). */
-    def center(cs: UI*): Toolbar = copy(centerKids = centerKids ++ cs)
+    def center(cs: UI*): Toolbar = new Toolbar(s.copy(centerKids = centerKids ++ cs))
 
     /** Appends content to the trailing section (`.p-toolbar-end`). */
-    def end(cs: UI*): Toolbar = copy(endKids = endKids ++ cs)
+    def end(cs: UI*): Toolbar = new Toolbar(s.copy(endKids = endKids ++ cs))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Toolbar = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Toolbar = copy(accessibleNameRefV = v)
-
-    private[uic] def render(using Frame): UI =
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Toolbar(s.copy(accessV = v))
+    private[uic] def render(using Frame): UI                   =
         var bar = div.cssClass("p-toolbar").cssClass("p-component").role("toolbar")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => bar = bar.aria("label", n)
             case Present(TextValue.Dyn(s))   => bar = bar.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => bar = bar.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => bar = bar.aria("labelledby", r))
         bar(
             div.cssClass("p-toolbar-start")(UI.children(startKids)*),
             div.cssClass("p-toolbar-center")(UI.children(centerKids)*),
@@ -48,4 +43,12 @@ final case class Toolbar private (
 end Toolbar
 
 object Toolbar:
-    def apply(): Toolbar = new Toolbar()
+    final private[uic] case class State(
+        startKids: List[UI] = Nil,
+        centerKids: List[UI] = Nil,
+        endKids: List[UI] = Nil,
+        accessV: Accessibility = Accessibility.none
+    )
+
+    def apply(): Toolbar = new Toolbar(State())
+end Toolbar

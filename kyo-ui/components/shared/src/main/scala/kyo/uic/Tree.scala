@@ -92,25 +92,15 @@ end TreeNodeScope
   * "all children fully checked". The cascade math is pure over the node tree and
   * the current set.
   */
-final case class Tree[K] private (
-    // The roots `body` draws, resolved from `nodeSources` by the render.
-    nodeList: List[TreeNode[K]] = Nil,
-    nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
-    expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
-    selectedSlot: Slot[Set[K]] = Slot[Set[K]](),
-    onNodeToggleF: Maybe[K => UI.Action] = Absent,
-    onItemClickF: Maybe[K => UI.Action] = Absent,
-    selectionModeV: SelectionMode = SelectionMode.None,
-    metaKeyFlag: Boolean = false,
-    emptyContentV: Maybe[EmptyContent] = Absent,
-    accessibleNameV: Maybe[TextValue] = Absent
-) extends Node, HasEmptyContent, HasAccessibleName:
+final class Tree[K] private[uic] (private[uic] val s: Tree.State[K]) extends Node, HasEmptyContent, HasAccessibleName, Stated:
+    import s.*
+
     type Self = Tree[K]
 
     /** Appends the given root nodes, each built directly or from `_` (see [[TreeNodeScope]]), or a signal of roots that change
       * while the tree is shown (see [[LiveEntry]]).
       */
-    def nodes(ns: TreeNodeLiveEntry[K]*): Tree[K] = copy(nodeSources = nodeSources ++ ns)
+    def nodes(ns: TreeNodeLiveEntry[K]*): Tree[K] = new Tree(s.copy(nodeSources = nodeSources ++ ns))
 
     /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[TreeNode[K]]] = TreeNodeScope.reading(nodeSources)
@@ -118,36 +108,36 @@ final case class Tree[K] private (
     /** This tree with `ns` as its roots, already resolved: what a host that read the roots itself hands over, so every
       * method (the key handler, the cascade) sees them, and not only a render that reads the sources again.
       */
-    private[uic] def rooted(ns: List[TreeNode[K]]): Tree[K] = copy(nodeList = ns, nodeSources = ns)
+    private[uic] def rooted(ns: List[TreeNode[K]]): Tree[K] = new Tree(s.copy(nodeList = ns, nodeSources = ns))
 
     /** The expanded node ids. A `SignalRef` binds two way: toggles update the set, ref changes re-render `aria-expanded`.
       * A plain `Signal` or a constant binds one way: the tree opens those nodes and a toggle only reports the set it asks
       * for to [[onExpandedChange]]; with neither that nor [[onNodeToggle]] it is reported in a card.
       */
-    def expanded(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(expandedSlot = expandedSlot.bind(v))
+    def expanded(v: Set[K] | Signal[Set[K]]): Tree[K] = new Tree(s.copy(expandedSlot = expandedSlot.bind(v)))
 
     /** The chosen node ids. A `SignalRef` binds two way: clicking a node updates the set, ref changes re-render selection.
       * A plain `Signal` or a constant binds one way: the tree marks those nodes and a click only reports the set it asks
       * for to [[onSelectionChange]]; with neither that nor [[onItemClick]] it is reported in a card.
       */
-    def selection(v: Set[K] | Signal[Set[K]]): Tree[K] = copy(selectedSlot = selectedSlot.bind(v))
+    def selection(v: Set[K] | Signal[Set[K]]): Tree[K] = new Tree(s.copy(selectedSlot = selectedSlot.bind(v)))
 
     /** Fired with the nodes open after a toggle, after a two-way [[expanded]] is written, and before [[onNodeToggle]]. */
-    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(expandedSlot = expandedSlot.hear(f))
+    def onExpandedChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = new Tree(s.copy(expandedSlot = expandedSlot.hear(f)))
 
     /** Fired with the nodes chosen after a click, after a two-way [[selection]] is written, and before [[onItemClick]].
       * Unlike [[onItemClick]] it carries what the click made of the selection: the mode, the modifier and a checkbox's
       * cascade included.
       */
-    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = copy(selectedSlot = selectedSlot.hear(f))
+    def onSelectionChange(f: Set[K] => UI.Action)(using Frame): Tree[K] = new Tree(s.copy(selectedSlot = selectedSlot.hear(f)))
 
     /** Fired with the node id after a toggle (after the expansion write). */
     def onNodeToggle(f: K => UI.Action)(using Frame): Tree[K] =
-        copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo)
+        new Tree(s.copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo))
 
     /** Fired with the node id after a content click (after the selection write). */
     def onItemClick(f: K => UI.Action)(using Frame): Tree[K] =
-        copy(onItemClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo)
+        new Tree(s.copy(onItemClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
 
     /** Selection semantics: `None` (default; nodes inert unless `onItemClick` is
       * set), `Single` (clicking replaces the selection; re-clicking clears it),
@@ -157,7 +147,7 @@ final case class Tree[K] private (
       * checks its whole subtree and re-checks any ancestor that becomes complete,
       * and parents render indeterminate while partially checked).
       */
-    def selectionMode(v: SelectionMode): Tree[K] = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): Tree[K] = new Tree(s.copy(selectionModeV = v))
 
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -167,12 +157,12 @@ final case class Tree[K] private (
       * point of that mode. See [[SelectionPick]] for the rule every component offering this
       * shares; there is no shift-range, matching Prime.
       */
-    def metaKeySelection(v: Boolean): Tree[K] = copy(metaKeyFlag = v)
+    def metaKeySelection(v: Boolean): Tree[K] = new Tree(s.copy(metaKeyFlag = v))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree[K] = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree[K] = new Tree(s.copy(emptyContentV = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree[K] = copy(accessibleNameV = v)
-
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tree(s.copy(accessV = v))
     // A node id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
     private given CanEqual[K, K] = CanEqual.derived
 
@@ -223,7 +213,7 @@ final case class Tree[K] private (
                 // Unbound, the tree keeps what the reader opens, and picks where it selects, itself.
                 exp <- expandedSlot.owned(Set.empty[K])
                 sel <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[K]) else Kyo.lift(selectedSlot)
-            yield copy(expandedSlot = exp, selectedSlot = sel).wired(hi, base)
+            yield new Tree(s.copy(expandedSlot = exp, selectedSlot = sel)).wired(hi, base)
         }.placeholder(subscribed(Absent))
 
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
@@ -255,7 +245,7 @@ final case class Tree[K] private (
                 )
             else Nil
         var list = ul.cssClass("p-tree-root-children").role("tree")
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => list = list.aria("label", v)
             case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
             case Absent                      => ()
@@ -519,6 +509,20 @@ final case class Tree[K] private (
 end Tree
 
 object Tree:
+    final private[uic] case class State[K](
+        // The roots `body` draws, resolved from `nodeSources` by the render.
+        nodeList: List[TreeNode[K]] = Nil,
+        nodeSources: List[TreeNodeLiveEntry[K]] = Nil,
+        expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
+        selectedSlot: Slot[Set[K]] = Slot[Set[K]](),
+        onNodeToggleF: Maybe[K => UI.Action] = Absent,
+        onItemClickF: Maybe[K => UI.Action] = Absent,
+        selectionModeV: SelectionMode = SelectionMode.None,
+        metaKeyFlag: Boolean = false,
+        emptyContentV: Maybe[EmptyContent] = Absent,
+        accessV: Accessibility = Accessibility.none
+    )
+
     private val expandedName  = Slot.Name("Tree", "expanded", "a toggle", "onExpandedChange")
     private val selectionName = Slot.Name("Tree", "selection", "a click", "onSelectionChange")
 
@@ -546,7 +550,7 @@ object Tree:
       */
     private[uic] def rowId(base: String, index: Int): String = s"$base-node-$index"
 
-    def apply[K](): Tree[K] = new Tree[K]()
+    def apply[K](): Tree[K] = new Tree[K](State())
 end Tree
 
 /** The keyboard highlight of a [[Tree]], and the id it addresses rows by.

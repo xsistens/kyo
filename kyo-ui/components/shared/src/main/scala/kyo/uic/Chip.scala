@@ -17,23 +17,15 @@ import kyo.UI.*
   * `<svg>` with handlers): same class vocabulary, native focus/keyboard
   * semantics; the kyo remainder strips the button chrome.
   */
-final case class Chip private (
-    labelV: Maybe[TextValue] = Absent,
-    iconV: Maybe[IconGlyph] = Absent,
-    imageV: Maybe[String] = Absent,
-    removableFlag: Boolean = false,
-    removeIconV: Maybe[IconGlyph] = Absent,
-    onRemoveEff: Maybe[UI.Action] = Absent,
-    kids: List[UI] = Nil,
-    extraClassesV: List[String] = Nil,
-    isolateRemoveFlag: Boolean = false
-) extends Node:
+final class Chip private[uic] (private[uic] val s: Chip.State) extends Node, Stated:
+    import s.*
+
     type Self = Chip
 
     /** Package-internal class hook: hosts (MultiSelect) stamp Prime's contextual
       * class (`p-multiselect-chip`) onto the chip root.
       */
-    private[uic] def extraClass(cls: String): Chip = copy(extraClassesV = extraClassesV :+ cls)
+    private[uic] def extraClass(cls: String): Chip = new Chip(s.copy(extraClassesV = extraClassesV :+ cls))
 
     /** Package-internal: ends the remove button's own events at the button (kyo's `stopPropagation`).
       *
@@ -43,30 +35,30 @@ final case class Chip private (
       * stays the button's too. Off by default, so a chip an app places in a clickable container of its
       * own keeps bubbling as before.
       */
-    private[uic] def isolateRemove(v: Boolean): Chip = copy(isolateRemoveFlag = v)
+    private[uic] def isolateRemove(v: Boolean): Chip = new Chip(s.copy(isolateRemoveFlag = v))
 
     /** Leading icon (`.p-chip-icon`); an `image` wins over it (Prime precedence). */
-    def icon(glyph: IconGlyph): Chip = copy(iconV = Present(glyph))
+    def icon(glyph: IconGlyph): Chip = new Chip(s.copy(iconV = Present(glyph)))
 
     /** Leading image URL, rendered as the circular `img.p-chip-image`. */
-    def image(url: String): Chip = copy(imageV = Present(url))
+    def image(url: String): Chip = new Chip(s.copy(imageV = Present(url)))
 
     /** Renders the remove affordance (`.p-chip-remove-icon`, hidden by default). */
-    def removable(v: Boolean): Chip = copy(removableFlag = v)
+    def removable(v: Boolean): Chip = new Chip(s.copy(removableFlag = v))
 
     /** Glyph override for the remove affordance (Prime's `removeIcon`; default:
       * the times-circle glyph).
       */
-    def removeIcon(glyph: IconGlyph): Chip = copy(removeIconV = Present(glyph))
+    def removeIcon(glyph: IconGlyph): Chip = new Chip(s.copy(removeIconV = Present(glyph)))
 
     /** Runs `action` when the remove affordance is activated (implies nothing
       * about visibility; hide the chip from your own state if you want it gone).
       */
     def onRemove(action: => UI.Action)(using Frame): Chip =
-        copy(onRemoveEff = Present(Callback(action)))
+        new Chip(s.copy(onRemoveEff = Present(Callback(action))))
 
     /** Adds default-slot children after the label. */
-    def apply(cs: UI*): Chip = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Chip = new Chip(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-chip").cssClass("p-component")
@@ -109,11 +101,23 @@ final case class Chip private (
 end Chip
 
 object Chip:
+    final private[uic] case class State(
+        labelV: Maybe[TextValue] = Absent,
+        iconV: Maybe[IconGlyph] = Absent,
+        imageV: Maybe[String] = Absent,
+        removableFlag: Boolean = false,
+        removeIconV: Maybe[IconGlyph] = Absent,
+        onRemoveEff: Maybe[UI.Action] = Absent,
+        kids: List[UI] = Nil,
+        extraClassesV: List[String] = Nil,
+        isolateRemoveFlag: Boolean = false
+    )
+
     /** A chip labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): Chip = new Chip(labelV = Present(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): Chip = new Chip(State(labelV = Present(ReactiveValue(label))))
 
     /** An empty chip; fill the default slot via `apply(cs*)`. */
-    def apply(): Chip = new Chip()
+    def apply(): Chip = new Chip(State())
 end Chip

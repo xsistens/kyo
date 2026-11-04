@@ -15,62 +15,51 @@ import kyo.UI.*
   * make the caption row a focusable `role="button"` activated by
   * click/Enter/Space.
   */
-final case class Card private (
-    titleText: Maybe[TextValue] = Absent,
-    subtitleText: Maybe[TextValue] = Absent,
-    additionalTextV: Maybe[TextValue] = Absent,
-    headerAvatarV: Maybe[UI] = Absent,
-    headerActionV: Maybe[UI] = Absent,
-    headerInteractiveFlag: Boolean = false,
-    onHeaderClickEff: Maybe[UI.Action] = Absent,
-    customHeaderV: Maybe[UI] = Absent,
-    footerV: Maybe[UI] = Absent,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent,
-    kids: List[UI] = Nil
-) extends Node, HasAccessibleNameRef:
+final class Card private[uic] (private[uic] val s: Card.State) extends Node, HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = Card
 
     /** Card title. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t`
       * leaf).
       */
-    def title(v: String | Signal[String]): Card = copy(titleText = Present(ReactiveValue(v)))
+    def title(v: String | Signal[String]): Card = new Card(s.copy(titleText = Present(ReactiveValue(v))))
 
     /** Subtitle under the title. A `Signal[String]` re-renders it in place on emission.
       */
-    def subtitle(v: String | Signal[String]): Card = copy(subtitleText = Present(ReactiveValue(v)))
+    def subtitle(v: String | Signal[String]): Card = new Card(s.copy(subtitleText = Present(ReactiveValue(v))))
 
     /** Right-aligned status text in the caption row (kyo extension, `p-uic-card-additional`). A
       * `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def additionalText(v: String | Signal[String]): Card = copy(additionalTextV = Present(ReactiveValue(v)))
+    def additionalText(v: String | Signal[String]): Card = new Card(s.copy(additionalTextV = Present(ReactiveValue(v))))
 
     /** Avatar slot rendered before the caption (kyo extension, `p-uic-card-avatar`). */
-    def headerAvatar(v: UI): Card = copy(headerAvatarV = Present(v))
+    def headerAvatar(v: UI): Card = new Card(s.copy(headerAvatarV = Present(v)))
 
     /** Action slot rendered at the caption row's far end (kyo extension, `p-uic-card-action`). */
-    def headerAction(v: UI): Card = copy(headerActionV = Present(v))
+    def headerAction(v: UI): Card = new Card(s.copy(headerActionV = Present(v)))
 
     /** Makes the caption row a focusable button activated by click/Enter/Space. */
-    def interactive(v: Boolean): Card = copy(headerInteractiveFlag = v)
+    def interactive(v: Boolean): Card = new Card(s.copy(headerInteractiveFlag = v))
 
     /** Runs `action` when the interactive caption row is activated. Implies [[interactive]]. */
     def onHeaderClick(action: => UI.Action)(using Frame): Card =
-        copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true)
+        new Card(s.copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true))
 
     /** Custom header slot rendered as `div.p-card-header` above the body (Prime's
       * header slot, typically an image or free-form UI).
       */
-    def header(v: UI): Card = copy(customHeaderV = Present(v))
+    def header(v: UI): Card = new Card(s.copy(customHeaderV = Present(v)))
 
     /** Footer slot rendered as `div.p-card-footer` at the body's end (Prime's footer slot). */
-    def footer(v: UI): Card = copy(footerV = Present(v))
+    def footer(v: UI): Card = new Card(s.copy(footerV = Present(v)))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Card = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Card = copy(accessibleNameRefV = v)
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Card(s.copy(accessV = v))
 
     /** Adds content children (rendered inside `div.p-card-content`). */
-    def apply(cs: UI*): Card = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Card = new Card(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         val headerUI: List[UI] =
@@ -82,13 +71,13 @@ final case class Card private (
             div.cssClass("p-card-body")(UI.children(captionArea ++ (contentUI :: footerUI))*)
 
         var el = div.cssClass("p-card").cssClass("p-component")
-        if accessibleNameV.isDefined || accessibleNameRefV.isDefined then el = el.role("region")
-        accessibleNameV match
+        if accessV.nameV.isDefined || accessV.nameRefV.isDefined then el = el.role("region")
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(r => el = el.aria("labelledby", r))
+        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
         el(UI.children(headerUI :+ body)*)
     end render
 
@@ -148,4 +137,19 @@ final case class Card private (
 end Card
 
 object Card:
-    def apply(): Card = new Card()
+    final private[uic] case class State(
+        titleText: Maybe[TextValue] = Absent,
+        subtitleText: Maybe[TextValue] = Absent,
+        additionalTextV: Maybe[TextValue] = Absent,
+        headerAvatarV: Maybe[UI] = Absent,
+        headerActionV: Maybe[UI] = Absent,
+        headerInteractiveFlag: Boolean = false,
+        onHeaderClickEff: Maybe[UI.Action] = Absent,
+        customHeaderV: Maybe[UI] = Absent,
+        footerV: Maybe[UI] = Absent,
+        accessV: Accessibility = Accessibility.none,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Card = new Card(State())
+end Card

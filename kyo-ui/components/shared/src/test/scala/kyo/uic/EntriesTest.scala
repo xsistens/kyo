@@ -33,7 +33,7 @@ class EntriesTest extends UicTest:
 
     /** The rows a listbox keeps as sources, resolved the way its region resolves them. */
     private def options(lb: uic.Listbox[String])(using Frame): List[uic.OptionItem[uic.ListItem[String]]] =
-        uic.OptionItem.reading(lb.optionSources) match
+        uic.OptionItem.reading(lb.s.optionSources) match
             case uic.ReactiveValue.Const(rows) => rows
             case _                             => throw new AssertionError("sources without a signal were read as live")
 
@@ -44,20 +44,20 @@ class EntriesTest extends UicTest:
             _.item.separator,
             _.item("Homepage").url("/")
         )
-        assert(rows(uic.Menu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.Menubar().items(scoped*).entriesV) == direct)
-        assert(rows(uic.TieredMenu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.ContextMenu().items(scoped*).entriesV) == direct)
-        assert(rows(uic.SplitButton("Save").items(scoped*).entriesV) == direct)
-        assert(rows(uic.SpeedDial().items(scoped*).entriesV) == direct)
-        assert(uic.MenuItem("File").items(scoped*).itemsV == direct)
-        assert(uic.MenuGroup("File").items(scoped*).itemsV == direct)
-        assert(rows(uic.ContextMenu(scoped).entriesV) == direct)
+        assert(rows(uic.Menu().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.Menubar().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.TieredMenu().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.ContextMenu().items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.SplitButton("Save").items(scoped*).s.entriesV) == direct)
+        assert(rows(uic.SpeedDial().items(scoped*).s.entriesV) == direct)
+        assert(uic.MenuItem("File").items(scoped*).s.itemsV == direct)
+        assert(uic.MenuGroup("File").items(scoped*).s.itemsV == direct)
+        assert(rows(uic.ContextMenu(scoped).s.entriesV) == direct)
         assert(rows(uic.ContextMenu(Seq(
             _.item("Update").icon(uic.Icons.refresh),
             _.item.separator,
             _.item("Homepage").url("/")
-        )).entriesV) ==
+        )).s.entriesV) ==
             direct)
     }
 
@@ -69,15 +69,15 @@ class EntriesTest extends UicTest:
         )
         val prepared: Seq[uic.MenuItem] = Seq(uic.MenuItem("A"), uic.MenuItem("B"))
         val splat                       = uic.SplitButton("Save").items(prepared*)
-        assert(rows(mixed.entriesV) == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
-        assert(rows(splat.entriesV) == prepared.toList)
+        assert(rows(mixed.s.entriesV) == List(uic.MenuItem("Update"), uic.MenuItem.separator, uic.MenuItem("Delete")))
+        assert(rows(splat.s.entriesV) == prepared.toList)
     }
 
     "mega menu: root items and the groups of a column" in {
         val group = uic.MenuGroup("Laptops").items(_.item("Pro"))
         val item  = uic.MegaMenuItem("Products").column(_.group("Laptops").items(_.item("Pro")))
         assert(item == uic.MegaMenuItem("Products").column(group))
-        assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).entriesV) ==
+        assert(uic.MegaMenuItemScope.reading(uic.MegaMenu().items(_.item("Products")).s.entriesV) ==
             uic.ReactiveValue.Const(List(uic.MegaMenuItem("Products"))))
     }
 
@@ -130,8 +130,8 @@ class EntriesTest extends UicTest:
         assert(fixed(uic.Accordion[String]().panels(_.panel(label, content, "a")).entries) ==
             fixed(uic.Accordion[String]().panel(label, "a")(content).entries))
         // Tabs.tab wraps its content in a fragment; the label is what is compared here.
-        assert(fixed(uic.Tabs[String]().tabs(_.tab(label, content, "t")).entries).map(t => (t.text, t.id)) ==
-            fixed(uic.Tabs[String]().tab(label, "t")(content).entries).map(t => (t.text, t.id)))
+        assert(fixed(uic.Tabs[String]().tabs(_.tab(label, content, "t")).entries).map(t => (t.s.text, t.s.id)) ==
+            fixed(uic.Tabs[String]().tab(label, "t")(content).entries).map(t => (t.s.text, t.s.id)))
     }
 
     "`_` offers only what that setter takes" in {

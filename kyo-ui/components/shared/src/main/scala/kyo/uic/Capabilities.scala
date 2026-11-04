@@ -15,9 +15,9 @@ import kyo.UI.*
   *
   * A component opts in by adding the trait to its `extends` clause and supplying the
   * one-line WRITER, which is the only part that is genuinely per component (the field
-  * names differ: `accNameV` in the field-shaped controls, `accessibleNameV` in the
-  * containers). `type Self` fixes the return type, so the setter still hands back the
-  * concrete component and autocomplete after `.` stays exact.
+  * name). `type Self` fixes the return type, so the setter still hands back the
+  * concrete component and autocomplete after `.` stays exact. The accessible name, its
+  * reference and the element id live together in one [[Accessibility]] with one writer.
   *
   * Two slots that LOOK like they belong here and do not:
   *
@@ -31,15 +31,12 @@ import kyo.UI.*
   *     change what an unset severity means, which is a design-system question, not a
   *     refactor.
   */
-private[uic] trait HasAccessibleName extends Node:
-    /** Stores the resolved accessible-name slot. Implemented as `copy(accNameV = v)`. */
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self
-
+private[uic] trait HasAccessibleName extends HasAccessibility:
     /** Accessible name → `aria-label`. A `Signal[String]` patches the attribute IN PLACE via
       * kyo-ui's attribute channel (`setAttribute`), with no re-render of the component.
       */
     final def accessibleName(v: String | Signal[String]): Self =
-        withAccessibleName(Present(ReactiveValue(v)))
+        withAccessibility(accessibility.copy(nameV = Present(ReactiveValue(v))))
 end HasAccessibleName
 
 /** A component whose rendered element carries a chosen DOM `id`.
@@ -51,10 +48,10 @@ end HasAccessibleName
   * `DataTable` and the rest of the display family had none. `Node` carries no `id` either,
   * so there was no escape hatch at the base type.
   *
-  * Storage was already uniform across every implementor (`copy(idV = Present(v))`), which is
+  * Storage was already uniform across every implementor ([[Accessibility.idV]]), which is
   * the test `Capabilities.scala` applies before lifting anything, and the test `disabled`
-  * and `severity` fail. `FileUpload` is the single exception and answers with its
-  * `inputId`.
+  * and `severity` fail. `FileUpload` keeps its `inputId` there too, and overrides [[elementId]]
+  * to tell its default apart from a caller's choice.
   *
   * ==Which element it lands on==
   *
@@ -77,28 +74,24 @@ end HasAccessibleName
   * `s"$id-<part>"`: `Menu`'s highlighted row is `s"$id-active"`, `Panel`'s collapse button
   * is `s"$id-toggle"`, a `Tabs` header is `s"$id-<tab id>"`. A component that mints a base
   * for itself when none was given (so its ARIA still works unasked) must prefer the
-  * caller's: `if idV.isDefined then this else copy(idV = Present(minted))`. Every derived
+  * caller's, as `accessV.idV` holds it. Every derived
   * name is documented on the component that derives it; an undocumented derived id is as
   * unreachable as no id at all.
   */
-private[uic] trait HasElementId extends Node:
-    /** Stores the element id. Implemented as `copy(idV = v)`. */
-    private[uic] def withElementId(v: Maybe[String]): Self
-
-    /** Reads it back. Implemented as `idV`.
+private[uic] trait HasElementId extends HasAccessibility:
+    /** The id the caller chose.
       *
-      * The writer's twin, and it exists because "prefer the caller's id" is a rule this trait
-      * already states and only a component could follow: everything else that stamps an id
-      * (`form.bind` is the one) could not see whether the caller had already set one, so it
-      * overwrote and the caller's id vanished with nothing said. A reader is what lets that be
-      * a named error instead.
+      * It exists because "prefer the caller's id" is a rule this trait already states and only a
+      * component could follow: everything else that stamps an id (`form.bind` is the one) could
+      * not see whether the caller had already set one, so it overwrote and the caller's id
+      * vanished with nothing said. A reader is what lets that be a named error instead.
       */
-    private[uic] def elementId: Maybe[String]
+    private[uic] def elementId: Maybe[String] = accessibility.idV
 
     /** Chosen DOM `id`. See [[HasElementId]] for which element it lands on and how a
       * component's internal parts derive from it.
       */
-    final def id(v: String): Self = withElementId(Present(v))
+    final def id(v: String): Self = withAccessibility(accessibility.copy(idV = Present(v)))
 end HasElementId
 
 /** A component that can ALSO be labelled by reference to other elements. Separate from
@@ -108,13 +101,10 @@ end HasElementId
   * component offering the reference offers the direct name too.
   */
 private[uic] trait HasAccessibleNameRef extends HasAccessibleName:
-    /** Stores the `aria-labelledby` reference. Implemented as `copy(accNameRefV = v)`. */
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self
-
     /** ID reference(s) of the element(s) that label this component (`aria-labelledby`). Takes
       * precedence over an `aria-label` for assistive tech, so set one or the other.
       */
-    final def accessibleNameRef(v: String): Self = withAccessibleNameRef(Present(v))
+    final def accessibleNameRef(v: String): Self = withAccessibility(accessibility.copy(nameRefV = Present(v)))
 end HasAccessibleNameRef
 
 /** A component carrying an `aria-description`, the longer companion to an accessible name.
@@ -122,7 +112,7 @@ end HasAccessibleNameRef
   * imply a description. See [[HasAccessibleName]] for why these traits exist.
   */
 private[uic] trait HasAccessibleDescription extends Node:
-    /** Stores the resolved description slot. Implemented as `copy(accDescV = v)`. */
+    /** Stores the resolved description slot. Implemented as `new Input(s.copy(accDescV = v))`. */
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Self
 
     /** Additional accessible description → `aria-description`. A `Signal[String]` patches the
@@ -136,7 +126,7 @@ end HasAccessibleDescription
   * empty. See [[HasAccessibleName]] for why these traits exist.
   */
 private[uic] trait HasPlaceholder extends Node:
-    /** Stores the resolved placeholder slot. Implemented as `copy(placeholderText = v)`. */
+    /** Stores the resolved placeholder slot. Implemented as `new Input(s.copy(placeholderText = v))`. */
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self
 
     /** Text shown while the bound value is empty. A `Signal[String]` tracks a downstream source
@@ -153,7 +143,7 @@ end HasPlaceholder
   * traits exist.
   */
 private[uic] trait HasTooltip extends Node:
-    /** Stores the resolved tooltip slot. Implemented as `copy(tooltipV = v)`. */
+    /** Stores the resolved tooltip slot. Implemented as `new Button(s.copy(tooltipV = v))`. */
     private[uic] def withTooltip(v: Maybe[TextValue]): Self
 
     /** Native tooltip (the `title` attribute). A `Signal[String]` patches `title` IN PLACE via
@@ -167,7 +157,7 @@ end HasTooltip
   * carries arbitrary UI and not only text.
   */
 private[uic] trait HasEmptyContent extends Node:
-    /** Stores the resolved empty slot. Implemented as `copy(emptyContentV = v)`. */
+    /** Stores the resolved empty slot. Implemented as `new Tree(s.copy(emptyContentV = v))`. */
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Self
 
     /** Text shown in place of the rows when there are none. A `Signal[String]` re-renders the
@@ -195,7 +185,7 @@ end HasEmptyContent
   * mask's spinner would sit on top of it.
   */
 private[uic] trait HasLoadingContent extends Node:
-    /** Stores the resolved loading slot. Implemented as `copy(loadingContentV = v)`. */
+    /** Stores the resolved loading slot. Implemented as `new DataTable(s.copy(loadingContentV = v))`. */
     private[uic] def withLoadingContent(v: Maybe[LoadingContent]): Self
 
     /** Text shown over the place of the rows that are coming. A `Signal[String]` patches the text in
@@ -222,3 +212,27 @@ private[uic] trait HasLoadingContent extends Node:
       */
     final def loadingRow(f: (Int, Int) => UI): Self = withLoadingContent(Present(LoadingContent.rows(f)))
 end HasLoadingContent
+
+/** What a component holds of its accessible name, its labelling reference and its element id, as its setters stored them. The one
+  * field `accessV` of a component's state, under one name whichever family the component is from.
+  */
+final private[uic] case class Accessibility(
+    nameV: Maybe[TextValue] = Absent,
+    nameRefV: Maybe[String] = Absent,
+    idV: Maybe[String] = Absent
+)
+
+private[uic] object Accessibility:
+    /** A component with nothing set, shared so that one nobody names stores nothing of its own for it. */
+    val none: Accessibility = Accessibility()
+
+/** A component whose state holds an [[Accessibility]]: what [[HasAccessibleName]], [[HasAccessibleNameRef]] and
+  * [[HasElementId]] read and write, each in its own setter.
+  */
+private[uic] trait HasAccessibility extends Node:
+    /** The group as it is. Implemented as `accessV`. */
+    private[uic] def accessibility: Accessibility
+
+    /** Stores the group. Implemented as `new Input(s.copy(accessV = v))`. */
+    private[uic] def withAccessibility(v: Accessibility): Self
+end HasAccessibility

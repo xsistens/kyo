@@ -34,21 +34,16 @@ import kyo.UI.*
   *
   * Honest deferrals as Menubar: no mobile mode; typeahead is not implemented.
   */
-final case class TieredMenu private (
-    // The root rows `body` draws, resolved from `entriesV` by the render.
-    itemsV: List[MenuItem] = Nil,
-    entriesV: List[MenuItemLiveEntry] = Nil,
-    popupSlot: Slot[Boolean] = Slot(),
-    popupOwnFlag: Boolean = false,
-    idV: Maybe[String] = Absent
-) extends Node, HasElementId:
+final class TieredMenu private[uic] (private[uic] val s: TieredMenu.State) extends Node, HasElementId, Stated:
+    import s.*
+
     type Self = TieredMenu
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open side
       * submenus), each built directly or from `_` (see [[MenuItemScope]]), or a signal of items for a menu whose
       * entries change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): TieredMenu = copy(entriesV = entriesV ++ is)
+    def items(is: MenuItemLiveEntry*): TieredMenu = new TieredMenu(s.copy(entriesV = entriesV ++ is))
 
     /** Popup mode: the menu renders as a floating [[Overlay]] panel (Prime's `.p-tieredmenu-overlay`) over the open state `v`. A
       * `SignalRef` binds two way: a pick, Tab, Escape and an outside click write false, then [[onPopupChange]] hears
@@ -56,42 +51,41 @@ final case class TieredMenu private (
       * open panel stays, and nothing closes it. A signal nothing hears is reported in a card. Without `popup` the menu
       * renders inline.
       */
-    def popup(v: Boolean | Signal[Boolean]): TieredMenu = copy(popupSlot = popupSlot.bind(v), popupOwnFlag = false)
+    def popup(v: Boolean | Signal[Boolean]): TieredMenu = new TieredMenu(s.copy(popupSlot = popupSlot.bind(v), popupOwnFlag = false))
 
     /** Popup mode with the open state kept by the menu itself, starting open, as an overlay nothing inside can open
       * does: the panel shows until the reader closes it. [[onPopupChange]] still hears every close.
       */
-    def popup(): TieredMenu = copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true)
+    def popup(): TieredMenu = new TieredMenu(s.copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true))
 
     /** Fired with the open state the reader asks for (false for a pick, Tab, Escape and an outside click), after a
       * two-way [[popup]] is written.
       */
-    def onPopupChange(f: Boolean => UI.Action)(using Frame): TieredMenu = copy(popupSlot = popupSlot.hear(f))
+    def onPopupChange(f: Boolean => UI.Action)(using Frame): TieredMenu = new TieredMenu(s.copy(popupSlot = popupSlot.hear(f)))
 
     /** Asks for the popup closed: a two-way binding is written, then the close reported. Inline, there is nothing to close. */
     private def closePopup(using Frame): UI.Action =
         if popupSlot.binding.isDefined then popupSlot.change(false) else ()
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): TieredMenu = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new TieredMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight. Before the mount runs
         // the panel is drawn open from a constant signal.
         val ownsPopup = popupSlot.binding.isEmpty && popupOwnFlag
-        val shown     = if ownsPopup then copy(popupSlot = popupSlot.standIn(true)) else this
-        val stat: UI  = MenuRender.readItems(entriesV).render(items => shown.copy(itemsV = items).body(Set.empty, Absent, Nil, Absent, idV))
-        val menu      = UI.mounted {
+        val shown     = if ownsPopup then new TieredMenu(s.copy(popupSlot = popupSlot.standIn(true))) else this
+        val stat: UI  = MenuRender.readItems(entriesV).render(items =>
+            new TieredMenu(shown.s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
+        )
+        val menu = UI.mounted {
             for
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
                 cmds  <- UI.commands
                 base  <- cmds.freshId
                 popup <- if ownsPopup then popupSlot.owned(true) else Kyo.lift(popupSlot)
-            yield copy(popupSlot = popup).wired(subs, focus, base)
+            yield new TieredMenu(s.copy(popupSlot = popup)).wired(subs, focus, base)
         }.placeholder(stat)
         // A popup bound one way that nothing hears: every close the reader asks for is painted away again.
         Diagnostics.before(menu)("TieredMenu")(Diagnostic.unheard(popupSlot, TieredMenu.popupName))
@@ -118,7 +112,9 @@ final case class TieredMenu private (
             case (((Rooted(roots, items), f), open), shown) =>
                 val fv = focus.view(f, roots)
                 val sv = subs.view(open, roots)
-                copy(itemsV = items).body(sv.open, Present(sv), fv.value, Present(fv), Present(idV.getOrElse(base)), shown)
+                new TieredMenu(s.copy(itemsV =
+                    items
+                )).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)), shown)
         }
     end wired
 
@@ -128,7 +124,7 @@ final case class TieredMenu private (
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `idV`, which is only ever the caller's; see Menu.wired.
+        // mint. Kept apart from `accessV.idV`, which is only ever the caller's; see Menu.wired.
         partBase: Maybe[String],
         // Whether a popup is open, where the host read it in its own region; `Absent` lets the Overlay gate itself.
         popupShown: Maybe[Boolean] = Absent
@@ -159,7 +155,7 @@ final case class TieredMenu private (
         if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         // In a popup the component's root is the overlay panel, which this does not own, so the
         // caller's id lands on the `ul[role=menu]`; see Menu.body for the same split.
-        if popupSlot.binding.isDefined then idV.foreach(v => list = list.id(v))
+        if popupSlot.binding.isDefined then accessV.idV.foreach(v => list = list.id(v))
         popupSlot.binding match
             case Present(_) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -192,15 +188,24 @@ final case class TieredMenu private (
                 list = list.tabIndex(0)
                 if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
                 var root = div.cssClass("p-tieredmenu").cssClass("p-component")
-                idV.foreach(v => root = root.id(v))
+                accessV.idV.foreach(v => root = root.id(v))
                 root(list(UI.children(rowsUI)*))
         end match
     end body
 end TieredMenu
 
 object TieredMenu:
+    final private[uic] case class State(
+        // The root rows `body` draws, resolved from `entriesV` by the render.
+        itemsV: List[MenuItem] = Nil,
+        entriesV: List[MenuItemLiveEntry] = Nil,
+        popupSlot: Slot[Boolean] = Slot(),
+        popupOwnFlag: Boolean = false,
+        accessV: Accessibility = Accessibility.none
+    )
+
     /** An empty tiered menu; add root items via [[TieredMenu.items]]. */
-    def apply(): TieredMenu = new TieredMenu()
+    def apply(): TieredMenu = new TieredMenu(State())
 
     private val popupName = Slot.Name("TieredMenu", "the popup", "a close", "onPopupChange")
 end TieredMenu

@@ -9,7 +9,7 @@ import kyo.UI.*
   * A component keeps one per slot in place of a binding and a callback side by side, and asks it the questions the rule asks:
   * is the change heard ([[heard]]), is this a value meant to stay ([[fixed]]), is it a mistake a card has to name ([[deaf]]).
   * [[change]] and [[update]] are the reader's change itself, written to a two-way binding first and then reported. A setter is
-  * one line, `copy(xSlot = xSlot.bind(v))` and `copy(xSlot = xSlot.hear(f))`.
+  * one line, `new X(s.copy(xSlot = xSlot.bind(v)))` and `new X(s.copy(xSlot = xSlot.hear(f)))`.
   *
   * One hearer, not a list: `.onChange(a).onChange(b)` replaces, as every setter in this module does. An event that carries
   * another value, or fires at another moment, keeps its own field and calls [[heardToo]] at its setter.

@@ -12,17 +12,16 @@ import kyo.UI.*
   * Construct from avatars (`AvatarGroup(a, b, c)`) or push arbitrary children
   * through `apply(cs*)`, e.g. a trailing `+N` counter Avatar.
   */
-final case class AvatarGroup private (
-    avatarsV: List[Avatar] = Nil,
-    kids: List[UI] = Nil
-) extends Node:
+final class AvatarGroup private[uic] (private[uic] val s: AvatarGroup.State) extends Node, Stated:
+    import s.*
+
     type Self = AvatarGroup
 
     /** Appends one avatar to the stack. */
-    def avatar(a: Avatar): AvatarGroup = copy(avatarsV = avatarsV :+ a)
+    def avatar(a: Avatar): AvatarGroup = new AvatarGroup(s.copy(avatarsV = avatarsV :+ a))
 
     /** Adds arbitrary children after the avatars. */
-    def apply(cs: UI*): AvatarGroup = copy(kids = kids ++ cs)
+    def apply(cs: UI*): AvatarGroup = new AvatarGroup(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         div.cssClass("p-avatar-group").cssClass("p-component")(
@@ -31,8 +30,13 @@ final case class AvatarGroup private (
 end AvatarGroup
 
 object AvatarGroup:
-    def apply(): AvatarGroup = new AvatarGroup()
+    final private[uic] case class State(
+        avatarsV: List[Avatar] = Nil,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): AvatarGroup = new AvatarGroup(State())
 
     /** A group of the given avatars, stacked with the Prime overlap. */
-    def apply(avatars: Avatar*): AvatarGroup = new AvatarGroup(avatarsV = avatars.toList)
+    def apply(avatars: Avatar*): AvatarGroup = new AvatarGroup(State(avatarsV = avatars.toList))
 end AvatarGroup

@@ -36,73 +36,39 @@ import scala.annotation.targetName
   * `id` lands on the text field, and the live picker derives the day grid's `$id-grid` and its cells' `$id-c<n>`
   * from it (a minted base stands in where none is given).
   */
-final case class DatePicker[A] private (
-    kind: DateKind[A],
-    bindingV: Maybe[DatePicker.Binding[A]] = Absent,
-    monthSlot: Slot[YearMonth] = Slot(),
-    currentViewSlot: Slot[DatePickerView] = Slot(),
-    inlineFlag: Boolean = false,
-    hourFormatV: HourFormat = HourFormat.H24,
-    showButtonBarFlag: Boolean = false,
-    todayV: Maybe[A] = Absent,
-    placeholderText: Maybe[TextValue] = Absent,
-    disabledFlag: Boolean = false,
-    readonlyFlag: Boolean = false,
-    requiredFlag: Boolean = false,
-    nameV: Maybe[String] = Absent,
-    minDateV: Maybe[A] = Absent,
-    maxDateV: Maybe[A] = Absent,
-    showWeekFlag: Boolean = false,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    fluidFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    openSlot: Slot[Boolean] = Slot(),
-    referenceDateV: Maybe[A] = Absent,
-    onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
-    onValuesChangeF: Maybe[Set[A] => UI.Action] = Absent,
-    onRangeChangeF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
-    onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
-    onValuesBlurF: Maybe[Set[A] => UI.Action] = Absent,
-    onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
-    idV: Maybe[String] = Absent
-) extends Node, OptionalFormControl[A], HasPlaceholder, HasAccessibleNameRef:
+final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A]) extends Node, OptionalFormControl[A], HasPlaceholder,
+      HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = DatePicker[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): DatePicker[A] = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new DatePicker(s.copy(accessV = v))
 
     /** Binds the held value two-way to `ref`, `Absent` while nothing is picked: a pick, the time picker, the button bar and a
       * typed text write it back.
       */
     def value(v: Maybe[A] | Signal[Maybe[A]]): DatePicker[A] =
-        copy(bindingV = Present(DatePicker.Binding.Single(ReactiveValue[Maybe[A]](v))))
+        new DatePicker(s.copy(bindingV = Present(DatePicker.Binding.Single(ReactiveValue[Maybe[A]](v)))))
 
     /** The same picker with several days picked at once (Prime's `selectionMode="multiple"`): a [[MultiDatePicker]] bound
       * two-way to the set. A day click toggles membership and the panel stays open. Everything set so far carries over except
       * the single-value binding and its `onChange` and `onBlur`, which hold one value and would never fire on a set.
       */
     def values(v: Set[A] | Signal[Set[A]])(using DateKind.Days[A]): MultiDatePicker[A] =
-        MultiDatePicker(single.copy(bindingV = Present(DatePicker.Binding.Multi(ReactiveValue[Set[A]](v)))))
+        new MultiDatePicker(new DatePicker(single.s.copy(bindingV = Present(DatePicker.Binding.Multi(ReactiveValue[Set[A]](v))))))
 
     /** The same picker picking a range (Prime's `selectionMode="range"`): a [[RangeDatePicker]] bound two-way to the start
       * and end days. The first pick writes `start` (clearing `end`), a pick on or after it completes the range and closes the
       * panel, an earlier pick restarts. Everything set so far carries over except the single-value binding and its events.
       */
     def range(start: Maybe[A] | Signal[Maybe[A]], end: Maybe[A] | Signal[Maybe[A]])(using DateKind.Days[A]): RangeDatePicker[A] =
-        RangeDatePicker(single.copy(bindingV =
+        new RangeDatePicker(new DatePicker(single.s.copy(bindingV =
             Present(DatePicker.Binding.Range(ReactiveValue[Maybe[A]](start), ReactiveValue[Maybe[A]](end)))
-        ))
+        )))
 
     /** This picker without its single-value binding and events, which is what a set or range picker is built from. */
-    private def single: DatePicker[A] = copy(bindingV = Absent, onChangeF = Absent, onBlurF = Absent)
+    private def single: DatePicker[A] = new DatePicker(s.copy(bindingV = Absent, onChangeF = Absent, onBlurF = Absent))
 
     /** Binds the DISPLAYED month: the header's prev and next buttons move it (by a month, a year or a decade, as the grid on
       * screen counts), and so do the page keys and any arrow that steps out of the page. In the month grid its year is the year
@@ -111,16 +77,17 @@ final case class DatePicker[A] private (
       * only to read or drive the page from outside: unbound, the mount keeps the page itself, so navigating is not something
       * a caller has to opt into. A signal nothing hears is reported in a card.
       */
-    def month(v: YearMonth | Signal[YearMonth])(using DateKind.Calendar[A]): DatePicker[A] = copy(monthSlot = monthSlot.bind(v))
+    def month(v: YearMonth | Signal[YearMonth])(using DateKind.Calendar[A]): DatePicker[A] =
+        new DatePicker(s.copy(monthSlot = monthSlot.bind(v)))
 
     /** Fired with the month the reader pages to, after a two-way [[month]] is written. */
     def onMonthChange(f: YearMonth => UI.Action)(using Frame, DateKind.Calendar[A]): DatePicker[A] =
-        copy(monthSlot = monthSlot.hear(f))
+        new DatePicker(s.copy(monthSlot = monthSlot.hear(f)))
 
     /** Renders the calendar panel IN-FLOW below the field instead of floating (Prime's `inline` prop,
       * `.p-datepicker-panel-inline`): always visible without an [[open]] ref, toggled by the dropdown button with one.
       */
-    def inline(v: Boolean): DatePicker[A] = copy(inlineFlag = v)
+    def inline(v: Boolean): DatePicker[A] = new DatePicker(s.copy(inlineFlag = v))
 
     /** Binds the grid on screen, kyo's server-honest stand-in for Prime's internal `currentView` state: the title's month
       * and year buttons drill into the coarser grids, and a pick there drills back. A `SignalRef` binds two way and
@@ -129,67 +96,63 @@ final case class DatePicker[A] private (
       * kind picks in (the day grid, or the month grid for `YearMonth`). A signal nothing hears is reported in a card.
       */
     def currentView(v: DatePickerView | Signal[DatePickerView])(using DateKind.Drill[A]): DatePicker[A] =
-        copy(currentViewSlot = currentViewSlot.bind(v))
+        new DatePicker(s.copy(currentViewSlot = currentViewSlot.bind(v)))
 
     /** Fired with the grid the reader drills to, after a two-way [[currentView]] is written. */
     def onCurrentViewChange(f: DatePickerView => UI.Action)(using Frame, DateKind.Drill[A]): DatePicker[A] =
-        copy(currentViewSlot = currentViewSlot.hear(f))
+        new DatePicker(s.copy(currentViewSlot = currentViewSlot.hear(f)))
 
     /** Hour display format: `H12` shows 12-hour hours plus Prime's AM/PM picker (the held value is the same either way).
       * Default `H24`.
       */
-    def hourFormat(v: HourFormat)(using DateKind.Clock[A]): DatePicker[A] = copy(hourFormatV = v)
+    def hourFormat(v: HourFormat)(using DateKind.Clock[A]): DatePicker[A] = new DatePicker(s.copy(hourFormatV = v))
 
     /** Renders Prime's button bar (`.p-datepicker-buttonbar`) with Today and Clear. Clear empties the bound selection and
       * closes the panel. Today needs a date and the render is pure (no clock), so the Today button renders only when the app
       * supplies [[today]].
       */
-    def showButtonBar(v: Boolean): DatePicker[A] = copy(showButtonBarFlag = v)
+    def showButtonBar(v: Boolean): DatePicker[A] = new DatePicker(s.copy(showButtonBarFlag = v))
 
     /** The app-supplied "now" for the button bar's Today button, which shows its page and picks it: the whole value in single
       * mode (a time kind takes its time too), the day in multiple and range mode. Outside the bounds it renders disabled.
       */
-    def today(v: A): DatePicker[A] = copy(todayV = Present(v))
+    def today(v: A): DatePicker[A] = new DatePicker(s.copy(todayV = Present(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker[A] = copy(placeholderText = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker[A] = new DatePicker(s.copy(placeholderText = v))
 
-    def disabled(v: Boolean): DatePicker[A] = copy(disabledFlag = v)
+    def disabled(v: Boolean): DatePicker[A] = new DatePicker(s.copy(disabledFlag = v))
 
     /** Native `readonly` on the field; the calendar cannot be opened through the dropdown button either. */
-    def readonly(v: Boolean): DatePicker[A] = copy(readonlyFlag = v)
+    def readonly(v: Boolean): DatePicker[A] = new DatePicker(s.copy(readonlyFlag = v))
 
     /** Marks the field required (`aria-required` + native constraint). */
-    def required(v: Boolean): DatePicker[A] = copy(requiredFlag = v)
+    def required(v: Boolean): DatePicker[A] = new DatePicker(s.copy(requiredFlag = v))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): DatePicker[A] = copy(nameV = Present(v))
+    def name(v: String): DatePicker[A] = new DatePicker(s.copy(nameV = Present(v)))
 
     /** Earliest value the picker writes. Earlier day, month and year cells render disabled; a time picker cannot step below
       * it (for a `LocalDateTime`, on its day); typed text before it is not taken.
       */
-    def minDate(v: A): DatePicker[A] = copy(minDateV = Present(v))
+    def minDate(v: A): DatePicker[A] = new DatePicker(s.copy(minDateV = Present(v)))
 
     /** Latest value the picker writes, the mirror of [[minDate]]. */
-    def maxDate(v: A): DatePicker[A] = copy(maxDateV = Present(v))
+    def maxDate(v: A): DatePicker[A] = new DatePicker(s.copy(maxDateV = Present(v)))
 
     /** Shows the ISO 8601 week-number column (`td.p-datepicker-weeknumber`; hidden by default, as Prime's `showWeek=false`). */
-    def showWeek(v: Boolean)(using DateKind.Weeks[A]): DatePicker[A] = copy(showWeekFlag = v)
+    def showWeek(v: Boolean)(using DateKind.Weeks[A]): DatePicker[A] = new DatePicker(s.copy(showWeekFlag = v))
 
     /** Size of the field: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): DatePicker[A] = copy(sizeV = v)
+    def size(v: Size): DatePicker[A] = new DatePicker(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): DatePicker[A] = copy(variantV = v)
+    def variant(v: FieldVariant): DatePicker[A] = new DatePicker(s.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
-    def fluid(v: Boolean): DatePicker[A] = copy(fluidFlag = v)
+    def fluid(v: Boolean): DatePicker[A] = new DatePicker(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): DatePicker[A]                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): DatePicker[A]                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): DatePicker[A] = copy(invalidMsgDynV = v)
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker[A] = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker[A] = copy(accNameRefV = v)
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new DatePicker(s.copy(validityV = v))
 
     /** Binds the calendar's visibility. A `SignalRef` binds two way: the field, the dropdown button, a completing pick,
       * the button bar, Escape and an outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal`
@@ -199,39 +162,41 @@ final case class DatePicker[A] private (
       * click, while the field and the grid are still the reader's. Unbound, the picker keeps the state itself, closed (an
       * [[inline]] calendar open). A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): DatePicker[A] = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): DatePicker[A] = new DatePicker(s.copy(openSlot = openSlot.bind(v)))
 
     /** A calendar held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
     /** The page to show while neither a `month` ref nor a held value says which. Keeps the render pure. */
-    def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = copy(referenceDateV = Present(v))
+    def referenceDate(v: A)(using DateKind.Calendar[A]): DatePicker[A] = new DatePicker(s.copy(referenceDateV = Present(v)))
 
     /** Fired with the value now held after a write that changed it (`Absent` once cleared). A pick of the value already held
       * fires nothing. The undo of an Escape writes a two-way binding back without firing; a one-way binding took every pick
       * from this event, so it hears the value to put back through it too.
       */
-    def onChange(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = new DatePicker(s.copy(onChangeF = Present(Callback.of(f))))
 
     /** Package-internal: the events [[MultiDatePicker]] and [[RangeDatePicker]] set. */
-    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A] = copy(onValuesChangeF = Present(Callback.of(f)))
-    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A]   = copy(onValuesBlurF = Present(Callback.of(f)))
+    private[uic] def withChangeSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A] =
+        new DatePicker(s.copy(onValuesChangeF = Present(Callback.of(f))))
+    private[uic] def withBlurSet(f: Set[A] => UI.Action)(using Frame): DatePicker[A] =
+        new DatePicker(s.copy(onValuesBlurF = Present(Callback.of(f))))
     private[uic] def withChangeRange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): DatePicker[A] =
-        copy(onRangeChangeF = Present(Callback.of2(f)))
+        new DatePicker(s.copy(onRangeChangeF = Present(Callback.of2(f))))
     private[uic] def withBlurRange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): DatePicker[A] =
-        copy(onRangeBlurF = Present(Callback.of2(f)))
+        new DatePicker(s.copy(onRangeBlurF = Present(Callback.of2(f))))
 
     /** Fired with the visibility the reader asks for, true when the field or the dropdown button opens the calendar and
       * false when the button, a completing pick, the button bar, Escape or an outside click closes it, after a two-way
       * [[open]] is written.
       * One event for both, since an open and a close are never both. External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): DatePicker[A] = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): DatePicker[A] = new DatePicker(s.copy(openSlot = openSlot.hear(f)))
 
     /** Fires on focus loss with the value held; unlike `onChange` it fires whether or not anything was edited. The
       * form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): DatePicker[A] = new DatePicker(s.copy(onBlurF = Present(Callback.of(f))))
 
     // === render =============================================================
 
@@ -258,7 +223,7 @@ final case class DatePicker[A] private (
         // A calendar bound shut by a constant nobody hears: nothing the reader does may open it, so the picker is read-only.
         // A value held by a constant nobody hears is fixed too: drawn read-only, reachable and readable.
         val valueFixed = bindingV.exists(_.fixed(valueHeard))
-        if (openSlot.fixedAt(false) || valueFixed) && !readonlyFlag then copy(readonlyFlag = true).render
+        if (openSlot.fixedAt(false) || valueFixed) && !readonlyFlag then new DatePicker(s.copy(readonlyFlag = true)).render
         // A calendar bound one way that nothing hears: every open and close the reader asks for is painted away again.
         else
             // A slot bound one way that nothing hears: every change the reader asks for there is painted away again.
@@ -293,7 +258,7 @@ final case class DatePicker[A] private (
                 for
                     cmds <- UI.commands
                     // A caller's own id is the base the grid and its cells derive from; a minted one stands in.
-                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     =>
@@ -315,7 +280,7 @@ final case class DatePicker[A] private (
                     restore <- Signal.initRef(Maybe.empty[DatePicker.Restore])
                     draft   <- Signal.initRef(Maybe.empty[String])
                     refs = DatePicker.Refs(oref, mref, cur, vref, seed, restore, draft)
-                yield copy(bindingV = Present(held)).wired(refs, base, id => cmds.focusId(id))
+                yield new DatePicker(s.copy(bindingV = Present(held))).wired(refs, base, id => cmds.focusId(id))
                 end for
             }.placeholder(stat)
         end if
@@ -330,7 +295,7 @@ final case class DatePicker[A] private (
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         // The mount mints a view ref when the caller binds none, the way it mints the month one. Without it the month and year
         // buttons rendered disabled and a drill-down had nothing to write.
-        copy(currentViewSlot = currentViewSlot.copy(binding = Present(refs.view))).wiredWith(refs, base, focus)
+        new DatePicker(s.copy(currentViewSlot = currentViewSlot.copy(binding = Present(refs.view)))).wiredWith(refs, base, focus)
 
     private def wiredWith(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         val oref                                                     = refs.open
@@ -338,7 +303,7 @@ final case class DatePicker[A] private (
         val cursor                                                   = refs.cursor
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
-            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, idV)
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, accessV.idV)
         // Whether it is open, the month, the cursor, the seed flag, the view and the selection are read as ONE region (see
         // [[ReactiveValue]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
         // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
@@ -365,7 +330,7 @@ final case class DatePicker[A] private (
         panel: UI,
         openSignal: Maybe[ReactiveValue[Boolean]] = Absent
     )(using Frame): UI =
-        val validity  = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity  = FieldValidity(validityV)
         val field: UI = bindingV match
             case Present(single @ DatePicker.Binding.Single(_)) =>
                 // The typed text and a rejected draft are read together, as one region: the draft is what puts a rejected
@@ -425,7 +390,7 @@ final case class DatePicker[A] private (
     )(using Frame): UI =
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
         // The live render stamps `fieldId` below, which is this same id where the caller gave one.
-        i = idV.map(v => i.id(v)).getOrElse(i)
+        i = accessV.idV.map(v => i.id(v)).getOrElse(i)
         sizeV match
             case Size.Small  => i = i.cssClass("p-inputtext-sm")
             case Size.Large  => i = i.cssClass("p-inputtext-lg")
@@ -442,11 +407,11 @@ final case class DatePicker[A] private (
         if readonlyFlag || !editable then i = i.readOnly(true)
         if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
         i = nameV.map(v => i.jsProp("name", v)).getOrElse(i)
-        i = accNameV match
+        i = accessV.nameV match
             case Present(TextValue.Const(v)) => i.aria("label", v)
             case Present(TextValue.Dyn(s))   => i.aria("label", s)
             case Absent                      => i
-        i = accNameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
+        i = accessV.nameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
         nav.foreach { n =>
             if editable && interactive then i = i.onChange(typed => commitText(typed, n))
             // The blur reports what is held, read from the bound refs, not the text in the field (which a blur could carry):
@@ -1379,19 +1344,51 @@ final case class DatePicker[A] private (
 end DatePicker
 
 object DatePicker:
+    final private[uic] case class State[A](
+        kind: DateKind[A],
+        bindingV: Maybe[DatePicker.Binding[A]] = Absent,
+        monthSlot: Slot[YearMonth] = Slot(),
+        currentViewSlot: Slot[DatePickerView] = Slot(),
+        inlineFlag: Boolean = false,
+        hourFormatV: HourFormat = HourFormat.H24,
+        showButtonBarFlag: Boolean = false,
+        todayV: Maybe[A] = Absent,
+        placeholderText: Maybe[TextValue] = Absent,
+        disabledFlag: Boolean = false,
+        readonlyFlag: Boolean = false,
+        requiredFlag: Boolean = false,
+        nameV: Maybe[String] = Absent,
+        minDateV: Maybe[A] = Absent,
+        maxDateV: Maybe[A] = Absent,
+        showWeekFlag: Boolean = false,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        fluidFlag: Boolean = false,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        accessV: Accessibility = Accessibility.none,
+        openSlot: Slot[Boolean] = Slot(),
+        referenceDateV: Maybe[A] = Absent,
+        onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
+        onValuesChangeF: Maybe[Set[A] => UI.Action] = Absent,
+        onRangeChangeF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent,
+        onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,
+        onValuesBlurF: Maybe[Set[A] => UI.Action] = Absent,
+        onRangeBlurF: Maybe[(Maybe[A], Maybe[A]) => UI.Action] = Absent
+    )
+
     private val valueName = Slot.Name("DatePicker", "the value", "a pick", "onChange")
     private val openName  = Slot.Name("DatePicker", "the calendar", "an open or a close", "onOpenChange")
     private val monthName = Slot.Name("DatePicker", "the month", "a page", "onMonthChange")
     private val viewName  = Slot.Name("DatePicker", "the view", "a drill", "onCurrentViewChange")
 
     /** A picker over the value type `A`, whose [[DateKind]] given decides what it shows: `uic.DatePicker[LocalDate]()`. */
-    def apply[A]()(using kind: DateKind[A]): DatePicker[A] = new DatePicker[A](kind)
+    def apply[A]()(using kind: DateKind[A]): DatePicker[A] = new DatePicker[A](State(kind))
 
     /** A picker over an explicitly chosen kind, which is how a `ZonedDateTime` picker is made:
       * `uic.DatePicker(uic.DateKind.zoned(zone))`.
       */
     @targetName("applyKind")
-    def apply[A](kind: DateKind[A]): DatePicker[A] = new DatePicker[A](kind)
+    def apply[A](kind: DateKind[A]): DatePicker[A] = new DatePicker[A](State(kind))
 
     /** The selection the calendar renders, as ISO strings at the kind's precision (`""` for none). Every comparison the grids
       * make is between such strings, which is what keeps the date math integer arithmetic over them.
@@ -1813,11 +1810,13 @@ end DatePicker
   * It carries the validation vocabulary ([[FormControl]]) but is not a form-bindable control: the form layer's set-valued
   * trait binds through `selection`, and a second spelling of the binding `values` already made would be a slot with two names.
   */
-final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+final class MultiDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, Stated:
     type Self = MultiDatePicker[A]
 
-    private def on(p: DatePicker[A]): MultiDatePicker[A] = copy(picker = p)
+    private[uic] def s: DatePicker[A] = picker
+
+    private def on(p: DatePicker[A]): MultiDatePicker[A] = new MultiDatePicker(p)
 
     /** Fired with the set now held after a toggle or a clear changed it; the undo of an Escape fires nothing. */
     def onChange(f: Set[A] => UI.Action)(using Frame): MultiDatePicker[A] = on(picker.withChangeSet(f))
@@ -1884,17 +1883,13 @@ final case class MultiDatePicker[A] private[uic] (private[uic] val picker: DateP
     /** Spans the full width of its container. */
     def fluid(v: Boolean): Self = on(picker.fluid(v))
 
-    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
-    private[uic] def elementId: Maybe[String]              = picker.elementId
+    private[uic] def accessibility: Accessibility              = picker.accessibility
+    private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
+    private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
 
     /** The seam golden tests render, as [[DatePicker.wired]]. */
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
@@ -1915,11 +1910,13 @@ end MultiDatePicker
   *
   * It carries the validation vocabulary ([[FormControl]]) but no form binding, since no form field holds two refs.
   */
-final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
-    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef:
+final class RangeDatePicker[A] private[uic] (private[uic] val picker: DatePicker[A])
+    extends Node, FormControl, HasPlaceholder, HasAccessibleNameRef, Stated:
     type Self = RangeDatePicker[A]
 
-    private def on(p: DatePicker[A]): RangeDatePicker[A] = copy(picker = p)
+    private[uic] def s: DatePicker[A] = picker
+
+    private def on(p: DatePicker[A]): RangeDatePicker[A] = new RangeDatePicker(p)
 
     /** Fired with the start and end now held after a pick or a clear changed either; the undo of an Escape fires nothing. */
     def onChange(f: (Maybe[A], Maybe[A]) => UI.Action)(using Frame): RangeDatePicker[A] = on(picker.withChangeRange(f))
@@ -1986,17 +1983,13 @@ final case class RangeDatePicker[A] private[uic] (private[uic] val picker: DateP
     /** Spans the full width of its container. */
     def fluid(v: Boolean): Self = on(picker.fluid(v))
 
-    private[uic] def withElementId(v: Maybe[String]): Self = on(picker.withElementId(v))
-    private[uic] def elementId: Maybe[String]              = picker.elementId
+    private[uic] def accessibility: Accessibility              = picker.accessibility
+    private[uic] def withAccessibility(v: Accessibility): Self = on(picker.withAccessibility(v))
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Self = on(picker.withPlaceholder(v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Self                       = on(picker.withInvalid(v))
-    private[uic] def withInvalidMessage(v: Maybe[String]): Self                   = on(picker.withInvalidMessage(v))
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self = on(picker.withInvalidMessageDyn(v))
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Self = on(picker.withAccessibleName(v))
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Self = on(picker.withAccessibleNameRef(v))
+    private[uic] def validitySlots: FieldValidity.Slots         = picker.validitySlots
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = on(picker.withValidity(v))
 
     /** The seam golden tests render, as [[DatePicker.wired]]. */
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =

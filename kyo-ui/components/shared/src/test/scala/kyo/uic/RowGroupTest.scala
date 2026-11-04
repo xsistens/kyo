@@ -47,9 +47,9 @@ class RowGroupTest extends UicTest:
     // The key of a level is labelled by its toString, and that label is also its identity,
     // so a String key passes through untouched and anything else reads as it renders.
     "a level labels any key type through toString, and String is the identity case" in {
-        assert(RowGroup[Int, Int](identity).keyF(42) == "42")
-        assert(RowGroup[String, String](identity).keyF("Accessories") == "Accessories")
-        assert(RowGroup[Int, (Int, Boolean)](i => (i, i > 0)).keyF(1) == "(1,true)")
+        assert(RowGroup[Int, Int](identity).s.keyF(42) == "42")
+        assert(RowGroup[String, String](identity).s.keyF("Accessories") == "Accessories")
+        assert(RowGroup[Int, (Int, Boolean)](i => (i, i > 0)).s.keyF(1) == "(1,true)")
     }
 
     // Below the outermost level a bare key is not an identity: the same brand sits under

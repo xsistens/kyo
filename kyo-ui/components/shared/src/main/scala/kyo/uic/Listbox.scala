@@ -154,38 +154,14 @@ end ListOptionScope
   * `id` lands on the `ul.p-listbox-list`, the listbox that holds the one tab stop, and each option derives
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final case class Listbox[K] private (
-    // The rows the body draws, resolved from `optionSources` by the region that draws them.
-    optionsV: List[OptionItem[ListItem[K]]] = Nil,
-    optionSources: List[OptionSource[ListItem[K]]] = Nil,
-    selectionModeV: SelectionMode = SelectionMode.None,
-    metaKeyFlag: Boolean = false,
-    selectedRef: Maybe[SetBinding[K]] = Absent,
-    filterQuerySlot: Slot[String] = Slot(),
-    filterableV: Maybe[BoolValue] = Absent,
-    onItemClickF: Maybe[K => UI.Action] = Absent,
-    templateF: Maybe[ListItem[K] => UI] = Absent,
-    checkmarkFlag: Boolean = false,
-    disabledFlag: Boolean = false,
-    fixedFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    emptyContentV: Maybe[EmptyContent] = Absent,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[K] => UI.Action] = Absent,
-    onChangeF: Maybe[Set[K] => UI.Action] = Absent,
-    idV: Maybe[String] = Absent,
-    hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
-) extends Node, MultiChoiceFormControl[K], HasEmptyContent, HasAccessibleNameRef:
+final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) extends Node, MultiChoiceFormControl[K], HasEmptyContent,
+      HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = Listbox[K]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Listbox[K] = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Listbox(s.copy(accessV = v))
 
     /** Chords the HOST claims, tried before the list's own machine sees them.
       *
@@ -194,19 +170,21 @@ final case class Listbox[K] private (
       * `Absent` leaves the chord to the list and then to the browser, so a host cannot swallow the
       * navigation it is nested in.
       */
-    private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox[K] = copy(hostKeyF = Present(f))
+    private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox[K] = new Listbox(s.copy(hostKeyF = Present(f)))
 
     /** Appends the given options, each built directly or from `_` (see [[ListItemScope]]), or a signal of options for a
       * list whose options change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: ListItemLiveEntry[K]*): Listbox[K] = copy(optionSources = optionSources ++ ListItemScope.sources(is))
+    def items(is: ListItemLiveEntry[K]*): Listbox[K] = new Listbox(s.copy(optionSources = optionSources ++ ListItemScope.sources(is)))
 
     /** Appends a single option (ergonomic builder; no need to construct [[ListItem]]). A
       * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
       * selection key either way, and `icon` keeps its default for both label shapes.
       */
     def item(text: String | Signal[String], id: K, icon: Maybe[IconGlyph] = Absent): Listbox[K] =
-        copy(optionSources = optionSources :+ OptionSource.Fixed(List(OptionItem.Item(ListItem(ReactiveValue(text), id, icon)))))
+        new Listbox(s.copy(optionSources =
+            optionSources :+ OptionSource.Fixed(List(OptionItem.Item(ListItem(ReactiveValue(text), id, icon))))
+        ))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their items
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -215,13 +193,14 @@ final case class Listbox[K] private (
       * across the whole listbox, and the filter drops a group once it has
       * emptied it. Each entry is built directly or from `_` (see [[ListOptionScope]]).
       */
-    def optionGroups(is: ListOptionLiveEntry[K]*): Listbox[K] = copy(optionSources = optionSources ++ ListOptionScope.sources(is))
+    def optionGroups(is: ListOptionLiveEntry[K]*): Listbox[K] =
+        new Listbox(s.copy(optionSources = optionSources ++ ListOptionScope.sources(is)))
 
     /** Selection semantics: `None` (default: rows inert unless `onItemClick` is
       * set), `Single` (picking replaces the selection; re-picking clears it), or
       * `Multiple` (picking toggles the row in the set).
       */
-    def selectionMode(v: SelectionMode): Listbox[K] = copy(selectionModeV = v)
+    def selectionMode(v: SelectionMode): Listbox[K] = new Listbox(s.copy(selectionModeV = v))
 
     /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -233,7 +212,7 @@ final case class Listbox[K] private (
       *
       * There is no shift-range here, matching Prime, which ranges on shift in `DataTable` only.
       */
-    def metaKeySelection(v: Boolean): Listbox[K] = copy(metaKeyFlag = v)
+    def metaKeySelection(v: Boolean): Listbox[K] = new Listbox(s.copy(metaKeyFlag = v))
 
     /** The set of chosen item ids. A `SignalRef` binds two way: clicks update the set, ref changes re-render
       * `aria-selected`. A plain `Signal` or a constant binds one way: the list shows it and a click only reports the set it
@@ -242,15 +221,16 @@ final case class Listbox[K] private (
       * different concept.
       */
     @targetName("selectionSet")
-    def selection(v: Set[K] | Signal[Set[K]]): Listbox[K] = copy(selectedRef = Present(SetBinding.of(ReactiveValue[Set[K]](v))))
+    def selection(v: Set[K] | Signal[Set[K]]): Listbox[K] =
+        new Listbox(s.copy(selectedRef = Present(SetBinding.of(ReactiveValue[Set[K]](v)))))
 
     /** Fired with the set a click made of the selection, after a two-way [[selection]] is written, and before
       * [[onItemClick]]. Nothing fires when the click changed nothing.
       */
-    def onChange(f: Set[K] => UI.Action)(using Frame): Listbox[K] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Set[K] => UI.Action)(using Frame): Listbox[K] = new Listbox(s.copy(onChangeF = Present(Callback.of(f))))
 
     /** Package-internal: an embedding host's typed selection, read and written through its own keys. */
-    private[uic] def selectionBinding(b: SetBinding[K]): Listbox[K] = copy(selectedRef = Present(b))
+    private[uic] def selectionBinding(b: SetBinding[K]): Listbox[K] = new Listbox(s.copy(selectedRef = Present(b)))
 
     /** Switches Prime's header filter input (`div.p-listbox-header` > `input.p-listbox-filter.p-inputtext`), over a
       * query the listbox allocates itself unless [[filterQuery]] hands it one: the same word, and the same meaning, as
@@ -262,49 +242,46 @@ final case class Listbox[K] private (
       * and hides the header in a region of its own inside the listbox, and the list repaints only where the options
       * it shows change.
       */
-    def filterable(v: Boolean | Signal[Boolean]): Listbox[K] = copy(filterableV = Present(ReactiveValue(v)))
+    def filterable(v: Boolean | Signal[Boolean]): Listbox[K] = new Listbox(s.copy(filterableV = Present(ReactiveValue(v))))
 
     /** Renders the header filter over a query the APP holds, as [[Select.filterQuery]] does: a `SignalRef` is written by
       * typing, a plain `Signal` filters the list and typing is only reported and painted back, a constant is the starting
       * text. Turns the header filter on unless [[filterable]] says otherwise. A signal nothing hears is reported in a card.
       */
-    def filterQuery(v: String | Signal[String]): Listbox[K] = copy(filterQuerySlot = filterQuerySlot.bind(v))
+    def filterQuery(v: String | Signal[String]): Listbox[K] = new Listbox(s.copy(filterQuerySlot = filterQuerySlot.bind(v)))
 
     /** Fired with the query the reader types. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): Listbox[K] = copy(filterQuerySlot = filterQuerySlot.hear(f))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): Listbox[K] =
+        new Listbox(s.copy(filterQuerySlot = filterQuerySlot.hear(f)))
 
     /** Fired with the id of the row clicked or picked by key, after the selection write. */
-    def onItemClick(f: K => UI.Action)(using Frame): Listbox[K] = copy(onItemClickF = Present(Callback.of(f)))
+    def onItemClick(f: K => UI.Action)(using Frame): Listbox[K] = new Listbox(s.copy(onItemClickF = Present(Callback.of(f))))
 
     /** Custom option content (Prime's `#option` slot): renders instead of the plain
       * text label; the checkmark column and leading icon keep their places.
       */
-    def itemTemplate(f: ListItem[K] => UI): Listbox[K] = copy(templateF = Present(f))
+    def itemTemplate(f: ListItem[K] => UI): Listbox[K] = new Listbox(s.copy(templateF = Present(f)))
 
     /** Renders Prime's option check-icon column: the check glyph on selected rows
       * (`.p-listbox-option-check-icon`), a blank placeholder on the rest.
       */
-    def checkmark(v: Boolean): Listbox[K] = copy(checkmarkFlag = v)
+    def checkmark(v: Boolean): Listbox[K] = new Listbox(s.copy(checkmarkFlag = v))
 
     /** Disables the whole listbox (`.p-disabled`): rows keep their look but stop
       * responding to clicks.
       */
-    def disabled(v: Boolean): Listbox[K] = copy(disabledFlag = v)
+    def disabled(v: Boolean): Listbox[K] = new Listbox(s.copy(disabledFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): Listbox[K]                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): Listbox[K]                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox[K] = copy(invalidMsgDynV = v)
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Listbox(s.copy(validityV = v))
 
     /** Fires on focus loss with the current selection: the validation layer's Blur
       * trigger.
       */
     @targetName("onBlurSet")
-    def onBlur(f: Set[K] => UI.Action)(using Frame): Listbox[K] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Set[K] => UI.Action)(using Frame): Listbox[K] = new Listbox(s.copy(onBlurF = Present(Callback.of(f))))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox[K] = copy(emptyContentV = v)
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox[K] = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox[K] = copy(accessibleNameRefV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox[K] = new Listbox(s.copy(emptyContentV = v))
 
     /** Whether the header filter is on: an explicit [[filterable]] decides alone, as an explicit `invalid` does in
       * [[FieldValidity]]; without one, an app-owned [[filterQuery]] turns it on.
@@ -322,7 +299,7 @@ final case class Listbox[K] private (
     /** Package-internal: a host whose selection is a constant nobody hears draws the list fixed, its options picking
       * nothing ([[ReactiveValue.fixed]]).
       */
-    private[uic] def fixed(v: Boolean): Listbox[K] = copy(fixedFlag = v)
+    private[uic] def fixed(v: Boolean): Listbox[K] = new Listbox(s.copy(fixedFlag = v))
 
     /** Package-internal: hosts (OrderList/PickList) that already subscribe to the
       * same selection ref in an enclosing render supply the resolved set directly;
@@ -333,11 +310,11 @@ final case class Listbox[K] private (
     private[uic] def resolved(sel: Set[K], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
         using Frame
     ): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
-            copy(optionsV = opts).body(sel, query, Slot(), hi, idV, focused)(validity)
+            new Listbox(s.copy(optionsV = opts)).body(sel, query, Slot(), hi, accessV.idV, focused)(validity)
         ))
     end resolved
 
@@ -345,7 +322,7 @@ final case class Listbox[K] private (
         // A constant selection nobody hears is fixed: the list shows it, read-only, and its options pick nothing.
         val fixed = selectionModeV != SelectionMode.None && selectedRef.exists(_.fixed(onChangeF.orElse(onItemClickF)))
         // A host that asked for a fixed list keeps it fixed, whatever the list's own binding says.
-        copy(fixedFlag = fixedFlag || fixed).renderQuery(FieldValidity(invalidV, invalidMsgV, invalidMsgDynV))
+        new Listbox(s.copy(fixedFlag = fixedFlag || fixed)).renderQuery(FieldValidity(validityV))
     end render
 
     /** One mount for the two signals this listbox owns: the keyboard highlight, and the
@@ -366,14 +343,14 @@ final case class Listbox[K] private (
                 // The id the highlight is announced through. A caller's own `id` wins, and where
                 // there is none a minted one stands in, so `aria-activedescendant` is not
                 // something a reader has to opt into to be told which option is highlighted.
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 hi   <- Signal.initRef(-1)
                 q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
                 own <-
                     if selectedRef.isEmpty && selectionModeV != SelectionMode.None then Signal.initRef(Set.empty[K]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
-                self = own.fold(this)(r => copy(selectedRef = Present(SetBinding.of(ReactiveValue(r)))))
+                self = own.fold(this)(r => new Listbox(s.copy(selectedRef = Present(SetBinding.of(ReactiveValue(r))))))
             yield self.subscribed(q, Present(hi), Present(base), validity)
         }.placeholder(subscribed(
             if filterQuerySlot.binding.exists(_.const.isDefined) then Slot() else filterQuerySlot,
@@ -405,7 +382,7 @@ final case class Listbox[K] private (
         val query = ReactiveValue.orElse(shown, "")
         val hi    = ReactiveValue.orElse(hiRef, -1)
         validity.follow(sel.and(query).and(hi).and(OptionItem.reading(optionSources)).render { case (((s, qv), h), opts) =>
-            copy(optionsV = opts).body(s, qv, if shown.isDefined then q else Slot(), hiRef, idBase, h)(validity)
+            new Listbox(this.s.copy(optionsV = opts)).body(s, qv, if shown.isDefined then q else Slot(), hiRef, idBase, h)(validity)
         })
     end subscribed
 
@@ -508,7 +485,7 @@ final case class Listbox[K] private (
         var list = ul.cssClass("p-listbox-list").role("listbox")
         // The id goes on the list, the listbox that holds the one tab stop, so a `Label.forId` and
         // the form's focus-first-invalid reach it; the options derive theirs from the same value.
-        idV.foreach(v => list = list.id(v))
+        accessV.idV.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
         // A fixed list is read-only, not disabled: it stays the one tab stop, so a reader still reaches what it holds, and
@@ -529,12 +506,12 @@ final case class Listbox[K] private (
         if interactive then
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus).onBlur(leaveList)
             if focused >= 0 then idBase.foreach(base => list = list.aria("activedescendant", optionId(base, focused)))
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => list = list.aria("label", v)
             case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
             case Absent                      => ()
         end match
-        accessibleNameRefV.foreach(v => list = list.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => list = list.aria("labelledby", v))
         val listUI: UI = list(UI.children(rows ++ emptyRow)*)
 
         def header: UI =
@@ -644,10 +621,32 @@ final case class Listbox[K] private (
 end Listbox
 
 object Listbox:
+    final private[uic] case class State[K](
+        // The rows the body draws, resolved from `optionSources` by the region that draws them.
+        optionsV: List[OptionItem[ListItem[K]]] = Nil,
+        optionSources: List[OptionSource[ListItem[K]]] = Nil,
+        selectionModeV: SelectionMode = SelectionMode.None,
+        metaKeyFlag: Boolean = false,
+        selectedRef: Maybe[SetBinding[K]] = Absent,
+        filterQuerySlot: Slot[String] = Slot(),
+        filterableV: Maybe[BoolValue] = Absent,
+        onItemClickF: Maybe[K => UI.Action] = Absent,
+        templateF: Maybe[ListItem[K] => UI] = Absent,
+        checkmarkFlag: Boolean = false,
+        disabledFlag: Boolean = false,
+        fixedFlag: Boolean = false,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        emptyContentV: Maybe[EmptyContent] = Absent,
+        accessV: Accessibility = Accessibility.none,
+        onBlurF: Maybe[Set[K] => UI.Action] = Absent,
+        onChangeF: Maybe[Set[K] => UI.Action] = Absent,
+        hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
+    )
+
     private val selectionName = Slot.Name("Listbox", "the selection", "a click", "onChange")
     private val queryName     = Slot.Name("Listbox", "the filter query", "the reader type", "onFilterQueryChange")
 
-    def apply[K](): Listbox[K] = new Listbox[K]()
+    def apply[K](): Listbox[K] = new Listbox[K](State())
 
     /** One chord a host claims, carrying the effect it answers with.
       *

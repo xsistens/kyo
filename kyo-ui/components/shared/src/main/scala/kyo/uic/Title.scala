@@ -12,24 +12,21 @@ import kyo.UI.*
   * `size`; `size` defaults to the level when unset. `wrap(false)` keeps the
   * title on a single line.
   */
-final case class Title private (
-    levelV: TitleLevel = TitleLevel.H2,
-    sizeV: Maybe[TitleLevel] = Absent,
-    wrapFlag: Boolean = true,
-    kids: List[UI] = Nil
-) extends Node:
+final class Title private[uic] (private[uic] val s: Title.State) extends Node, Stated:
+    import s.*
+
     type Self = Title
 
     /** Semantic heading level (`role="heading"` + `aria-level`, default H2). */
-    def level(v: TitleLevel): Title = copy(levelV = v)
+    def level(v: TitleLevel): Title = new Title(s.copy(levelV = v))
 
     /** Visual appearance (`p-uic-title--h<n>`); defaults to the semantic level. */
-    def size(v: TitleLevel): Title = copy(sizeV = Present(v))
+    def size(v: TitleLevel): Title = new Title(s.copy(sizeV = Present(v)))
 
     /** `wrap(false)` keeps the title on one line (`p-uic-title--nowrap`); default wraps. */
-    def wrap(v: Boolean): Title = copy(wrapFlag = v)
+    def wrap(v: Boolean): Title = new Title(s.copy(wrapFlag = v))
 
-    def apply(cs: UI*): Title = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Title = new Title(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         val visual = sizeV.getOrElse(levelV)
@@ -44,4 +41,12 @@ final case class Title private (
 end Title
 
 object Title:
-    def apply(): Title = new Title()
+    final private[uic] case class State(
+        levelV: TitleLevel = TitleLevel.H2,
+        sizeV: Maybe[TitleLevel] = Absent,
+        wrapFlag: Boolean = true,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Title = new Title(State())
+end Title

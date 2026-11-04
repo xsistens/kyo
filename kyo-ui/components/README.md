@@ -52,7 +52,7 @@ Every example below assumes those four imports, so they are not repeated per blo
 
 ## Placing a component
 
-A component is not a `UI`. The kyo HTML AST is `sealed` and cannot be extended from outside kyo-ui, so `uic.Button` is a plain case class implementing `Node`, and it renders itself into a `UI` at the moment you place it. That indirection is invisible in practice, because two implicit conversions do the lifting: `Node.nodeToChild` puts a component into a container's child list, and `Node.nodeToUI` produces a bare `UI` where one is expected. Both need `scala.language.implicitConversions` in scope.
+A component is not a `UI`. The kyo HTML AST is `sealed` and cannot be extended from outside kyo-ui, so `uic.Button` is a plain class implementing `Node`, and it renders itself into a `UI` at the moment you place it. That indirection is invisible in practice, because two implicit conversions do the lifting: `Node.nodeToChild` puts a component into a container's child list, and `Node.nodeToUI` produces a bare `UI` where one is expected. Both need `scala.language.implicitConversions` in scope.
 
 The consequence you feel is that uic components and raw kyo elements are the same kind of thing at a call site. A `uic.Button` sits inside a `div` next to a `span`, and a `p` sits inside a `uic.Card` next to another component.
 
@@ -100,7 +100,7 @@ val deleteButton: uic.Button =
         .size(uic.Size.Small)
 ```
 
-The builder is a `case class` with `copy`-based setters, so it is immutable and shareable: build a base once and specialize it in several places without any risk of one call mutating another's configuration.
+The builder is immutable, each setter hands back a new one, so it is shareable: build a base once and specialize it in several places without any risk of one call mutating another's configuration.
 
 ```scala
 val base: uic.Button      = uic.Button().severity(uic.Severity.Secondary).size(uic.Size.Small)

@@ -50,12 +50,20 @@ object Theme:
         def attr: String = toString.toLowerCase
     end Preset
 
-    /** Your own palette: its `name` (the `data-theme` value) and the [[sheet]] that declares
+    /** Your own palette: its name, the `data-theme` value [[attr]] answers, and the [[sheet]] that declares
       * its tokens under that name, made by [[brand]]. The two travel together, so the name an
       * element is themed with is always one a sheet was made for. Emit `sheet` AFTER [[css]].
       */
-    final case class Brand private[uic] (name: String, sheet: Stylesheet) extends Palette derives CanEqual:
-        def attr: String = name
+    final class Brand private[uic] (private[uic] val s: Brand.State) extends Palette, Stated derives CanEqual:
+        def attr: String = s.name
+
+        /** What declares this palette's tokens, to emit AFTER [[css]]. */
+        def sheet: Stylesheet = s.sheet
+    end Brand
+
+    object Brand:
+        final private[uic] case class State(name: String, sheet: Stylesheet)
+    end Brand
 
     /** The color scheme a preset's tokens resolve in, selected on the page with
       * [[themed]] (`data-scheme`). The two compose: dark is a set of overrides layered onto
@@ -255,7 +263,7 @@ object Theme:
         val sheet     =
             if darkPairs.isEmpty then base
             else base.scopedVars(scope.and(Selector.data("scheme", Scheme.Dark.attr)), darkPairs*)
-        Brand(name, sheet)
+        new Brand(Brand.State(name, sheet))
     end brand
 
     /** Prime sets no font-family of its own; the showcase look is Inter, with a system

@@ -67,20 +67,9 @@ end DrawerPosition
   * backdrops to the drawer box. Non-modal mode (`modal(false)`, mask-less) is
   * deferred too: the mask always renders.
   */
-final case class Drawer private (
-    openSlot: Slot[Boolean] = Slot(),
-    positionV: DrawerPosition = DrawerPosition.Left,
-    headerText: Maybe[TextValue] = Absent,
-    headerContent: Maybe[UI] = Absent,
-    footerV: Maybe[UI] = Absent,
-    dismissableFlag: Boolean = true,
-    showCloseIconFlag: Boolean = true,
-    preventInitialFocusFlag: Boolean = false,
-    preventFocusRestoreFlag: Boolean = false,
-    accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent,
-    kids: List[UI] = Nil
-) extends Node, HasAccessibleNameRef:
+final class Drawer private[uic] (private[uic] val s: Drawer.State) extends Node, HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = Drawer
 
     /** Binds visibility. A `SignalRef` binds two way: writes open and close the drawer, and every close the reader
@@ -89,57 +78,57 @@ final case class Drawer private (
       * reachable and inert. Unbound, the drawer keeps the state itself and starts open, so it shows until the reader
       * closes it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Drawer = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): Drawer = new Drawer(s.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Drawer = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Drawer = new Drawer(s.copy(openSlot = openSlot.hear(f)))
 
     /** Which edge the panel docks to (default [[DrawerPosition.Left]], as in Prime). */
-    def position(v: DrawerPosition): Drawer = copy(positionV = v)
+    def position(v: DrawerPosition): Drawer = new Drawer(s.copy(positionV = v))
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(v: String | Signal[String]): Drawer = copy(headerText = Present(ReactiveValue(v)))
+    def header(v: String | Signal[String]): Drawer = new Drawer(s.copy(headerText = Present(ReactiveValue(v))))
 
     /** Arbitrary header content replacing the default title (the close button is
       * still composed after it).
       */
-    def header(content: UI): Drawer = copy(headerContent = Present(content))
+    def header(content: UI): Drawer = new Drawer(s.copy(headerContent = Present(content)))
 
     /** Footer slot: Prime's `div.p-drawer-footer`. */
-    def footer(v: UI): Drawer = copy(footerV = Present(v))
+    def footer(v: UI): Drawer = new Drawer(s.copy(footerV = Present(v)))
 
     /** Whether clicking the mask closes the drawer (default true, Prime's
       * `dismissable`).
       */
-    def dismissable(v: Boolean): Drawer = copy(dismissableFlag = v)
+    def dismissable(v: Boolean): Drawer = new Drawer(s.copy(dismissableFlag = v))
 
     /** Whether the header renders the icon-only close button (default true). */
-    def showCloseIcon(v: Boolean): Drawer = copy(showCloseIconFlag = v)
+    def showCloseIcon(v: Boolean): Drawer = new Drawer(s.copy(showCloseIconFlag = v))
 
     /** Suppresses the panel's automatic focus seeding on open (omits
       * `data-kyo-focus-auto`). Escape then needs focus inside the drawer first.
       */
-    def preventInitialFocus(v: Boolean): Drawer = copy(preventInitialFocusFlag = v)
+    def preventInitialFocus(v: Boolean): Drawer = new Drawer(s.copy(preventInitialFocusFlag = v))
 
     /** Suppresses the focus return to the opener after close (omits
       * `data-kyo-focus-restore`).
       */
-    def preventFocusRestore(v: Boolean): Drawer = copy(preventFocusRestoreFlag = v)
+    def preventFocusRestore(v: Boolean): Drawer = new Drawer(s.copy(preventFocusRestoreFlag = v))
 
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Drawer = copy(accessibleNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): Drawer = copy(accessibleNameRefV = v)
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Drawer(s.copy(accessV = v))
 
     /** Adds content children. */
-    def apply(cs: UI*): Drawer = copy(kids = kids ++ cs)
+    def apply(cs: UI*): Drawer = new Drawer(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         // Unbound, the drawer keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so
         // the static page does not call its close button fixed.
-        Slot.draw(openSlot, Drawer.openName, start = true)(s => copy(openSlot = s).drawn)
+        Slot.draw(openSlot, Drawer.openName, start = true)(s => new Drawer(this.s.copy(openSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         openSlot.binding match
@@ -203,14 +192,14 @@ final case class Drawer private (
                 if !preventFocusRestoreFlag then box = box.focusRestore(true)
                 // A text header names the drawer when the caller gave it no name, as in Dialog.
                 val headerName: Maybe[TextValue] =
-                    if accessibleNameRefV.isDefined || headerContent.isDefined then Absent else headerText
-                val name: Maybe[TextValue] = accessibleNameV.orElse(headerName)
+                    if accessV.nameRefV.isDefined || headerContent.isDefined then Absent else headerText
+                val name: Maybe[TextValue] = accessV.nameV.orElse(headerName)
                 name match
                     case Present(TextValue.Const(n)) => box = box.aria("label", n)
                     case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
                     case Absent                      => ()
                 end match
-                accessibleNameRefV.foreach(n => box = box.aria("labelledby", n))
+                accessV.nameRefV.foreach(n => box = box.aria("labelledby", n))
                 if !fixed then
                     box = box.onKeyDown { e =>
                         e.key match
@@ -242,7 +231,21 @@ final case class Drawer private (
 end Drawer
 
 object Drawer:
-    def apply(): Drawer = new Drawer()
+    final private[uic] case class State(
+        openSlot: Slot[Boolean] = Slot(),
+        positionV: DrawerPosition = DrawerPosition.Left,
+        headerText: Maybe[TextValue] = Absent,
+        headerContent: Maybe[UI] = Absent,
+        footerV: Maybe[UI] = Absent,
+        dismissableFlag: Boolean = true,
+        showCloseIconFlag: Boolean = true,
+        preventInitialFocusFlag: Boolean = false,
+        preventFocusRestoreFlag: Boolean = false,
+        accessV: Accessibility = Accessibility.none,
+        kids: List[UI] = Nil
+    )
+
+    def apply(): Drawer = new Drawer(State())
 
     private val openName = Slot.Name("Drawer", "the visibility", "a close", "onOpenChange")
 end Drawer

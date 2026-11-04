@@ -54,62 +54,27 @@ enum MultiSelectDisplay derives CanEqual:
   * `id` lands on the field root, the combobox that holds the tab stop, and the panel derives `$id-list` and
   * `$id-option-<n>` from it (a minted base stands in where none is given).
   */
-final case class MultiSelect[A] private (
-    // The rows the body draws, resolved from `optionSources` by the region that draws them.
-    optionsV: List[OptionItem[A]],
-    labelF: A => String,
-    keyF: Maybe[A => String] = Absent,
-    optionDisabledF: Maybe[A => Boolean] = Absent,
-    choice: Maybe[MultiChoice[A]] = Absent,
-    openSlot: Slot[Boolean] = Slot(),
-    placeholderV: Maybe[TextValue] = Absent,
-    displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
-    maxSelectedLabelsV: Maybe[Int] = Absent,
-    selectedItemsLabelV: Maybe[TextValue] = Absent,
-    filterableV: Maybe[BoolValue] = Absent,
-    filterF: Maybe[(A, String) => Boolean] = Absent,
-    filterQuerySlot: Slot[String] = Slot(),
-    showToggleAllFlag: Boolean = true,
-    highlightOnSelectFlag: Boolean = false,
-    showClearFlag: Boolean = false,
-    emptyContentV: Maybe[EmptyContent] = Absent,
-    disabledFlag: Boolean = false,
-    nameV: Maybe[String] = Absent,
-    tooltipV: Maybe[TextValue] = Absent,
-    sizeV: Size = Size.Normal,
-    variantV: FieldVariant = FieldVariant.Outlined,
-    fluidFlag: Boolean = false,
-    invalidV: Maybe[BoolValue] = Absent,
-    invalidMsgV: Maybe[String] = Absent,
-    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Set[A] => UI.Action] = Absent,
-    idV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[A] => UI.Action] = Absent,
-    loadingV: Maybe[BoolValue] = Absent,
-    optionSources: List[OptionSource[A]] = Nil
-) extends Node, MultiChoiceFormControl[A], HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
+final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A]) extends Node, MultiChoiceFormControl[A], HasEmptyContent,
+      HasTooltip, HasPlaceholder, HasAccessibleNameRef, Stated:
+    import s.*
+
     type Self = MultiSelect[A]
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): MultiSelect[A] = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new MultiSelect(s.copy(accessV = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a list that changes
       * while the field is shown (read in the field's own region, so the field is not built again around it).
       */
     def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): MultiSelect[A] =
-        copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label)
+        new MultiSelect(s.copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label))
 
     /** Convenience for plain string options (label = identity), a collection or a signal. */
     def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): MultiSelect[A] =
-        copy(
+        new MultiSelect(s.copy(
             optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
             labelF = a => ev.flip(a)
-        )
+        ))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their options
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -121,17 +86,17 @@ final case class MultiSelect[A] private (
       * whole panel.
       */
     def optionGroups(is: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]])(label: A => String): MultiSelect[A] =
-        copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label)
+        new MultiSelect(s.copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label))
 
     /** Stable per-option key: the value written into the bound set (defaults to
       * the label projection).
       */
-    def optionKey(f: A => String): MultiSelect[A] = copy(keyF = Present(f))
+    def optionKey(f: A => String): MultiSelect[A] = new MultiSelect(s.copy(keyF = Present(f)))
 
     /** Renders matching options disabled (`.p-disabled` rows, shown in the panel
       * but not pickable; the keyboard highlight and select-all skip them).
       */
-    def optionDisabled(f: A => Boolean): MultiSelect[A] = copy(optionDisabledF = Present(f))
+    def optionDisabled(f: A => Boolean): MultiSelect[A] = new MultiSelect(s.copy(optionDisabledF = Present(f)))
 
     /** The set of chosen options. A `SignalRef` binds two way: toggles write the options that carry the chosen
       * [[optionKey]]s, ref changes reselect the rows whose keys its members carry. A plain `Signal` or a constant binds
@@ -140,12 +105,13 @@ final case class MultiSelect[A] private (
       * others toggle, and the trigger shows it from the value itself.
       */
     @targetName("selectionSet")
-    def selection(v: Set[A] | Signal[Set[A]]): MultiSelect[A] = copy(choice = Present(MultiChoice(ReactiveValue[Set[A]](v))))
+    def selection(v: Set[A] | Signal[Set[A]]): MultiSelect[A] =
+        new MultiSelect(s.copy(choice = Present(MultiChoice(ReactiveValue[Set[A]](v)))))
 
     /** Says the options are still arriving: the dropdown icon turns into Prime's spinner, and a held option no row carries
       * yet is shown from the value itself rather than reported in a `.p-uic-diagnostic` card.
       */
-    def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(loadingV = Present(ReactiveValue(v)))
+    def loading(v: Boolean | Signal[Boolean]): MultiSelect[A] = new MultiSelect(s.copy(loadingV = Present(ReactiveValue(v))))
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
       * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
@@ -155,10 +121,10 @@ final case class MultiSelect[A] private (
       * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
       * signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(openSlot = openSlot.bind(v))
+    def open(v: Boolean | Signal[Boolean]): MultiSelect[A] = new MultiSelect(s.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = copy(openSlot = openSlot.hear(f))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): MultiSelect[A] = new MultiSelect(s.copy(openSlot = openSlot.hear(f)))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
     private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
@@ -169,23 +135,24 @@ final case class MultiSelect[A] private (
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = copy(placeholderV = v)
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(s.copy(placeholderV = v))
 
     /** Trigger selection rendering: comma-joined text (default) or removable
       * chips (`.p-multiselect-display-chip`).
       */
-    def display(v: MultiSelectDisplay): MultiSelect[A] = copy(displayV = v)
+    def display(v: MultiSelectDisplay): MultiSelect[A] = new MultiSelect(s.copy(displayV = v))
 
     /** Beyond `n` selected options the trigger shows the [[selectedItemsLabel]]
       * summary instead of the joined labels/chips (Prime's `maxSelectedLabels`).
       */
-    def maxSelectedLabels(n: Int): MultiSelect[A] = copy(maxSelectedLabelsV = Present(n))
+    def maxSelectedLabels(n: Int): MultiSelect[A] = new MultiSelect(s.copy(maxSelectedLabelsV = Present(n)))
 
     /** Summary template used beyond [[maxSelectedLabels]]: `{0}` is replaced by the selection count
       * (default "{0} items selected", Prime's locale default). A `Signal[String]` re-renders the summary in
       * place on emission, and the emitted string is still a `{0}` template interpolated with the count.
       */
-    def selectedItemsLabel(v: String | Signal[String]): MultiSelect[A] = copy(selectedItemsLabelV = Present(ReactiveValue(v)))
+    def selectedItemsLabel(v: String | Signal[String]): MultiSelect[A] =
+        new MultiSelect(s.copy(selectedItemsLabelV = Present(ReactiveValue(v))))
 
     /** Switches Prime's header filter (an IconField `.p-multiselect-filter-container` with the
       * `input.p-multiselect-filter`), over a query the control allocates itself unless [[filterQuery]] hands it one;
@@ -198,79 +165,76 @@ final case class MultiSelect[A] private (
       * open and only the filter input comes and goes. Same word and same meaning on [[Select.filterable]] and
       * [[Listbox.filterable]].
       */
-    def filterable(v: Boolean | Signal[Boolean]): MultiSelect[A] = copy(filterableV = Present(ReactiveValue(v)))
+    def filterable(v: Boolean | Signal[Boolean]): MultiSelect[A] = new MultiSelect(s.copy(filterableV = Present(ReactiveValue(v))))
 
     /** How an option matches the query typed into the header filter, as `(option, query) => Boolean` with the query
       * as typed. [[Filter]] holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` finds an option by
       * either text. Without it the match is a case-insensitive contains on the label projection. Setting it turns the
       * header filter on unless [[filterable]] says otherwise.
       */
-    def filter(f: (A, String) => Boolean): MultiSelect[A] = copy(filterF = Present(f))
+    def filter(f: (A, String) => Boolean): MultiSelect[A] = new MultiSelect(s.copy(filterF = Present(f)))
 
     /** Renders the same header filter over a query the APP holds, as [[Select.filterQuery]] does: a `SignalRef` is written
       * by typing, a plain `Signal` filters the panel and typing is only reported and painted back, a constant is the
       * starting text. Turns the header filter on unless [[filterable]] says otherwise.
       */
-    def filterQuery(v: String | Signal[String]): MultiSelect[A] = copy(filterQuerySlot = filterQuerySlot.bind(v))
+    def filterQuery(v: String | Signal[String]): MultiSelect[A] = new MultiSelect(s.copy(filterQuerySlot = filterQuerySlot.bind(v)))
 
     /** Fired with the query the reader types, and with the empty query a new open starts from. */
-    def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] = copy(filterQuerySlot = filterQuerySlot.hear(f))
+    def onFilterQueryChange(f: String => UI.Action)(using Frame): MultiSelect[A] =
+        new MultiSelect(s.copy(filterQuerySlot = filterQuerySlot.hear(f)))
 
     /** Whether the header renders the select-all checkbox (default true,
       * Prime's `showToggleAll`).
       */
-    def showToggleAll(v: Boolean): MultiSelect[A] = copy(showToggleAllFlag = v)
+    def showToggleAll(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(showToggleAllFlag = v))
 
     /** Whether selected rows ALSO get Prime's highlighted row skin
       * (`.p-multiselect-option-selected`). Default false, PrimeVue's default:
       * the checked box alone marks a selected row.
       */
-    def highlightOnSelect(v: Boolean): MultiSelect[A] = copy(highlightOnSelectFlag = v)
+    def highlightOnSelect(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(highlightOnSelectFlag = v))
 
     /** Renders the clear affordance on the trigger while the selection is
       * non-empty; it clears the bound set and fires `onChange(Set.empty)`.
       */
-    def showClear(v: Boolean): MultiSelect[A] = copy(showClearFlag = v)
+    def showClear(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(showClearFlag = v))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): MultiSelect[A] = copy(emptyContentV = v)
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): MultiSelect[A] = new MultiSelect(s.copy(emptyContentV = v))
 
-    def disabled(v: Boolean): MultiSelect[A] = copy(disabledFlag = v)
+    def disabled(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(disabledFlag = v))
 
     /** HTML form participation: emits a hidden `<input name=...>` carrying the
       * comma-joined selected keys (the div trigger has no native form value).
       */
-    def name(v: String): MultiSelect[A] = copy(nameV = Present(v))
+    def name(v: String): MultiSelect[A] = new MultiSelect(s.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): MultiSelect[A] = copy(tooltipV = v)
+    private[uic] def withTooltip(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(s.copy(tooltipV = v))
 
     /** Size: `.p-multiselect-sm` / default / `.p-multiselect-lg`. */
-    def size(v: Size): MultiSelect[A] = copy(sizeV = v)
+    def size(v: Size): MultiSelect[A] = new MultiSelect(s.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): MultiSelect[A] = copy(variantV = v)
+    def variant(v: FieldVariant): MultiSelect[A] = new MultiSelect(s.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
-    def fluid(v: Boolean): MultiSelect[A] = copy(fluidFlag = v)
+    def fluid(v: Boolean): MultiSelect[A] = new MultiSelect(s.copy(fluidFlag = v))
 
-    private[uic] def withInvalid(v: Maybe[BoolValue]): MultiSelect[A]                       = copy(invalidV = v)
-    private[uic] def withInvalidMessage(v: Maybe[String]): MultiSelect[A]                   = copy(invalidMsgV = v)
-    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): MultiSelect[A] = copy(invalidMsgDynV = v)
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelect[A] = copy(accNameV = v)
-    private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelect[A] = copy(accNameRefV = v)
+    private[uic] def validitySlots: FieldValidity.Slots         = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new MultiSelect(s.copy(validityV = v))
 
     /** Fired with the FULL set of options now held after every selection change (toggle,
       * select-all, chip remove, clear). A gesture that changes nothing fires nothing.
       */
     @targetName("onChangeSet")
-    def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = copy(onChangeF = Present(Callback.of(f)))
+    def onChange(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = new MultiSelect(s.copy(onChangeF = Present(Callback.of(f))))
 
     /** Fires on focus loss (native `blur`) with the current selection; unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
     @targetName("onBlurSet")
-    def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = copy(onBlurF = Present(Callback.of(f)))
+    def onBlur(f: Set[A] => UI.Action)(using Frame): MultiSelect[A] = new MultiSelect(s.copy(onBlurF = Present(Callback.of(f))))
 
     /** Every selectable option in render order, groups flattened away. The value
       * binding, the key-collision check, select-all and the keyboard all work on
@@ -317,7 +281,7 @@ final case class MultiSelect[A] private (
     end freshQuery
 
     /** The wired interaction state, allocated per mount. */
-    final private case class State(
+    final private case class Wired(
         open: Slot[Boolean],
         isOpen: Boolean,
         hi: SignalRef[Int],
@@ -346,15 +310,15 @@ final case class MultiSelect[A] private (
         // The interaction state (open/highlight/filter) lives in signals allocated
         // by this effectful mount; static projections render the same closed
         // anatomy inert (the Select precedent).
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
             val (held, ld, ph) = s
-            copy(optionsV = opts).bodyStatic(held, Absent, ph, ld, validity)
+            new MultiSelect(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
         }
         UI.mounted {
             for
                 cmds <- UI.commands
-                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -365,8 +329,8 @@ final case class MultiSelect[A] private (
                 own <-
                     if choice.isEmpty then Signal.initRef(Set.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
-                self = own.fold(this)(r => copy(choice = Present(MultiChoice(ReactiveValue(r)))))
-            yield self.copy(openSlot = open).wiredOver(hi, q, Present(base))
+                self = own.fold(this)(r => new MultiSelect(s.copy(choice = Present(MultiChoice(ReactiveValue(r))))))
+            yield new MultiSelect(self.s.copy(openSlot = open)).wiredOver(hi, q, Present(base))
         }.placeholder(stat)
     end renderLive
 
@@ -379,7 +343,7 @@ final case class MultiSelect[A] private (
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
     ): UI =
-        copy(openSlot = openSlot.bind(open)).wiredOver(hi, filterQuerySlot.bind(q), base)
+        new MultiSelect(s.copy(openSlot = openSlot.bind(open))).wiredOver(hi, filterQuerySlot.bind(q), base)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
@@ -388,11 +352,11 @@ final case class MultiSelect[A] private (
         q: Slot[String],
         base: Maybe[String]
     )(using Frame): UI =
-        val validity = FieldValidity(invalidV, invalidMsgV, invalidMsgDynV)
+        val validity = FieldValidity(validityV)
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
-            val self = copy(optionsV = opts)
-            self.bodyStatic(held, Present(self.State(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            val self = new MultiSelect(s.copy(optionsV = opts))
+            self.bodyStatic(held, Present(self.Wired(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
         }
     end wiredOver
 
@@ -426,7 +390,7 @@ final case class MultiSelect[A] private (
 
     private def bodyStatic(
         held: Set[A],
-        st: Maybe[State],
+        st: Maybe[Wired],
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
@@ -454,14 +418,14 @@ final case class MultiSelect[A] private (
             if sel >= 0 then sel else items.indexWhere(a => !isOptionDisabled(a))
 
         // Opens with a fresh query and the highlight on the first selected option.
-        def openPanel(s: State): UI.Action =
+        def openPanel(s: Wired): UI.Action =
             for
                 _ <- freshQuery(s.q)
                 _ <- s.hi.set(openHighlight)
                 _ <- askOpen(s.open, true)
             yield ()
 
-        def toggle(s: State): UI.Action =
+        def toggle(s: Wired): UI.Action =
             if s.isOpen then askOpen(s.open, false) else openPanel(s)
 
         // === closed trigger ======================================================
@@ -547,7 +511,7 @@ final case class MultiSelect[A] private (
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label container: see
         // [[HasElementId]]. The panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
-        idV.foreach(v => el = el.id(v))
+        accessV.idV.foreach(v => el = el.id(v))
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
@@ -566,12 +530,12 @@ final case class MultiSelect[A] private (
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accNameV match
+        accessV.nameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
             case Absent                      => ()
         end match
-        accNameRefV.foreach(v => el = el.aria("labelledby", v))
+        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox follows the filter header, and follows it for the same
         // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
         // because `aria-activedescendant` is read off the focused element or off nothing at all.
@@ -637,7 +601,7 @@ final case class MultiSelect[A] private (
       * Prime's multiselect stops at the ends rather than cycling, as its select does, so `wrap` is
       * false wherever the navigable list is read.
       */
-    private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
+    private def shownState(s: Wired): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
             if s.filtering && s.qV.nonEmpty then
                 val m = matcher
@@ -670,7 +634,7 @@ final case class MultiSelect[A] private (
       * [[Overlay]] primitive: header (select-all + filter), then the checkbox
       * option rows.
       */
-    private def overlayPanel(current: Set[String], s: State, toggleOption: A => UI.Action)(using Frame): UI =
+    private def overlayPanel(current: Set[String], s: Wired, toggleOption: A => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val allSelected = isAllSelected(current, shown)
@@ -816,7 +780,7 @@ final case class MultiSelect[A] private (
         shown: Seq[A],
         navigable: List[Int],
         hiEff: Int,
-        s: State,
+        s: Wired,
         toggleOption: A => UI.Action,
         toggleAll: UI.Action
     )(
@@ -864,9 +828,42 @@ final case class MultiSelect[A] private (
 end MultiSelect
 
 object MultiSelect:
+    final private[uic] case class State[A](
+        // The rows the body draws, resolved from `optionSources` by the region that draws them.
+        optionsV: List[OptionItem[A]],
+        labelF: A => String,
+        keyF: Maybe[A => String] = Absent,
+        optionDisabledF: Maybe[A => Boolean] = Absent,
+        choice: Maybe[MultiChoice[A]] = Absent,
+        openSlot: Slot[Boolean] = Slot(),
+        placeholderV: Maybe[TextValue] = Absent,
+        displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
+        maxSelectedLabelsV: Maybe[Int] = Absent,
+        selectedItemsLabelV: Maybe[TextValue] = Absent,
+        filterableV: Maybe[BoolValue] = Absent,
+        filterF: Maybe[(A, String) => Boolean] = Absent,
+        filterQuerySlot: Slot[String] = Slot(),
+        showToggleAllFlag: Boolean = true,
+        highlightOnSelectFlag: Boolean = false,
+        showClearFlag: Boolean = false,
+        emptyContentV: Maybe[EmptyContent] = Absent,
+        disabledFlag: Boolean = false,
+        nameV: Maybe[String] = Absent,
+        tooltipV: Maybe[TextValue] = Absent,
+        sizeV: Size = Size.Normal,
+        variantV: FieldVariant = FieldVariant.Outlined,
+        fluidFlag: Boolean = false,
+        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        accessV: Accessibility = Accessibility.none,
+        onChangeF: Maybe[Set[A] => UI.Action] = Absent,
+        onBlurF: Maybe[Set[A] => UI.Action] = Absent,
+        loadingV: Maybe[BoolValue] = Absent,
+        optionSources: List[OptionSource[A]] = Nil
+    )
+
     private val openName      = Slot.Name("MultiSelect", "the panel", "an open or a close", "onOpenChange")
     private val queryName     = Slot.Name("MultiSelect", "the filter query", "the reader type", "onFilterQueryChange")
     private val selectionName = Slot.Name("MultiSelect", "the selection", "a pick", "onChange")
 
-    def apply[A](): MultiSelect[A] = new MultiSelect[A](Nil, _.toString)
+    def apply[A](): MultiSelect[A] = new MultiSelect[A](State(Nil, _.toString))
 end MultiSelect

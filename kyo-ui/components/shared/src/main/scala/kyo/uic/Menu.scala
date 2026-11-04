@@ -62,32 +62,22 @@ end MenuAccessibleRole
   *
   * Honest deferrals: no per-item templates; typeahead is not implemented.
   */
-final case class Menu private (
-    // The rows `body` draws: what a render resolved from `entriesV`, or what a host handed over through `rows`.
-    itemsV: List[MenuItem] = Nil,
-    entriesV: List[MenuItemLiveEntry] = Nil,
-    popupSlot: Slot[Boolean] = Slot(),
-    popupOwnFlag: Boolean = false,
-    idV: Maybe[String] = Absent,
-    roleV: MenuAccessibleRole = MenuAccessibleRole.Menu,
-    accessibleNameV: Maybe[TextValue] = Absent
-) extends Node, HasElementId, HasAccessibleName:
+final class Menu private[uic] (private[uic] val s: Menu.State) extends Node, HasElementId, HasAccessibleName, Stated:
+    import s.*
+
     type Self = Menu
 
     /** Appends items ([[MenuItem]] rows, `MenuItem.separator` dividers, and
       * grouped sections via nested `items`), each built directly or from `_` (see [[MenuItemScope]]), or a signal of
       * items for rows that change while the menu is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): Menu = copy(entriesV = entriesV ++ is)
+    def items(is: MenuItemLiveEntry*): Menu = new Menu(s.copy(entriesV = entriesV ++ is))
 
     /** Package-internal: rows a host has already resolved in its own region, drawn as they are. */
-    private[uic] def rows(items: List[MenuItem]): Menu = copy(itemsV = items, entriesV = items)
+    private[uic] def rows(items: List[MenuItem]): Menu = new Menu(s.copy(itemsV = items, entriesV = items))
 
-    /** Stores the element id. */
-    private[uic] def withElementId(v: Maybe[String]): Menu = copy(idV = v)
-
-    /** Reads it back. */
-    private[uic] def elementId: Maybe[String] = idV
+    private[uic] def accessibility: Accessibility              = accessV
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menu(s.copy(accessV = v))
 
     /** Popup mode: the menu renders as a floating [[Overlay]] panel (Prime's `.p-menu-overlay`) over the open state `v`. A
       * `SignalRef` binds two way: a pick, Tab, Escape and an outside click write false, then [[onPopupChange]] hears
@@ -95,17 +85,17 @@ final case class Menu private (
       * open panel stays, and nothing closes it. A signal nothing hears is reported in a card. Without `popup` the menu
       * renders inline.
       */
-    def popup(v: Boolean | Signal[Boolean]): Menu = copy(popupSlot = popupSlot.bind(v), popupOwnFlag = false)
+    def popup(v: Boolean | Signal[Boolean]): Menu = new Menu(s.copy(popupSlot = popupSlot.bind(v), popupOwnFlag = false))
 
     /** Popup mode with the open state kept by the menu itself, starting open, as an overlay nothing inside can open
       * does: the panel shows until the reader closes it. [[onPopupChange]] still hears every close.
       */
-    def popup(): Menu = copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true)
+    def popup(): Menu = new Menu(s.copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true))
 
     /** Fired with the open state the reader asks for (false for a pick, Tab, Escape and an outside click), after a
       * two-way [[popup]] is written.
       */
-    def onPopupChange(f: Boolean => UI.Action)(using Frame): Menu = copy(popupSlot = popupSlot.hear(f))
+    def onPopupChange(f: Boolean => UI.Action)(using Frame): Menu = new Menu(s.copy(popupSlot = popupSlot.hear(f)))
 
     /** Asks for the popup closed: a two-way binding is written, then the close reported. Inline, there is nothing to close. */
     private def closePopup(using Frame): UI.Action =
@@ -117,13 +107,11 @@ final case class Menu private (
     /** What the menu is to a reader: an application menu (the default) or a site's
       * navigation. See [[MenuAccessibleRole]].
       */
-    def accessibleRole(v: MenuAccessibleRole): Menu = copy(roleV = v)
-
-    private[uic] def withAccessibleName(v: Maybe[TextValue]): Menu = copy(accessibleNameV = v)
+    def accessibleRole(v: MenuAccessibleRole): Menu = new Menu(s.copy(roleV = v))
 
     /** Puts the accessible name on `el` as `aria-label`, a signal through the attribute channel. */
     private def named[E <: UI.Ast.Element { type Self = E }](el: E): E =
-        accessibleNameV match
+        accessV.nameV match
             case Present(TextValue.Const(n)) => el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el.aria("label", s)
             case Absent                      => el
@@ -133,10 +121,10 @@ final case class Menu private (
       */
     private def flatRows: List[MenuRow] =
         itemsV.flatMap { it =>
-            if it.separatorFlag then List(MenuRow.Sep)
-            else if it.itemsV.nonEmpty then
-                MenuRow.Heading(it.labelV) :: it.itemsV.map { c =>
-                    if c.separatorFlag then MenuRow.Sep else MenuRow.Item(c)
+            if it.s.separatorFlag then List(MenuRow.Sep)
+            else if it.s.itemsV.nonEmpty then
+                MenuRow.Heading(it.s.labelV) :: it.s.itemsV.map { c =>
+                    if c.s.separatorFlag then MenuRow.Sep else MenuRow.Item(c)
                 }
             else List(MenuRow.Item(it))
         }
@@ -151,18 +139,19 @@ final case class Menu private (
                 // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight. Before the
                 // mount runs the panel is drawn open from a constant signal.
                 val ownsPopup = popupSlot.binding.isEmpty && popupOwnFlag
-                val shown     = if ownsPopup then copy(popupSlot = popupSlot.standIn(true)) else this
+                val shown     = if ownsPopup then new Menu(s.copy(popupSlot = popupSlot.standIn(true))) else this
                 // The keyboard highlight lives in a signal allocated by this effectful
                 // mount; static projections (SSG, the SSR page HTML) render the same
                 // anatomy inert until the client transport attaches.
-                val stat: UI = MenuRender.readItems(entriesV).render(items => shown.copy(itemsV = items).body(-1, Absent, idV))
+                val stat: UI =
+                    MenuRender.readItems(entriesV).render(items => new Menu(shown.s.copy(itemsV = items)).body(-1, Absent, accessV.idV))
                 UI.mounted {
                     for
                         cmds  <- UI.commands
                         base  <- cmds.freshId
                         hi    <- Anchored.init(-1)
                         popup <- if ownsPopup then popupSlot.owned(true) else Kyo.lift(popupSlot)
-                    yield copy(popupSlot = popup).wired(hi, base)
+                    yield new Menu(s.copy(popupSlot = popup)).wired(hi, base)
                 }.placeholder(stat)
         Diagnostics.before(menu)("Menu")(Diagnostic.unheard(popupSlot, Menu.popupName))
     end render
@@ -173,14 +162,16 @@ final case class Menu private (
       */
     private def navigation(using Frame): UI =
         // `popup()` with no mount to allocate in: the open state is kept by a mount of its own.
-        Slot.owning(popupSlot, start = true, on = ReactiveValue.Const(popupOwnFlag))(s => copy(popupSlot = s).navigationOver)(
-            copy(popupSlot = popupSlot.standIn(true)).navigationOver
+        Slot.owning(popupSlot, start = true, on = ReactiveValue.Const(popupOwnFlag))(s =>
+            new Menu(this.s.copy(popupSlot = s)).navigationOver
+        )(
+            new Menu(s.copy(popupSlot = popupSlot.standIn(true))).navigationOver
         )
     end navigation
 
     private def navigationOver(using Frame): UI =
         MenuRender.readItems(entriesV).render { items =>
-            val rowUIs: List[UI] = copy(itemsV = items).flatRows.map {
+            val rowUIs: List[UI] = new Menu(s.copy(itemsV = items)).flatRows.map {
                 case MenuRow.Sep           => li.cssClass("p-menu-separator").role("separator")
                 case MenuRow.Heading(text) =>
                     text match
@@ -188,16 +179,16 @@ final case class Menu private (
                         case TextValue.Dyn(s)   => li.cssClass("p-menu-submenu-label")(s)
                 case MenuRow.Item(it) =>
                     var row = MenuRender.markCurrent(li.cssClass("p-menu-item"), it)
-                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled")
+                    if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled")
                     // A long nav opened on a deep link shows its top rows, and the current page can be
                     // screens further down. A constant `current` is known here, so its row asks to be
                     // scrolled in (`nearest`: a row already in view stays put). A reactive one is
                     // patched through a channel with no render, so there is no moment to ask in.
-                    if it.currentFlag.constTrue then row = row.scrollAuto(true)
+                    if it.s.currentFlag.constTrue then row = row.scrollAuto(true)
                     // Only a row with an action declares a click handler. A url row declares none,
                     // because kyo-ui prevent-defaults a click on any anchor carrying one, and the
                     // browser following the link IS what the row is for.
-                    row(MenuRender.itemContent("menu", it, it.actionV, Absent, roving = false))
+                    row(MenuRender.itemContent("menu", it, it.s.actionV, Absent, roving = false))
             }
             val list = ul.cssClass("p-menu-list")(UI.children(rowUIs)*)
             popupSlot.binding match
@@ -205,7 +196,7 @@ final case class Menu private (
                     // The links are the stops, so focus goes to the list only to bring the reader
                     // into the panel, and Tab walks on from there.
                     var panelList = named(list.tabIndex(-1).focusAuto(true).focusRestore(true))
-                    idV.foreach(v => panelList = panelList.id(v))
+                    accessV.idV.foreach(v => panelList = panelList.id(v))
                     popupOverlay
                         .matchWidth(false)
                         .animate(false)
@@ -216,7 +207,7 @@ final case class Menu private (
                         .render
                 case Absent =>
                     var root = named(nav.cssClass("p-menu").cssClass("p-component"))
-                    idV.foreach(v => root = root.id(v))
+                    accessV.idV.foreach(v => root = root.id(v))
                     root(list)
             end match
         }
@@ -231,9 +222,9 @@ final case class Menu private (
       * is the whole of what a screen reader hears about the highlighted row, and a menu that had
       * to be given an id to say it said nothing in most of the pages that use one.
       *
-      * The minted base is passed DOWN rather than written into `idV`, so the two questions stay
-      * apart: `idV` is "the id the caller asked for", which lands on the element, and the base is
-      * "what internal parts derive from", which may be machine-made. Writing the mint into `idV`
+      * The minted base is passed DOWN rather than written into `accessV.idV`, so the two questions stay
+      * apart: `accessV.idV` is "the id the caller asked for", which lands on the element, and the base is
+      * "what internal parts derive from", which may be machine-made. Writing the mint into `accessV.idV`
       * (as this did) makes them one value, and then either the caller's id never reaches the DOM
       * or a machine name does. Same split `AutoComplete` makes at its own mount.
       */
@@ -252,7 +243,7 @@ final case class Menu private (
                 // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
                 MenuRender.readRooted(entriesV).and(hi.reading).and(popup).render { case ((Rooted(roots, items), h), shown) =>
                     val hv = hi.view(h, roots)(using Menu.rowRebase)
-                    copy(itemsV = items).body(hv.value, Present(hv), Present(idV.getOrElse(base)), shown)
+                    new Menu(s.copy(itemsV = items)).body(hv.value, Present(hv), Present(accessV.idV.getOrElse(base)), shown)
                 }
     end wired
 
@@ -261,10 +252,10 @@ final case class Menu private (
       * its own. `SplitButton` hosts its menu this way.
       */
     private[uic] def hosted(h: Int, hi: Anchored.View[Int], base: String, shown: Boolean)(using Frame): UI =
-        body(h, Present(hi), Present(idV.getOrElse(base)), Present(shown))
+        body(h, Present(hi), Present(accessV.idV.getOrElse(base)), Present(shown))
 
     /** @param partBase what internal parts derive from (`s"$partBase-active"`): the caller's id
-      *                 when there is one, else the id the mount minted. Distinct from `idV`,
+      *                 when there is one, else the id the mount minted. Distinct from `accessV.idV`,
       *                 which is only ever the caller's and is what lands on the element.
       */
     private def body(h: Int, hiRef: Maybe[Anchored.View[Int]], partBase: Maybe[String], popupShown: Maybe[Boolean] = Absent)(using
@@ -273,7 +264,7 @@ final case class Menu private (
         val rows = flatRows
         // Positions (into `rows`) of the keyboard-navigable rows.
         val navigable: List[Int] = rows.zipWithIndex.collect {
-            case (MenuRow.Item(it), i) if !it.disabledFlag.constTrue => i
+            case (MenuRow.Item(it), i) if !it.s.disabledFlag.constTrue => i
         }
         // `h` is a ROW position, the same coordinate [[ListNav]] navigates in, so a row that
         // went disabled under a live update simply stops being the highlighted one.
@@ -283,7 +274,7 @@ final case class Menu private (
             hiRef match
                 case Present(hi) =>
                     for
-                        _ <- it.actionV match
+                        _ <- it.s.actionV match
                             case Present(eff) => eff
                             case Absent       => (): UI.Action
                         _ <- closePopup
@@ -324,12 +315,12 @@ final case class Menu private (
                 // stripped exactly that away, leaving a menu whose every child claimed to be
                 // nothing. The link inside stays roleless, the way Prime renders it.
                 var row = MenuRender.markCurrent(li.cssClass("p-menu-item").role("menuitem"), it)
-                if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(base => row = row.id(s"$base-active"))
                 val act: Maybe[UI.Action] =
-                    if hiRef.isDefined && !it.disabledFlag.constTrue then Present(activate(it)) else Absent
+                    if hiRef.isDefined && !it.s.disabledFlag.constTrue then Present(activate(it)) else Absent
                 row(MenuRender.itemContent("menu", it, act, Absent, roving = true))
         }
 
@@ -340,7 +331,7 @@ final case class Menu private (
         // root is the overlay's panel, which the menu does not own, so it lands on the
         // `ul[role=menu]`, the element that IS the menu to a reader. Either way `#<id>` exists
         // and contains the rows, which is what a page addressing a menu by name is reaching for.
-        if popupSlot.binding.isDefined then idV.foreach(v => list = list.id(v))
+        if popupSlot.binding.isDefined then accessV.idV.foreach(v => list = list.id(v))
         popupSlot.binding match
             case Present(_) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -394,7 +385,7 @@ final case class Menu private (
                     list = list.preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
                     hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
                 var root = div.cssClass("p-menu").cssClass("p-component")
-                idV.foreach(v => root = root.id(v))
+                accessV.idV.foreach(v => root = root.id(v))
                 root(list(UI.children(rowUIs)*))
         end match
     end body
@@ -410,8 +401,18 @@ private[uic] enum MenuRow derives CanEqual:
 end MenuRow
 
 object Menu:
+    final private[uic] case class State(
+        // The rows `body` draws: what a render resolved from `entriesV`, or what a host handed over through `rows`.
+        itemsV: List[MenuItem] = Nil,
+        entriesV: List[MenuItemLiveEntry] = Nil,
+        popupSlot: Slot[Boolean] = Slot(),
+        popupOwnFlag: Boolean = false,
+        accessV: Accessibility = Accessibility.none,
+        roleV: MenuAccessibleRole = MenuAccessibleRole.Menu
+    )
+
     /** An empty menu; add rows via [[Menu.items]]. */
-    def apply(): Menu = new Menu()
+    def apply(): Menu = new Menu(State())
 
     private val popupName = Slot.Name("Menu", "the popup", "a close", "onPopupChange")
 
@@ -422,8 +423,8 @@ object Menu:
       */
     private[uic] val rowRebase: Anchored.Rebase[Int] = (h, from, to) =>
         def span(root: AnyRef): Int = root match
-            case it: MenuItem if !it.separatorFlag && it.itemsV.nonEmpty => 1 + it.itemsV.size
-            case _                                                       => 1
+            case it: MenuItem if !it.s.separatorFlag && it.s.itemsV.nonEmpty => 1 + it.s.itemsV.size
+            case _                                                           => 1
         @scala.annotation.tailrec
         def locate(roots: List[AnyRef], i: Int, start: Int): Maybe[(Int, Int)] =
             roots match
