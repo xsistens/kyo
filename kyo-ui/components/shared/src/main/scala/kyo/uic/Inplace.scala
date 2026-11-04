@@ -16,40 +16,36 @@ import kyo.UI.*
   * Prime's open guard). [[onActiveChange]] hears the reader ask for either side
   * (external ref writes fire nothing).
   */
-final case class Inplace private (
-    displayV: Maybe[UI] = Absent,
-    contentV: Maybe[UI] = Absent,
-    activeSlot: Slot[Boolean] = Slot(),
-    closableFlag: Boolean = false,
-    disabledFlag: Boolean = false
-) extends Node:
+final class Inplace private[uic] (private[uic] val s: Inplace.State) extends Node, Stated:
+    import s.*
+
     type Self = Inplace
 
     /** The inactive side (`.p-inplace-display`); clicking it activates the content. */
-    def display(u: UI): Inplace = copy(displayV = Present(u))
+    def display(u: UI): Inplace = new Inplace(s.copy(displayV = Present(u)))
 
     /** The active side (`.p-inplace-content`), shown while the ref is true. */
-    def content(u: UI): Inplace = copy(contentV = Present(u))
+    def content(u: UI): Inplace = new Inplace(s.copy(contentV = Present(u)))
 
     /** Binds which side shows. A `SignalRef` binds two way: activating the display writes true and the close button
       * false, then [[onActiveChange]] hears it. A plain `Signal` binds one way: the inplace follows it and only reports.
       * A constant nobody hears is fixed: the side it names stays, reachable and inert. Unbound, the inplace keeps the
       * state itself, starting on the display side. A signal nothing hears is reported in a card.
       */
-    def active(v: Boolean | Signal[Boolean]): Inplace = copy(activeSlot = activeSlot.bind(v))
+    def active(v: Boolean | Signal[Boolean]): Inplace = new Inplace(s.copy(activeSlot = activeSlot.bind(v)))
 
     /** Fired with the side the reader asks for (true for the content, false for the display), after a two-way
       * [[active]] is written. One channel for both ways, since an open and a close are never both.
       */
-    def onActiveChange(f: Boolean => UI.Action)(using Frame): Inplace = copy(activeSlot = activeSlot.hear(f))
+    def onActiveChange(f: Boolean => UI.Action)(using Frame): Inplace = new Inplace(s.copy(activeSlot = activeSlot.hear(f)))
 
     /** Appends a close button to the content that deactivates (sets the ref false). */
-    def closable(v: Boolean): Inplace = copy(closableFlag = v)
+    def closable(v: Boolean): Inplace = new Inplace(s.copy(closableFlag = v))
 
     /** Renders the display side inert: `.p-disabled` look, no activation (Prime's
       * `disabled` open guard; the content side is unaffected).
       */
-    def disabled(v: Boolean): Inplace = copy(disabledFlag = v)
+    def disabled(v: Boolean): Inplace = new Inplace(s.copy(disabledFlag = v))
 
     private def displaySide(using Frame): UI =
         var d = div.cssClass("p-inplace-display").role("button").tabIndex(0)
@@ -86,7 +82,7 @@ final case class Inplace private (
     private[uic] def render(using Frame): UI =
         // Unbound, the inplace keeps the side itself, starting on the display. Before the mount runs it draws the display from a
         // stand-in, so the static page does not call it fixed.
-        Slot.draw(activeSlot, Inplace.activeName, start = false)(s => copy(activeSlot = s).drawn)
+        Slot.draw(activeSlot, Inplace.activeName, start = false)(s => new Inplace(this.s.copy(activeSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         div.cssClass("p-inplace").cssClass("p-component").aria("live", "polite")(
@@ -95,7 +91,15 @@ final case class Inplace private (
 end Inplace
 
 object Inplace:
-    def apply(): Inplace = new Inplace()
+    final private[uic] case class State(
+        displayV: Maybe[UI] = Absent,
+        contentV: Maybe[UI] = Absent,
+        activeSlot: Slot[Boolean] = Slot(),
+        closableFlag: Boolean = false,
+        disabledFlag: Boolean = false
+    )
+
+    def apply(): Inplace = new Inplace(State())
 
     private val activeName = Slot.Name("Inplace", "the active side", "the other side", "onActiveChange")
 end Inplace
