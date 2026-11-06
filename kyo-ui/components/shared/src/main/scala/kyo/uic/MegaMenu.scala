@@ -148,18 +148,13 @@ final class MegaMenu private[uic] (private[uic] val s: MegaMenu.State) extends N
     private[uic] def withAccessibility(v: Accessibility): Self = new MegaMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
-        val stat: UI =
-            MegaMenuItemScope.reading(entriesV).render(items =>
-                new MegaMenu(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
-            )
         UI.mounted {
             for
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
-                cmds  <- UI.commands
-                base  <- cmds.freshId
+                base  <- UI.id
             yield wired(subs, focus, base)
-        }.placeholder(stat)
+        }
     end render
 
     /** The subscription tree the mount publishes (golden-test seam).

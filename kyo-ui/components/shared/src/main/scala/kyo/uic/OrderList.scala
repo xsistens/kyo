@@ -98,20 +98,17 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
 
     /** One mount for the state the list roves: the highlight, and the id it announces it through.
       * Minted OUTSIDE the region, since a mount inside a subscribed region re-runs on every
-      * emission and would hand out a new highlight per keystroke. The static projection renders
-      * through the placeholder: the list is already its one tab stop there, with no highlight
-      * on it yet.
+      * emission and would hand out a new highlight per keystroke.
       */
     private[uic] def render(using Frame): UI =
         UI.mounted {
             for
-                cmds <- UI.commands
-                id   <- cmds.freshId
-                hi   <- Signal.initRef(-1)
+                id <- UI.id
+                hi <- Signal.initRef(-1)
                 // Unbound, the list keeps the rows the reader picks itself.
                 sel <- selectedSlot.owned(Set.empty[A])
             yield new OrderList(s.copy(selectedSlot = sel)).wired(Present(ListReorder.Cursor(hi, id)))
-        }.placeholder(wired(Absent))
+        }
 
     /** The tree the mount publishes: the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.

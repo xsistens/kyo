@@ -94,6 +94,7 @@ class FieldValidityTest extends UicTest:
                 case e: UI.Ast.Element       => Kyo.foreach(e.children)(find).map(_.flattenChunk)
                 case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(find)
                 case k: UI.Ast.KeyedChild[?] => find(k.child)
+                case d: UI.Ast.Drawn         => drawnContent(d).map(find)
                 case m: UI.Ast.Mounted       => m.placeholderUI.fold(Kyo.lift(Chunk.empty[String]))(find)
                 case _                       => Chunk.empty
             find(ui)
@@ -190,54 +191,61 @@ class FieldValidityTest extends UicTest:
         end for
     }
 
-    /** One row per control that carries the validity slots: how to build it with the slots set, and the class of its
-      * root element.
+    /** One row per control that carries the validity slots: how to build it with the slots set, the class of its root
+      * element, and the depths its code draws them at, counted in regions from the top of what it renders:
+      *   - the root: 0 where the control draws its root once, 1 where a region it reads its own state in draws the root;
+      *   - the message row: 1 where the row follows the control from outside that region, as a region beside it. 2 where it
+      *     is inside: Select, MultiSelect, CascadeSelect and TreeSelect build the row in the region that also works out their
+      *     `.p-uic-diagnostic` card, because the row has to sit between the field and that card.
       */
     private type Control = FormControl { type Self <: FormControl }
 
-    private def controls: Seq[(String, Control, String)] =
-        def row(name: String, c: Control, root: String) = (name, c, root)
+    private def controls: Seq[(String, Control, String, Int, Int)] =
+        def row(name: String, c: Control, root: String, regions: Int, rowAt: Int) = (name, c, root, regions, rowAt)
         Seq(
-            row("Input", Input(), "p-inputtext"),
-            row("TextArea", TextArea(), "p-textarea"),
-            row("InputMask", InputMask("999"), "p-inputmask"),
-            row("Password", Password(), "p-password"),
-            row("InputNumber", InputNumber(), "p-inputnumber"),
-            row("InputOtp", InputOtp(), "p-inputotp"),
-            row("AutoComplete", AutoComplete[String]().options(Seq("a")), "p-autocomplete"),
-            row("CheckBox", CheckBox("a"), "p-checkbox"),
-            row("RadioButton", RadioButton("a"), "p-radiobutton"),
-            row("ToggleSwitch", ToggleSwitch(), "p-toggleswitch"),
-            row("ToggleButton", ToggleButton(), "p-togglebutton"),
-            row("Knob", Knob(), "p-knob"),
-            row("Slider", Slider(), "p-slider"),
-            row("Rating", Rating(), "p-rating"),
-            row("ColorPicker", ColorPicker(), "p-colorpicker"),
-            row("ColorPicker inline", ColorPicker().inline(true), "p-colorpicker"),
-            row("FileUpload", FileUpload(), "p-fileupload"),
-            row("DatePicker", DatePicker[LocalDate](), "p-datepicker"),
-            row("DatePicker inline", DatePicker[LocalDate]().inline(true), "p-datepicker"),
-            row("Select", Select[String]().options(Seq("a", "b")), "p-select"),
-            row("MultiSelect", MultiSelect[String]().options(Seq("a", "b")), "p-multiselect"),
+            row("Input", Input(), "p-inputtext", 0, 1),
+            row("TextArea", TextArea(), "p-textarea", 0, 1),
+            row("InputMask", InputMask("999"), "p-inputmask", 0, 1),
+            row("Password", Password(), "p-password", 0, 1),
+            row("InputNumber", InputNumber(), "p-inputnumber", 0, 1),
+            row("InputOtp", InputOtp(), "p-inputotp", 1, 1),
+            row("AutoComplete", AutoComplete[String]().options(Seq("a")), "p-autocomplete", 1, 1),
+            row("CheckBox", CheckBox("a"), "p-checkbox", 1, 1),
+            row("RadioButton", RadioButton("a"), "p-radiobutton", 1, 1),
+            row("ToggleSwitch", ToggleSwitch(), "p-toggleswitch", 1, 1),
+            row("ToggleButton", ToggleButton(), "p-togglebutton", 1, 1),
+            row("Knob", Knob(), "p-knob", 0, 1),
+            row("Slider", Slider(), "p-slider", 1, 1),
+            row("Rating", Rating(), "p-rating", 1, 1),
+            row("ColorPicker", ColorPicker(), "p-colorpicker", 0, 1),
+            row("ColorPicker inline", ColorPicker().inline(true), "p-colorpicker", 0, 1),
+            row("FileUpload", FileUpload(), "p-fileupload", 0, 1),
+            row("DatePicker", DatePicker[LocalDate](), "p-datepicker", 0, 1),
+            row("DatePicker inline", DatePicker[LocalDate]().inline(true), "p-datepicker", 0, 1),
+            row("Select", Select[String]().options(Seq("a", "b")), "p-select", 1, 2),
+            row("MultiSelect", MultiSelect[String]().options(Seq("a", "b")), "p-multiselect", 1, 2),
             row(
                 "CascadeSelect",
                 CascadeSelect[String]().options(Seq(CascadeItem.leaf("a"), CascadeItem.leaf("b")))(identity),
-                "p-cascadeselect"
+                "p-cascadeselect",
+                1,
+                2
             ),
-            row("TreeSelect", TreeSelect[String]().nodes(_.node("a", "a")), "p-treeselect"),
-            row("Listbox", Listbox[String]().item("A", "a"), "p-listbox"),
-            row("SelectButton", SelectButton[String]().options(Seq("a", "b")), "p-selectbutton")
+            row("TreeSelect", TreeSelect[String]().nodes(_.node("a", "a")), "p-treeselect", 1, 2),
+            row("Listbox", Listbox[String]().item("A", "a"), "p-listbox", 1, 1),
+            row("SelectButton", SelectButton[String]().options(Seq("a", "b")), "p-selectbutton", 1, 1)
         )
     end controls
 
     "no control is rebuilt by its validity, and each patches the elements its constant render marks" - {
-        controls.foreach { (name, control, root) =>
+        controls.foreach { (name, control, root, expectedRegions, expectedRowAt) =>
             name in {
                 for
                     msg <- message("Required")
                     live  = (control.invalidMessage(msg): Node).render
                     fixed = (control.invalid(true).invalidMessage("Required"): Node).render
                     regions  <- regionsAbove(live, root)
+                    without  <- regionsAbove((control: Node).render, root)
                     liveEls  <- elements(live)
                     fixedEls <- elements(fixed)
                     rowAt    <- regionsAbove(live, "p-uic-invalid-message")
@@ -246,7 +254,12 @@ class FieldValidityTest extends UicTest:
                     val classed = fixedEls.filter(_.attrs.cssClasses.contains("p-invalid")).map(nameOf)
                     val aria    = fixedEls.filter(_.attrs.ariaAttrs.contains("invalid")).map(nameOf)
                     assert(classed.nonEmpty, s"$name: the constant render marks no element .p-invalid")
-                    assert(regions == 0, s"$name: its root sits under $regions validity region(s); it must sit under none")
+                    assert(
+                        regions == expectedRegions,
+                        s"$name: its root sits under $regions region(s), its code draws it under $expectedRegions"
+                    )
+                    // The depth alone cannot say whose region it is: one from validity, in place of the control's own, sits at the same depth.
+                    assert(regions == without, s"$name: its validity puts its root under $regions region(s) where it had $without")
                     assert(
                         liveEls.filter(_.attrs.reactiveClasses.contains("p-invalid")).map(nameOf) == classed,
                         s"$name: .p-invalid must be a class channel on exactly $classed"
@@ -255,7 +268,8 @@ class FieldValidityTest extends UicTest:
                         liveEls.filter(_.attrs.reactiveAttrs.contains("aria-invalid")).map(nameOf) == aria,
                         s"$name: aria-invalid must be an attribute channel on exactly $aria"
                     )
-                    assert(rows == 1 && rowAt == 1, s"$name: one message row, one region deep ($rows at $rowAt)")
+                    assert(rows == 1, s"$name: one message row, found $rows")
+                    assert(rowAt == expectedRowAt, s"$name: the message row sits at depth $rowAt, its code draws it at $expectedRowAt")
             }
         }
     }

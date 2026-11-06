@@ -104,9 +104,7 @@ end AccordionPanelScope
   * radii), so it is NEVER wrapped in a reactive region: its `aria-expanded` is a
   * reactive attribute, patched in place, and only the chevron glyph swaps in a
   * tiny reactive region INSIDE the button (the toggle-icon rule is descendant,
-  * so that inner wrapper is harmless). The mount's `.placeholder` is the
-  * un-animated whole-body render (content only-when-active), the SSR/golden
-  * fallback.
+  * so that inner wrapper is harmless).
   *
   * Panels from a signal (see [[LiveEntry]]) are a list keyed by panel id inside
   * the one body: a panel the signal adds is a new row, and one that stays keeps
@@ -185,21 +183,19 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
     end openIds
 
     private[uic] def render(using Frame): UI =
-        val still = entries.and(openIds).render((ps, open) => new Accordion(s.copy(panelList = ps)).body(open))
         val drawn =
-            if !interactive then still
+            if !interactive then entries.and(openIds).render((ps, open) => new Accordion(s.copy(panelList = ps)).body(open))
             else
                 UI.mounted {
                     for
-                        cmds <- UI.commands
-                        base <- cmds.freshId
+                        base <- UI.id
                         // Unbound, the accordion keeps the open panel itself, in single mode, starting with all closed.
                         self <-
                             if multiSlot.binding.isEmpty then
                                 singleSlot.owned(Maybe.empty[K]).map(s => new Accordion(this.s.copy(singleSlot = s)))
                             else Kyo.lift(this)
-                    yield self.wired(base, id => cmds.focusId(id))
-                }.placeholder(still)
+                    yield self.wired(base, focusById)
+                }
         // A value bound one way that nothing hears: every click is painted away again.
         Diagnostics.before(drawn)("Accordion")(Diagnostic(singleSlot.deaf || multiSlot.deaf, Accordion.valueName.advice))
     end render

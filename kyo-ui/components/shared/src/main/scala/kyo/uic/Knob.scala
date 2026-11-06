@@ -116,7 +116,7 @@ final class Knob private[uic] (private[uic] val s: Knob.State) extends Node, Num
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the knob keeps where the reader turns it itself.
         if valueSlot.fixed && !readonlyFlag then new Knob(s.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = minV)(s => new Knob(this.s.copy(valueSlot = s)).renderLive)(renderLive)
+        else Slot.owning(valueSlot, start = minV)(s => new Knob(this.s.copy(valueSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)

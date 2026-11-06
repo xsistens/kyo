@@ -42,8 +42,7 @@ import scala.annotation.targetName
   * `.p-uic-diagnostic` card. `open(ref)`
   * optionally exposes the panel visibility (it is self-managed otherwise). The interaction
   * state (open/highlight/filter query) lives in signals allocated by an
-  * effectful `UI.mounted` region; static projections (SSG, the SSR page HTML)
-  * render the same closed anatomy inert until the client transport attaches.
+  * `UI.mounted` region, which draws in the render pass: a static page shows the real field.
   * Form participation: `name(...)` emits a hidden `<input>` carrying the current
   * key (a div trigger has no native form value).
   *
@@ -309,7 +308,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
 
     /** Whether the panel is open, paired with whether the filter is on. A signal switch is read only while the panel is
-      * open: a closed field reads the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching
+      * open: a closed field reads the switch nowhere but in its role, which is a channel (see `body`), so switching
       * it re-renders nothing.
       */
     private def openFiltering(open: Signal[Boolean])(using Frame): Signal[(Boolean, Boolean)] =
@@ -345,8 +344,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         filtering: Boolean,
         /** The id the highlight is announced through. A caller's own `id` wins, and where there is
           * none a minted one stands in, so `aria-activedescendant` is not something a reader has to
-          * opt into to be told which option is highlighted. Absent only in the placeholder, which
-          * has no highlight to announce.
+          * opt into to be told which option is highlighted. Absent only for a test that names none.
           */
         idBase: Maybe[String]
     ):
@@ -374,14 +372,9 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         // initial render) show the placeholder (the same closed anatomy, inert)
         // until the transport attaches and the mount publishes the wired tree.
         val validity = FieldValidity(validityV)
-        val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
-            val (held, ld, ph) = s
-            new Select(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
-        }
         UI.mounted {
             for
-                cmds <- UI.commands
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the select keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -394,12 +387,10 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => new Select(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(r))))))
             yield new Select(self.s.copy(openSlot = open)).wiredOver(hi, q, Present(base))
-        }.placeholder(stat)
+        }
     end renderLive
 
-    /** The subscription tree the mount publishes: the seam golden tests render
-      * directly (a full top-down re-render shows mounted regions as placeholders,
-      * so the wired anatomy is only reachable here).
+    /** The tree the mount draws: the seam a test renders directly to hand it refs of its own.
       */
     private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
         using Frame
@@ -417,7 +408,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = new Select(s.copy(optionsV = opts))
-            self.bodyStatic(held, Present(self.Wired(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            self.body(held, self.Wired(openSlot, o, hi, h, q, qq, f, base), ph, ld, validity)
         }
     end wiredOver
 
@@ -435,16 +426,16 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         }
     end shown
 
-    private def bodyStatic(
+    private def body(
         held: Maybe[A],
-        st: Maybe[Wired],
+        st: Wired,
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
     )(using Frame): UI =
-        val isOpen = st.exists(_.isOpen)
+        val isOpen = st.isOpen
         // Whether the filter is on, as far as this render reads it: only an open panel subscribes a signal switch.
-        val filtering = st.fold(filterOn.const.getOrElse(false))(_.filtering)
+        val filtering = st.filtering
         val all       = items
         val current   = held.fold("")(key)
         val selIdx    = all.indexWhere(a => key(a) == current)
@@ -496,13 +487,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
                 case Present(drawn) if !showPlaceholder => lbl(drawn)
                 case _                                  => lbl(if labelText.isEmpty then " " else labelText)
 
-        // Explicitly typed effect: an untyped match would infer `Any`, passing the
-        // effect as an inert VALUE into the by-name handler (never executed).
-        val clearEffect: UI.Action =
-            st match
-                case Present(_) =>
-                    write(Absent)
-                case Absent => ()
+        val clearEffect: UI.Action = write(Absent)
 
         val clearUI: List[UI] =
             if showClearFlag && interactive && held.isDefined && choice.forall(_.clearable) then
@@ -528,7 +513,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
             nameV.toList.map(n => hiddenInput.jsProp("name", n).value(current))
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.filter(_.isOpen).map(s => overlayPanel(current, s, pick))
+        val panelUI: List[UI] = if st.isOpen then List(overlayPanel(current, st, pick)) else Nil
 
         // === field root ==========================================================
         var el = div.cssClass("p-select").cssClass("p-component")
@@ -582,13 +567,11 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
         el = el
             .aria("haspopup", "listbox")
             .aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach { b =>
+        st.idBase.foreach { b =>
             el = el.aria("controls", listId(b))
             if !filtering then
-                st.foreach { s =>
-                    val (_, _, _, hiEff) = shownState(s)
-                    if s.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
-                }
+                val (_, _, _, hiEff) = shownState(st)
+                if st.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
             end if
         }
         // readonly keeps the field FOCUSABLE and says `aria-readonly` above; it simply answers no
@@ -600,21 +583,19 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
             // its padding and a click addressed by its id included. What inside does work of its
             // own ends the click there: the clear button, and the panel (`Overlay.containClicks`). A panel fixed open has
             // no close for a click to ask for, so the field takes none rather than one that changes nothing.
-            if !openFixedOpen then st.foreach(s => el = el.onClick(toggle(s)))
+            if !openFixedOpen then el = el.onClick(toggle(st))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard.
             // The one exception is a filter header, which takes focus into the panel and the keys
             // with it, because a reader typing into a text box is not steering a list from outside it.
-            st.foreach { s =>
-                val (_, shown, navigable, hiEff) = shownState(s)
-                el = el.onKeyDown { e =>
-                    if !s.isOpen then
-                        e.key match
-                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
-                            case _                                                    => ()
-                    else if s.filtering then ()
-                    else panelKey(shown, navigable, hiEff, s, pick)(e)
-                }
+            val (_, shown, navigable, hiEff) = shownState(st)
+            el = el.onKeyDown { e =>
+                if !st.isOpen then
+                    e.key match
+                        case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(st)
+                        case _                                                    => ()
+                else if st.filtering then ()
+                else panelKey(shown, navigable, hiEff, st, pick)(e)
             }
             // Focus-loss on the trigger reports the currently bound key (or the resolved
             // current value when unbound): the validation layer's Blur trigger.
@@ -632,7 +613,7 @@ final class Select[A] private[uic] (private[uic] val s: Select.State[A]) extends
             Diagnostic.unknown(strays),
             Diagnostic(interactive && choice.exists(_.deaf(onChangeF.orElse(onPickF))), Select.selectionName.advice)
         )
-    end bodyStatic
+    end body
 
     /** Writes `next` through the binding, then fires `onChange` and `onPick` where the write changed what the field holds
       * ([[SingleChoice.report]]). An unbound field (a host supplying `current`) has nothing to write and reports the pick as

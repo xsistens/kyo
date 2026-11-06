@@ -31,8 +31,7 @@ import kyo.UI.Ast.HtmlChildVal
   * `value(ref)` binds the raw TEXT two-way: typing and picks write back, ref
   * writes update the field and re-filter the list. The interaction state
   * (open/highlight/show-all) lives in signals allocated by an effectful
-  * `UI.mounted` region; static projections (SSG, the SSR page HTML) render the
-  * same closed anatomy inert until the client transport attaches.
+  * `UI.mounted` region, which draws in the render pass: a static page shows the real field.
   *
   * Honest deferrals: multiple selection (chips), forceSelection, and virtual
   * scrolling are not implemented yet. Arrow keys on the field no longer scroll
@@ -252,37 +251,23 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
     private[uic] def render(using Frame): UI =
         // Unbound or started from a constant, the text is the field's own: the suggestions filter by it, a pick writes its
         // label into it and a clear empties it, and a field drawn with a constant would be given the constant back by the
-        // render that typing's open causes. A ref the field keeps for as long as it is shown holds it.
-        Slot.owningFrom(
-            valueSlot,
-            unbound = "",
-            on = ReactiveValue.Const(interactive)
-        )(s => new AutoComplete(this.s.copy(valueSlot = s)).drawn)(stat)
-
-    /** The closed anatomy over the text as bound, with nothing wired: what a static projection shows. */
-    private def stat(using Frame): UI =
-        val validity = FieldValidity(validityV)
-        validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
-            new AutoComplete(s.copy(optionsV = opts)).body(cur, Absent, validity)
-        ))
-    end stat
-
-    private def drawn(using Frame): UI =
-        // The interaction state (open/highlight/show-all) lives in signals allocated
-        // by this effectful mount. Static projections (SSG, the SSR page GET,
-        // initial render) show the placeholder (the same closed anatomy, inert)
-        // until the transport attaches and the mount publishes the wired tree.
-        if !interactive then stat
+        // render that typing's open causes. A ref the field keeps for as long as it is shown holds it, beside the interaction state
+        // (open/highlight/show-all) the mount allocates.
+        if !interactive then
+            val validity = FieldValidity(validityV)
+            validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
+                new AutoComplete(s.copy(optionsV = opts)).body(cur, Absent, validity)
+            ))
         else
             val field = UI.mounted {
                 for
-                    cmds <- UI.commands
-                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
-                    open <- Signal.initRef(false)
-                    hi   <- Signal.initRef(-1)
-                    all  <- Signal.initRef(false)
-                yield wired(open, hi, all, Present(base), id => cmds.focusId(id))
-            }.placeholder(stat)
+                    value <- valueSlot.ownedFrom("")
+                    base  <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                    open  <- Signal.initRef(false)
+                    hi    <- Signal.initRef(-1)
+                    all   <- Signal.initRef(false)
+                yield new AutoComplete(s.copy(valueSlot = value)).wired(open, hi, all, Present(base), focusById)
+            }
             Diagnostics.after(field)("AutoComplete")(
                 Diagnostic.naming(
                     "value is bound one way and an edit reaches nobody, so the reader cannot make it; add the event, or bind a SignalRef",
@@ -290,7 +275,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
                 )
             )
         end if
-    end drawn
+    end render
 
     /** The edits of a one-way text that reach nobody, each with the event that would hear it. They report through
       * different events: typing through `onInput` (without it the suggestions keep filtering the text the owner holds),
@@ -304,8 +289,8 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
                 (if valueSlot.hearer.isEmpty && onSelectF.isEmpty then List("a pick: add onChange or onSelect") else Nil) ++
                 (if showClearFlag && valueSlot.hearer.isEmpty then List("a clear: add onChange") else Nil)
 
-    /** The subscription tree the mount publishes: the seam golden tests render
-      * directly (a full top-down re-render shows mounted regions as placeholders,
+    /** The tree the mount draws: the seam a test renders directly to hand it refs of its own
+      * (a full top-down render allocates its own,
       * so the wired anatomy is only reachable here).
       */
     private[uic] def wired(

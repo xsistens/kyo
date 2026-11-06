@@ -87,8 +87,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
             focus <- Anchored.init(List.empty[Int])
             at    <- Signal.initRef(Absent: Maybe[UI.Point])
             subs  <- Submenus.init()
-            cmds  <- UI.commands
-            base  <- cmds.freshId
+            base  <- UI.id
         yield new ContextMenu.State(open, at, focus, subs, base)
 
     /** The panel WITHOUT a target region: no wrapper `div`, no mount, no right-click listener of
@@ -126,10 +125,8 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
 
     private def wrapping(using Frame): UI =
         // Open state, keyboard focus path, and the open submenus are allocated
-        // by this effectful mount; static projections (SSG, the SSR page HTML)
-        // render the closed target region inert.
-        val stat: UI = targetShell(Absent)(Nil)
-        val mount    = UI.mounted {
+        // by this mount, which draws in the render pass.
+        val mount = UI.mounted {
             for
                 openRef <- Signal.initRef(false)
                 focus   <- Anchored.init(List.empty[Int])
@@ -137,10 +134,9 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
                 // panel as a style, so the point can change without rebuilding the panel.
                 at   <- Signal.initRef(Absent: Maybe[UI.Point])
                 subs <- Submenus.init()
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
             yield wired(openRef, focus, at, subs, base)
-        }.placeholder(stat)
+        }
         // An id is the caller declaring which menu this is, so it is also the identity the
         // instance keeps. Without one the mount stays keyless, which is what it always was.
         //

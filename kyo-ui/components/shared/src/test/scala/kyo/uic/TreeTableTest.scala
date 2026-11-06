@@ -393,8 +393,9 @@ class TreeTableTest extends ReactiveValueContract:
             next = Set(r1),
             control = bodyRows(_).map(_.headOption.getOrElse(throw new AssertionError("no row"))),
             shows = elementsWithClass(_, "p-treetable-row-selected").map(_.map(r => byName(textOf(r))).toSet),
+            // A row still takes a click for the treegrid's cursor, which is no pick.
             isFixed = Present(bodyRows(_).map(rs =>
-                rs.nonEmpty && rs.forall(r => !declaresClick(r) && !r.attrs.cssClasses.contains("p-treetable-selectable-row"))
+                rs.nonEmpty && rs.forall(r => !r.attrs.cssClasses.contains("p-treetable-selectable-row"))
             )),
             ready = Present(elementsWithClass(_, "p-treetable-selectable-row").map(_.exists(declaresClick)))
         )

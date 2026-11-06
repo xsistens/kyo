@@ -285,15 +285,19 @@ class ElementIdTest extends UicTest:
                     "Large"
                 )).optionDisabled(_ == "Small").selection(none).id("mine").render
             )
-            rtHeld <- tabStops(uic.Rating().value(three).id("mine").render)
-            rtNone <- tabStops(uic.Rating().id("mine").render)
+            rtHeld   <- tabStops(uic.Rating().value(three).id("mine").render)
+            rtNone   <- tabStops(uic.Rating().id("mine").render)
+            rtHeldId <- elements(uic.Rating().value(three).id("mine").render).map(_.filter(_.attrs.identifier == Present("mine")))
+            rtNoneId <- elements(uic.Rating().id("mine").render).map(_.filter(_.attrs.identifier == Present("mine")))
         yield
             assert(sbHeld.map(textOf) == Chunk("Medium"), "the chosen option")
             assert(sbNone.map(textOf) == Chunk("Medium"), "nothing chosen: the first option a reader can reach")
-            assert(rtHeld.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("3 stars")), "the checked star")
-            assert(rtNone.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("1 star")), "none checked: the first")
+            // A Rating's radios share a name, drawn on the static page too, which is what makes them one stop in a browser.
+            assert(rtHeld.size == 1 && rtNone.size == 1, "one tab stop: the radios are one group")
+            assert(rtHeldId.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("3 stars")), "the id is on the checked star")
+            assert(rtNoneId.map(_.attrs.ariaAttrs.get("label")) == Chunk(Some("1 star")), "none checked: on the first")
             assert(
-                Chunk(sbHeld, sbNone, rtHeld, rtNone).forall(_.map(_.attrs.identifier) == Chunk(Present("mine"))),
+                Chunk(sbHeld, sbNone).forall(_.map(_.attrs.identifier) == Chunk(Present("mine"))),
                 "and that one stop is the element carrying the id"
             )
         end for

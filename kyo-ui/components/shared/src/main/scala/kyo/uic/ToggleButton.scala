@@ -101,7 +101,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new ToggleButton(this.s.copy(checkedSlot = s)).drawn(validity))(drawn(validity)))
+        )(s => new ToggleButton(this.s.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         Diagnostics.after(field)("ToggleButton")(Diagnostic.unheard(
             checkedSlot,

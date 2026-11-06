@@ -90,7 +90,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
             valueSlot,
             unbound = "",
             on = BoolValue.Const(interactive)
-        )(s => new InputOtp(this.s.copy(valueSlot = s)).resolved)(resolved)
+        )(s => new InputOtp(this.s.copy(valueSlot = s)).resolved)
 
     private def resolved(using Frame): UI =
         BoolValue.reactive(disabledFlag)(d => new InputOtp(s.copy(disabledFlag = d)).renderResolved)
@@ -99,17 +99,10 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
         val validity = FieldValidity(validityV)
         val field    = valueSlot.binding match
             case Present(ReactiveValue.Dyn(sig)) if interactive =>
-                // Auto-advance needs the session Commands and stable per-cell ids: mint
-                // them ONCE in a mounted effect, then the reactive body reads the same
-                // ids across re-renders. Golden/SSG projection = the un-advancing
-                // placeholder (no ids); the wired seam exercises the advancing form. Bound one way,
-                // each cell follows its position of the signal, so kyo-ui puts back a character the owner does not take.
-                UI.mounted {
-                    for
-                        cmds <- UI.commands
-                        ids  <- Kyo.foreach(0 until lengthV)(_ => cmds.freshId)
-                    yield wired(sig, ids.toList, id => cmds.focusId(id))
-                }.placeholder(validity.follow(sig.render(v => body(v, Absent, _ => (), validity))))
+                // Auto-advance needs stable per-cell ids: they are drawn once, then the reactive body reads the same ids across
+                // re-renders. Bound one way, each cell follows its position of the signal, so kyo-ui puts back a character the owner
+                // does not take.
+                UI.mounted(Kyo.foreach(0 until lengthV)(_ => UI.id).map(ids => wired(sig, ids.toList, focusById)))
             case Present(ReactiveValue.Dyn(sig)) => validity.follow(sig.render(v => body(v, Absent, _ => (), validity)))
             case other                           => validity.follow(body(other.flatMap(_.const).getOrElse(""), Absent, _ => (), validity))
         Diagnostics.after(field)("InputOtp")(Diagnostic.unheard(valueSlot, InputOtp.valueName, on = interactive))

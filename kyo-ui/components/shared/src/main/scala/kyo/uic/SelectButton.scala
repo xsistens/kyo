@@ -159,31 +159,30 @@ final class SelectButton[A] private[uic] (private[uic] val s: SelectButton.State
     private type Nav = Maybe[(List[String], String => UI.Action)]
 
     private[uic] def render(using Frame): UI =
-        // Unbound, the group keeps what the reader presses itself.
-        if multipleFlag && multi.isEmpty then
-            UI.owned(Set.empty[A])(own =>
-                new SelectButton(s.copy(multi = Present(MultiChoice(ReactiveVariable(own))))).renderBound
-            ).placeholder(renderBound)
-        else if !multipleFlag && single.isEmpty then
-            UI.owned(Maybe.empty[A])(own =>
-                new SelectButton(s.copy(single = Present(SingleChoice.Optional(ReactiveVariable(own))))).renderBound
-            )
-                .placeholder(renderBound)
-        else renderBound
-
-    private def renderBound(using Frame): UI =
-        // Multiple select is a group of independent toggles, each its own tab stop, so it needs no
-        // ids and no mount. Single select is a radio group, and the mount is where its ids come from.
-        if multipleFlag then renderNav(Absent)
+        // Multiple select is a group of independent toggles, each its own tab stop, so it needs no ids; unbound it keeps what the
+        // reader presses in a mount, and bound it needs no mount at all.
+        if multipleFlag then
+            if multi.nonEmpty then renderNav(Absent)
+            else
+                UI.mounted(Signal.initRef(Set.empty[A]).map(own =>
+                    new SelectButton(s.copy(multi = Present(MultiChoice(ReactiveVariable(own))))).renderNav(Absent)
+                ))
         else
-            // ONE minted base the option ids derive from (`$base-<n>`), so the ids follow the options however many there are.
+            // Single select is a radio group, and its mount is where the ids come from: ONE base the option ids derive from
+            // (`$base-<n>`), so the ids follow the options however many there are. Unbound, the mount keeps what the reader presses too.
             UI.mounted {
-                UI.commands.map { cmds =>
-                    cmds.freshId.map(base => renderNav(Present((base, (id: String) => cmds.focusId(id)))))
-                }
-            }.placeholder(renderNav(Absent))
+                for
+                    base <- UI.id
+                    self <-
+                        if single.nonEmpty then Kyo.lift(this)
+                        else
+                            Signal.initRef(Maybe.empty[A]).map(own =>
+                                new SelectButton(s.copy(single = Present(SingleChoice.Optional(ReactiveVariable(own)))))
+                            )
+                yield self.renderNav(Present((base, focusById)))
+            }
 
-    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    /** The seam a test renders to choose the base itself. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
         renderNav(Present((base, focus)))
 

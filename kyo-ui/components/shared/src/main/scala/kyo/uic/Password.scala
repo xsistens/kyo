@@ -110,25 +110,28 @@ final class Password private[uic] (private[uic] val s: Password.State) extends N
     private[uic] def render(using Frame): UI =
         // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the reader
         // types is the field's to keep: from a constant (which a reveal would otherwise give back), and with the meter unbound
-        // too. Unbound without the meter, the field draws no value and the text stays the browser's. The page as first rendered
-        // draws the text as bound with nothing wired, since nothing is wired before the mount runs.
-        Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(keepsText && (feedbackFlag || valueSlot.binding.isDefined)))(s =>
-            new Password(this.s.copy(valueSlot = s)).drawn
-        )(new Password(s.copy(valueSlot = Slot(valueSlot.binding), onChangeSF = Absent, onBlurSF = Absent)).drawn)
+        // too. Unbound without the meter, the field draws no value and the text stays the browser's. With a mask toggle the one mount
+        // keeps the reveal beside the text.
+        val keepsOwnText = keepsText && (feedbackFlag || valueSlot.binding.isDefined)
+        if !toggleMaskFlag then
+            Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(keepsOwnText)) { slot =>
+                val field = new Password(s.copy(valueSlot = slot))
+                field.validated(field.withValue(Absent, _))
+            }
+        else
+            UI.mounted {
+                for
+                    value  <- if keepsOwnText then valueSlot.ownedFrom("") else Kyo.lift(valueSlot)
+                    reveal <- Signal.initRef(false)
+                yield new Password(s.copy(valueSlot = value)).wired(reveal)
+            }
+        end if
     end render
 
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
       * reader can change.
       */
     private def keepsText: Boolean = (feedbackFlag || toggleMaskFlag) && !readonlyFlag.constTrue && !disabledFlag
-
-    /** The field with its mask toggle, where it has one, over the text as bound. */
-    private def drawn(using Frame): UI =
-        if !toggleMaskFlag then validated(withValue(Absent, _))
-        else
-            UI.mounted {
-                Signal.initRef(false).map(r => wired(r))
-            }.placeholder(validated(withValue(Absent, _)))
 
     /** The subscription tree the mount publishes (golden-test seam): the internal
       * reveal state driving the password/text type switch.

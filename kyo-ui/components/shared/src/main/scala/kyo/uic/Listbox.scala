@@ -339,11 +339,10 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
         val ownsQuery = filterQuerySlot.binding.forall(_.const.isDefined) && !filterOn.const.exists(on => !on)
         val list      = UI.mounted {
             for
-                cmds <- UI.commands
                 // The id the highlight is announced through. A caller's own `id` wins, and where
                 // there is none a minted one stands in, so `aria-activedescendant` is not
                 // something a reader has to opt into to be told which option is highlighted.
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 hi   <- Signal.initRef(-1)
                 q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
@@ -352,12 +351,7 @@ final class Listbox[K] private[uic] (private[uic] val s: Listbox.State[K]) exten
                     else Kyo.lift(Maybe.empty[SignalRef[Set[K]]])
                 self = own.fold(this)(r => new Listbox(s.copy(selectedRef = Present(SetBinding.of(ReactiveValue(r))))))
             yield self.subscribed(q, Present(hi), Present(base), validity)
-        }.placeholder(subscribed(
-            if filterQuerySlot.binding.exists(_.const.isDefined) then Slot() else filterQuerySlot,
-            Absent,
-            Absent,
-            validity
-        ))
+        }
         // A selection bound one way that nothing hears: every click is painted away again.
         Diagnostics.before(list)("Listbox")(
             Diagnostic(

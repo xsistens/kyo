@@ -3822,8 +3822,8 @@ class DataTableTest extends ReactiveValueContract:
             sel    <- Signal.initRef(Set.empty[Item])
             anchor <- Signal.initRef(Absent: Maybe[Item])
         yield rangingTable(sel, anchor) match
-            case m: Ast.Mounted => fail("a bound anchor should not force a mount")
-            case _              => succeed
+            case m: Ast.MountNode => fail("a bound anchor should not force a mount")
+            case _                => succeed
     }
 
     "an unbound ranging table still mints its anchor in a mount, as it always did" in {
@@ -3832,8 +3832,8 @@ class DataTableTest extends ReactiveValueContract:
             val ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selection(sel).metaKeySelection(true).render
             ui match
-                case _: Ast.Mounted => succeed
-                case other          => fail(s"a table that mints its anchor renders as a mount; got: $other")
+                case _: Ast.MountNode => succeed
+                case other            => fail(s"a table that mints its anchor renders as a mount; got: $other")
     }
 
     // ── the mount's identity ────────────────────────────────────────────────────────
@@ -3860,7 +3860,7 @@ class DataTableTest extends ReactiveValueContract:
         // `key` is `Maybe[Any]` and Any is not comparable under strict equality, so the keys are
         // held against each other by their rendered form rather than by ==.
         (stateful(Present("t1")), stateful(Absent)) match
-            case (n: Ast.Mounted, a: Ast.Mounted) =>
+            case (n: Ast.MountNode, a: Ast.MountNode) =>
                 assert(n.key.map(_.toString).contains("t1"), "the id is the key")
                 assert(a.key.isEmpty, "and no id means no key, as before")
             case other => fail(s"a stateful DataTable renders as a mount; got: $other")
@@ -3871,7 +3871,7 @@ class DataTableTest extends ReactiveValueContract:
         // A re-render builds the value again from scratch; this is that, and the key has to
         // survive it or the instance behind the mount does not.
         (stateful(Present("t1")), stateful(Present("t1"))) match
-            case (x: Ast.Mounted, y: Ast.Mounted) =>
+            case (x: Ast.MountNode, y: Ast.MountNode) =>
                 assert(x.key.map(_.toString) == y.key.map(_.toString))
                 assert(x.key.isDefined)
             case other => fail(s"a stateful DataTable renders as a mount; got: $other")
@@ -3880,7 +3880,7 @@ class DataTableTest extends ReactiveValueContract:
 
     "two named tables on one page take two distinct keys" in {
         (stateful(Present("t1")), stateful(Present("t2"))) match
-            case (x: Ast.Mounted, y: Ast.Mounted) =>
+            case (x: Ast.MountNode, y: Ast.MountNode) =>
                 assert(x.key.map(_.toString) != y.key.map(_.toString))
             case other => fail(s"a stateful DataTable renders as a mount; got: $other")
         end match
@@ -3950,7 +3950,7 @@ class DataTableTest extends ReactiveValueContract:
         for h <- elementsWithClass(bare.render, "p-datatable-header-cell").map(_.head)
         yield assert(
             h.attrs.cssClasses.contains("p-datatable-sortable-column") && h.attrs.tabIndex.contains(0) && declaresClick(h) &&
-                h.attrs.ariaAttrs.get("sort").contains("none"),
+                h.attrs.reactiveAttrs.contains("aria-sort"),
             s"an unbound sort is the reader's: ${h.attrs.cssClasses}, ${h.attrs.ariaAttrs}"
         )
     }

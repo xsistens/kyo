@@ -70,7 +70,7 @@ final class RadioButton private[uic] (private[uic] val s: RadioButton.State) ext
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new RadioButton(this.s.copy(checkedSlot = s)).drawn(validity))(drawn(validity)))
+        )(s => new RadioButton(this.s.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("RadioButton")(Diagnostic.unheard(checkedSlot, RadioButton.checkedName, on = !inert))

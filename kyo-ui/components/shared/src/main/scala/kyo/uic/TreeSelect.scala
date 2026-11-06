@@ -202,15 +202,10 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
         val validity = FieldValidity(validityV)
-        val stat: UI = roots.and(shown).render { (rs, s) =>
-            val (sel, ld, ph) = s
-            new TreeSelect(this.s.copy(nodeList = rs)).bodyStatic(sel, Set.empty, false, Absent, ph, ld, validity)
-        }
         UI.mounted {
             for
-                cmds <- UI.commands
                 // A caller's own id is the base the tree's parts derive from; a minted one stands in.
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 exp  <- expandedSlot.owned(Set.empty[K])
@@ -218,7 +213,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
                 // Unbound, the field keeps the nodes the reader picks itself.
                 value <- valueSlot.owned(Set.empty[K])
             yield new TreeSelect(s.copy(valueSlot = value, openSlot = open)).wiredOver(exp, hi, base)
-        }.placeholder(stat)
+        }
     end renderLive
 
     /** A constant selection nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to
@@ -247,7 +242,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         panel.and(shown).and(roots).render { case ((((o, e), h), (sel, ld, ph)), rs) =>
             new TreeSelect(s.copy(nodeList =
                 rs
-            )).bodyStatic(sel, e, o, Present(TreeSelect.Wired(openSlot, exp, hi, h, idBase)), ph, ld, validity)
+            )).body(sel, e, o, TreeSelect.Wired(openSlot, exp, hi, h, idBase), ph, ld, validity)
         }
     end wiredOver
 
@@ -269,11 +264,11 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         }
     end shown
 
-    private def bodyStatic(
+    private def body(
         current: Set[K],
         exp: Set[K],
         isOpen: Boolean,
-        st: Maybe[TreeSelect.Wired[K]],
+        st: TreeSelect.Wired[K],
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
@@ -294,25 +289,18 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         end openHighlight
 
         def openPanel: UI.Action =
-            st match
-                case Present(s) => s.hi.set(openHighlight).andThen(askOpen(s.open, true))
-                case Absent     => ()
+            st.hi.set(openHighlight).andThen(askOpen(st.open, true))
 
         // A pointer opens through the same path as a key, so the highlight lands on a row either way.
         def toggle: UI.Action =
-            st match
-                case Present(s) => if isOpen then askOpen(s.open, false) else openPanel
-                case Absent     => ()
+            if isOpen then askOpen(st.open, false) else openPanel
 
         // Fired by the hosted Tree after its selection change: Single mode closes the panel (Prime). The new set reaches
         // onChange through the tree's onSelectionChange, which carries it whether the binding is two-way or one-way.
         def afterPick: UI.Action =
-            st match
-                case Present(s) =>
-                    selectionModeV match
-                        case SelectionMode.Single | SelectionMode.Radio => askOpen(s.open, false)
-                        case _                                          => ()
-                case Absent => ()
+            selectionModeV match
+                case SelectionMode.Single | SelectionMode.Radio => askOpen(st.open, false)
+                case _                                          => ()
 
         // === closed trigger ======================================================
         val showPlaceholder = selectedLabels.isEmpty && placeholder.isDefined
@@ -342,19 +330,17 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         val hosted: Maybe[Tree[K]] =
             if nodeList.isEmpty then Absent
             else
-                st.map { state =>
-                    var t = Tree[K]()
-                        .rooted(nodeList)
-                        .selectionMode(selectionModeV)
-                        .onItemClick(_ => afterPick)
-                    state.exp.bound.foreach(v => t = t.expanded(v))
-                    state.exp.hearer.foreach(f => t = t.onExpandedChange(f))
-                    valueSlot.bound.foreach(v => t = t.selection(v))
-                    valueSlot.hearer.foreach(f => t = t.onSelectionChange(f))
-                    t
-                }
+                var t = Tree[K]()
+                    .rooted(nodeList)
+                    .selectionMode(selectionModeV)
+                    .onItemClick(_ => afterPick)
+                st.exp.bound.foreach(v => t = t.expanded(v))
+                st.exp.hearer.foreach(f => t = t.onExpandedChange(f))
+                valueSlot.bound.foreach(v => t = t.selection(v))
+                valueSlot.hearer.foreach(f => t = t.onSelectionChange(f))
+                Present(t)
 
-        val panelUI: List[UI] = st.toList.filter(_ => isOpen).map { state =>
+        val panelUI: List[UI] = List(st).filter(_ => isOpen).map { state =>
             val roving     = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
             val treeUI: UI = hosted match
                 case Absent =>
@@ -412,21 +398,19 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
         end match
         accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
-        st.foreach { s =>
-            el = el.aria("controls", Tree.rootListId(s.idBase))
-            if isOpen && s.hiV >= 0 then el = el.aria("activedescendant", Tree.rowId(s.idBase, s.hiV))
-        }
+        el = el.aria("controls", Tree.rootListId(st.idBase))
+        if isOpen && st.hiV >= 0 then el = el.aria("activedescendant", Tree.rowId(st.idBase, st.hiV))
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
             if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the panel.
             // A panel fixed open has no close for a click to ask for, so the field takes none.
-            if st.isDefined && !fixed && !openFixedOpen then el = el.onClick(toggle)
+            if !fixed && !openFixedOpen then el = el.onClick(toggle)
             // Focus stays on the trigger while the panel is open, so the tree's own keyboard runs
             // from here: closed, the three opening keys; open, the tree's arrows and Escape. The
             // tree supplies the handler rather than a second copy of it living here.
-            st.filter(_ => !fixed).foreach { state =>
-                val roving  = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
+            if !fixed then
+                val roving  = Roving(st.hi, st.hiV, st.idBase, ownsFocus = false)
                 val treeKey = hosted.map(_.keyHandler(exp, roving))
                 el = el.onKeyDown { e =>
                     if !isOpen then
@@ -436,13 +420,13 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
                     // Escape closes, and so does Tab in either direction: the panel's keyboard
                     // lives here, on the element the Tab is carrying the reader away from, so a
                     // panel left open behind them is one nothing answers.
-                    else if e.key == Keyboard.Escape || e.key == Keyboard.Tab then askOpen(state.open, false)
+                    else if e.key == Keyboard.Escape || e.key == Keyboard.Tab then askOpen(st.open, false)
                     else
                         treeKey match
                             case Present(f) => f(e)
                             case Absent     => ()
                 }
-            }
+            end if
             // Focus-loss on the trigger reports the currently bound selection (or the
             // resolved current set when unbound): the validation layer's Blur trigger.
             onBlurF.foreach { f =>
@@ -457,7 +441,7 @@ final class TreeSelect[K] private[uic] (private[uic] val s: TreeSelect.State[K])
             Diagnostic.unheard(valueSlot, TreeSelect.selectionName, on = !disabledFlag),
             Diagnostic.unheard(expandedSlot, TreeSelect.expandedName, on = !disabledFlag)
         )
-    end bodyStatic
+    end body
 end TreeSelect
 
 object TreeSelect:

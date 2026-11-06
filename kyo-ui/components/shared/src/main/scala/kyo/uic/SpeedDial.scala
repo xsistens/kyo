@@ -92,17 +92,14 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
     def accessibleName(v: String): SpeedDial = new SpeedDial(s.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
 
     private[uic] def render(using Frame): UI =
-        val shownAt  = openSlot.binding.flatMap(_.const).getOrElse(false)
-        val stat: UI =
-            MenuRender.readItems(entriesV).render(items => new SpeedDial(s.copy(itemsV = items)).body(shownAt, live = false, "", _ => ()))
-        val dial = UI.mounted {
+        val shownAt = openSlot.binding.flatMap(_.const).getOrElse(false)
+        val dial    = UI.mounted {
             for
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
                 // Unbound, the dial keeps the fan state itself, starting closed.
                 open <- openSlot.owned(false)
-            yield new SpeedDial(s.copy(openSlot = open)).wiredOver(base, id => cmds.focusId(id))
-        }.placeholder(stat)
+            yield new SpeedDial(s.copy(openSlot = open)).wiredOver(base, focusById)
+        }
         // A signal nobody hears: every toggle the reader makes is painted away again.
         Diagnostics.before(dial)("SpeedDial")(Diagnostic.unheard(openSlot, SpeedDial.openName))
     end render
@@ -116,7 +113,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
         // See Menu.wired for why the resolution sits inside the mount's content. The items and the open state are read as
         // ONE region (see [[ReactiveValue.and]]).
         MenuRender.readItems(entriesV).and(openSlot.reading(false)).render((items, o) =>
-            new SpeedDial(s.copy(itemsV = items)).body(o, live = true, base, focus)
+            new SpeedDial(s.copy(itemsV = items)).body(o, base, focus)
         )
 
     /** The actions the fan actually fans out: a separator has no place in a row of round icon
@@ -125,13 +122,12 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
       */
     private def actions: List[MenuItem] = itemsV.filterNot(_.s.separatorFlag)
 
-    private def body(isOpen: Boolean, live: Boolean, base: String, focus: String => UI.Action)(using
+    private def body(isOpen: Boolean, base: String, focus: String => UI.Action)(using
         Frame
     ): UI =
-        // The placeholder has no state to change (`live` false): every write below is then a no-op.
-        val toggle: UI.Action  = if live then openSlot.update(!_) else ()
-        def close: UI.Action   = if live then openSlot.change(false) else ()
-        def openFan: UI.Action = if live then openSlot.change(true) else ()
+        val toggle: UI.Action  = openSlot.update(!_)
+        def close: UI.Action   = openSlot.change(false)
+        def openFan: UI.Action = openSlot.change(true)
         // A constant nobody hears is fixed: the toggle stays a tab stop and says it changes nothing.
         val fixed = openSlot.fixed
 
@@ -153,8 +149,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
             .ariaRaw("expanded", isOpen.toString)
             .disabled(disabledFlag)
         if fixed then toggleBtn = toggleBtn.ariaDisabled(true)
-        // The ids come from the mount, so the placeholder render has none to point at and says
-        // nothing rather than naming an element called `-list`.
+        // A test may render with no base, and then there is no list id to point at.
         if base.nonEmpty then toggleBtn = toggleBtn.ariaRaw("controls", listId)
         if !disabledFlag && !fixed then
             toggleBtn = toggleBtn.onClick(toggle).onKeyDownRaw { e =>
@@ -180,14 +175,12 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
             else
                 acts.zipWithIndex.map { (it, i) =>
                     def activate: UI.Action =
-                        if !live then ()
-                        else
-                            for
-                                _ <- it.s.actionV match
-                                    case Present(eff) => eff
-                                    case Absent       => (): UI.Action
-                                _ <- close
-                            yield ()
+                        for
+                            _ <- it.s.actionV match
+                                case Present(eff) => eff
+                                case Absent       => (): UI.Action
+                            _ <- close
+                        yield ()
                     var btn = Button()
                         .rounded(true)
                         .severity(Severity.Secondary)
@@ -207,7 +200,7 @@ final class SpeedDial private[uic] (private[uic] val s: SpeedDial.State) extends
                             .tabIndexRaw(-1)
                             .focusSeedRaw(i == first)
                             .onKeyDownRaw(itemKey(i, navigable, itemId, focus, close))
-                        if live then btn = btn.onClick(activate)
+                        btn = btn.onClick(activate)
                     end if
                     li.cssClass("p-speeddial-item").role("presentation")(btn: UI)
                 }

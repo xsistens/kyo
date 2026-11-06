@@ -132,27 +132,18 @@ final class Menu private[uic] (private[uic] val s: Menu.State) extends Node, Has
     private[uic] def render(using Frame): UI =
         val menu = roleV match
             case MenuAccessibleRole.Navigation =>
-                // No mount: a navigation holds no highlight and mints no id, so there is no state
-                // for one to allocate, and the static projection is already the live tree.
+                // No mount: a navigation holds no highlight and draws no id, so there is no state for one to allocate.
                 navigation
             case MenuAccessibleRole.Menu =>
-                // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight. Before the
-                // mount runs the panel is drawn open from a constant signal.
+                // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight, which lives there too.
                 val ownsPopup = popupSlot.binding.isEmpty && popupOwnFlag
-                val shown     = if ownsPopup then new Menu(s.copy(popupSlot = popupSlot.standIn(true))) else this
-                // The keyboard highlight lives in a signal allocated by this effectful
-                // mount; static projections (SSG, the SSR page HTML) render the same
-                // anatomy inert until the client transport attaches.
-                val stat: UI =
-                    MenuRender.readItems(entriesV).render(items => new Menu(shown.s.copy(itemsV = items)).body(-1, Absent, accessV.idV))
                 UI.mounted {
                     for
-                        cmds  <- UI.commands
-                        base  <- cmds.freshId
+                        base  <- UI.id
                         hi    <- Anchored.init(-1)
                         popup <- if ownsPopup then popupSlot.owned(true) else Kyo.lift(popupSlot)
                     yield new Menu(s.copy(popupSlot = popup)).wired(hi, base)
-                }.placeholder(stat)
+                }
         Diagnostics.before(menu)("Menu")(Diagnostic.unheard(popupSlot, Menu.popupName))
     end render
 
@@ -164,8 +155,6 @@ final class Menu private[uic] (private[uic] val s: Menu.State) extends Node, Has
         // `popup()` with no mount to allocate in: the open state is kept by a mount of its own.
         Slot.owning(popupSlot, start = true, on = ReactiveValue.Const(popupOwnFlag))(s =>
             new Menu(this.s.copy(popupSlot = s)).navigationOver
-        )(
-            new Menu(s.copy(popupSlot = popupSlot.standIn(true))).navigationOver
         )
     end navigation
 
@@ -213,9 +202,7 @@ final class Menu private[uic] (private[uic] val s: Menu.State) extends Node, Has
         }
     end navigationOver
 
-    /** The subscription tree the mount publishes: the seam golden tests render
-      * directly (a full top-down re-render shows mounted regions as
-      * placeholders).
+    /** The tree the mount draws: the seam a test renders directly to hand it refs of its own.
       *
       * `base` is the id the announcement is built from, which the mount mints. A caller's own
       * `id(...)` still wins, but the announcement no longer waits for one: `aria-activedescendant`

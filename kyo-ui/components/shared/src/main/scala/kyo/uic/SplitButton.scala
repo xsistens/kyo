@@ -79,16 +79,14 @@ final class SplitButton private[uic] (private[uic] val s: SplitButton.State) ext
     private[uic] def render(using Frame): UI =
         // The panel visibility + keyboard highlight live in signals allocated by
         // this effectful mount; static projections render the same closed anatomy.
-        val stat: UI = body(openSlot.binding.flatMap(_.const).getOrElse(false), Absent, "")
-        val button   = UI.mounted {
+        val button = UI.mounted {
             for
                 // Unbound, the button keeps the menu state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Anchored.init(-1)
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
             yield new SplitButton(s.copy(openSlot = open)).wiredOver(hi, base)
-        }.placeholder(stat)
+        }
         // A signal nobody hears: every toggle and pick the reader makes is painted away again.
         Diagnostics.before(button)("SplitButton")(Diagnostic.unheard(openSlot, SplitButton.openName))
     end render

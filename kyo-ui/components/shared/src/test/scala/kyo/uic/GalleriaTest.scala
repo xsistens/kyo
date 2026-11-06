@@ -58,14 +58,12 @@ class GalleriaTest extends ReactiveValueContract:
         yield assert(enter == Absent && space == Absent)
     }
 
-    "the placeholder render carries neither ids nor key handlers" in {
-        // No mount has run there, so there is nothing to move focus with; the strips stay exactly
-        // what they were, which is reachable by clicking.
+    "the first paint carries the ids and the key handlers" in {
         for
             active <- Signal.initRef(0)
             ui = gallery.activeIndex(active).render
             dots <- elementsWithClass(ui, "p-galleria-indicator-button")
-        yield assert(dots.forall(_.attrs.onKeyDown.isEmpty) && dots.forall(_.attrs.identifier.isEmpty))
+        yield assert(dots.nonEmpty && dots.forall(_.attrs.onKeyDown.nonEmpty) && dots.forall(_.attrs.identifier.nonEmpty))
     }
 
     private def stepping(using Frame) =

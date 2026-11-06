@@ -240,16 +240,15 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
     private[uic] def render(using Frame): UI =
         UI.mounted {
             for
-                cmds   <- UI.commands
-                base   <- cmds.freshId
+                base   <- UI.id
                 cursor <- Signal.initRef(Absent: Maybe[String])
                 // Unbound, the table keeps the sort, the open rows and, where it selects, the picked ones itself.
                 sort <- sortSlot.owned(List.empty[SortKey])
                 exp  <- expandedSlot.owned(Set.empty[A])
                 sel  <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[A]) else Kyo.lift(selectedSlot)
                 self = new TreeTable(s.copy(sortSlot = sort, expandedSlot = exp, selectedSlot = sel))
-            yield self.buildAll(base, Present(cursor), id => cmds.focusId(id))
-        }.placeholder(buildAll("", Absent, _ => ()))
+            yield self.buildAll(base, Present(cursor), focusById)
+        }
 
     /** The seam the golden tests render, since a mount shows only its placeholder there.
       *

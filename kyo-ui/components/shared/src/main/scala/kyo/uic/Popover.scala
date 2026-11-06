@@ -84,13 +84,8 @@ final class Popover private[uic] (private[uic] val s: Popover.State) extends Nod
     def apply(cs: UI*): Popover = new Popover(s.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
-        // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise. Before the mount
-        // runs it draws from a stand-in for that state, which is nobody's mistake.
-        val start = triggerV.isEmpty
-        Slot.owning(
-            openSlot,
-            start
-        )(s => new Popover(this.s.copy(openSlot = s)).drawn)(new Popover(s.copy(openSlot = openSlot.standIn(start))).drawn)
+        // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise.
+        Slot.owning(openSlot, start = triggerV.isEmpty)(s => new Popover(this.s.copy(openSlot = s)).drawn)
     end render
 
     private def drawn(using Frame): UI =

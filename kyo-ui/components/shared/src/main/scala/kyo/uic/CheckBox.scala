@@ -93,7 +93,7 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new CheckBox(this.s.copy(checkedSlot = s)).drawn(validity))(drawn(validity)))
+        )(s => new CheckBox(this.s.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("CheckBox")(Diagnostic.unheard(checkedSlot, CheckBox.checkedName, on = !inert))

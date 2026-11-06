@@ -71,22 +71,16 @@ final class TieredMenu private[uic] (private[uic] val s: TieredMenu.State) exten
     private[uic] def withAccessibility(v: Accessibility): Self = new TieredMenu(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
-        // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight. Before the mount runs
-        // the panel is drawn open from a constant signal.
+        // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight.
         val ownsPopup = popupSlot.binding.isEmpty && popupOwnFlag
-        val shown     = if ownsPopup then new TieredMenu(s.copy(popupSlot = popupSlot.standIn(true))) else this
-        val stat: UI  = MenuRender.readItems(entriesV).render(items =>
-            new TieredMenu(shown.s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
-        )
-        val menu = UI.mounted {
+        val menu      = UI.mounted {
             for
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
-                cmds  <- UI.commands
-                base  <- cmds.freshId
+                base  <- UI.id
                 popup <- if ownsPopup then popupSlot.owned(true) else Kyo.lift(popupSlot)
             yield new TieredMenu(s.copy(popupSlot = popup)).wired(subs, focus, base)
-        }.placeholder(stat)
+        }
         // A popup bound one way that nothing hears: every close the reader asks for is painted away again.
         Diagnostics.before(menu)("TieredMenu")(Diagnostic.unheard(popupSlot, TieredMenu.popupName))
     end render

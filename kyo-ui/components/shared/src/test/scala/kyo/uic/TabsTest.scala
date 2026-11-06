@@ -192,12 +192,12 @@ class TabsTest extends ReactiveValueContract:
         )
     }
 
-    "without a base the ids are minted, so a pure render has none at all" in {
-        // The minting needs a mount, and a pure render shows only the placeholder, which is
-        // why a golden render and an SSG page had no header ids before a base could be given.
+    "without a base the ids are drawn from the node's place, so a pure render has them too" in {
         for
             headers <- elementsWithClass(strip.render, "p-tab")
-        yield assert(headers.forall(_.attrs.identifier.isEmpty))
+        yield
+            val ids = headers.map(_.attrs.identifier)
+            assert(ids.forall(_.nonEmpty) && ids.distinct.size == ids.size, s"header ids: $ids")
     }
 
     "a disabled header is still addressable, though it is out of the arrow wiring" in {

@@ -193,4 +193,38 @@ class OverlayTest extends ReactiveValueContract:
         end for
     }
 
+    "a host region that runs again keeps the panel and the effect that places it, which starts once and ends once on close" in {
+        import kyo.UI.*
+        val log = new kyo.internal.RecordingExchange
+        for
+            seen <- AtomicRef.init(Chunk.empty[String])
+            cmds <- UI.Commands.init {
+                case kyo.internal.HtmlOp.ObserveViewportById(id)   => seen.getAndUpdate(_.append("+" + id)).unit
+                case kyo.internal.HtmlOp.UnobserveViewportById(id) => seen.getAndUpdate(_.append("-" + id)).unit
+                case _                                             => Kyo.unit
+            }
+            open <- Signal.initRef(true)
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(n => div(span(s"t$n"), uic.Overlay(open)(span("content")))))
+            out <- kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { _ =>
+                for
+                    _     <- assertEventually(seen.get.map(_.size == 1))
+                    _     <- assertEventually(tick.waiters.map(_ == 1))
+                    _     <- tick.set(1)
+                    _     <- assertEventually(tick.waiters.map(_ == 1))
+                    _     <- tick.set(2)
+                    _     <- assertEventually(tick.waiters.map(_ == 1))
+                    kept  <- seen.get
+                    _     <- open.set(false)
+                    _     <- assertEventually(seen.get.map(_.lastMaybe.exists(_.startsWith("-"))))
+                    after <- seen.get
+                yield (kept, after)
+            }
+        yield
+            val (kept, after) = out
+            assert(kept.size == 1 && kept.head.startsWith("+"), s"while the host ran again: $kept")
+            assert(after == kept :+ kept.head.replace("+", "-"), s"after closing: $after")
+        end for
+    }
+
 end OverlayTest
