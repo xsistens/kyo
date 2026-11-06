@@ -92,7 +92,7 @@ final class ConfirmDialog private[uic] (private[uic] val s: ConfirmDialog.State)
         val drawing = Slot.owning(
             openSlot,
             start = true
-        )(s => new ConfirmDialog(this.s.copy(openSlot = s)).drawn)(new ConfirmDialog(s.copy(openSlot = openSlot.standIn(true))).drawn)
+        )(s => new ConfirmDialog(this.s.copy(openSlot = s)).drawn)
         // A signal nobody hears for a choice: that choice is painted away again. One card for both, since the dialog
         // underneath is kept quiet.
         val unheard = Seq("an accept").filter(_ => accepting.deaf) ++ Seq("a reject or a dismissal").filter(_ => rejecting.deaf)

@@ -83,19 +83,17 @@ final class VirtualScroller[A] private[uic] (private[uic] val s: VirtualScroller
         // The scroll position lives in a signal allocated by this effectful mount. The VIEWPORT shell is stable (only
         // its inner window is reactive), so the browser-owned `scrollTop` survives every window re-render. This matters
         // because a reactive region updates via `el.outerHTML =` (full element replacement); if the shell itself were
-        // reactive, each scroll would recreate it and reset `scrollTop` to 0, fighting the user. Static projections (SSG,
-        // the SSR GET) show the placeholder window at scroll 0, inert, until the transport attaches.
+        // reactive, each scroll would recreate it and reset `scrollTop` to 0, fighting the user.
         UI.mounted {
             for
                 scroll <- Signal.initRef(0.0)
                 // The first range has to be asked for by someone, and no scroll has
                 // happened yet to ask for it.
-                _ <- (sourceV match
-                    case Present(src) => src.demand.set(viewport.demand(0.0)).andThen(src.run)
-                    case _            => ()
-                ): Unit < (Async & Scope)
+                _ <- sourceV match
+                    case Present(src) => UI.whileMounted(src.demand.set(viewport.demand(0.0)).andThen(src.run))
+                    case _            => Kyo.unit
             yield wired(scroll)
-        }.placeholder(shell(Absent)(placeholderWindow))
+        }
 
     /** The subscription tree the mount publishes: the golden seam. */
     private[uic] def wired(scroll: SignalRef[Double])(using Frame): UI =

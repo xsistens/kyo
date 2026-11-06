@@ -108,17 +108,22 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 
     // Unbound or started from a constant, the colour is the picker's own: it draws everything itself, so the colour the reader
     // moves to is one it keeps, for as long as it is shown. It sits above the region over `disabled`, or a flip would end the mount
-    // that holds it. The page as first rendered draws the same anatomy at where it starts, with no handler, since nothing is wired
-    // before the mount runs.
+    // that holds it. An overlay picker keeps its panel state in the same mount.
     private[uic] def render(using Frame): UI =
-        val start = valueSlot.binding.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
-        Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
-            new ColorPicker(this.s.copy(valueSlot = s)).resolved
-        )(
-            BoolValue.reactive(disabledFlag)(d =>
-                new ColorPicker(s.copy(disabledFlag = d)).body(Present(Signal.initConst(start)), start, wire = false)
+        if inlineFlag then
+            Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
+                new ColorPicker(this.s.copy(valueSlot = s)).resolved
             )
-        )
+        else
+            val start = valueSlot.binding.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
+            UI.mounted {
+                for
+                    value  <- if interactive then valueSlot.ownedFrom(ColorPicker.DefaultHex) else Kyo.lift(valueSlot)
+                    open   <- Signal.initRef(false)
+                    opened <- Signal.initRef(start)
+                yield new ColorPicker(s.copy(valueSlot = value, panelV = Present(ColorPicker.Panel(open, opened)))).resolved
+            }
+        end if
     end render
 
     private def resolved(using Frame): UI =
@@ -175,7 +180,6 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
         onKey: (Keyboard, (Double, Double, Double)) => Maybe[String],
         panel: Maybe[ColorPicker.Panel],
         seed: Boolean,
-        wire: Boolean,
         elementId: Maybe[String] = Absent
     )(using Frame): UI =
         var el = span
@@ -190,21 +194,19 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
             .preventScrollKeys
         elementId.foreach(v => el = el.id(v))
         if seed then el = el.focusAuto(true).focusRestore(true)
-        if wire then
-            el = el.onKeyDown { e =>
-                val eff: UI.Action = e.key match
-                    case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false)
-                    case Keyboard.Escape                 => dismiss(panel, restore = true)
-                    case k                               =>
-                        r.current.map { cur =>
-                            val moved: UI.Action = onKey(k, ColorPicker.hsvOf(cur)) match
-                                case Present(hex) => commit(hex)
-                                case Absent       => ()
-                            moved
-                        }
-                eff
-            }
-        end if
+        el = el.onKeyDown { e =>
+            val eff: UI.Action = e.key match
+                case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false)
+                case Keyboard.Escape                 => dismiss(panel, restore = true)
+                case k                               =>
+                    r.current.map { cur =>
+                        val moved: UI.Action = onKey(k, ColorPicker.hsvOf(cur)) match
+                            case Present(hex) => commit(hex)
+                            case Absent       => ()
+                        moved
+                    }
+            eff
+        }
         el
     end slider
 
@@ -227,8 +229,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
     private def content(
         color: Maybe[Signal[String]],
         fallbackHex: String,
-        panel: Maybe[ColorPicker.Panel] = Absent,
-        wire: Boolean = true
+        panel: Maybe[ColorPicker.Panel] = Absent
     )(using Frame): UI =
         def planeVisual(hex: String): UI =
             val (h, s, v)    = ColorPicker.hsvOf(hex)
@@ -253,7 +254,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
         var selector = div.cssClass("p-colorpicker-color-selector")
         var hue      = div.cssClass("p-colorpicker-hue")
         color.foreach { r =>
-            if interactive && wire then
+            if interactive then
                 val onPlane = (e: PointerEvent) =>
                     r.current.map { cur =>
                         val (h, _, _) = ColorPicker.hsvOf(cur)
@@ -314,7 +315,6 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
                 planeKeys,
                 panel,
                 seed = panel.isDefined,
-                wire = wire,
                 // Inline, the plane is the picker's first tab stop and so where the caller's id goes;
                 // in the overlay the swatch carries it, since the panel is not on the page until opened.
                 elementId = if panel.isEmpty then accessV.idV else Absent
@@ -329,8 +329,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
                 359.0,
                 hueKeys,
                 panel,
-                seed = false,
-                wire = wire
+                seed = false
             )
         }
         div.cssClass("p-colorpicker-content")(
@@ -339,14 +338,14 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
         )
     end content
 
-    private def body(color: Maybe[Signal[String]], fallbackHex: String, wire: Boolean = true)(using Frame): UI =
+    private def body(color: Maybe[Signal[String]], fallbackHex: String)(using Frame): UI =
         if inlineFlag then
             validated { validity =>
                 // Without a bound value or while disabled, an inline picker renders no slider, so
                 // nothing in it takes focus and the root is the one place the id can name.
                 shellRoot(validity, ownsId = color.isEmpty || !interactive)(
                     div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
-                        content(color, fallbackHex, wire = wire)
+                        content(color, fallbackHex)
                     )
                 )
             }
@@ -397,24 +396,11 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
         preview
     end previewSwatch
 
-    /** Overlay mode: a preview swatch trigger + the floating panel. The open state
-      * is an internal ref owned by a `UI.mounted` region (Select's pattern); the
-      * static placeholder is the closed swatch.
+    /** Overlay mode: a preview swatch trigger + the floating panel. The open state is an internal ref of the mount `render` puts around an
+      * overlay picker, which is the only way here.
       */
     private def overlayBody(color: Maybe[Signal[String]], fallbackHex: String)(using Frame): UI =
-        val staticRoot: UI =
-            validated { validity =>
-                shellRoot(validity, false, "p-uic-overlay-anchor")(
-                    previewSwatchOf(hex => previewSwatch(hex, ()), color, fallbackHex)
-                )
-            }
-        UI.mounted {
-            for
-                open   <- Signal.initRef(false)
-                opened <- Signal.initRef(fallbackHex)
-            yield wired(ColorPicker.Panel(open, opened), color, fallbackHex)
-        }.placeholder(staticRoot)
-    end overlayBody
+        panelV.fold[UI](UI.empty)(wired(_, color, fallbackHex))
 
     /** The subscription tree the overlay mount publishes, the seam the tests drive, since a
       * golden render shows a mount only as its placeholder.
@@ -463,6 +449,8 @@ end ColorPicker
 object ColorPicker:
     final private[uic] case class State(
         valueSlot: Slot[String] = Slot(),
+        // An overlay picker's open state, which the mount around it allocates beside the value.
+        panelV: Maybe[Panel] = Absent,
         inlineFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,

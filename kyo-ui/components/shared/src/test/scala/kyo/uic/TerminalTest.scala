@@ -82,6 +82,23 @@ class TerminalTest extends ReactiveValueContract:
             assert(s == List(Seq(ls)), s"reported $s")
     }
 
+    "an append brings the terminal's end into view: the newest row's effect names the prompt, the last thing in it" in {
+        for
+            ref  <- Signal.initRef(Seq(ls, uic.TerminalCommand("pwd", "ran pwd")))
+            seen <- Signal.initRef(List.empty[String])
+            ui = shell.commands(ref).wired(ref, "term-end", id => seen.updateAndGet(_ :+ id).unit)
+            rows   <- elementsWithClass(ui, "p-terminal-command")
+            prompt <- elementWithClass(ui, "p-terminal-prompt")
+            _      <- Abort.run[Any](Scope.run(Kyo.foreach(rows.flatMap(_.attrs.whileMounted))(identity)))
+            named  <- seen.get
+        yield
+            assert(rows.map(_.attrs.whileMounted.size) == Chunk(0, 1), "only the newest row has the effect")
+            assert(prompt.attrs.identifier == Present("term-end"), s"the prompt is what is named: ${prompt.attrs.identifier}")
+            assert(rows.forall(_.attrs.identifier.isEmpty), "a row is not the target: a scroll to it leaves the prompt below the fold")
+            assert(named == List("term-end"), s"the effect named $named")
+        end for
+    }
+
     "a fixed history shows its commands" in {
         history(shell.commands(Seq(ls)).render).map(h => assert(h == Seq(ls), s"shows $h"))
     }

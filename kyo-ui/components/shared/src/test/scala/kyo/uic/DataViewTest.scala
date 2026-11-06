@@ -7,7 +7,7 @@ import kyo.UI.*
 class DataViewTest extends ReactiveValueContract:
 
     private def control(cls: String)(using Frame): UI =
-        UI.mounted(Signal.initRef(0).map(_ => UI.div.cssClass(cls))).placeholder(UI.div.cssClass(cls))
+        UI.mounted(Signal.initRef(0).map(_ => UI.div.cssClass(cls)))
 
     private def view(page: SignalRef[Int])(using Frame): UI =
         DataView[Int]()

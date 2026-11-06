@@ -879,8 +879,9 @@ class SelectTest extends ReactiveValueContract:
             letGo  <- Promise.init[Unit, Any]
             cmds   <- UI.Commands.init(_ => Kyo.unit)
             armed = new java.util.concurrent.atomic.AtomicBoolean(false)
-            ui    = select.selection(value).render
-            // The first paint is the field's mount publishing the live field, the one a click can open.
+            // A boundary around the field holds its passes where this test can pause one; the field itself waits for nothing.
+            ui = UI.boundary.placeholder(UI.span("wait"))(select.selection(value).render)
+            // The first paint is the live field, the one a click can open.
             exchange = new RecordingExchange(beforePaint = (_, _) => live.completeUnitDiscard)
             closed         <- HtmlRenderer.render(select.selection(Present(fruit.head): Maybe[Fruit]).render, Seq.empty)
             (_, _, opened) <- field(select, open = true)
@@ -904,6 +905,26 @@ class SelectTest extends ReactiveValueContract:
                 yield v
             }))
         yield assert(picked.map(_.name) == Present("Cherry"), s"the click on Cherry left the field at $picked")
+        end for
+    }
+
+    "a click on the field right after the first paint opens the panel, before any subscription stands behind it" in {
+        import kyo.internal.*
+        // A real Chrome lost this click on 4 of 12 loads when the first paint was a placeholder.
+        for
+            open <- Signal.initRef(false)
+            cmds <- UI.Commands.init(_ => Kyo.unit)
+            ui = select.open(open).render
+            opened <- Scope.run(UICommands.commands.let(Present(cmds)) {
+                for
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    page <- MountDispatch.live.let(root.mountDispatch)(HtmlRenderer.render(ui, Seq.empty))
+                    at = pathOf(page, "sel")
+                    _ <- Abort.run[Any](root.handle(at, clickAt(at)))
+                    o <- open.get
+                yield o
+            })
+        yield assert(opened, "the click on the first paint left the panel closed")
         end for
     }
 

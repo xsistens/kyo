@@ -13,8 +13,8 @@ class CellEditorTest extends UicTest:
             label <- elementWithClass(ui, "p-select-label")
         yield
             val mountAtRoot = ui match
-                case _: UI.Ast.Mounted => true
-                case _                 => false
+                case _: UI.Ast.MountNode => true
+                case _                   => false
             assert(mountAtRoot, s"a region of the draft around the mount rebuilds it, open panel and all, on every write: $ui")
             assert(label.children.exists {
                 case t: UI.Ast.Text => t.value == "a"

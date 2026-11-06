@@ -1571,7 +1571,7 @@ val editableTable: UI < Async =
 
 `editableWhen(p)` gates a column per row, and `Column.onValueChanged` is the column-scoped twin of `onCellValueChanged`. Editing is keyed by `rowKey`, so it joins selection and expansion in requiring one, and binding both modes at once is a card, since a cell inside an edited row would be open for two reasons with two ways out.
 
-A table that binds an editing state owns state no caller supplies (one draft per editable column, and the error a refused commit left standing), so it renders through a mount: the static projection is the same table with its editors closed and its affordances inert, and the live one arrives when the transport attaches. A table that does not edit is untouched by this.
+A table that binds an editing state owns state no caller supplies (one draft per editable column, and the error a refused commit left standing), so it renders through a mount, which draws it in the render pass: a static page shows the same table a live one does, with its editors closed. A table that does not edit is untouched by this.
 
 Editing comes with a keyboard. `cellNavigation` is on as soon as a column is editable, and the cursor is the focused `td` itself, not a ref: arrows move it, Home and End go to the ends of a row (of the grid under ctrl or cmd), the Page keys move it a page, Enter and F2 open the cell it is on, and any printable key opens it on that character. Space selects the row where selection is bound, and Escape closes an editor without writing.
 
@@ -2301,6 +2301,6 @@ The library targets kyo-ui's server-push transport as a first-class deployment, 
 
 **Render is pure.** No clock, no randomness, nothing scheduled while a component is being projected into a `UI`. `DatePicker.today(value)` is an explicit parameter because a pure render cannot read a clock.
 
-Fibers follow one rule from there. A component may own one spawned inside its own `UI.mounted`, because the mount's `Scope` is that component's lifetime and unmount cancels it; `Carousel`'s autoplay is the one that does. A timer that has to outlive any single render belongs to a service instead, which forks it unscoped and owns the cancellation: that is why a single `Toast` emits its `duration` as a data attribute and runs no timer of its own, while `ToastService` owns its dismissal fibers.
+Fibers follow one rule from there. A component may own one started with `UI.whileMounted` inside its own `UI.mounted`, because the mount's `Scope` is that component's lifetime and unmount cancels it; `Carousel`'s autoplay is the one that does. A timer that has to outlive any single render belongs to a service instead, which forks it unscoped and owns the cancellation: that is why a single `Toast` emits its `duration` as a data attribute and runs no timer of its own, while `ToastService` owns its dismissal fibers.
 
 **The honest deferrals**, per family, are option groups in the picker family, virtual scrolling inside picker panels, typeahead in the menu family, range mode on `Slider`, advanced mode on `FileUpload`, pagination on `TreeTable`, and fullscreen on `Galleria`. Each is absent rather than half-present, so nothing silently degrades. The full record, component by component with the reason for each, is [PARITY.md](PARITY.md), which also names the one PrimeReact component this library does not have.

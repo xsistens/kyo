@@ -260,7 +260,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
     private def matcher: (A, String) => Boolean = filterF.getOrElse(Filter.contains(labelF))
 
     /** Whether the panel is open, paired with whether the filter is on. A signal switch is read only while the panel is
-      * open: a closed field reads the switch nowhere but in its role, which is a channel (see `bodyStatic`), so switching
+      * open: a closed field reads the switch nowhere but in its role, which is a channel (see `body`), so switching
       * it re-renders nothing.
       */
     private def openFiltering(open: Signal[Boolean])(using Frame): Signal[(Boolean, Boolean)] =
@@ -308,17 +308,11 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
 
     private def renderLive(using Frame): UI =
         // The interaction state (open/highlight/filter) lives in signals allocated
-        // by this effectful mount; static projections render the same closed
-        // anatomy inert (the Select precedent).
+        // by this mount, which draws in the render pass (the Select precedent).
         val validity = FieldValidity(validityV)
-        val stat: UI = OptionItem.reading(optionSources).and(shown).render { (opts, s) =>
-            val (held, ld, ph) = s
-            new MultiSelect(this.s.copy(optionsV = opts)).bodyStatic(held, Absent, ph, ld, validity)
-        }
         UI.mounted {
             for
-                cmds <- UI.commands
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -331,7 +325,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
                     else Kyo.lift(Maybe.empty[SignalRef[Set[A]]])
                 self = own.fold(this)(r => new MultiSelect(s.copy(choice = Present(MultiChoice(ReactiveValue(r))))))
             yield new MultiSelect(self.s.copy(openSlot = open)).wiredOver(hi, q, Present(base))
-        }.placeholder(stat)
+        }
     end renderLive
 
     /** A constant nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to open and
@@ -356,7 +350,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         val panel    = ReactiveValue.Dyn(openFiltering(openSlot.reading(false).signal)).and(ReactiveValue.Dyn(hi)).and(q.reading(""))
         panel.and(shown).and(OptionItem.reading(optionSources)).render { case (((((o, f), h), qq), (held, ld, ph)), opts) =>
             val self = new MultiSelect(s.copy(optionsV = opts))
-            self.bodyStatic(held, Present(self.Wired(openSlot, o, hi, h, q, qq, f, base)), ph, ld, validity)
+            self.body(held, self.Wired(openSlot, o, hi, h, q, qq, f, base), ph, ld, validity)
         }
     end wiredOver
 
@@ -388,16 +382,16 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         }
     end write
 
-    private def bodyStatic(
+    private def body(
         held: Set[A],
-        st: Maybe[Wired],
+        st: Wired,
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
     )(using Frame): UI =
-        val isOpen = st.exists(_.isOpen)
+        val isOpen = st.isOpen
         // Whether the filter is on, as far as this render reads it: only an open panel subscribes a signal switch.
-        val filtering = st.fold(filterOn.const.getOrElse(false))(_.filtering)
+        val filtering = st.filtering
         val current   = held.map(key)
         // Held options no row carries: the trigger still shows them from the value itself, after the known ones.
         val strays   = held.filterNot(a => items.exists(i => key(i) == key(a))).toList.sortBy(labelF)
@@ -474,11 +468,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
 
         val labelContainerUI: UI = div.cssClass("p-multiselect-label-container")(labelUI)
 
-        // Explicitly typed effect (the untyped-match Any-inference trap).
-        val clearEffect: UI.Action =
-            st match
-                case Present(_) => write(Set.empty)
-                case Absent     => ()
+        val clearEffect: UI.Action = write(Set.empty)
 
         val clearUI: List[UI] =
             if showClearFlag && !disabledFlag && !fixed && selected.nonEmpty then
@@ -505,7 +495,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
             }
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.filter(_.isOpen).map(s => overlayPanel(current, s, toggleOption))
+        val panelUI: List[UI] = if st.isOpen then List(overlayPanel(current, st, toggleOption)) else Nil
 
         // === field root ==========================================================
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
@@ -547,13 +537,11 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
         el = el
             .aria("haspopup", "listbox")
             .aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach { b =>
+        st.idBase.foreach { b =>
             el = el.aria("controls", listId(b))
             if !filtering then
-                st.foreach { s =>
-                    val (_, _, _, hiEff) = shownState(s)
-                    if s.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
-                }
+                val (_, _, _, hiEff) = shownState(st)
+                if st.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
             end if
         }
         if !disabledFlag then
@@ -563,21 +551,21 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
             // The clear button, the chips' remove buttons and the panel (`Overlay.containClicks`)
             // end their own clicks where they land.
             // A panel fixed open has no close for a click to ask for, so the field takes none.
-            st.filter(_ => !fixed && !openFixedOpen).foreach(s => el = el.onClick(toggle(s)))
+            if !fixed && !openFixedOpen then el = el.onClick(toggle(st))
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's
             // keyboard lives: closed, the three opening keys; open, the whole option keyboard. A
             // filter header is the exception, taking focus into the panel and the keys with it.
-            st.filter(_ => !fixed).foreach { s =>
-                val (_, shown, navigable, hiEff) = shownState(s)
+            if !fixed then
+                val (_, shown, navigable, hiEff) = shownState(st)
                 el = el.onKeyDown { e =>
-                    if !s.isOpen then
+                    if !st.isOpen then
                         e.key match
-                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
+                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(st)
                             case _                                                    => ()
-                    else if s.filtering then ()
-                    else panelKey(shown, navigable, hiEff, s, toggleOption, toggleAllOf(current, shown))(e)
+                    else if st.filtering then ()
+                    else panelKey(shown, navigable, hiEff, st, toggleOption, toggleAllOf(current, shown))(e)
                 }
-            }
+            end if
             // Focus-loss on the trigger reports the current selection: the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
@@ -592,7 +580,7 @@ final class MultiSelect[A] private[uic] (private[uic] val s: MultiSelect.State[A
             Diagnostic.unknown(if loading then Nil else strays.map(labelF)),
             Diagnostic(!disabledFlag && choice.exists(_.deaf(onChangeF)), MultiSelect.selectionName.advice)
         )
-    end bodyStatic
+    end body
 
     /** The options the panel is showing, the positions the highlight may land on, and where it is
       * now. Derived in one place because the TRIGGER reads it too: the keyboard lives on whatever

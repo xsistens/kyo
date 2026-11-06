@@ -237,9 +237,8 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
     end render
 
     private def renderLive(using Frame): UI =
-        // The static projection (SSG, the SSR page GET) is the same anatomy, inert: an inline
-        // calendar still draws its month, a floating one still draws its closed field.
-        val stat: UI =
+        // Not interactive it holds nothing: an inline calendar still draws its month, a floating one still draws its closed field.
+        if !interactive then
             if inlineFlag then
                 val panel = openSlot.binding match
                     case Present(o) =>
@@ -249,16 +248,14 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
                     case _ => calendarStatic
                 assemble(openSlot.binding, Absent, floating = false, panel)
             else assemble(Absent, Absent, floating = true, UI.empty)
-        if !interactive then stat
         else
             UI.mounted {
                 // The held value of an unbound picker is the mount's own; its equality is the value type's `equals`, which
                 // is what every kind's value type defines.
                 given CanEqual[A, A] = CanEqual.derived
                 for
-                    cmds <- UI.commands
                     // A caller's own id is the base the grid and its cells derive from; a minted one stands in.
-                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     =>
@@ -280,14 +277,13 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
                     restore <- Signal.initRef(Maybe.empty[DatePicker.Restore])
                     draft   <- Signal.initRef(Maybe.empty[String])
                     refs = DatePicker.Refs(oref, mref, cur, vref, seed, restore, draft)
-                yield new DatePicker(s.copy(bindingV = Present(held))).wired(refs, base, id => cmds.focusId(id))
+                yield new DatePicker(s.copy(bindingV = Present(held))).wired(refs, base, focusById)
                 end for
-            }.placeholder(stat)
+            }
         end if
     end renderLive
 
-    /** The host the mount publishes, and the seam golden tests render directly (a full top-down re-render shows mounted
-      * regions as placeholders).
+    /** The host the mount draws, and the seam a test renders directly to hand it refs of its own.
       *
       * The FIELD is built outside the open ref's subscription: only the panel and the root's anchor class follow it. That is
       * what makes the focus return on Escape safe, since the element focus goes back to is never one a close replaces.
@@ -349,8 +345,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
             case Absent => fieldUI("", editable = true, oref, nav, floating, validity)
 
         // The dropdown button toggles the calendar, firing onOpen/onClose on actual transitions. Inline without an open ref
-        // keeps it disabled (the always-on panel has nothing to toggle); the floating static projection renders it
-        // enabled-looking but inert until the mount wires it. A read-only picker (readonly, or fixed by a constant nobody
+        // keeps it disabled (the always-on panel has nothing to toggle). A read-only picker (readonly, or fixed by a constant nobody
         // hears) and a calendar fixed open keep it a tab stop that says `aria-disabled` and takes no click: readonly is not
         // disabled, which stays native.
         var dd = button
@@ -613,7 +608,7 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
 
     // === reactive panel =====================================================
 
-    /** The inline calendar of the static projection, inert. Without a mount a caller's own `month(ref)` is the only month
+    /** The inline calendar of a picker that takes no input. Without a mount a caller's own `month(ref)` is the only month
       * there is, read with the view and the selection as ONE region.
       */
     private def calendarStatic(using Frame): UI =
@@ -685,8 +680,8 @@ final class DatePicker[A] private[uic] (private[uic] val s: DatePicker.State[A])
     /** Prime's calendar header: prev button, the month/year title BUTTONS (they drill into the month and year grids through
       * the view ref), next button. The nav buttons shift the month by a month, a year or a decade depending on the view.
       *
-      * The mount mints both refs when the caller binds none, so every button here is live in a mounted picker. They render
-      * disabled only in the static projection, which is inert throughout.
+      * The mount draws both refs when the caller binds none, so every button here is live in a mounted picker. They render
+      * disabled only in a picker that takes no input.
       */
     private def headerUI(view: DatePickerView, year: Int, month: Int, nav: Maybe[DatePicker.Nav])(using Frame): UI =
         def navButton(cls: String, glyph: IconGlyph, target: (Int, Int), label: String): UI =

@@ -28,15 +28,13 @@ final case class TerminalCommand(command: String, response: String) derives CanE
   * TerminalService event bus is replaced by the effect-typed handler: same
   * contract, no global bus.
   *
-  * Auto-scroll (self-addressing): the newest history row carries a
-  * session-unique id (minted via `Commands.freshId` in the `UI.mounted` region);
-  * after each append a post-insertion mount on that row drives the Local
-  * fire-and-forget `UI.scrollIntoView(newestId)`, so a long transcript keeps the
-  * latest output in view exactly as Prime's client scroll does. Fire-and-forget is
-  * the right door here: a dropped auto-scroll self-corrects on the next append and
-  * needs no reply, unlike Form's submit-time reveal, which couples scroll with
-  * focus and uses the guaranteed `Commands` channel. The static projection (before
-  * the transport attaches) renders no id and does not scroll.
+  * Auto-scroll (self-addressing): the prompt, the last thing in the terminal, carries an
+  * id (from `UI.id` in the `UI.mounted` region), and after each append a `whileMounted`
+  * on the newest history row sends `scrollIntoViewId` for it, so a long transcript ends
+  * on the latest output and the prompt below it, as Prime's client scroll does. That
+  * command scrolls to the nearest edge, so the page around the terminal stays where it
+  * is while the terminal itself is in view; `UI.scrollIntoView` scrolls to the block's
+  * start, and moved the page with every line. A static render runs no effect.
   */
 final class Terminal private[uic] (private[uic] val s: Terminal.State) extends Node, HasAccessibleName, Stated:
     import s.*
@@ -85,52 +83,47 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
         handlerF match
             case Absent     => static
             case Present(_) =>
-                // Auto-scroll needs a stable id for the newest row: mint one from the
-                // session `Commands` (`freshId`) once in a mounted effect, then the
-                // reactive body reads it. The scroll ITSELF goes through the Local
-                // fire-and-forget door (`UI.scrollIntoView`), not `Commands.scrollIntoViewId`:
-                // a missed auto-scroll is harmless (the next append re-scrolls) and the op
-                // needs no return channel or ordering with any other command, so it wants
-                // the lost-op-is-fine transport (see the A+ two-door contract on UI.Commands).
-                // The post-insertion mount below already guarantees the row exists when the
-                // command lands, which is exactly the discipline the fire-and-forget door needs.
+                // Auto-scroll needs a stable id for the prompt, drawn once here, which the reactive body reads.
                 val terminal = UI.mounted {
                     for
-                        cmds   <- UI.commands
-                        lastId <- cmds.freshId
+                        endId <- UI.id
                         // Unbound, the terminal keeps the history itself.
                         history <- commandsSlot.owned(Seq.empty[TerminalCommand])
                         // Counts the repaints a one-way history asks for, so a commit the owner declines clears the prompt.
                         paints <- Signal.initRef(0)
-                    yield new Terminal(s.copy(commandsSlot = history)).wiredOver(lastId, id => UI.scrollIntoView(id), Present(paints))
-                }.placeholder(static)
+                    yield new Terminal(s.copy(commandsSlot = history)).wiredOver(
+                        endId,
+                        id => UI.commands.map(_.scrollIntoViewId(id)),
+                        Present(paints)
+                    )
+                }
                 // A history bound one way that nothing hears: every commit reaches nobody.
                 Diagnostics.before(terminal)("Terminal")(Diagnostic.unheard(commandsSlot, Terminal.commandsName))
         end match
     end render
 
     /** The scrolling subscription the mount publishes: the golden seam.
-      * `scrollTo` scrolls the row with the given id into view (production: the Local
-      * fire-and-forget `UI.scrollIntoView`; tests inject a fake to observe the seam).
+      * `scrollTo` scrolls the element with the given id into view (production: `scrollIntoViewId`; tests
+      * inject a fake to observe the seam).
       */
-    private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], lastId: String, scrollTo: String => UI.Action)(using Frame): UI =
-        new Terminal(s.copy(commandsSlot = commandsSlot.bind(ref))).wiredOver(lastId, scrollTo, Absent)
+    private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], endId: String, scrollTo: String => UI.Action)(using Frame): UI =
+        new Terminal(s.copy(commandsSlot = commandsSlot.bind(ref))).wiredOver(endId, scrollTo, Absent)
 
     /** [[wired]] over the history however it is bound. */
     private def wiredOver(
-        lastId: String,
+        endId: String,
         scrollTo: String => UI.Action,
         paints: Maybe[SignalRef[Int]]
     )(using Frame): UI =
         val painted            = ReactiveValue.orElse(paints, 0)
         val repaint: UI.Action = paints.fold[UI.Action](())(_.updateAndGet(_ + 1).unit)
         // The paint count is read and dropped: it is there so a repaint draws the prompt empty again.
-        commandsSlot.reading(Seq.empty).and(painted).render((h, _) => body(h, Present(lastId), Present(scrollTo), repaint))
+        commandsSlot.reading(Seq.empty).and(painted).render((h, _) => body(h, Present(endId), Present(scrollTo), repaint))
     end wiredOver
 
     private def body(
         history: Seq[TerminalCommand],
-        lastId: Maybe[String],
+        endId: Maybe[String],
         scrollTo: Maybe[String => UI.Action],
         repaint: UI.Action = ()
     )(using Frame): UI =
@@ -143,24 +136,19 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
         val lastIdx        = history.size - 1
         val rows: List[UI] = history.toList.zipWithIndex.map { (c, i) =>
             var row = div.cssClass("p-terminal-command")
-            // Stamp the newest row + give it an invisible mount that scrolls IT into
-            // view once it is actually in the DOM. Doing this from the append handler
-            // races the re-render (the scroll op can reach the client before the row
-            // is inserted); a mount on the freshly inserted last row fires AFTER the
-            // insertion, so the scroll always lands on the real newest row.
-            val scrollMount: List[UI] =
-                if i == lastIdx then
-                    (lastId, scrollTo) match
-                        case (Present(id), Present(f)) =>
-                            List(UI.mounted(f(id).andThen(UI.empty)).placeholder(UI.empty))
-                        case _ => Nil
-                else Nil
-            if i == lastIdx then lastId.foreach(id => row = row.id(id))
+            // The newest row brings the terminal's end into view once it is actually in the DOM. Doing this from the append handler
+            // races the re-render (the scroll op can reach the client before the row is inserted); an effect on the freshly inserted last
+            // row runs AFTER the insertion, so the scroll always lands below the real newest row. It belongs to the row's place, so the
+            // next append, which makes another row the last, scrolls again.
+            if i == lastIdx then
+                (endId, scrollTo) match
+                    case (Present(id), Present(f)) => row = row.whileMounted(f(id))
+                    case _                         => ()
+            end if
             row(
                 UI.children(span.cssClass("p-terminal-prompt-label")(promptV) ::
                     span.cssClass("p-terminal-command-value")(c.command) ::
-                    div.cssClass("p-terminal-command-response").aria("live", "polite")(c.response) ::
-                    scrollMount)*
+                    div.cssClass("p-terminal-command-response").aria("live", "polite")(c.response) :: Nil)*
             )
         }
         val list: UI = div.cssClass("p-terminal-command-list")(UI.children(rows)*)
@@ -173,7 +161,9 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
             .aria("label", "Terminal command")
         if fixed then field = field.readOnly(true)
         else if handlerF.isDefined && commandsSlot.binding.isDefined then field = field.onChange(line => execute(line, repaint))
-        val promptRow: UI = div.cssClass("p-terminal-prompt")(
+        var promptDiv = div.cssClass("p-terminal-prompt")
+        endId.foreach(id => promptDiv = promptDiv.id(id))
+        val promptRow: UI = promptDiv(
             span.cssClass("p-terminal-prompt-label")(promptV),
             field
         )
@@ -188,8 +178,8 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
     end body
 
     /** Runs the handler effect on the committed line and appends the executed
-      * command to the bound history. The newest row scrolls itself into view via
-      * its own on-mount effect (see [[body]]), reliable because it fires AFTER
+      * command to the bound history. The newest row brings the terminal's end into view via
+      * its own effect (see [[body]]), reliable because it fires AFTER
       * the row is inserted, unlike scrolling from here (which races the render).
       */
     private def execute(line: String, repaint: UI.Action)(using Frame): UI.Action =

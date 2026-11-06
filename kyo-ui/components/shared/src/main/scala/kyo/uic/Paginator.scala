@@ -191,7 +191,7 @@ final class Paginator private[uic] (private[uic] val s: Paginator.State) extends
                     page <- if ownsPage then pageSlot.owned(0) else Kyo.lift(pageSlot)
                     rows <- rowsSlot.owned(rowsStart)
                 yield new Paginator(s.copy(pageSlot = page, rowsSlot = rows)).renderLive
-            }.placeholder(renderLive)
+            }
         end if
     end render
 

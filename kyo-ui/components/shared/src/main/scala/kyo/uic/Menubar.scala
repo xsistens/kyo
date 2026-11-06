@@ -59,20 +59,14 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
     private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(s.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
-        // The open submenus and the keyboard focus path, allocated by this effectful mount; static projections render the
-        // closed anatomy inert.
-        val stat: UI =
-            MenuRender.readItems(entriesV).render(items =>
-                new Menubar(s.copy(itemsV = items)).body(Set.empty, Absent, Nil, Absent, accessV.idV)
-            )
+        // The open submenus and the keyboard focus path live in this mount.
         UI.mounted {
             for
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
-                cmds  <- UI.commands
-                base  <- cmds.freshId
+                base  <- UI.id
             yield wired(subs, focus, base)
-        }.placeholder(stat)
+        }
     end render
 
     /** The subscription tree the mount publishes (golden-test seam).

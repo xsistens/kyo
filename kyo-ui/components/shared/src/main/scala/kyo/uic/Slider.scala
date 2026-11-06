@@ -98,7 +98,7 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
         if valueSlot.fixed && !readonlyFlag then new Slider(s.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.s.copy(valueSlot = s)).renderLive)(renderLive)
+        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.s.copy(valueSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)

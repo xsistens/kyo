@@ -147,14 +147,13 @@ final class Stepper[K] private[uic] (private[uic] val s: Stepper.State[K]) exten
     private[uic] def render(using Frame): UI =
         val stepper = UI.mounted {
             for
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
                 // Unbound, the stepper keeps the active step itself, starting on the first.
                 self <-
                     if valueSlot.binding.isEmpty then activeSlot.owned(0).map(s => new Stepper(this.s.copy(activeSlot = s)))
                     else Kyo.lift(this)
-            yield self.wired(base, id => cmds.focusId(id))
-        }.placeholder(shown(Absent, _ => ()))
+            yield self.wired(base, focusById)
+        }
         // A binding one way that nothing hears: every click is painted away again.
         // The card names the event of the slot that is bound: in value mode onValueChange hears the value, and onActiveChange
         // hears the click as well.
@@ -265,7 +264,7 @@ final class Stepper[K] private[uic] (private[uic] val s: Stepper.State[K]) exten
         val stepEls: List[UI] = stepList.zipWithIndex.map((st, i) => stepHeader(st, i, cur, tablist = true, ids, focus))
 
         val panel: List[UI] = stepList.lift(cur).toList.map { st =>
-            animatedPanel(cur, horizontalPanel(st, animated = false), horizontalPanel(st, animated = true))
+            animatedPanel(cur, horizontalPanel(st, animated = true))
         }
 
         var root = div.cssClass("p-stepper").cssClass("p-component")
@@ -291,11 +290,10 @@ final class Stepper[K] private[uic] (private[uic] val s: Stepper.State[K]) exten
       * incoming panel fades in (`p-uic-enter-fade`). A bare `enterTransition` would
       * never replay (`ref.render` keeps the horizontal panel's structural path
       * stable), so the mount's key (the active index) is what forces the teardown +
-      * remount. The placeholder is the un-animated panel, so SSR/golden output stays
-      * byte-identical (the animation is a pure runtime enhancement).
+      * remount.
       */
-    private def animatedPanel(cur: Int, plain: UI, animated: UI)(using Frame): UI =
-        UI.mounted(animated).keyed(cur).placeholder(plain)
+    private def animatedPanel(cur: Int, animated: UI)(using Frame): UI =
+        UI.mounted(animated).keyed(cur)
 
     /** The `div.p-steppanel.p-steppanel-active` for the active vertical step;
       * `animated` adds the crossfade transition hooks (only the live mount).
@@ -323,11 +321,7 @@ final class Stepper[K] private[uic] (private[uic] val s: Stepper.State[K]) exten
                         if i < stepList.length - 1 then List(span.cssClass("p-stepper-separator")) else Nil
                     val wrapperChildren = sep :+ div.cssClass("p-steppanel-content")(UI.children(st.s.content)*)
                     List(
-                        animatedPanel(
-                            cur,
-                            verticalPanel(wrapperChildren, animated = false),
-                            verticalPanel(wrapperChildren, animated = true)
-                        )
+                        animatedPanel(cur, verticalPanel(wrapperChildren, animated = true))
                     )
 
             var item = div.cssClass("p-stepitem")

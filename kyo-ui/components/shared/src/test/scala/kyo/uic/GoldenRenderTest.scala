@@ -4355,9 +4355,8 @@ class GoldenRenderTest extends UicTest:
             assert(named.contains("""aria-label="2 stars""""), "plural star aria-label")
             // The name is what the browser groups the radios by, and the grouping is what makes
             // this ONE tab stop with arrows between the stars. A caller's own name wins; the
-            // mount mints one otherwise, and only the static projection, which has no mount to
-            // mint in, is left without.
-            assert(!unnamed.contains("name="), "the static projection has no uniqueness source to mint from")
+            // mount draws one otherwise, on a static page as well.
+            assert(count(unnamed, """name="kyo-""") == 5, "the drawn name groups them on a static page too")
             assert((count(minted, """name="kyo-uic-7"""") == 5), "the mount's minted name groups them all")
             assert(named.contains("""role="radiogroup""""), "the box around the radios says what it is")
             assert(hearts.contains("""data-uic-icon="heart-fill""""), "onIcon overrides the filled glyph")
@@ -5724,7 +5723,8 @@ class GoldenRenderTest extends UicTest:
             assert(single.contains("p-accordioncontent-wrapper"), "content wrapper anatomy")
             assert(single.contains("p-accordioncontent-content"), "content inner anatomy")
             assert(single.contains("Content I"), "active content rendered")
-            assert(!single.contains("Content II"), "collapsed content not rendered")
+            // The body is the animated one from the first paint: a collapsed panel keeps its content, in a wrapper that hides it.
+            assert(single.contains("""aria-expanded="false""""), "the collapsed header says so")
             assert(single.contains("p-disabled"), "disabled panel class")
             assert(single.contains("""aria-expanded="true""""), "aria-expanded on the open header")
             assert(single.contains("click"), "headers register clicks")
@@ -5867,10 +5867,11 @@ class GoldenRenderTest extends UicTest:
             assert(page0.contains("p-carousel-viewport"), "viewport")
             assert(page0.contains("p-carousel-item-list"), "item list")
             assert(page0.contains("p-carousel-item-active"), "visible items are active")
-            assert(page0.contains("flex-basis: 50%"), "items sized 100/numVisible (Prime's inline sizing)")
-            assert(page0.contains(">A</span>") && page0.contains(">B</span>"), "page 0 shows the first window")
-            assert(!page0.contains(">C</span>"), "page 0 hides the rest (server-honest window)")
-            assert(page1.contains(">C</span>") && page1.contains(">D</span>"), "page 1 shows the stepped window")
+            // The strip is the live one from the first paint: every item, each a share of it, and the viewport shows the window.
+            assert(page0.contains("flex-basis: 20%"), "each item is its share of the stable strip")
+            assert(page0.contains(">A</span>") && page0.contains(">E</span>"), "the strip holds every item")
+            assert(!page0.contains("translate"), "page 0 needs no shift")
+            assert(page1.contains("translate"), "a strip that starts on page 1 starts shifted there")
             assert(page0.contains("p-carousel-prev-button"), "prev button")
             assert(page0.contains("p-carousel-next-button"), "next button")
             assert(page0.contains("p-button-text"), "nav buttons are Prime's text variant")
@@ -6436,17 +6437,21 @@ class GoldenRenderTest extends UicTest:
             assert(html.contains("input"), "cells still register the write-back that triggers the advance")
     }
 
-    "Terminal.wired stamps the newest history row so it can be scrolled into view" in {
+    "Terminal.wired stamps its prompt, the end of the terminal, so it can be scrolled into view" in {
         for
             html <-
                 for
                     ref <- Signal.initRef(Seq(uic.TerminalCommand("a", "1"), uic.TerminalCommand("b", "2")))
                     out <- UI.runRender(
-                        uic.Terminal().commands(ref).commandHandler(_ => "ok").wired(ref, "lastrow", _ => ())
+                        uic.Terminal().commands(ref).commandHandler(_ => "ok").wired(ref, "term-end", _ => ())
                     ).take(1).run
                 yield out.mkString
         yield
-            assert(("""id="lastrow"""".r.findAllIn(html).size == 1), "exactly the newest row carries the scroll id")
+            assert(("""id="term-end"""".r.findAllIn(html).size == 1), "exactly one element carries the scroll id")
+            assert(
+                html.contains("""id="term-end"""") && html.indexOf("""id="term-end"""") > html.lastIndexOf("p-terminal-command-response"),
+                "after every row: on the prompt"
+            )
             assert(html.contains("p-terminal-command"), "history rows rendered")
     }
 

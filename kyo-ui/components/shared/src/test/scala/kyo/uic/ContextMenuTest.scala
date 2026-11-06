@@ -118,7 +118,7 @@ class ContextMenuTest extends UicTest:
         // `key` is `Maybe[Any]` and Any is not comparable under strict equality, so the keys are
         // held against each other by their rendered form rather than by ==.
         (named.render, anon.render) match
-            case (n: Ast.Mounted, a: Ast.Mounted) =>
+            case (n: Ast.MountNode, a: Ast.MountNode) =>
                 assert(n.key.map(_.toString).contains("m1"), "the id is the key")
                 assert(a.key.isEmpty, "and no id means no key, as before")
             case other => fail(s"a ContextMenu renders as a mount; got: $other")
@@ -138,7 +138,7 @@ class ContextMenuTest extends UicTest:
 
     /** The state a caller's own mount would have allocated. */
     private def allocState(m: uic.ContextMenu)(using Frame): uic.ContextMenu.State < Async =
-        UI.Commands.init(_ => ()).map(c => kyo.internal.UICommands.commands.let(Present(c))(m.state))
+        inDraw(m.state)
 
     "the targetless form renders no target wrapper, which is the whole of what it is for" in {
         for
@@ -147,7 +147,7 @@ class ContextMenuTest extends UicTest:
             wrappers <- elementsWithClass(ui, "p-uic-contextmenu-target")
         yield
             assert(wrappers.isEmpty, "no div to be hoisted out of a table")
-            assert(!ui.isInstanceOf[Ast.Mounted], "and no mount of its own, so nothing above it can reset one")
+            assert(!ui.isInstanceOf[Ast.MountNode], "and no mount of its own, so nothing above it can reset one")
     }
 
     "openAt opens the menu at the point the caller's own element was right-clicked" in {
@@ -216,7 +216,7 @@ class ContextMenuTest extends UicTest:
         val a = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("a")).id("m1").render
         val b = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("b")).id("m2").render
         (a, b) match
-            case (x: Ast.Mounted, y: Ast.Mounted) =>
+            case (x: Ast.MountNode, y: Ast.MountNode) =>
                 assert(x.key.map(_.toString) != y.key.map(_.toString))
             case other => fail(s"a ContextMenu renders as a mount; got: $other")
         end match

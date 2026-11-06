@@ -148,7 +148,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   lives, the way an HTML control nobody binds keeps its tick. There are four forms, smallest first: `slot.owned(start)` inside a mount
   the component already has (beside its ids and highlights: a mount around it would be a mount inside a mount for every instance,
   which `UicTest.mountsAbove` holds), `slot.ownedFrom(unbound)` the same where a constant is only where it starts, `Slot.owning` a mount
-  of its own, and `Slot.draw` that with the placeholder drawn over `slot.standIn(start)` and the card in front, for a container.
+  of its own, and `Slot.draw` that with the card in front, for a container.
   `Slot.drawField` is what a field with native state draws from. A region around it that re-renders ends the instance and starts the
   state over, which a native control under a morph would not do; a parent that repaints and has to keep it binds the slot or gives
   the component a key. So a component that draws itself again for `disabled` reads that signal below the mount that holds its state,
@@ -172,8 +172,7 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   that carry something else stay (ConfirmDialog's `onAccept`/`onReject` are a choice, and each hears its own path).
   An overlay nothing inside can open (Dialog, Drawer, Toast, ConfirmDialog, a Popover without a trigger) starts OPEN
   when unbound, like an HTML `dialog` with `open`, and shows until the reader closes it; one with its own opener
-  (SpeedDial, a Popover with a trigger, the pickers) starts closed. A static placeholder that draws such own state from
-  a constant signal draws it quietly (`Dialog.quiet`, `Overlay.quiet`), or it reports a binding nobody made.
+  (SpeedDial, a Popover with a trigger, the pickers) starts closed.
 - **A field with NATIVE state binds it through kyo-ui, which puts back what its owner did not take.** The browser moves a tick,
   a caret's text, a range thumb or a radio before the report reaches the owner, and an owner that declines leaves the signal where it was,
   so no emission would ever reach the control. A one-way signal goes straight to the native element's setter (`value`, `checked`), which
@@ -614,41 +613,51 @@ or clean the test module before trusting the suite.
 hatch for the two things a render diff cannot express: imperative DOM commands
 (`focusId`, `scrollIntoViewId`) and measuring an element (`requestMeasureById*`). Load-bearing rules:
 
-- **Commands resolve ONLY inside a `UI.mounted` effect or an event handler**,
-  never in pure build/SSR render. In pure render the `Local` is empty and
-  `UI.commands` panics.
+- **Every component mount that does not wait is the `Sync` form of `UI.mounted`** (decided 2026-11-05): it allocates and draws in the
+  render pass, so the first paint, a static page included, shows the real component, and a reader's first click or key works. It has
+  no placeholder and no static copy of itself: the body draws once. `UI.id` gives the ids, `UI.whileMounted` runs what needs the live
+  page (an observer, a feed, a bound style), and a handler reaches commands through `UI.commands` or `focusById`. An effect typed
+  wider than it is counts as waiting, silently, with a placeholder window, so a helper stays `Sync` where it is. Only `form.Form` waits,
+  since its builder may.
+- **An effect that belongs to an element goes on the element**: `el.whileMounted(effect)`. A region that runs again has
+  new content, so without a key the effect starts again with each run of its region, as an unkeyed mount does; what has to
+  survive says so with `el.whileMountedKeyed(key)(effect)` (Overlay's panel and DataTable's header by their id, DataTable's
+  source by itself). The element's id is no key, and no position among siblings is part of a key. No mount with empty
+  content exists for this in uic. Its `Scope` ends with its instance, and a failure reaches the `onFailure` rules around the element.
+- **A component's mount that must survive its host's region running again is keyed on where the component was made**: Overlay
+  takes `(using UI.MountSite)` at construction and keys the mounts that mint its panel's ids on it. An effect inside a real mount's draw that reads
+  that mount's state stays `UI.whileMounted` (Carousel, VirtualScroller, DataTable's demand writes).
+- **Commands resolve ONLY in `el.whileMounted`, `UI.whileMounted`, a waiting `UI.mounted` effect or an event handler**,
+  never in a draw a static page also runs: outside a session `UI.commands` panics.
 - **A reusable component has no way to learn its own render path.** Every command
-  is id-addressed: in a `UI.mounted` effect, `id <- cmds.freshId`, stamp it
+  is id-addressed: in a `UI.mounted` effect, `id <- UI.id`, stamp it
   with `.id(id)` on your own element, then drive `focusId(id)` /
-  `scrollIntoViewId(id)` / `requestMeasureById(id)`. `freshId` mints
-  session-unique `kyo-uic-N` deterministically.
+  `scrollIntoViewId(id)` / `requestMeasureById(id)`. `UI.id` derives from the node's place and key,
+  so a static page and the live one agree; an id only a running session can mint would make them differ.
 - **Handlers take `UI.Action` (`Any < (Async & Abort[Any])`)**, on `uic.Button` and on a raw kyo element alike.
   A failure a handler leaves unhandled goes to the `onFailure` rules around it.
   A setter that takes an app's callback stores it as a `Callback` (`Callback.of(f)`,
   `Callback(action)`): the callback's failure goes to those rules right where it ran,
   and the component's own work after it (closing a panel, ending an edit, clearing a
   busy flag) still happens. A new setter does the same.
-  `UI.commands` works inside a handler, but capturing `cmds` once in the outer
-  mount and passing it down keeps the inner code free of the lookup.
 - **A command from a mount waits for that mount's content; one from a handler does not.**
-  kyo-ui holds a command sent from a `UI.mounted` effect (or a fiber it forked) until
+  kyo-ui holds a command sent from `UI.whileMounted`, a waiting effect or a fiber it forked until
   the instance's own content is on the page, behind whatever boundary holds it back,
-  and drops it (a measure then answers `Absent`) if the content never shows. So an
-  effect may focus the element it yields, and a fiber it forked may measure it. A
-  measure the effect awaits BEFORE it yields goes out at once (holding it would hold
+  and drops it (a measure then answers `Absent`) if the content never shows. So a
+  mount may focus the element it draws, and a fiber it forked may measure it. A
+  measure a waiting effect awaits BEFORE it yields goes out at once (holding it would hold
   the effect forever), so it can only see what is already on the page. A HANDLER's command goes out at
   once, and the client resolves `getElementById` immediately (no rAF, no retry): a
   handler that addresses an element its own write is about to insert can miss it.
-  - Terminal auto-scroll: the newest row carries an invisible on-mount child that
-    scrolls ITSELF into view, not a scroll from the append handler (that races the
-    re-render; `scrollTop` stays 0 even though the container is scrollable). See
-    `Terminal.scala`.
+  - Terminal auto-scroll: the newest row carries an `el.whileMounted` that sends
+    `scrollIntoViewId` for the prompt, not a scroll from the append handler (that races the
+    re-render; `scrollTop` stays 0 even though the container is scrollable). `UI.scrollIntoView` scrolls
+    to the block's start and moves the page around the component too, so a component scrolling inside
+    itself uses `scrollIntoViewId`, which goes to the nearest edge. See `Terminal.scala`.
   - OTP auto-advance advances from the input handler (the target cell already
     exists from the prior render), so no nested mount is needed there.
-- **An effect never touches the DOM itself.** Even in the browser mount, a mount's
-  effect runs before its content is on the page, and inside a boundary (a mount's
-  own `.placeholder` is one) necessarily so, since the boundary waits for it. Code
-  that needs the real element uses `onAttached`, which runs once the element is in
+- **An effect never touches the DOM itself.** A draw runs before its content is on the page, and on a static page there is no DOM at all.
+  Code that needs the real element uses `onAttached`, which runs once the element is in
   the document; a nested mount is not a substitute and broke the demo's editor.
 
 ## Pointer and drag: the stable-surface idiom
@@ -679,16 +688,14 @@ plus its `rectX/Y/W/H` (normalize to 0..1 without a second round-trip).
 ## The wired golden seam
 
 Golden tests (`GoldenRenderTest`, all four platforms) render through the real `HtmlRenderer`,
-which shows a `UI.mounted` region as its PLACEHOLDER (the mount effect does not
-run). So a component whose live behavior lives in a mount exposes a
-`private[uic] def wired(...)` that returns the published subtree directly; the
-golden test calls it to assert the anatomy the placeholder cannot show (stamped
-ids, pointer handlers, focus wiring).
+which shows a `Sync` `UI.mounted` as what it draws, so a golden of `render` is the anatomy the reader meets. A component
+still has a `private[uic] def wired(...)` where a test has to hand it state the draw would otherwise allocate (a ref to write, a
+panel held open).
 
 - **Keep the wired seam Commands-free** so `kyo.uic.test` can drive it: pass id
   lists plus a plain `String => UI.Action` scroll/focus function, not a
   `UI.Commands` (`Commands.init` is `private[kyo]`, unreachable from the test).
-  Production wires `id => cmds.focusId(id)`; the test wires `_ => ()`. See
+  Production wires `focusById`; the test wires `_ => ()`. See
   `InputOtp.wired`, `Terminal.wired`, `Carousel.wired`.
 - `private[uic]` members (including `wired` and pure helpers like
   `Knob.valueFromPointer`, `Overlay.flipAnchor`) ARE reachable from `kyo.uic.test`,

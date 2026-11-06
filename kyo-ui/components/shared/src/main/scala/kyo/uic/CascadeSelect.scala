@@ -207,27 +207,22 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
 
     private def renderLive(using Frame): UI =
         // One open/closed signal for the root panel plus the open groups, allocated
-        // by this effectful mount; static projections render the closed anatomy inert.
+        // by this mount, which draws in the render pass.
         val validity = FieldValidity(validityV)
-        val stat: UI = roots.and(shown).render { (rs, s) =>
-            val (held, ld, ph) = s
-            new CascadeSelect(this.s.copy(items = rs)).bodyStatic(held, false, Set.empty, Absent, ph, ld, validity)
-        }
         UI.mounted {
             for
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open  <- openSlot.owned(false)
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
-                cmds  <- UI.commands
-                base  <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                base  <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the leaf the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
                 self = own.fold(this)(r => new CascadeSelect(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(r))))))
             yield new CascadeSelect(self.s.copy(openSlot = open)).wiredOver(subs, focus, Present(base))
-        }.placeholder(stat)
+        }
     end renderLive
 
     /** A constant nobody hears is fixed: the field is drawn read-only, reachable and readable with no panel to open. */
@@ -258,7 +253,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
             val sv = subs.view(openSet, rs)
             val fv = focus.view(f, rs)
             val st = CascadeSelect.Wired(openSlot, sv, fv, fv.value, base)
-            new CascadeSelect(s.copy(items = rs)).bodyStatic(held, o, sv.open, Present(st), ph, ld, validity)
+            new CascadeSelect(s.copy(items = rs)).body(held, o, sv.open, st, ph, ld, validity)
         }
     end wiredOver
 
@@ -276,11 +271,11 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         }
     end shown
 
-    private def bodyStatic(
+    private def body(
         held: Maybe[A],
         isOpen: Boolean,
         openMap: Set[List[Int]],
-        st: Maybe[CascadeSelect.Wired],
+        st: CascadeSelect.Wired,
         placeholder: Maybe[String],
         loading: Boolean,
         validity: FieldValidity
@@ -293,27 +288,21 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                 case _                                                                => Nil
 
         def closeAll: UI.Action =
-            st match
-                case Present(state) =>
-                    for
-                        _ <- state.submenus.openExactly(Absent)
-                        _ <- state.focusRef.set(Nil)
-                        _ <- askOpen(state.open, false)
-                    yield ()
-                case Absent => ()
+            for
+                _ <- st.submenus.openExactly(Absent)
+                _ <- st.focusRef.set(Nil)
+                _ <- askOpen(st.open, false)
+            yield ()
 
         // Opens with every group closed and the highlight on the first root option. Not on the
         // selected one: the chain opens closed, so a leaf chosen three levels down has no row on
         // the screen to land on.
         def openPanel: UI.Action =
-            st match
-                case Present(state) =>
-                    for
-                        _ <- state.submenus.openExactly(Absent)
-                        _ <- state.focusRef.set(MenuNav.firstFocus(items).getOrElse(Nil))
-                        _ <- askOpen(state.open, true)
-                    yield ()
-                case Absent => ()
+            for
+                _ <- st.submenus.openExactly(Absent)
+                _ <- st.focusRef.set(MenuNav.firstFocus(items).getOrElse(Nil))
+                _ <- askOpen(st.open, true)
+            yield ()
 
         def toggleRoot: UI.Action =
             if isOpen then closeAll else openPanel
@@ -376,7 +365,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                     case Absent => ()
 
         // === floating panel chain ================================================
-        val panelUI: List[UI] = st.toList.collect {
+        val panelUI: List[UI] = List(st).collect {
             case state if isOpen =>
                 Overlay.hosted(state.open)
                     .animate(false)
@@ -391,7 +380,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                     // chain (a leaf, a group row, a nested panel) ends at this root panel.
                     .containClicks(true)(
                         div.cssClass("p-cascadeselect-list-container")(
-                            list(items, Nil, current, openMap, Present(state), pick)
+                            list(items, Nil, current, openMap, state, pick)
                         )
                     )
                     .renderOpen
@@ -426,31 +415,31 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         end match
         accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach { b =>
+        st.idBase.foreach { b =>
             el = el.aria("controls", listId(b))
             // One travelling id, wherever in the nested chain the highlight has walked to, because
             // `aria-activedescendant` names exactly one element and the trigger is the one thing
             // holding focus.
-            st.foreach(state => if state.focus.nonEmpty then el = el.aria("activedescendant", activeId(b)))
+            if st.focus.nonEmpty then el = el.aria("activedescendant", activeId(b))
         }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
             if fixed then el = el.aria("readonly", "true")
             // The one click listener: a click anywhere on the field toggles the chain.
             // A panel fixed open has no close for a click to ask for, so the field takes none.
-            if st.isDefined && !fixed && !openFixedOpen then el = el.onClick(toggleRoot)
+            if !fixed && !openFixedOpen then el = el.onClick(toggleRoot)
             // Focus never leaves the trigger, however deep the chain of panels goes, so the whole
             // cascade keyboard lives here: closed, the three opening keys; open, one [[MenuNav]]
             // walk that steps into groups, back out of them, picks a leaf and closes on Escape.
-            st.filter(_ => !fixed).foreach { state =>
+            if !fixed then
                 el = el.onKeyDown { e =>
-                    if isOpen then panelKey(state)(e)
+                    if isOpen then panelKey(st)(e)
                     else
                         e.key match
                             case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel
                             case _                                                    => ()
                 }
-            }
+            end if
             // Focus-loss on the trigger reports the held leaf, the validation layer's Blur trigger.
             onBlurF.foreach { f =>
                 el = el.onBlur(choice match
@@ -466,7 +455,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
             Diagnostic.unknown(strays),
             Diagnostic(!disabledFlag && choice.exists(_.deaf(onChangeF.orElse(onPickF))), CascadeSelect.selectionName.advice)
         )
-    end bodyStatic
+    end body
 
     private def activeId(base: String): String = s"$base-active"
 
@@ -483,7 +472,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         path: List[Int],
         current: String,
         openMap: Set[List[Int]],
-        st: Maybe[CascadeSelect.Wired],
+        st: CascadeSelect.Wired,
         pick: A => UI.Action
     )(using Frame): UI =
         val rows: List[UI] = its.zipWithIndex.map {
@@ -491,24 +480,22 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                 val isSel = key(a) == current
                 var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected", isSel.toString)
                 if isSel then row = row.cssClass("p-cascadeselect-option-selected")
-                if st.exists(_.focus == (path :+ i)) then
+                if st.focus == (path :+ i) then
                     row = row.cssClass("p-focus").scrollAuto(true)
-                    st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
+                    st.idBase.foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
-                if st.isDefined then content = content.onClick(pick(a))
+                content = content.onClick(pick(a))
                 row(content(span.cssClass("p-cascadeselect-option-text")(labelF(a))))
 
             case (CascadeItem.Group(label, children), i) =>
                 val p                      = path :+ i
                 val groupOpen              = openMap(p)
                 def toggleGroup: UI.Action =
-                    st match
-                        case Present(state) =>
-                            val target: Maybe[List[Int]] =
-                                if groupOpen then (if p.size > 1 then Present(p.init) else Absent)
-                                else Present(p)
-                            state.submenus.openExactly(target)
-                        case Absent => ()
+                    val target: Maybe[List[Int]] =
+                        if groupOpen then (if p.size > 1 then Present(p.init) else Absent)
+                        else Present(p)
+                    st.submenus.openExactly(target)
+                end toggleGroup
                 var row = li
                     .cssClass("p-cascadeselect-option")
                     .cssClass("p-cascadeselect-option-group")
@@ -517,11 +504,11 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                     .aria("expanded", groupOpen.toString)
                     .aria("level", (p.size).toString)
                 if groupOpen then row = row.cssClass("p-cascadeselect-option-active")
-                if st.exists(_.focus == p) then
+                if st.focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
-                    st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
+                    st.idBase.foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
-                if st.isDefined then content = content.onClick(toggleGroup)
+                content = content.onClick(toggleGroup)
                 val contentUI: UI = content(
                     span.cssClass("p-cascadeselect-option-text")(label),
                     span.cssClass("p-cascadeselect-group-icon-container")(
@@ -530,10 +517,10 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                 )
                 // The side sub-panel: Prime's nested list skin on the Overlay primitive
                 // (RightStart = the sheet's `inset-inline-start: 100%; inset-block-start: 0`).
-                val panel: List[UI] = st match
-                    case Present(state) if groupOpen =>
+                val panel: List[UI] =
+                    if groupOpen then
                         List(
-                            Overlay.gated(state.submenus.close(p))
+                            Overlay.gated(st.submenus.close(p))
                                 .anchor(OverlayAnchor.RightStart)
                                 .matchWidth(false)
                                 .animate(false)
@@ -548,13 +535,13 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                                 )
                                 .renderOpen
                         )
-                    case _ => Nil
+                    else Nil
                 row(UI.children(contentUI :: panel)*)
         }
         // Named by `aria-controls`; the announcement itself rides the trigger, which is the one
         // element focus is ever on.
         var listEl = ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")
-        if path.isEmpty then st.foreach(state => state.idBase.foreach(b => listEl = listEl.id(listId(b))))
+        if path.isEmpty then st.idBase.foreach(b => listEl = listEl.id(listId(b)))
         listEl(UI.children(rows)*)
     end list
 end CascadeSelect

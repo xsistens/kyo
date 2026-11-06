@@ -110,7 +110,7 @@ final class FileUpload private[uic] (private[uic] val s: FileUpload.State) exten
         Diagnostics.before(Slot.owning(
             filesSlot,
             start = Seq.empty
-        )(s => new FileUpload(this.s.copy(filesSlot = s)).body)(body))("FileUpload")(
+        )(s => new FileUpload(this.s.copy(filesSlot = s)).body))("FileUpload")(
             Diagnostic.unheard(filesSlot, FileUpload.filesName)
         )
     end render

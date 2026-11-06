@@ -14,4 +14,6 @@ package kyo
   * }}}
   */
 package object uic:
+    /** Moves focus to the element with DOM id `id`, for a handler: it runs in a session, whichever page drew the id. */
+    private[uic] def focusById(id: String)(using Frame): UI.Action = UI.commands.map(_.focusId(id))
 end uic

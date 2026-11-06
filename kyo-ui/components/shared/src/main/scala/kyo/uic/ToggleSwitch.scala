@@ -70,7 +70,7 @@ final class ToggleSwitch private[uic] (private[uic] val s: ToggleSwitch.State) e
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new ToggleSwitch(this.s.copy(checkedSlot = s)).drawn(validity))(drawn(validity)))
+        )(s => new ToggleSwitch(this.s.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("ToggleSwitch")(Diagnostic.unheard(checkedSlot, ToggleSwitch.checkedName, on = !inert))

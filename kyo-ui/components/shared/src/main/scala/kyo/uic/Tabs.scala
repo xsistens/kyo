@@ -215,27 +215,20 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
 
     private def renderLive(using Frame): UI =
         UI.mounted {
-            UI.commands.map { cmds =>
-                // A caller's base wins, and only without one does the mount mint it. Same rule as [[Menu]]'s base: the ARIA
-                // and focus wiring works unasked, and a caller who wants to address a header can.
-                val base: String < Sync = accessV.idV match
-                    case Present(b) => b
-                    case Absent     => cmds.freshId
-                // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
-                val first: Maybe[K] < Sync = entries match
-                    case ReactiveValue.Const(ts) => Maybe.fromOption(ts.headOption.map(_.s.id))
-                    case ReactiveValue.Dyn(sig)  => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.s.id)))
-                val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => new Tabs(this.s.copy(selectedSlot = s)))
-                base.map(b => self.map(_.wired(b, id => cmds.focusId(id))))
-            }
+            // A caller's base wins, and only without one does the mount draw it. Same rule as [[Menu]]'s base: the ARIA
+            // and focus wiring works unasked, and a caller who wants to address a header can.
+            val base: String < Sync = accessV.idV match
+                case Present(b) => b
+                case Absent     => UI.id
+            // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
+            val first: Maybe[K] < Sync = entries match
+                case ReactiveValue.Const(ts) => Maybe.fromOption(ts.headOption.map(_.s.id))
+                case ReactiveValue.Dyn(sig)  => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.s.id)))
+            val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => new Tabs(this.s.copy(selectedSlot = s)))
+            base.map(b => self.map(_.wired(b, focusById)))
         }
-            // With a base the ids are known without a mount, so the placeholder carries them
-            // too: a golden render, an SSG page and the live tree then agree on the header
-            // ids instead of only the live one having any. Arrow-key focus still needs the
-            // mount, which is what the no-op focus says here.
-            .placeholder(body(accessV.idV, _ => ()))
 
-    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    /** The seam a test renders to choose the base itself. */
     private[uic] def wired(base: String, focus: String => UI.Action)(using Frame): UI =
         body(Present(base), focus)
 

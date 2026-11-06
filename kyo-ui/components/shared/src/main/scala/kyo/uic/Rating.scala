@@ -120,22 +120,24 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
     private[uic] def render(using Frame): UI =
-        // A constant nobody hears is fixed: drawn read-only. Unbound, the rating keeps the stars the reader picks itself.
+        // A constant nobody hears is fixed: drawn read-only.
         if valueSlot.fixed && !readonlyFlag then new Rating(s.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = 0)(s => new Rating(this.s.copy(valueSlot = s)).renderLive)(renderLive)
+        else renderLive
 
     private def renderLive(using Frame): UI =
         // The radios' `name` is what the browser groups them by, and the grouping is what gives
         // this control its single tab stop and its arrows. Without one every star was its own
         // group: five tab stops, no arrows, and nothing stopping two of them from being checked.
-        // A caller's own name wins; otherwise the mount mints one. The static projection has no
-        // name yet, so it keeps the single tab stop by taking the other stars out of the tab order.
+        // A caller's own name wins; otherwise the mount draws one. Unbound, the same mount keeps the stars the reader picks.
         val field =
-            if nameV.isDefined then renderNamed
+            if nameV.isDefined && valueSlot.binding.isDefined then renderNamed
             else
                 UI.mounted {
-                    UI.commands.map(cmds => cmds.freshId.map(n => new Rating(s.copy(nameV = Present(n))).renderNamed))
-                }.placeholder(renderNamed)
+                    for
+                        value <- valueSlot.owned(0)
+                        name  <- nameV.fold(UI.id)(Kyo.lift)
+                    yield new Rating(s.copy(valueSlot = value, nameV = Present(name))).renderNamed
+                }
         // A value bound one way that nothing hears: every star the reader picks is put back.
         Diagnostics.after(field)("Rating")(Diagnostic.unheard(valueSlot, Rating.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
