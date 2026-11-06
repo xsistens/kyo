@@ -111,6 +111,66 @@ object UI:
             Foreach[A, C](signal, Present(key), render, indexed = true)
     end extension
 
+    // ---- Props ----
+
+    /** A value a component reads that may change while it is shown: a constant, or a signal.
+      *
+      * A setter takes one, so a caller writes `.label("Save")` or `.label(name)` with no wrapper, and a default reads
+      * `label: Prop[String] = ""`. A component reads it where it is used, the way Solid reads a prop: a constant is a plain
+      * value and costs no subscription, a signal draws in one region of its own. The operations in [[Prop$ Prop]] keep that
+      * split, so code that reads a prop is written once for both cases:
+      *
+      * {{{
+      * Prop.render(busy)(on => if on then spinner else UI.empty)      // a region only where busy is a signal
+      * Prop.map(Prop.zip(disabled, busy))(_ || _)                     // a constant where both are
+      * }}}
+      *
+      * Drawing goes through `render`, never through `map` into a `Signal[UI]`: a region made by `render` compares the value it
+      * was drawn from, while two trees built from one value are never equal (each holds fresh handler closures). A two-way
+      * binding is a [[kyo.SignalRef]] in the prop, found again by its runtime class with `writable`.
+      *
+      * A text or element child takes a prop directly (`span(label)`), through the conversions on
+      * [[kyo.UI.Ast.HtmlChildVal]].
+      */
+    type Prop[A] = A | Signal[A]
+
+    /** The operations of a [[Prop]], as functions over it, not extensions: a prop is any value as well, so an extension on it
+      * would apply to every value and hide the extensions a value already has (kyo's own `map` on `A < S` among them).
+      */
+    object Prop:
+
+        /** The prop as a signal: a signal as it is, a constant as a constant signal. For combining with other signals; a
+          * component that only reads the prop uses [[render]] or [[map]], which make no signal for a constant.
+          */
+        def signal[A](p: Prop[A])(using CanEqual[A, A], Frame): Signal[A] = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]]
+            case a            => Signal.initConst(a.asInstanceOf[A])
+
+        /** Drawn from the prop: a constant draws once with no region, a signal in one region compared by its value. */
+        def render[A](p: Prop[A])(f: A => UI)(using Frame): UI = p match
+            case s: Signal[?] => UI.render(s.asInstanceOf[Signal[A]])(f) // by name: here `render` is this method
+            case a            => f(a.asInstanceOf[A])
+
+        /** The prop through `f`, for a value that is not drawn: a constant gives a constant, a signal a mapped signal. */
+        def map[A, B](p: Prop[A])(f: A => B)(using CanEqual[B, B], Frame): Prop[B] = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]].map(f)
+            case a            => f(a.asInstanceOf[A])
+
+        /** Both props as one: two constants stay a constant, anything else is one combined signal, never one region inside
+          * another.
+          */
+        def zip[A, B](p: Prop[A], q: Prop[B])(using CanEqual[A, A], CanEqual[B, B], Frame): Prop[(A, B)] = (p, q) match
+            case (_: Signal[?], _) | (_, _: Signal[?]) => signal(p).combineLatest(signal(q))
+            case (a, b)                                => (a.asInstanceOf[A], b.asInstanceOf[B])
+
+        /** The ref a reader's change is written into, when the prop binds two way: a [[kyo.SignalRef]] by its runtime class.
+          * Any other signal, and a constant, binds one way. `ref.readOnly` is how a caller opts out.
+          */
+        def writable[A](p: Prop[A]): Maybe[SignalRef[A]] = p match
+            case r: SignalRef[?] => Present(r.asInstanceOf[SignalRef[A]])
+            case _               => Absent
+    end Prop
+
     // ---- Factory constructors ----
 
     /** The empty UI: an [[kyo.UI.Ast.Fragment]] with no children, rendering nothing. Useful as a neutral element or a conditional
@@ -2127,6 +2187,20 @@ object UI:
               */
             implicit def liftSignalString(sig: Signal[String])(using Frame): HtmlChildVal =
                 new HtmlChildVal(Reactive[Text](sig.map(s => Text(s)), Present(Reactive.Source.Lifted(sig))))
+
+            /** A text [[kyo.UI.Prop]] as a child: a constant is a text node, a signal a reactive one, as `liftString` and
+              * `liftSignalString` make them. A plain `String` or `Signal[String]` still takes those, which are more specific.
+              */
+            implicit def liftPropString(p: Prop[String])(using Frame): HtmlChildVal = p match
+                case s: Signal[?] => liftSignalString(s.asInstanceOf[Signal[String]])
+                case s            => liftString(s.asInstanceOf[String])
+
+            /** A [[kyo.UI.Prop]] of an element type as a child: a constant is the element, a signal a reactive node, as `lift` and
+              * `liftSignal` make them.
+              */
+            implicit def liftPropUI[A <: UI](p: Prop[A])(using Frame, AsHtmlChild[A]): HtmlChildVal = p match
+                case s: Signal[?] => liftSignal(s.asInstanceOf[Signal[A]])
+                case a            => new HtmlChildVal(a.asInstanceOf[A])
         end HtmlChildVal
 
         /** Layout marker for block-flow elements (`div`, `p`, headings, ...). */
