@@ -388,67 +388,83 @@ private[kyo] object DomBackend:
     private def mountInto(ui: UI, container: dom.Element, diagnostics: MountDiagnostics)(using Frame): Unit < (Async & Scope) =
         val session     = new LocalSession
         val attachments = new Attachments(container)
+        val listeners   = new BodyListeners
         for
-            _       <- Sync.defer(discard(morphScript))
-            _       <- DomStyleSheet.injectBase()
-            root    <- ReactiveUI.normalize(ui, Seq.empty)
-            html    <- HtmlRenderer.render(ui, Seq.empty)
-            _       <- Sync.defer { noteMarkers(html); container.innerHTML = html }
-            regions <- DomReactiveRegions.init(container)
-            _       <- Sync.defer(diagnostics.regionsOpened(regions))
-            _       <- applyJsProps(container)
-            _       <- Sync.defer(seedEnter(container, Set.empty))
-            _       <- Sync.defer(seedFocusAuto(container, Set.empty))
-            // Record the initial carriers without scrolling: the first paint is where the reader starts, not a
-            // movement to follow.
-            _ <- Sync.defer(sweepScrollAuto(scroll = false))
-            _ <- Sync.defer(sweepFilled())
-            // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
-            _        <- Sync.defer { adoptPortals(container); retireOrphanTwins() }
-            _        <- Sync.defer(beginAnimationsSync(container))
+            _        <- Sync.defer(discard(morphScript))
+            _        <- DomStyleSheet.injectBase()
+            root     <- ReactiveUI.normalize(ui, Seq.empty)
+            html     <- HtmlRenderer.render(ui, Seq.empty)
             commands <- UI.Commands.init(op => applyOpLocal(op, session))
             _ = session.commands = commands
             // Installed so component handlers and mounted effects reach `UI.commands`: the region fibers subscribe
             // forks and the event drain all start inside it.
             _ <- UICommands.commands.let(Present(commands)) {
                 for
+                    // The first paint is on the page before the session behind it runs, and the browser hands over the reader's events in
+                    // between. So the queue, its drain and the listeners come before the paint, and what they hear waits in the queue until
+                    // the subscription lets the drain go, as the server-push client's `__q` keeps what is raised before its session is live.
+                    // Every listener on the page offers here, on the one JS thread; the drain is the only consumer.
+                    events <- Channel.init[Unit < Async](256, Access.MultiProducerSingleConsumer)
+                    _ = session.events = Present(events)
+                    subscribed <- Promise.init[(Seq[String], UIEvent) => Boolean < Async, Any]
+                    handle = (path: Seq[String], event: UIEvent) => subscribed.get.map(h => h(path, event))
+                    // Single-consumer drain owned by the ambient page Scope. The single consumer preserves event ordering.
+                    // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
+                    // Panic propagates rather than being silently swallowed as a clean drain end.
+                    // The drain carries the session's scroll sink: a handler calling UI.scrollIntoView scrolls the
+                    // local document, the browser-mount counterpart of the server session's WebSocket op.
+                    drain <- Fiber.initUnscoped(UICommands.scrollSink.let(Present(scrollLocal)) {
+                        DragCommands.resolveSink.let(Present(resolveLocal)) {
+                            subscribed.get.andThen(Sync.defer(diagnostics.drainStarted())).andThen(
+                                Loop.foreach(Abort.runPartial[Closed](events.take).map {
+                                    case Result.Success(eff) => eff.andThen(Loop.continue)
+                                    case Result.Failure(_)   => Loop.done
+                                })
+                            )
+                        }
+                    })
+                    // Removes callbacks before closing their queue and finally interrupts and joins the drain. Registered twice: here for
+                    // a mount that fails on its way up, and again after the subscription, since finalizers are LIFO and the events have to
+                    // stop before the exchange closes. Only the first one to run does anything.
+                    ended <- AtomicBoolean.init(false)
+                    endEvents = ended.getAndSet(true).map { done =>
+                        if done then Kyo.unit
+                        else
+                            Sync.defer(listeners.removeAll())
+                                .andThen(events.close.unit)
+                                .andThen(Sync.defer(diagnostics.channelClosed()))
+                                .andThen(Sync.defer(diagnostics.drainInterrupting()))
+                                .andThen(drain.interrupt)
+                                .andThen(drain.getResult)
+                                .andThen(Sync.defer(diagnostics.drainJoined()))
+                    }
+                    _ <- Scope.ensure(endEvents)
+                    _ <- Sync.defer(diagnostics.drainInstalled(drain))
+                    _ <- Sync.defer {
+                        setupEventDelegation(handle, events, listeners)
+                        setupPointerDelegation(handle, events, listeners)
+                        setupInputMasking(listeners)
+                    }
+                    _       <- Sync.defer { noteMarkers(html); container.innerHTML = html }
+                    regions <- DomReactiveRegions.init(container)
+                    _       <- Sync.defer(diagnostics.regionsOpened(regions))
+                    _       <- applyJsProps(container)
+                    _       <- Sync.defer(seedEnter(container, Set.empty))
+                    _       <- Sync.defer(seedFocusAuto(container, Set.empty))
+                    // Record the initial carriers without scrolling: the first paint is where the reader starts, not a
+                    // movement to follow.
+                    _ <- Sync.defer(sweepScrollAuto(scroll = false))
+                    _ <- Sync.defer(sweepFilled())
+                    // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
+                    _        <- Sync.defer { adoptPortals(container); retireOrphanTwins() }
+                    _        <- Sync.defer(beginAnimationsSync(container))
                     exchange <- Kyo.lift(LocalExchange(regions, diagnostics, attachments))
                     dispatch <- ReactiveUI.subscribe(root, exchange)
                     // A subscription interrupt is asynchronous. Stop accepting publications before the Scope begins
                     // interrupting region fibers, so an already-woken observer cannot publish into the registry after its
                     // close finalizer has run.
                     _ <- Scope.ensure(exchange.close)
-                    // Single-consumer drain owned by the ambient page Scope. The single consumer preserves event ordering.
-                    // Every listener on the page offers here, on the one JS thread; the drain is the only consumer.
-                    events <- Channel.init[Unit < Async](256, Access.MultiProducerSingleConsumer)
-                    _ = session.events = Present(events)
-                    // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
-                    // Panic propagates rather than being silently swallowed as a clean drain end.
-                    // The drain carries the session's scroll sink: a handler calling UI.scrollIntoView scrolls the
-                    // local document, the browser-mount counterpart of the server session's WebSocket op.
-                    drain <- Scope.acquireRelease(
-                        Fiber.initUnscoped(UICommands.scrollSink.let(Present(scrollLocal)) {
-                            DragCommands.resolveSink.let(Present(resolveLocal)) {
-                                Sync.defer(diagnostics.drainStarted()).andThen(
-                                    Loop.foreach(Abort.runPartial[Closed](events.take).map {
-                                        case Result.Success(eff) => eff.andThen(Loop.continue)
-                                        case Result.Failure(_)   => Loop.done
-                                    })
-                                )
-                            }
-                        })
-                    )(drain =>
-                        Sync.defer(diagnostics.drainInterrupting()).andThen(drain.interrupt).andThen(drain.getResult).andThen {
-                            Sync.defer(diagnostics.drainJoined())
-                        }
-                    )
-                    _ <- Sync.defer(diagnostics.drainInstalled(drain))
-                    // Finalizers are LIFO. Register the drain first, then the channel, then listeners, so teardown
-                    // removes callbacks before closing their queue and finally interrupts and joins the drain.
-                    _ <- Scope.ensure(events.close.andThen(Sync.defer(diagnostics.channelClosed())).unit)
-                    _ <- setupEventDelegation(dispatch.handle, events)
-                    _ <- setupPointerDelegation(dispatch.handle, events)
-                    _ <- setupInputMasking()
+                    _ <- Scope.ensure(endEvents)
                     // Hooks start through the drain, so they can start only now; what the first paint and the initial
                     // subscription put on the page is found by this first sweep. Registered after the drain, the close runs
                     // before it is interrupted, so every hook ends inside a live session.
@@ -458,6 +474,9 @@ private[kyo] object DomBackend:
                         attachments.events = Present(events)
                         attachments.sweep()
                     }
+                    // Lets the drain go from a fiber of its own, so it runs behind the regions' first passes the subscription started. One
+                    // of those may rebuild an element the sweep above found; the hook it queued then starts on the new value, and only there.
+                    _           <- Fiber.initUnscoped(subscribed.completeDiscard(Result.succeed(dispatch.handle)))
                     dragRuntime <- DomDragRuntime.install(
                         container,
                         event =>
@@ -1396,54 +1415,38 @@ private[kyo] object DomBackend:
         found
     end declaredInChain
 
-    private def addScopedListener(
-        eventType: String,
-        listener: scalajs.js.Function1[dom.Event, Unit],
-        capture: Boolean
-    )(using Frame): Unit < (Scope & Sync) =
-        final case class Installed(
-            target: dom.EventTarget,
-            eventType: String,
-            listener: scalajs.js.Function1[dom.Event, Unit],
-            capture: Boolean
-        )
-        Scope.acquireRelease {
-            Sync.defer {
-                val target = document.body
-                target.addEventListener(eventType, listener, capture)
-                Installed(target, eventType, listener, capture)
-            }
-        }(installed =>
-            Sync.defer(installed.target.removeEventListener(installed.eventType, installed.listener, installed.capture))
-        ).unit
-    end addScopedListener
+    /** The listeners one mount has on the body. They go on before the first paint and come off before their queue closes, which is after
+      * everything the mount does in between, so they are not added through `Scope`, whose finalizers run in the reverse of the order things
+      * were added.
+      */
+    final private class BodyListeners:
+        private var installed = List.empty[() => Unit]
 
-    private def addScopedListener(
-        eventType: String,
-        listener: scalajs.js.Function1[dom.Event, Unit],
-        options: dom.EventListenerOptions
-    )(using Frame): Unit < (Scope & Sync) =
-        final case class Installed(
-            target: dom.EventTarget,
-            eventType: String,
-            listener: scalajs.js.Function1[dom.Event, Unit],
-            options: dom.EventListenerOptions
-        )
-        Scope.acquireRelease {
-            Sync.defer {
-                val target = document.body
-                target.addEventListener(eventType, listener, options)
-                Installed(target, eventType, listener, options)
-            }
-        }(installed =>
-            Sync.defer(installed.target.removeEventListener(installed.eventType, installed.listener, installed.options))
-        ).unit
-    end addScopedListener
+        def add(eventType: String, listener: scalajs.js.Function1[dom.Event, Unit], capture: Boolean): Unit =
+            val target = document.body
+            target.addEventListener(eventType, listener, capture)
+            installed = (() => target.removeEventListener(eventType, listener, capture)) :: installed
+        end add
+
+        def add(eventType: String, listener: scalajs.js.Function1[dom.Event, Unit], options: dom.EventListenerOptions): Unit =
+            val target = document.body
+            target.addEventListener(eventType, listener, options)
+            installed = (() => target.removeEventListener(eventType, listener, options)) :: installed
+        end add
+
+        def removeAll(): Unit =
+            val all = installed
+            installed = Nil
+            all.foreach(_())
+        end removeAll
+    end BodyListeners
 
     /** Set up capture-phase event delegation on document.body. */
-    private def setupEventDelegation(dispatch: (Seq[String], UIEvent) => Boolean < Async, events: Channel[Unit < Async])(using
-        Frame
-    ): Unit < (Scope & Sync) =
+    private def setupEventDelegation(
+        dispatch: (Seq[String], UIEvent) => Boolean < Async,
+        events: Channel[Unit < Async],
+        listeners: BodyListeners
+    )(using Frame): Unit =
         final class ChainTypes(target: dom.Element):
             def contains(t: String): Boolean = declaredInChain(target, t)
 
@@ -1686,22 +1689,19 @@ private[kyo] object DomBackend:
                     end if
             }
         val scrollOptions = js.Dynamic.literal(capture = true, passive = true).asInstanceOf[dom.EventListenerOptions]
-        for
-            _ <- addScopedListener("click", handler, true)
-            _ <- addScopedListener("contextmenu", handler, true)
-            _ <- addScopedListener("input", handler, true)
-            _ <- addScopedListener("change", handler, true)
-            _ <- addScopedListener("submit", handler, true)
-            _ <- addScopedListener("keydown", handler, true)
-            _ <- addScopedListener("keyup", handler, true)
-            _ <- addScopedListener("focus", handler, true)
-            _ <- addScopedListener("blur", handler, true)
-            _ <- addScopedListener("mouseover", handler, true)
-            _ <- addScopedListener("mouseout", handler, true)
-            _ <- addScopedListener("wheel", handler, wheelOptions)
-            _ <- addScopedListener("scroll", scrollHandler, scrollOptions)
-        yield ()
-        end for
+        listeners.add("click", handler, true)
+        listeners.add("contextmenu", handler, true)
+        listeners.add("input", handler, true)
+        listeners.add("change", handler, true)
+        listeners.add("submit", handler, true)
+        listeners.add("keydown", handler, true)
+        listeners.add("keyup", handler, true)
+        listeners.add("focus", handler, true)
+        listeners.add("blur", handler, true)
+        listeners.add("mouseover", handler, true)
+        listeners.add("mouseout", handler, true)
+        listeners.add("wheel", handler, wheelOptions)
+        listeners.add("scroll", scrollHandler, scrollOptions)
     end setupEventDelegation
 
     private def findPathElement(el: dom.Element): Maybe[dom.Element] =
@@ -1945,7 +1945,7 @@ private[kyo] object DomBackend:
         dispatchInput(t)
     end setFilteredAt
 
-    private def setupInputMasking()(using Frame): Unit < (Scope & Sync) =
+    private def setupInputMasking(listeners: BodyListeners)(using Frame): Unit =
         val handler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
             val tRaw = e.target
             if tRaw != null then
@@ -2020,9 +2020,8 @@ private[kyo] object DomBackend:
                     end if
                 end if
             end if
-        addScopedListener("beforeinput", handler, true).andThen {
-            addScopedListener("compositionend", compositionEndHandler, true)
-        }
+        listeners.add("beforeinput", handler, true)
+        listeners.add("compositionend", compositionEndHandler, true)
     end setupInputMasking
 
     /** Corrects the whole value once a composition finishes.
@@ -2221,8 +2220,9 @@ private[kyo] object DomBackend:
 
     private def setupPointerDelegation(
         dispatch: (Seq[String], UIEvent) => Boolean < Async,
-        events: Channel[Unit < Async]
-    )(using Frame): Unit < (Scope & Sync) =
+        events: Channel[Unit < Async],
+        listeners: BodyListeners
+    )(using Frame): Unit =
         val down: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
             val e = e0.asInstanceOf[dom.PointerEvent]
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { el =>
@@ -2273,15 +2273,9 @@ private[kyo] object DomBackend:
                 ptrPath = Seq.empty
                 fireFromJs(events, dispatch(path, UIEvent.PointerUp(path, pointerPayload(el, e))).unit)
 
-        // Scoped like every other listener this mount installs. Registering them unscoped left three
-        // capture-phase listeners on the body per mount cycle, each closing over the torn-down mount's
-        // event channel.
-        for
-            _ <- addScopedListener("pointerdown", down, true)
-            _ <- addScopedListener("pointermove", move, true)
-            _ <- addScopedListener("pointerup", up, true)
-        yield ()
-        end for
+        listeners.add("pointerdown", down, true)
+        listeners.add("pointermove", move, true)
+        listeners.add("pointerup", up, true)
     end setupPointerDelegation
 
 end DomBackend

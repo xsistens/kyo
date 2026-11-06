@@ -497,4 +497,37 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "a click right after the first paint reaches its handler, before the subscription behind that paint has run" in {
+        // The browser hands over events between the paint and the session behind it: a real Chrome took a click on this page
+        // 12 to 234 ms after the paint with nothing listening. `regionsOpened` runs right after the paint, which is that moment.
+        def click(id: String): Unit =
+            val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
+                "click",
+                scalajs.Dynamic.literal(bubbles = true)
+            )
+            discard(dom.document.getElementById(id).asInstanceOf[scalajs.Dynamic].dispatchEvent(event))
+        end click
+        val diagnostics = new DomTestEnv.MountReady:
+            override def regionsOpened(opened: kyo.internal.DomReactiveRegions): Unit =
+                super.regionsOpened(opened)
+                click("early")
+        for
+            clicks <- AtomicInt.init(0)
+            later  <- Promise.init[Unit, Any]
+            ui = UI.div(
+                UI.button("early").id("early").onClick(clicks.incrementAndGet),
+                UI.button("later").id("later").onClick(later.completeUnitDiscard)
+            )
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, diagnostics)))
+            _     <- assertEventually(Sync.defer(diagnostics.installed), installBudget)
+            // The drain keeps the order of the events, so what became of the early click has happened by the time this one runs.
+            _     <- Sync.defer(click("later"))
+            _     <- later.get
+            heard <- clicks.get
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(heard == 1, s"the handler heard the click on the first paint $heard times")
+        end for
+    }
+
 end DomBackendDelegationTest
