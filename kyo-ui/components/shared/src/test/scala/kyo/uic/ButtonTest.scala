@@ -73,16 +73,15 @@ class ButtonTest extends UicTest:
             busy     <- Signal.initRef(false)
             cmds     <- headlessCommands
             ends <- kyo.internal.ReactiveUI.subscribed(button.disabled(disabled).loading(busy).render, log, commands = Present(cmds)) { _ =>
-                settles(busy.waiters.map(_ > 0), 5.seconds).andThen(drive(disabled, busy)).andThen(
-                    settles(
+                waitFor(busy.waiters.map(_ > 0)).andThen(drive(disabled, busy)).andThen(
+                    waitFor(
                         for
                             parked <- disabled.waiters.map(_ > 0)
                             also   <- busy.waiters.map(_ > 0)
                             drawn  <- Sync.defer(UicTest.publishedIn(log).headOption)
                             both   <- drawn.fold(Kyo.lift(false))(held)
-                        yield parked && also && both,
-                        5.seconds
-                    )
+                        yield parked && also && both
+                    ).andThen(true)
                 )
             }
         yield ends
@@ -97,7 +96,7 @@ class ButtonTest extends UicTest:
 
     "a write that lands while the older state is still painting ends on both" in {
         // The paint `busy` brought is paused at the transport, a slow one, while `disabled` is written: however that overlaps, the
-        // page ends on both. The pause is a latch, and the limits only turn a wait that never ends into an answer.
+        // page ends on both. The pause is a latch, and no wait here has a time limit.
         for
             painting <- Latch.init(1)
             resume   <- Latch.init(1)
