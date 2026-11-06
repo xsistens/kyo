@@ -28,11 +28,24 @@ private[kyo] object SignalNow:
 
         /** For a pass that reads no signal, so has nothing to read with. */
         val none: Locals = Map.empty
+
+        extension (locals: Locals)
+            /** What `local` holds in these locals. */
+            def read[A](local: Local[A]): A = local.getIn(locals)
+
+            /** These locals with `local` bound to `value`. */
+            def bound[A](local: Local[A], value: A): Locals =
+                locals.updated(local, value.asInstanceOf[AnyRef])
+        end extension
     end Locals
 
     def apply[A](signal: Signal[A])(using Frame, Locals, AllowUnsafe): A =
         signal.unsafeCurrent(summon[Locals]) match
             case Present(v) => v
-            case Absent     => Sync.Unsafe.evalOrThrow(Local.restore(summon[Locals])(signal.current))
+            case Absent     => eval(signal.current)
+
+    /** Evaluates `v` in place with the locals of the pass bound: what a pass needs of an effect it cannot suspend for. */
+    def eval[A](v: A < (Sync & Abort[Throwable]))(using Frame, Locals, AllowUnsafe): A =
+        Sync.Unsafe.evalOrThrow(Local.restore(summon[Locals])(v))
 
 end SignalNow
