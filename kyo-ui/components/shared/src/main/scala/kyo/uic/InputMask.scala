@@ -22,60 +22,60 @@ import kyo.*
   * rather than faked. `onComplete` IS honest: it fires when the masked value
   * fills every mask slot (its length reaches the full template length).
   */
-final class InputMask private[uic] (private[uic] val s: InputMask.State) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
-      Stated:
-    import s.*
+final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
+      HasProps:
+    import p.*
 
     type Self = InputMask
 
     /** The mask template (`9` digit, `a` letter, `*` alphanumeric, else literal). */
-    def mask(v: String): InputMask = new InputMask(s.copy(maskV = v))
+    def mask(v: String): InputMask = new InputMask(p.copy(maskV = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes the MASKED value, and ref writes update the field. Any other
       * signal binds ONE-WAY: the field shows it, and an edit only reports through [[onChange]] and [[onComplete]]; with
       * neither, a card says the reader cannot change it. A constant (already formatted, or raw; the client re-masks on
       * edit) is the starting text. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): InputMask = new InputMask(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): InputMask = new InputMask(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = new InputMask(s.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = new InputMask(p.copy(placeholderText = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(p.copy(accessV = v))
 
     /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
       * (no re-render).
       */
-    def disabled(v: Boolean | Signal[Boolean]): InputMask = new InputMask(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): InputMask = new InputMask(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
       * PLACE via kyo-ui's boolean attribute channel (no re-render).
       */
-    def readonly(v: Boolean | Signal[Boolean]): InputMask = new InputMask(s.copy(readonlyFlag = Present(ReactiveValue(v))))
+    def readonly(v: Boolean | Signal[Boolean]): InputMask = new InputMask(p.copy(readonlyFlag = Present(ReactiveValue(v))))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): InputMask = new InputMask(s.copy(sizeV = v))
+    def size(v: Size): InputMask = new InputMask(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`. */
-    def variant(v: FieldVariant): InputMask = new InputMask(s.copy(variantV = v))
+    def variant(v: FieldVariant): InputMask = new InputMask(p.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
-    def fluid(v: Boolean): InputMask = new InputMask(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): InputMask = new InputMask(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputMask(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputMask(p.copy(validityV = v))
 
     /** Fired with the MASKED value on every change (native change commit). */
-    def onChange(f: String => UI.Action)(using Frame): InputMask = new InputMask(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: String => UI.Action)(using Frame): InputMask = new InputMask(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the MASKED text the field holds as focus leaves it
       * (what the reader typed, also unbound or from a constant). Unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => UI.Action)(using Frame): InputMask = new InputMask(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): InputMask = new InputMask(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** Fired with the MASKED value when it fills every mask slot (complete). */
-    def onComplete(f: String => UI.Action)(using Frame): InputMask = new InputMask(s.copy(onCompleteF = Present(Callback.of(f))))
+    def onComplete(f: String => UI.Action)(using Frame): InputMask = new InputMask(p.copy(onCompleteF = Present(Callback.of(f))))
 
     /** The number of literal-template characters when every slot is filled: a
       * masked value of this length is complete.
@@ -130,7 +130,7 @@ final class InputMask private[uic] (private[uic] val s: InputMask.State) extends
 end InputMask
 
 object InputMask:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         maskV: String,
         valueSlot: Slot[String] = Slot(),
         placeholderText: Maybe[TextValue] = Absent,
@@ -146,8 +146,8 @@ object InputMask:
     )
 
     /** An input mask with the given template (`9`/`a`/`*` slots, else literal). */
-    def apply(mask: String): InputMask = new InputMask(State(maskV = mask))
+    def apply(mask: String): InputMask = new InputMask(Props(maskV = mask))
 
     /** An unbound input mask; set the template via [[InputMask.mask]]. */
-    def apply(): InputMask = new InputMask(State(maskV = ""))
+    def apply(): InputMask = new InputMask(Props(maskV = ""))
 end InputMask

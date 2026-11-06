@@ -51,8 +51,8 @@ end PopupAccessibleRole
   * client seeds the first `data-kyo-focus-auto` element of the inserted
   * region, root first; the box must therefore stand down).
   */
-final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node, HasAccessibleNameRef, HasAccessibleDescription, Stated:
-    import s.*
+final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node, HasAccessibleNameRef, HasAccessibleDescription, HasProps:
+    import p.*
 
     type Self = Dialog
 
@@ -63,91 +63,91 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
       * the way an HTML `dialog` with `open` does, so it shows until the reader closes it. A signal nothing hears is
       * reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Dialog = new Dialog(s.copy(openSlot = openSlot.bind(v)))
+    def open(v: Boolean | Signal[Boolean]): Dialog = new Dialog(p.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Dialog = new Dialog(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Dialog = new Dialog(p.copy(openSlot = openSlot.hear(f)))
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(v: String | Signal[String]): Dialog = new Dialog(s.copy(headerText = Present(ReactiveValue(v))))
+    def header(v: String | Signal[String]): Dialog = new Dialog(p.copy(headerText = Present(ReactiveValue(v))))
 
     /** Arbitrary header content replacing the default title span (the severity icon
       * and the close button are still composed around it).
       */
-    def header(content: UI): Dialog = new Dialog(s.copy(headerContent = Present(content)))
+    def header(content: UI): Dialog = new Dialog(p.copy(headerContent = Present(content)))
 
     /** Footer slot (typically right-aligned action buttons), Prime's
       * `div.p-dialog-footer`.
       */
-    def footer(v: UI): Dialog = new Dialog(s.copy(footerV = Present(v)))
+    def footer(v: UI): Dialog = new Dialog(p.copy(footerV = Present(v)))
 
     /** Whether clicking the backdrop closes the dialog (default true). */
-    def closeOnBackdrop(v: Boolean): Dialog = new Dialog(s.copy(closeOnBackdrop = v))
+    def closeOnBackdrop(v: Boolean): Dialog = new Dialog(p.copy(closeOnBackdrop = v))
 
     /** Grows the dialog to the full viewport: Prime's `.p-dialog-maximized`. */
-    def maximized(v: Boolean): Dialog = new Dialog(s.copy(maximizedFlag = v))
+    def maximized(v: Boolean): Dialog = new Dialog(p.copy(maximizedFlag = v))
 
     /** Makes the dialog draggable by its header (Prime's `draggable`, driven by
       * pointer-drag). The header becomes a stable pointer-capture surface; a drag
       * translates the box via an internal position ref. Reset to centered on each
       * open.
       */
-    def draggable(v: Boolean): Dialog = new Dialog(s.copy(draggableFlag = v))
+    def draggable(v: Boolean): Dialog = new Dialog(p.copy(draggableFlag = v))
 
     /** Adds a bottom-right resize handle (Prime's `resizable`, driven by
       * pointer-drag): dragging it sets an explicit box width/height that follows
       * the cursor (seeded from a one-shot self-measure on grab).
       */
-    def resizable(v: Boolean): Dialog = new Dialog(s.copy(resizableFlag = v))
+    def resizable(v: Boolean): Dialog = new Dialog(p.copy(resizableFlag = v))
 
     /** Semantic header accent (kyo extension: colored border + tinted icon under
       * `.p-uic-dialog-<token>`); only visible when a header is present.
       */
-    def severity(v: Severity): Dialog = new Dialog(s.copy(severityV = Present(v)))
+    def severity(v: Severity): Dialog = new Dialog(p.copy(severityV = Present(v)))
 
     /** Superseded hint (kept for source compatibility, no attribute emitted): the
       * box seeds focus on open and the named child is reachable by Tab inside the
       * trap. To seed the child DIRECTLY, use `preventInitialFocus(true)` on the
       * dialog plus `.focusAuto(true).focusRestore(true)` on the child element.
       */
-    def initialFocus(id: String): Dialog = new Dialog(s.copy(initialFocusV = Present(id)))
+    def initialFocus(id: String): Dialog = new Dialog(p.copy(initialFocusV = Present(id)))
 
     /** Suppresses the box's automatic focus seeding on open (omits
       * `data-kyo-focus-auto`). Escape then needs focus inside the dialog first.
       */
-    def preventInitialFocus(v: Boolean): Dialog = new Dialog(s.copy(preventInitialFocusFlag = v))
+    def preventInitialFocus(v: Boolean): Dialog = new Dialog(p.copy(preventInitialFocusFlag = v))
 
     /** Suppresses the focus return to the opener after close (omits
       * `data-kyo-focus-restore`).
       */
-    def preventFocusRestore(v: Boolean): Dialog = new Dialog(s.copy(preventFocusRestoreFlag = v))
+    def preventFocusRestore(v: Boolean): Dialog = new Dialog(p.copy(preventFocusRestoreFlag = v))
 
     private[uic] def accessibility: Accessibility                           = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self              = new Dialog(s.copy(accessV = v))
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Dialog = new Dialog(s.copy(accessibleDescriptionV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self              = new Dialog(p.copy(accessV = v))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Dialog = new Dialog(p.copy(accessibleDescriptionV = v))
 
     /** Id(s) of describing element(s), emitted as `aria-describedby`. */
-    def accessibleDescriptionRef(v: String): Dialog = new Dialog(s.copy(accessibleDescriptionRefV = Present(v)))
+    def accessibleDescriptionRef(v: String): Dialog = new Dialog(p.copy(accessibleDescriptionRefV = Present(v)))
 
     /** ARIA role of the dialog box (default [[PopupAccessibleRole.Dialog]]). */
-    def accessibleRole(v: PopupAccessibleRole): Dialog = new Dialog(s.copy(accessibleRoleV = v))
+    def accessibleRole(v: PopupAccessibleRole): Dialog = new Dialog(p.copy(accessibleRoleV = v))
 
     /** Package-internal class hook: hosts (ConfirmDialog) stamp Prime's skin
       * class (`p-confirmdialog`) onto the dialog box element.
       */
-    private[uic] def boxClass(cls: String): Dialog = new Dialog(s.copy(boxClassesV = boxClassesV :+ cls))
+    private[uic] def boxClass(cls: String): Dialog = new Dialog(p.copy(boxClassesV = boxClassesV :+ cls))
 
     /** Package-internal: the slot of a host that embeds this dialog, as the host wants it heard. A host that reports its own
       * binding mistakes (ConfirmDialog, whose choices are heard apart) hands it over quieted.
       */
-    private[uic] def withOpen(slot: Slot[Boolean]): Dialog = new Dialog(s.copy(openSlot = slot))
+    private[uic] def withOpen(slot: Slot[Boolean]): Dialog = new Dialog(p.copy(openSlot = slot))
 
     /** Adds content children. */
-    def apply(cs: UI*): Dialog = new Dialog(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Dialog = new Dialog(p.copy(kids = kids ++ cs))
 
     /** The name a text header gives the dialog when the caller gave it none.
       *
@@ -171,7 +171,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
 
     private[uic] def render(using Frame): UI =
         // Unbound, the dialog keeps its visibility itself and starts open.
-        Slot.draw(openSlot, Dialog.openName, start = true)(s => new Dialog(this.s.copy(openSlot = s)).drawn)
+        Slot.draw(openSlot, Dialog.openName, start = true)(s => new Dialog(this.p.copy(openSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
         openSlot.binding match
@@ -294,7 +294,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
                         .cssClass("p-overlay-mask")
                         .enterTransition("p-uic-enter-fade")
                         .leaveTransition("p-overlay-mask-leave-active")
-                    if s.closeOnBackdrop && !fixed then base.onClickSelf(close)(boxUI) else base(boxUI)
+                    if p.closeOnBackdrop && !fixed then base.onClickSelf(close)(boxUI) else base(boxUI)
                 end maskAround
 
                 if !draggableFlag && !resizableFlag then
@@ -365,7 +365,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
 end Dialog
 
 object Dialog:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         openSlot: Slot[Boolean] = Slot(),
         headerText: Maybe[TextValue] = Absent,
         headerContent: Maybe[UI] = Absent,
@@ -386,7 +386,7 @@ object Dialog:
         kids: List[UI] = Nil
     )
 
-    def apply(): Dialog = new Dialog(State())
+    def apply(): Dialog = new Dialog(Props())
 
     /** Minimum box dimensions (px) while resizing. */
     private[uic] val MinW = 200.0

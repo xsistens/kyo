@@ -69,8 +69,8 @@ end TreeTableNodeScope
   * Pagination is deferred (Prime paginates root rows only; revisit with a
   * concrete need).
   */
-final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) extends Node, HasEmptyContent, HasAccessibleName, Stated:
-    import s.*
+final class TreeTable[A] private[uic] (private[uic] val p: TreeTable.Props[A]) extends Node, HasEmptyContent, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = TreeTable[A]
 
@@ -80,7 +80,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
     /** Appends root nodes, each built directly or from `_` (see [[TreeTableNodeScope]]), or a signal of roots that change
       * while the table is shown (see [[LiveEntry]]).
       */
-    def nodes(ns: TreeTableNodeLiveEntry[A]*): TreeTable[A] = new TreeTable(s.copy(nodeSources = nodeSources ++ ns))
+    def nodes(ns: TreeTableNodeLiveEntry[A]*): TreeTable[A] = new TreeTable(p.copy(nodeSources = nodeSources ++ ns))
 
     /** The roots as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[TreeTableNode[A]]] = TreeTableNodeScope.reading(nodeSources)
@@ -90,7 +90,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * position in the tree as authored, which does not survive data changes, and
       * matches a bound row by its own equality).
       */
-    def rowKey(f: A => String): TreeTable[A] = new TreeTable(s.copy(rowKeyF = Present(f)))
+    def rowKey(f: A => String): TreeTable[A] = new TreeTable(p.copy(rowKeyF = Present(f)))
 
     /** Appends columns (the DataTable [[Column]] carrier: text projection, body
       * template, `sortBy`, alignment). Each argument is authored against the table's row
@@ -103,7 +103,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       */
     def columns[K <: FlatOnly](cs: ColumnOf[A, K]*)(using shared: AnyTableColumn[K]): TreeTable[A] =
         given ColumnScope[A] = new ColumnScope[A]()
-        new TreeTable(s.copy(cols = cols ++ cs.map(c => shared.widen((c: Column[A, K]))).toList))
+        new TreeTable(p.copy(cols = cols ++ cs.map(c => shared.widen((c: Column[A, K]))).toList))
     end columns
 
     /** The expanded rows, matched by [[rowKey]].
@@ -113,10 +113,10 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * is how expansion held in a route or a parent is changed there. A one-way binding with neither
       * [[onExpandedChange]] nor [[onNodeToggle]] is reported in a card.
       */
-    def expanded(v: Set[A] | Signal[Set[A]]): TreeTable[A] = new TreeTable(s.copy(expandedSlot = expandedSlot.bind(v)))
+    def expanded(v: Set[A] | Signal[Set[A]]): TreeTable[A] = new TreeTable(p.copy(expandedSlot = expandedSlot.bind(v)))
 
     /** Fired with the rows open after a toggle, after a two-way [[expanded]] is written, and before [[onNodeToggle]]. */
-    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(s.copy(expandedSlot = expandedSlot.hear(f)))
+    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(p.copy(expandedSlot = expandedSlot.hear(f)))
 
     /** The chosen rows, matched by [[rowKey]].
       *
@@ -124,12 +124,12 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * hears it. A plain `Signal` or a constant binds one way: the table marks those rows and only reports the set a
       * press asks for. A one-way binding with neither [[onSelectionChange]] nor [[onRowClick]] is reported in a card.
       */
-    def selection(v: Set[A] | Signal[Set[A]]): TreeTable[A] = new TreeTable(s.copy(selectedSlot = selectedSlot.bind(v)))
+    def selection(v: Set[A] | Signal[Set[A]]): TreeTable[A] = new TreeTable(p.copy(selectedSlot = selectedSlot.bind(v)))
 
     /** Fired with the rows chosen after a row press, after a two-way [[selection]] is written, and before
       * [[onRowClick]]. Unlike [[onRowClick]] it carries what the press made of the selection, modifiers included.
       */
-    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(s.copy(selectedSlot = selectedSlot.hear(f)))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(p.copy(selectedSlot = selectedSlot.hear(f)))
 
     /** The ordered sort spec (applied per sibling level): [[SortKey]] entries, the first
       * sorting one being the primary key. Presses follow the DataTable contract, plain for
@@ -141,20 +141,20 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * fixed: each sortable header stays a tab stop that says its sort and answers no press or key. Unbound, the table
       * keeps the sort itself.
       */
-    def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = new TreeTable(s.copy(sortSlot = sortSlot.bind(v)))
+    def sort(v: List[SortKey] | Signal[List[SortKey]]): TreeTable[A] = new TreeTable(p.copy(sortSlot = sortSlot.bind(v)))
 
     /** Fired with the spec a header press asks for, after a two-way [[sort]] is written. */
-    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(s.copy(sortSlot = sortSlot.hear(f)))
+    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): TreeTable[A] = new TreeTable(p.copy(sortSlot = sortSlot.hear(f)))
 
     /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
       * and descending, which is Prime's default.
       */
-    def removableSort(v: Boolean): TreeTable[A] = new TreeTable(s.copy(removableSortFlag = v))
+    def removableSort(v: Boolean): TreeTable[A] = new TreeTable(p.copy(removableSortFlag = v))
 
     /** Selection semantics: `Single`/`Multiple` select on row click; `None`
       * (default) leaves rows inert.
       */
-    def selectionMode(v: SelectionMode): TreeTable[A] = new TreeTable(s.copy(selectionModeV = v))
+    def selectionMode(v: SelectionMode): TreeTable[A] = new TreeTable(p.copy(selectionModeV = v))
 
     /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -167,26 +167,26 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * the honest answer, since a range over a tree would have to say what it means to reach
       * across a collapsed branch.
       */
-    def metaKeySelection(v: Boolean): TreeTable[A] = new TreeTable(s.copy(metaKeyFlag = v))
+    def metaKeySelection(v: Boolean): TreeTable[A] = new TreeTable(p.copy(metaKeyFlag = v))
 
     /** Cell borders on every edge (`.p-treetable-gridlines`). */
-    def showGridlines(v: Boolean): TreeTable[A] = new TreeTable(s.copy(gridlinesFlag = v))
+    def showGridlines(v: Boolean): TreeTable[A] = new TreeTable(p.copy(gridlinesFlag = v))
 
     /** Size: `.p-treetable-sm` / default / `.p-treetable-lg` cell paddings. */
-    def size(v: Size): TreeTable[A] = new TreeTable(s.copy(sizeV = v))
+    def size(v: Size): TreeTable[A] = new TreeTable(p.copy(sizeV = v))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = new TreeTable(s.copy(emptyContentV = v))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = new TreeTable(p.copy(emptyContentV = v))
 
     /** Fired with the row after a toggler press (after the expansion write). */
     def onNodeToggle(f: A => UI.Action)(using Frame): TreeTable[A] =
-        new TreeTable(s.copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo))
+        new TreeTable(p.copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo))
 
     /** Fired with the row after a row click (after the selection write). */
     def onRowClick(f: A => UI.Action)(using Frame): TreeTable[A] =
-        new TreeTable(s.copy(onRowClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
+        new TreeTable(p.copy(onRowClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new TreeTable(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new TreeTable(p.copy(accessV = v))
     // ---- render ----
 
     private def keyOf(a: A, fallback: => String): String =
@@ -246,7 +246,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
                 sort <- sortSlot.owned(List.empty[SortKey])
                 exp  <- expandedSlot.owned(Set.empty[A])
                 sel  <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[A]) else Kyo.lift(selectedSlot)
-                self = new TreeTable(s.copy(sortSlot = sort, expandedSlot = exp, selectedSlot = sel))
+                self = new TreeTable(p.copy(sortSlot = sort, expandedSlot = exp, selectedSlot = sel))
             yield self.buildAll(base, Present(cursor), focusById)
         }
 
@@ -274,7 +274,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
         // selection together, and a region nested per signal would repaint the rows against the values it closed over.
         // The reactive `visible` and `sortable` flags are resolved here too, each to a plain boolean.
         val visible  = ReactiveValue.keyed(cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig))))
-        val sortable = ReactiveValue.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.s.headerV, sig))))
+        val sortable = ReactiveValue.keyed(cols.flatMap(c => c.sortableSig.toList.map(sig => (c.p.headerV, sig))))
         // The bound rows are matched to keys inside the region, against the roots it read: without a [[rowKey]] a row's
         // key is its place in the tree, which a live list moves.
         val exp    = expandedSlot.reading(Set.empty[A])
@@ -283,7 +283,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
         val cursor = ReactiveValue.orElse(cursorRef, Absent: Maybe[String])
         entries.and(visible).and(sortable).and(exp).and(sel).and(sort).and(cursor).render {
             case ((((((ns, vis), flags), e), s), so), cu) =>
-                val table = new TreeTable(this.s.copy(nodeList = ns))
+                val table = new TreeTable(this.p.copy(nodeList = ns))
                 table.narrowed(vis).body(e.map(table.keyFor), s.map(table.keyFor), so, cu, seed, flags, base, focus)
         }
     end buildAll
@@ -299,7 +299,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
         if vis.isEmpty && cols.forall(_.visibleConst) then this
         else
             val (shown, hidden) = cols.zipWithIndex.partition((c, i) => vis.getOrElse(i, c.visibleConst))
-            new TreeTable(s.copy(cols = shown.map(_._1), hiddenCols = hidden.map(_._1)))
+            new TreeTable(p.copy(cols = shown.map(_._1), hiddenCols = hidden.map(_._1)))
     end narrowed
 
     private def body(
@@ -320,12 +320,12 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
             if sortSlot.binding.isEmpty then Set.empty
             else
                 cols.collect {
-                    case c if c.isSortable(flags.getOrElse(c.s.headerV, c.sortableConst)) => List(c.s.headerV)
+                    case c if c.isSortable(flags.getOrElse(c.p.headerV, c.sortableConst)) => List(c.p.headerV)
                 }.toSet
 
         val headRow: UI =
             tr(UI.children(cols.map(c =>
-                headerCell(c, sort, flags.getOrElse(c.s.headerV, c.sortableConst), interactive)
+                headerCell(c, sort, flags.getOrElse(c.p.headerV, c.sortableConst), interactive)
             ))*)
 
         val bodyRows: List[UI] =
@@ -349,10 +349,10 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
         // One `col` per column when any of them is sized, which is the only place a width
         // can go: a width on a cell sizes the row it is in, not the column it is under.
         val colGroupUI: List[UI] =
-            if !cols.exists(_.s.widthV.isDefined) then Nil
+            if !cols.exists(_.p.widthV.isDefined) then Nil
             else
                 val cs: List[UI] = cols.map(c =>
-                    c.s.widthV match
+                    c.p.widthV match
                         case Present(w) => col.style(_.width(w.px))
                         case Absent     => col
                 )
@@ -398,7 +398,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       * toggle also reaches [[onNodeToggle]] and a press [[onRowClick]], so either is an outlet as good as the new events.
       */
     private def unheard(using Frame): List[UI] =
-        val sortable = cols.filter(c => c.isSortable(c.sortableConst)).map(_.s.headerV)
+        val sortable = cols.filter(c => c.isSortable(c.sortableConst)).map(_.p.headerV)
         Diagnostics.cards("TreeTable")(
             Diagnostic(sortSlot.deaf && sortable.nonEmpty, TreeTable.sortName.advice, sortable),
             Diagnostic.unheard(expandedSlot, TreeTable.expandedName),
@@ -411,7 +411,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
       */
     private def sortSiblings(ns: List[(TreeTableNode[A], Int)], sort: List[SortKey]): List[(TreeTableNode[A], Int)] =
         SortKey.sorting(sort).reverse.foldLeft(ns) { (rs, k) =>
-            (cols ++ hiddenCols).find(c => k.path == List(c.s.headerV)).flatMap(_.s.orderingV.toOption) match
+            (cols ++ hiddenCols).find(c => k.path == List(c.p.headerV)).flatMap(_.p.orderingV.toOption) match
                 case Some(ord) =>
                     val dir     = if k.direction == SortDirection.Ascending then ord else ord.reverse
                     val nodeOrd = Ordering.by[(TreeTableNode[A], Int), A](_._1.data)(using dir)
@@ -428,12 +428,12 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
         val sortable  = c.isSortable(flag) && !sortFixed
         val sortingKs = SortKey.sorting(sort)
         // A TreeTable renders one header row, so a column's path is its header alone.
-        val path      = List(c.s.headerV)
+        val path      = List(c.p.headerV)
         val rank      = sortingKs.indexWhere(_.path == path)
         val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
 
         var cell = th.cssClass("p-treetable-header-cell")
-        c.s.alignV match
+        c.p.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
@@ -474,7 +474,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
 
         cell(
             div.cssClass("p-treetable-column-header-content")(
-                UI.children((span.cssClass("p-treetable-column-title")(c.s.headerV): UI) :: (sortIcon ++ sortBadge))*
+                UI.children((span.cssClass("p-treetable-column-title")(c.p.headerV): UI) :: (sortIcon ++ sortBadge))*
             )
         )
     end headerCell
@@ -566,15 +566,15 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
 
         val tds: List[UI] = cols.zipWithIndex.map { (c, ci) =>
             var cell = td.role("cell")
-            c.s.alignV match
+            c.p.alignV match
                 case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
                 case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
                 case ColumnAlign.Start  => ()
             end match
 
-            val cellValue: HtmlChildVal = c.s.bodyF match
+            val cellValue: HtmlChildVal = c.p.bodyF match
                 case Present(f) => f(node.data)
-                case Absent     => stringToUI(c.s.textF.map(_(node.data)).getOrElse(""))
+                case Absent     => stringToUI(c.p.textF.map(_(node.data)).getOrElse(""))
 
             // The FIRST column carries the toggler: indent = depth × 1rem (Prime's
             // inline marginLeft); leaves keep the box but hide it (Prime's inline
@@ -713,7 +713,7 @@ final class TreeTable[A] private[uic] (private[uic] val s: TreeTable.State[A]) e
 end TreeTable
 
 object TreeTable:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         // The roots `body` draws, resolved from `nodeSources` by the render.
         nodeList: List[TreeTableNode[A]] = Nil,
         nodeSources: List[TreeTableNodeLiveEntry[A]] = Nil,
@@ -737,5 +737,5 @@ object TreeTable:
     private val sortName         = Slot.Name("TreeTable", "the sort", "a header press", "onSortChange")
     private val expandedName     = Slot.Name("TreeTable", "expanded", "a toggle", "onExpandedChange")
     private val selectionName    = Slot.Name("TreeTable", "selection", "a row press", "onSelectionChange")
-    def apply[A](): TreeTable[A] = new TreeTable[A](State())
+    def apply[A](): TreeTable[A] = new TreeTable[A](Props())
 end TreeTable

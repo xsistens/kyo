@@ -37,26 +37,26 @@ import kyo.UI.*
   * Honest deferrals: no mobile/hamburger breakpoint mode; typeahead is not
   * implemented.
   */
-final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Node, HasElementId, Stated:
-    import s.*
+final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Node, HasElementId, HasProps:
+    import p.*
 
     type Self = Menubar
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus), each built directly or from `_` (see
       * [[MenuItemScope]]), or a signal of items for a bar whose entries change while it is shown (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): Menubar = new Menubar(s.copy(entriesV = entriesV ++ is))
+    def items(is: MenuItemLiveEntry*): Menubar = new Menubar(p.copy(entriesV = entriesV ++ is))
 
     /** Content before the root list (`div.p-menubar-start`, the logo slot). */
-    def start(ui: UI): Menubar = new Menubar(s.copy(startV = Present(ui)))
+    def start(ui: UI): Menubar = new Menubar(p.copy(startV = Present(ui)))
 
     /** Content after the root list (`div.p-menubar-end`, pushed to the far
       * edge by the sheet's `margin-left: auto`).
       */
-    def end(ui: UI): Menubar = new Menubar(s.copy(endV = Present(ui)))
+    def end(ui: UI): Menubar = new Menubar(p.copy(endV = Present(ui)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(p.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         // The open submenus and the keyboard focus path live in this mount.
@@ -87,7 +87,7 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).render { case ((Rooted(roots, items), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)
-            new Menubar(s.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
+            new Menubar(p.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
         }
     end wired
 
@@ -136,7 +136,7 @@ final class Menubar private[uic] (private[uic] val s: Menubar.State) extends Nod
 end Menubar
 
 object Menubar:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         // The root rows `body` draws, resolved from `entriesV` by the render.
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
@@ -146,7 +146,7 @@ object Menubar:
     )
 
     /** An empty menubar; add root items via [[Menubar.items]]. */
-    def apply(): Menubar = new Menubar(State())
+    def apply(): Menubar = new Menubar(Props())
 end Menubar
 
 /** Package-internal recursive tree renderer shared by Menubar and TieredMenu
@@ -185,11 +185,11 @@ private[uic] object MenuTree:
                 case Absent     => ()
 
         its.zipWithIndex.map { (it, i) =>
-            if it.s.separatorFlag then
+            if it.p.separatorFlag then
                 li.cssClass(s"p-$prefix-separator").role("separator")
             else
                 val p = path :+ i
-                if it.s.itemsV.nonEmpty then
+                if it.p.itemsV.nonEmpty then
                     val isOpen            = open(p)
                     def toggle: UI.Action =
                         subs match
@@ -218,9 +218,9 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     val act: Maybe[UI.Action] =
-                        if subs.isDefined && !it.s.disabledFlag.constTrue then Present(toggle) else Absent
+                        if subs.isDefined && !it.p.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
                     // The enclosing wired render already reads the open submenus (Submenus.reading), so the overlay is
                     // host-gated: rendered only while open, via the single-subscription renderOpen form, and closing its
@@ -237,7 +237,7 @@ private[uic] object MenuTree:
                                 .role("menu")(
                                     UI.children(items(
                                         prefix,
-                                        it.s.itemsV,
+                                        it.p.itemsV,
                                         p,
                                         open,
                                         subs,
@@ -269,10 +269,10 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.s.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.p.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     def activate: UI.Action =
                         for
-                            _ <- it.s.actionV match
+                            _ <- it.p.actionV match
                                 case Present(eff) => eff
                                 case Absent       => (): UI.Action
                             _ <- closeAll
@@ -281,7 +281,7 @@ private[uic] object MenuTree:
                                 case Absent       => (): UI.Action
                         yield ()
                     val act: Maybe[UI.Action] =
-                        if subs.isDefined && !it.s.disabledFlag.constTrue then Present(activate) else Absent
+                        if subs.isDefined && !it.p.disabledFlag.constTrue then Present(activate) else Absent
                     row(MenuRender.itemContent(prefix, it, act, Absent, roving))
                 end if
         }

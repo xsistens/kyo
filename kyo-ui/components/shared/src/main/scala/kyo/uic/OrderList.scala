@@ -23,8 +23,8 @@ import kyo.UI.*
   * Listbox component (Prime embeds Listbox too); `itemTemplate` maps Prime's
   * option slot onto the typed items.
   */
-final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class OrderList[A] private[uic] (private[uic] val p: OrderList.Props[A]) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = OrderList[A]
 
@@ -34,37 +34,37 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
       * is the two-column member of the pair and spells the same thing `sourceItems` / `targetItems`.
       */
     def items(v: Seq[A] | Signal[Seq[A]])(label: A => String): OrderList[A] =
-        new OrderList(s.copy(itemsSlot = itemsSlot.bind(v), labelF = Present(label)))
+        new OrderList(p.copy(itemsSlot = itemsSlot.bind(v), labelF = Present(label)))
 
     /** Fired with the order a move asks for, after a two-way [[items]] is written. */
-    def onItemsChange(f: Seq[A] => UI.Action)(using Frame): OrderList[A] = new OrderList(s.copy(itemsSlot = itemsSlot.hear(f)))
+    def onItemsChange(f: Seq[A] => UI.Action)(using Frame): OrderList[A] = new OrderList(p.copy(itemsSlot = itemsSlot.hear(f)))
 
     /** Stable item identity: the selection key (defaults to the label). */
-    def itemKey(f: A => String): OrderList[A] = new OrderList(s.copy(keyF = Present(f)))
+    def itemKey(f: A => String): OrderList[A] = new OrderList(p.copy(keyF = Present(f)))
 
     /** Custom row content (Prime's option slot), replacing the plain label text. */
-    def itemTemplate(f: A => UI): OrderList[A] = new OrderList(s.copy(templateF = Present(f)))
+    def itemTemplate(f: A => UI): OrderList[A] = new OrderList(p.copy(templateF = Present(f)))
 
     /** The set of chosen items, matched by [[itemKey]]; the selected rows are the ones the move buttons act on. A
       * `SignalRef` binds two way; a plain `Signal` or a constant binds one way, and a click only reports the set it asks
       * for to [[onSelectionChange]].
       */
-    def selection(v: Set[A] | Signal[Set[A]]): OrderList[A] = new OrderList(s.copy(selectedSlot = selectedSlot.bind(v)))
+    def selection(v: Set[A] | Signal[Set[A]]): OrderList[A] = new OrderList(p.copy(selectedSlot = selectedSlot.bind(v)))
 
     /** Fired with the items chosen after a click, after a two-way [[selection]] is written. */
-    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): OrderList[A] = new OrderList(s.copy(selectedSlot = selectedSlot.hear(f)))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): OrderList[A] = new OrderList(p.copy(selectedSlot = selectedSlot.hear(f)))
 
     /** Disables the whole control: the listbox dims and the buttons lock. */
-    def disabled(v: Boolean): OrderList[A] = new OrderList(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): OrderList[A] = new OrderList(p.copy(disabledFlag = v))
 
     /** Whether picking takes a modifier key, forwarded to the embedded [[Listbox]] (Prime's
       * `metaKeySelection`, which this component has there too). Off by default, as in Prime:
       * every click toggles, which is what a list whose whole purpose is picking several wants.
       */
-    def metaKeySelection(v: Boolean): OrderList[A] = new OrderList(s.copy(metaKeyFlag = v))
+    def metaKeySelection(v: Boolean): OrderList[A] = new OrderList(p.copy(metaKeyFlag = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new OrderList(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new OrderList(p.copy(accessV = v))
     private def keyOf(a: A): String                            =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
@@ -107,7 +107,7 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
                 hi <- Signal.initRef(-1)
                 // Unbound, the list keeps the rows the reader picks itself.
                 sel <- selectedSlot.owned(Set.empty[A])
-            yield new OrderList(s.copy(selectedSlot = sel)).wired(Present(ListReorder.Cursor(hi, id)))
+            yield new OrderList(p.copy(selectedSlot = sel)).wired(Present(ListReorder.Cursor(hi, id)))
         }
 
     /** The tree the mount publishes: the seam the tests drive, since a golden render shows a mount
@@ -233,7 +233,7 @@ final class OrderList[A] private[uic] (private[uic] val s: OrderList.State[A]) e
 end OrderList
 
 object OrderList:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         itemsSlot: Slot[Seq[A]] = Slot[Seq[A]](),
         labelF: Maybe[A => String] = Absent,
         keyF: Maybe[A => String] = Absent,
@@ -246,5 +246,5 @@ object OrderList:
 
     private val itemsName        = Slot.Name("OrderList", "items", "a move", "onItemsChange")
     private val selectionName    = Slot.Name("OrderList", "selection", "a click", "onSelectionChange")
-    def apply[A](): OrderList[A] = new OrderList[A](State())
+    def apply[A](): OrderList[A] = new OrderList[A](Props())
 end OrderList

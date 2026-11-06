@@ -33,8 +33,8 @@ import kyo.UI.*
   * per-item functions fit the library's typed template idiom; see
   * `Timeline.content`).
   */
-final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) extends Node, Stated:
-    import s.*
+final class MeterGroup private[uic] (private[uic] val p: MeterGroup.Props) extends Node, HasProps:
+    import p.*
 
     type Self = MeterGroup
 
@@ -42,68 +42,68 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
       * re-renders in place on emission; the trailing `(NN%)` follows the value either way.
       */
     def meter(label: String | Signal[String], value: Double): MeterGroup =
-        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value)))
+        new MeterGroup(p.copy(metersV = metersV :+ MeterGroup.Meter(label, value)))
 
     /** Appends one meter with an explicit CSS color (`#hex` or `var(--token)`). */
     def meter(label: String | Signal[String], value: Double, color: String): MeterGroup =
-        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color))))
+        new MeterGroup(p.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color))))
 
     /** Appends one meter whose label leads with `icon` instead of the color marker. */
     def meter(label: String | Signal[String], value: Double, icon: IconGlyph): MeterGroup =
-        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Absent, Present(icon))))
+        new MeterGroup(p.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Absent, Present(icon))))
 
     /** Appends one meter with an explicit CSS color and a leading label icon. */
     def meter(label: String | Signal[String], value: Double, color: String, icon: IconGlyph): MeterGroup =
-        new MeterGroup(s.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color), Present(icon))))
+        new MeterGroup(p.copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color), Present(icon))))
 
     /** Appends the given meters. */
-    def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = new MeterGroup(s.copy(metersV = metersV ++ ms.toList))
+    def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = new MeterGroup(p.copy(metersV = metersV ++ ms.toList))
 
     /** The scale ceiling (default 100): each meter's size is `value / max`. */
-    def max(v: Double): MeterGroup = new MeterGroup(s.copy(maxV = v))
+    def max(v: Double): MeterGroup = new MeterGroup(p.copy(maxV = v))
 
     /** Meter-track orientation: `Vertical` renders `.p-metergroup-vertical`: the
       * track becomes a column and segments size by HEIGHT percent (the group needs
       * a height from the surrounding layout). Default `Horizontal`.
       */
-    def orientation(v: Orientation): MeterGroup = new MeterGroup(s.copy(orientationV = v))
+    def orientation(v: Orientation): MeterGroup = new MeterGroup(p.copy(orientationV = v))
 
     /** Label-list orientation (independent of the track, like Prime's
       * `labelOrientation`): `Vertical` stacks the labels. Default `Horizontal`.
       */
-    def labelOrientation(v: Orientation): MeterGroup = new MeterGroup(s.copy(labelOrientationV = v))
+    def labelOrientation(v: Orientation): MeterGroup = new MeterGroup(p.copy(labelOrientationV = v))
 
     /** Places the label list before (`Start`) or after (`End`, default) the meter
       * track (Prime's `labelPosition`).
       */
-    def labelPosition(v: LabelPosition): MeterGroup = new MeterGroup(s.copy(labelPositionV = v))
+    def labelPosition(v: LabelPosition): MeterGroup = new MeterGroup(p.copy(labelPositionV = v))
 
     /** Content rendered directly BEFORE the meter track (Prime's `start` slot). */
-    def startTemplate(content: UI): MeterGroup = new MeterGroup(s.copy(startTemplateV = Present(content)))
+    def startTemplate(content: UI): MeterGroup = new MeterGroup(p.copy(startTemplateV = Present(content)))
 
     /** Content rendered directly AFTER the meter track (Prime's `end` slot). */
-    def endTemplate(content: UI): MeterGroup = new MeterGroup(s.copy(endTemplateV = Present(content)))
+    def endTemplate(content: UI): MeterGroup = new MeterGroup(p.copy(endTemplateV = Present(content)))
 
     /** Replaces each meter segment with `(meter, percent) => UI` (Prime's `meter`
       * slot); the template renders for 0% meters too; skipping is its call.
       */
     def meterTemplate(f: (MeterGroup.Meter, Double) => UI): MeterGroup =
-        new MeterGroup(s.copy(meterTemplateV = Present(f)))
+        new MeterGroup(p.copy(meterTemplateV = Present(f)))
 
     /** Replaces each label row's CONTENT with `(meter, percent) => UI`, keeping the
       * `li.p-metergroup-label` rows (Prime's `label` slot swaps the whole list).
       */
     def labelTemplate(f: (MeterGroup.Meter, Double) => UI): MeterGroup =
-        new MeterGroup(s.copy(labelTemplateV = Present(f)))
+        new MeterGroup(p.copy(labelTemplateV = Present(f)))
 
     private def pct(v: Double): Double =
         if maxV <= 0 then 0.0 else math.max(0.0, math.min(100.0, v / maxV * 100.0))
 
     private def colorOf(m: MeterGroup.Meter, index: Int): Style.Color =
-        m.s.color.flatMap(Style.Color.parse).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
+        m.p.color.flatMap(Style.Color.parse).getOrElse(MeterGroup.palette(index % MeterGroup.palette.size))
 
     private[uic] def render(using Frame): UI =
-        val totalPct = math.round(pct(metersV.map(_.s.value).sum))
+        val totalPct = math.round(pct(metersV.map(_.p.value).sum))
         val root     = div
             .cssClass("p-metergroup")
             .cssClass("p-component")
@@ -116,13 +116,13 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
         // Like Prime, default segments rounding to 0% render no span at all; a
         // custom meterTemplate always renders (skipping is the template's call).
         val segments: List[UI] = metersV.zipWithIndex.collect {
-            case (m, i) if meterTemplateV.isDefined || math.round(pct(m.s.value)) != 0L =>
+            case (m, i) if meterTemplateV.isDefined || math.round(pct(m.p.value)) != 0L =>
                 meterTemplateV match
-                    case Present(f) => f(m, pct(m.s.value))
+                    case Present(f) => f(m, pct(m.p.value))
                     case Absent     =>
                         val sized: Style.type => Style = orientationV match
-                            case Orientation.Horizontal => _.width(Length.Pct(pct(m.s.value))).bg(colorOf(m, i))
-                            case Orientation.Vertical   => _.height(Length.Pct(pct(m.s.value))).bg(colorOf(m, i))
+                            case Orientation.Horizontal => _.width(Length.Pct(pct(m.p.value))).bg(colorOf(m, i))
+                            case Orientation.Vertical   => _.height(Length.Pct(pct(m.p.value))).bg(colorOf(m, i))
                         span.cssClass("p-metergroup-meter").style(sized)
         }
         val meters: UI = div.cssClass("p-metergroup-meters")(UI.children(segments)*)
@@ -132,23 +132,23 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
             .cssClass(s"p-metergroup-label-list-${labelOrientationV.token}")(
                 UI.children(metersV.zipWithIndex.map { (m, i) =>
                     val content: List[UI] = labelTemplateV match
-                        case Present(f) => List(f(m, pct(m.s.value)))
+                        case Present(f) => List(f(m, pct(m.p.value)))
                         case Absent     =>
-                            val lead: UI = m.s.icon match
+                            val lead: UI = m.p.icon match
                                 case Present(g) =>
                                     GlyphSvg.styled(g, _.color(colorOf(m, i)), "p-metergroup-label-icon")
                                 case Absent =>
                                     span.cssClass("p-metergroup-label-marker").style(_.bg(colorOf(m, i)))
-                            val labelText: UI = m.s.label match
+                            val labelText: UI = m.p.label match
                                 case TextValue.Dyn(sig) =>
                                     // The percentage is build-time (the meter value is not reactive), so the
                                     // whole label is a projection of the one string signal and goes in as a
                                     // text child, patched in place instead of rebuilding the span.
                                     span.cssClass("p-metergroup-label-text")(
-                                        sig.map(t => s"$t (${math.round(pct(m.s.value))}%)")
+                                        sig.map(t => s"$t (${math.round(pct(m.p.value))}%)")
                                     )
                                 case TextValue.Const(t) =>
-                                    span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.s.value))}%)")
+                                    span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.p.value))}%)")
                             List(lead, labelText)
                     li.cssClass("p-metergroup-label")(UI.children(content)*)
                 })*
@@ -167,7 +167,7 @@ final class MeterGroup private[uic] (private[uic] val s: MeterGroup.State) exten
 end MeterGroup
 
 object MeterGroup:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         metersV: List[MeterGroup.Meter] = Nil,
         maxV: Double = 100.0,
         orientationV: Orientation = Orientation.Horizontal,
@@ -179,7 +179,7 @@ object MeterGroup:
         labelTemplateV: Maybe[(MeterGroup.Meter, Double) => UI] = Absent
     )
 
-    def apply(): MeterGroup = new MeterGroup(State())
+    def apply(): MeterGroup = new MeterGroup(Props())
 
     /** One meter: `label` + `value` (scaled against the group's `max`), an
       * optional CSS color (`#hex` or `var(--token)`; unset draws from the
@@ -187,8 +187,8 @@ object MeterGroup:
       * marker, tinted with the meter color, Prime semantics). A reactive label
       * re-renders only its own text region; the `(NN%)` suffix follows the value.
       */
-    final class Meter private[uic] (private[uic] val s: Meter.State) extends Stated:
-        import s.*
+    final class Meter private[uic] (private[uic] val p: Meter.Props) extends HasProps:
+        import p.*
 
         /** The label as plain text, `""` for a reactive one. What a [[MeterGroup.meterTemplate]] or
           * [[MeterGroup.labelTemplate]] reads when it composes its own label string, and all it reads off the
@@ -199,7 +199,7 @@ object MeterGroup:
     end Meter
 
     object Meter:
-        final private[uic] case class State(
+        final private[uic] case class Props(
             label: TextValue,
             value: Double,
             color: Maybe[String],
@@ -212,7 +212,7 @@ object MeterGroup:
             value: Double,
             color: Maybe[String] = Absent,
             icon: Maybe[IconGlyph] = Absent
-        ): Meter = new Meter(State(ReactiveValue(label), value, color, icon))
+        ): Meter = new Meter(Props(ReactiveValue(label), value, color, icon))
     end Meter
 
     /** The rotating default segment palette (Prime theme tokens). */

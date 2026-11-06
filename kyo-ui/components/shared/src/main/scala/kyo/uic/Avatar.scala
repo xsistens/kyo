@@ -18,45 +18,45 @@ enum AvatarShape derives CanEqual:
   * (`.p-disabled` + `aria-disabled`), and the `badge(UI)` overlay rendered as
   * `span.p-uic-avatar-badge` (Prime's OverlayBadge arrives later).
   */
-final class Avatar private[uic] (private[uic] val s: Avatar.State) extends Node, Stated:
-    import s.*
+final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Avatar
 
     /** Sets the initials text (Prime's `label`; wins over `icon` and `image`). */
-    def initials(v: String): Avatar = new Avatar(s.copy(initialsV = Present(v)))
+    def initials(v: String): Avatar = new Avatar(p.copy(initialsV = Present(v)))
 
     /** Alias for [[initials]] (Prime's property name). */
-    def label(v: String): Avatar = new Avatar(s.copy(initialsV = Present(v)))
+    def label(v: String): Avatar = new Avatar(p.copy(initialsV = Present(v)))
 
-    def icon(glyph: IconGlyph): Avatar = new Avatar(s.copy(iconV = Present(glyph)))
+    def icon(glyph: IconGlyph): Avatar = new Avatar(p.copy(iconV = Present(glyph)))
 
     /** Image URL rendered as a native `<img>` (`.p-avatar-image` on the root). */
-    def image(url: String): Avatar = new Avatar(s.copy(imageV = Present(url)))
+    def image(url: String): Avatar = new Avatar(p.copy(imageV = Present(url)))
 
     /** `Circle` renders `.p-avatar-circle`; `Square` (default) keeps the rounded box. */
-    def shape(v: AvatarShape): Avatar = new Avatar(s.copy(shapeV = v))
+    def shape(v: AvatarShape): Avatar = new Avatar(p.copy(shapeV = v))
 
     /** Size: `Normal` (default) / `Large` (`.p-avatar-lg`) / `XLarge`
       * (`.p-avatar-xl`); `Small` falls back to `Normal` (Prime has no small avatar).
       */
-    def size(v: ExtendedSize): Avatar = new Avatar(s.copy(sizeV = v))
+    def size(v: ExtendedSize): Avatar = new Avatar(p.copy(sizeV = v))
 
     /** Greys the avatar out (`.p-disabled` + `aria-disabled`) and suppresses interaction. */
-    def disabled(v: Boolean): Avatar = new Avatar(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): Avatar = new Avatar(p.copy(disabledFlag = v))
 
     /** Makes the avatar a focusable button activated by click/Enter/Space (kyo extension). */
-    def interactive(v: Boolean): Avatar = new Avatar(s.copy(interactiveFlag = v))
+    def interactive(v: Boolean): Avatar = new Avatar(p.copy(interactiveFlag = v))
 
     /** Accessible name announced for the avatar (overrides the initials-derived default). */
-    def accessibleName(v: String): Avatar = new Avatar(s.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
+    def accessibleName(v: String): Avatar = new Avatar(p.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
 
     /** Overlay badge (e.g. a status dot or counter) rendered as `span.p-uic-avatar-badge`. */
-    def badge(v: UI): Avatar = new Avatar(s.copy(badgeV = Present(v)))
+    def badge(v: UI): Avatar = new Avatar(p.copy(badgeV = Present(v)))
 
     /** Runs `action` when the avatar is activated. Implies [[interactive]]. */
     def onClick(action: => UI.Action)(using Frame): Avatar =
-        new Avatar(s.copy(onClickEff = Present(Callback(action)), interactiveFlag = true))
+        new Avatar(p.copy(onClickEff = Present(Callback(action)), interactiveFlag = true))
 
     private[uic] def render(using Frame): UI =
         val accName = accessV.nameV.map(_.constOrEmpty).getOrElse(initialsV.getOrElse("Avatar"))
@@ -105,7 +105,7 @@ final class Avatar private[uic] (private[uic] val s: Avatar.State) extends Node,
 end Avatar
 
 object Avatar:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         initialsV: Maybe[String] = Absent,
         iconV: Maybe[IconGlyph] = Absent,
         imageV: Maybe[String] = Absent,
@@ -118,5 +118,5 @@ object Avatar:
         onClickEff: Maybe[UI.Action] = Absent
     )
 
-    def apply(): Avatar = new Avatar(State())
+    def apply(): Avatar = new Avatar(Props())
 end Avatar

@@ -23,28 +23,28 @@ end IconMode
   * it, or an `onClick` to make it interactive (button role + focusability).
   * An explicit [[mode]] overrides that implicit behaviour.
   */
-final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Icon
 
-    def size(px: Int): Icon = new Icon(s.copy(sizePx = px))
+    def size(px: Int): Icon = new Icon(p.copy(sizePx = px))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Icon(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Icon(p.copy(accessV = v))
 
     /** Shows the glyph name as a native tooltip (the `title` attribute). */
-    def showTooltip(v: Boolean): Icon = new Icon(s.copy(showTooltipFlag = v))
+    def showTooltip(v: Boolean): Icon = new Icon(p.copy(showTooltipFlag = v))
 
     /** Explicit mode override. When unset, the mode is implicit: `Decorative` by
       * default, `Interactive` when an `onClick` is set (and `Image` semantics when
       * only an `accessibleName` is set).
       */
-    def mode(v: IconMode): Icon = new Icon(s.copy(modeV = Present(v)))
+    def mode(v: IconMode): Icon = new Icon(p.copy(modeV = Present(v)))
 
     /** Runs `action` when the icon is activated; makes the icon focusable with a button role. */
     def onClick(action: => UI.Action)(using Frame): Icon =
-        new Icon(s.copy(onClickEff = Present(Callback(action))))
+        new Icon(p.copy(onClickEff = Present(Callback(action))))
 
     private[uic] def render(using Frame): UI =
         val svgIcon = Svg.svg
@@ -111,7 +111,7 @@ final class Icon private[uic] (private[uic] val s: Icon.State) extends Node, Has
 end Icon
 
 object Icon:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         glyph: IconGlyph,
         sizePx: Int = 16,
         accessV: Accessibility = Accessibility.none,
@@ -120,5 +120,5 @@ object Icon:
         onClickEff: Maybe[UI.Action] = Absent
     )
 
-    def apply(glyph: IconGlyph): Icon = new Icon(State(glyph))
+    def apply(glyph: IconGlyph): Icon = new Icon(Props(glyph))
 end Icon

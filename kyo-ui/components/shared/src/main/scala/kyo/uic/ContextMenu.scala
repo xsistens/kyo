@@ -60,8 +60,8 @@ import kyo.UI.*
   * as `s"$id-active"`; keyboard navigation works without an id, only the ARIA
   * hook is omitted.
   */
-final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) extends Node, HasElementId, Stated:
-    import s.*
+final class ContextMenu private[uic] (private[uic] val p: ContextMenu.Props) extends Node, HasElementId, HasProps:
+    import p.*
 
     type Self = ContextMenu
 
@@ -69,10 +69,10 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       * nested `items(...)` open side submenus), each built directly or from `_` (see [[MenuItemScope]]), or a signal of
       * items for a menu whose entries follow what it was opened on (see [[LiveEntry]]).
       */
-    def items(is: MenuItemLiveEntry*): ContextMenu = new ContextMenu(s.copy(entriesV = entriesV ++ is))
+    def items(is: MenuItemLiveEntry*): ContextMenu = new ContextMenu(p.copy(entriesV = entriesV ++ is))
 
     /** Adds target children: the region whose right-click opens the menu. */
-    def apply(cs: UI*): ContextMenu = new ContextMenu(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): ContextMenu = new ContextMenu(p.copy(kids = kids ++ cs))
 
     /** Allocates the state a [[targetless]] menu keeps.
       *
@@ -105,10 +105,10 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       * `onContextMenu` is what does that: the kyo client suppresses the native menu for any
       * element with a context-menu handler in its ancestor chain.
       */
-    def targetless(state: ContextMenu.State): ContextMenu = new ContextMenu(s.copy(stateV = Present(state)))
+    def targetless(state: ContextMenu.State): ContextMenu = new ContextMenu(p.copy(stateV = Present(state)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ContextMenu(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new ContextMenu(p.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         stateV match
@@ -120,7 +120,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
       * F-27 (a keyless mount reset by every enclosing emission) cannot arise in this form.
       */
     private def panelOnly(st: ContextMenu.State)(using Frame): UI =
-        val self = new ContextMenu(s.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(st.base))))
+        val self = new ContextMenu(p.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(st.base))))
         self.panelRegion(st.open, st.focus, st.at, st.submenus)
 
     private def wrapping(using Frame): UI =
@@ -183,7 +183,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
         // whenever that signal moved. Measured on a twenty-row keyed list under a menu whose label
         // counts the rows: one row changed, eighty-one rendered. So the shell and the right-click
         // that opens it are built once, out here, and only the panel is placed reactively.
-        val self = new ContextMenu(s.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(base))))
+        val self = new ContextMenu(p.copy(accessV = accessV.copy(idV = if accessV.idV.isDefined then accessV.idV else Present(base))))
         self.targetShell(Present(self.openHandler(Present(openRef), Present(focus), Present(subs), Present(at)))) {
             List(self.panelRegion(openRef, focus, at, subs))
         }
@@ -206,7 +206,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
         read.render { case (((Rooted(roots, items), isOpen), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)
-            UI.fragment(new ContextMenu(s.copy(itemsV = items)).panelFor(
+            UI.fragment(new ContextMenu(p.copy(itemsV = items)).panelFor(
                 isOpen,
                 Present(openRef),
                 fv.value,
@@ -355,7 +355,7 @@ final class ContextMenu private[uic] (private[uic] val s: ContextMenu.Slots) ext
 end ContextMenu
 
 object ContextMenu:
-    final private[uic] case class Slots(
+    final private[uic] case class Props(
         // The rows the panel draws, resolved from `entriesV` by the panel's region.
         itemsV: List[MenuItem] = Nil,
         entriesV: List[MenuItemLiveEntry] = Nil,
@@ -368,12 +368,12 @@ object ContextMenu:
       * `apply(...)`: right-click inside it opens the menu. Each item is built directly or from `_`
       * (`Seq(_.item("Copy"), _.item.separator)`, see [[MenuItemScope]]).
       */
-    def apply(items: Seq[MenuItemLiveEntry]): ContextMenu = new ContextMenu(Slots(entriesV = items.toList))
+    def apply(items: Seq[MenuItemLiveEntry]): ContextMenu = new ContextMenu(Props(entriesV = items.toList))
 
     /** An empty context menu; add items via [[ContextMenu.items]] and target
       * children via `apply(...)`.
       */
-    def apply(): ContextMenu = new ContextMenu(Slots())
+    def apply(): ContextMenu = new ContextMenu(Props())
 
     /** What a [[ContextMenu.targetless]] menu keeps between right-clicks, held by the caller
       * because the panel has no mount of its own. Allocate it with [[ContextMenu.state]].

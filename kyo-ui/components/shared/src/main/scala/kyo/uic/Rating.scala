@@ -34,13 +34,13 @@ import scala.annotation.targetName
   * `id` lands on the hidden radio a Tab reaches, since the group itself takes no focus: the checked star's,
   * or the first star's while none is checked.
   */
-final class Rating private[uic] (private[uic] val s: Rating.State) extends Node, NumberFormControl, HasAccessibleName, Stated:
-    import s.*
+final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node, NumberFormControl, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Rating
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Rating(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Rating(p.copy(accessV = v))
 
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
       * constant nobody hears is fixed, drawn read-only; one [[onChange]] hears is reported and the
@@ -51,7 +51,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
       * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Int]` does
       * not opt out of write-back; pass `ref.readOnly` for that.
       */
-    def value(v: Int | Signal[Int]): Rating = new Rating(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: Int | Signal[Int]): Rating = new Rating(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** The `Double`-shaped binding of [[NumberFormControl]], so a Rating can carry a
       * `Form.numberField`. The stars remain whole: the value is read rounded and written back as a
@@ -64,25 +64,25 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
     def value(v: Double | Signal[Double]): Rating =
         // The setter is the trait's, which takes no Frame. Nothing here runs: a Frame only names where a signal was built.
         given Frame = Frame.internal
-        new Rating(s.copy(valueSlot = valueSlot.bind(v match
+        new Rating(p.copy(valueSlot = valueSlot.bind(v match
             case r: SignalRef[Double] @unchecked => r.zoom(Rating.stars)((_, i) => i.toDouble)
             case s: Signal[Double] @unchecked    => s.map(Rating.stars)
             case d: Double                       => Rating.stars(d))))
     end value
 
     /** Number of stars (Prime default 5). */
-    def stars(n: Int): Rating = new Rating(s.copy(starsV = math.max(1, n)))
+    def stars(n: Int): Rating = new Rating(p.copy(starsV = math.max(1, n)))
 
     /** `readonly`: the stars keep their look, keep their place in the tab order, and stop
       * reacting (`.p-readonly`, `aria-readonly` on the group). Only `disabled` takes them out of
       * reach.
       */
-    def readonly(v: Boolean): Rating = new Rating(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): Rating = new Rating(p.copy(readonlyFlag = v))
 
     /** Disables the control (`.p-disabled` dimming + no interaction); a `Signal[Boolean]`
       * toggles it reactively (re-renders this small control on change).
       */
-    def disabled(v: Boolean | Signal[Boolean]): Rating = new Rating(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): Rating = new Rating(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `name` on the hidden per-option radios, which makes the value participate in HTML
       * form submission.
@@ -91,16 +91,16 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
       * name is also what groups the radios, and an ungrouped set of them is five tab stops with no
       * arrows between them rather than the one tab stop this control is.
       */
-    def name(v: String): Rating = new Rating(s.copy(nameV = Present(v)))
+    def name(v: String): Rating = new Rating(p.copy(nameV = Present(v)))
 
     /** Glyph for the ACTIVE options (Prime default: the filled star). */
-    def onIcon(glyph: IconGlyph): Rating = new Rating(s.copy(onIconV = Present(glyph)))
+    def onIcon(glyph: IconGlyph): Rating = new Rating(p.copy(onIconV = Present(glyph)))
 
     /** Glyph for the options beyond the value (Prime default: the outline star). */
-    def offIcon(glyph: IconGlyph): Rating = new Rating(s.copy(offIconV = Present(glyph)))
+    def offIcon(glyph: IconGlyph): Rating = new Rating(p.copy(offIconV = Present(glyph)))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Rating(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Rating(p.copy(validityV = v))
 
     /** Accepted for the [[NumberFormControl]] contract and satisfied by construction: a
       * star count is always whole, so the constraint has nothing left to enforce here.
@@ -110,18 +110,18 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
     def integer(v: Boolean): Rating = this
 
     /** Fired with the NEW value (0 on cancel) after the ref write-back. */
-    def onChange(f: Int => UI.Action)(using Frame): Rating = new Rating(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: Int => UI.Action)(using Frame): Rating = new Rating(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the current star count: the validation layer's Blur
       * trigger, in the `Double` shape the number family speaks.
       */
-    def onBlur(f: Double => UI.Action)(using Frame): Rating = new Rating(s.copy(onBlurDoubleF = Present(Callback.of(f))))
+    def onBlur(f: Double => UI.Action)(using Frame): Rating = new Rating(p.copy(onBlurDoubleF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only.
-        if valueSlot.fixed && !readonlyFlag then new Rating(s.copy(readonlyFlag = true)).render
+        if valueSlot.fixed && !readonlyFlag then new Rating(p.copy(readonlyFlag = true)).render
         else renderLive
 
     private def renderLive(using Frame): UI =
@@ -136,7 +136,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
                     for
                         value <- valueSlot.owned(0)
                         name  <- nameV.fold(UI.id)(Kyo.lift)
-                    yield new Rating(s.copy(valueSlot = value, nameV = Present(name))).renderNamed
+                    yield new Rating(p.copy(valueSlot = value, nameV = Present(name))).renderNamed
                 }
         // A value bound one way that nothing hears: every star the reader picks is put back.
         Diagnostics.after(field)("Rating")(Diagnostic.unheard(valueSlot, Rating.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
@@ -145,11 +145,11 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
     /** The tree the mount publishes once it has a name to group the radios by, the seam golden
       * tests render directly, since a mount shows only its placeholder there.
       */
-    private[uic] def wired(name: String)(using Frame): UI = new Rating(s.copy(nameV = Present(name))).renderNamed
+    private[uic] def wired(name: String)(using Frame): UI = new Rating(p.copy(nameV = Present(name))).renderNamed
 
     private def renderNamed(using Frame): UI =
         val validity = FieldValidity(validityV)
-        validity.follow(BoolValue.reactive(disabledFlag)(d => new Rating(s.copy(disabledFlag = d)).renderResolved(validity)))
+        validity.follow(BoolValue.reactive(disabledFlag)(d => new Rating(p.copy(disabledFlag = d)).renderResolved(validity)))
 
     // Bound one way the native radios follow the signal, so kyo-ui puts back a star the owner does not take; the visual layer is
     // drawn from it. A constant somebody hears is the same, and a constant nobody hears is fixed (drawn read-only).
@@ -237,7 +237,7 @@ final class Rating private[uic] (private[uic] val s: Rating.State) extends Node,
 end Rating
 
 object Rating:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[Int] = Slot(),
         starsV: Int = 5,
         readonlyFlag: Boolean = false,
@@ -250,7 +250,7 @@ object Rating:
         onBlurDoubleF: Maybe[Double => UI.Action] = Absent
     )
 
-    def apply(): Rating = new Rating(State())
+    def apply(): Rating = new Rating(Props())
 
     /** The whole stars of the number family's `Double`. */
     private def stars(d: Double): Int = math.rint(d).toInt

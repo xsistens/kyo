@@ -29,8 +29,8 @@ import kyo.UI.*
   * `moveDisabled`. `showSourceControls`/`showTargetControls` (default true)
   * drop the per-column reorder rails.
   */
-final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) extends Node, Stated:
-    import s.*
+final class PickList[A] private[uic] (private[uic] val p: PickList.Props[A]) extends Node, HasProps:
+    import p.*
 
     type Self = PickList[A]
 
@@ -40,42 +40,42 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
       * [[onSourceItemsChange]].
       */
     def sourceItems(v: Seq[A] | Signal[Seq[A]])(label: A => String): PickList[A] =
-        new PickList(s.copy(sourceSlot = sourceSlot.bind(v), labelF = Present(label)))
+        new PickList(p.copy(sourceSlot = sourceSlot.bind(v), labelF = Present(label)))
 
     /** The target column, bound like [[sourceItems]]; the label projection comes from [[sourceItems]] and covers both
       * columns.
       */
-    def targetItems(v: Seq[A] | Signal[Seq[A]]): PickList[A] = new PickList(s.copy(targetSlot = targetSlot.bind(v)))
+    def targetItems(v: Seq[A] | Signal[Seq[A]]): PickList[A] = new PickList(p.copy(targetSlot = targetSlot.bind(v)))
 
     /** Fired with the source column a transfer or a reorder asks for, after a two-way [[sourceItems]] is written. */
-    def onSourceItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = new PickList(s.copy(sourceSlot = sourceSlot.hear(f)))
+    def onSourceItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = new PickList(p.copy(sourceSlot = sourceSlot.hear(f)))
 
     /** Fired with the target column a transfer or a reorder asks for, after a two-way [[targetItems]] is written. */
-    def onTargetItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = new PickList(s.copy(targetSlot = targetSlot.hear(f)))
+    def onTargetItemsChange(f: Seq[A] => UI.Action)(using Frame): PickList[A] = new PickList(p.copy(targetSlot = targetSlot.hear(f)))
 
     /** Stable item identity: the selection key (defaults to the label). */
-    def itemKey(f: A => String): PickList[A] = new PickList(s.copy(keyF = Present(f)))
+    def itemKey(f: A => String): PickList[A] = new PickList(p.copy(keyF = Present(f)))
 
     /** Custom row content (Prime's option slot) for both columns. */
-    def itemTemplate(f: A => UI): PickList[A] = new PickList(s.copy(templateF = Present(f)))
+    def itemTemplate(f: A => UI): PickList[A] = new PickList(p.copy(templateF = Present(f)))
 
     /** The source column's selection, as the set of chosen items matched by [[itemKey]], bound like [[sourceItems]] and
       * reported to [[onSourceSelectionChange]]. A transfer out of the column clears it.
       */
     def sourceSelection(v: Set[A] | Signal[Set[A]]): PickList[A] =
-        new PickList(s.copy(sourceSelectedSlot = sourceSelectedSlot.bind(v)))
+        new PickList(p.copy(sourceSelectedSlot = sourceSelectedSlot.bind(v)))
 
     /** The target column's selection, bound and reported like [[sourceSelection]]. */
     def targetSelection(v: Set[A] | Signal[Set[A]]): PickList[A] =
-        new PickList(s.copy(targetSelectedSlot = targetSelectedSlot.bind(v)))
+        new PickList(p.copy(targetSelectedSlot = targetSelectedSlot.bind(v)))
 
     /** Fired with the source selection a click or a transfer asks for, after a two-way [[sourceSelection]] is written. */
     def onSourceSelectionChange(f: Set[A] => UI.Action)(using Frame): PickList[A] =
-        new PickList(s.copy(sourceSelectedSlot = sourceSelectedSlot.hear(f)))
+        new PickList(p.copy(sourceSelectedSlot = sourceSelectedSlot.hear(f)))
 
     /** Fired with the target selection a click or a transfer asks for, after a two-way [[targetSelection]] is written. */
     def onTargetSelectionChange(f: Set[A] => UI.Action)(using Frame): PickList[A] =
-        new PickList(s.copy(targetSelectedSlot = targetSelectedSlot.hear(f)))
+        new PickList(p.copy(targetSelectedSlot = targetSelectedSlot.hear(f)))
 
     /** One column's bindings and the events that hear them, so a move or a transfer is the same code for either. */
     final private case class Col(items: Slot[Seq[A]], sel: Slot[Set[A]]):
@@ -90,19 +90,19 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
     private def targetCol: Col = Col(targetSlot, targetSelectedSlot)
 
     /** Renders the source column's reorder rail (default true, like Prime). */
-    def showSourceControls(v: Boolean): PickList[A] = new PickList(s.copy(showSourceControlsFlag = v))
+    def showSourceControls(v: Boolean): PickList[A] = new PickList(p.copy(showSourceControlsFlag = v))
 
     /** Renders the target column's reorder rail (default true, like Prime). */
-    def showTargetControls(v: Boolean): PickList[A] = new PickList(s.copy(showTargetControlsFlag = v))
+    def showTargetControls(v: Boolean): PickList[A] = new PickList(p.copy(showTargetControlsFlag = v))
 
     /** Disables the whole control: both listboxes dim and every button locks. */
-    def disabled(v: Boolean): PickList[A] = new PickList(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): PickList[A] = new PickList(p.copy(disabledFlag = v))
 
     /** Whether picking takes a modifier key, forwarded to BOTH embedded [[Listbox]]es (Prime's
       * `metaKeySelection`, which this component has there too). Off by default, as in Prime:
       * every click toggles, which is what a list whose whole purpose is picking several wants.
       */
-    def metaKeySelection(v: Boolean): PickList[A] = new PickList(s.copy(metaKeyFlag = v))
+    def metaKeySelection(v: Boolean): PickList[A] = new PickList(p.copy(metaKeyFlag = v))
 
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
@@ -165,7 +165,7 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
                 tgt    <- targetSlot.owned(Seq.empty[A])
                 srcSel <- sourceSelectedSlot.owned(Set.empty[A])
                 tgtSel <- targetSelectedSlot.owned(Set.empty[A])
-                self = new PickList(s.copy(sourceSlot = src, targetSlot = tgt, sourceSelectedSlot = srcSel, targetSelectedSlot = tgtSel))
+                self = new PickList(p.copy(sourceSlot = src, targetSlot = tgt, sourceSelectedSlot = srcSel, targetSelectedSlot = tgtSel))
             yield self.wired(
                 Present(ListReorder.Cursor(sourceHi, sourceId)),
                 Present(ListReorder.Cursor(targetHi, targetId))
@@ -405,7 +405,7 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
 end PickList
 
 object PickList:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         sourceSlot: Slot[Seq[A]] = Slot[Seq[A]](),
         targetSlot: Slot[Seq[A]] = Slot[Seq[A]](),
         labelF: Maybe[A => String] = Absent,
@@ -420,5 +420,5 @@ object PickList:
     )
 
     private def name(subject: String, event: String) = Slot.Name("PickList", subject, "a change", event)
-    def apply[A](): PickList[A]                      = new PickList[A](State())
+    def apply[A](): PickList[A]                      = new PickList[A](Props())
 end PickList

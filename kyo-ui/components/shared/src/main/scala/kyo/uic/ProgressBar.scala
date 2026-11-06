@@ -21,8 +21,8 @@ enum ProgressBarMode derives CanEqual:
   * default (Prime's `showValue`); `valueTemplate` formats it, `showValue(false)`
   * hides it. Like Prime, a zero value renders no label.
   */
-final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class ProgressBar private[uic] (private[uic] val p: ProgressBar.Props) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = ProgressBar
 
@@ -33,19 +33,19 @@ final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) ext
       * carry has nothing to write: it reads exactly like a one-way signal here. A derived signal
       * (`loaded.zip(total).map(pct)`) is the natural binding.
       */
-    def value(v: Int | Signal[Int]): ProgressBar = new ProgressBar(s.copy(valueBinding = Present(ReactiveValue(v))))
+    def value(v: Int | Signal[Int]): ProgressBar = new ProgressBar(p.copy(valueBinding = Present(ReactiveValue(v))))
 
     /** `Determinate` (default) or the endless `Indeterminate` slide. */
-    def mode(v: ProgressBarMode): ProgressBar = new ProgressBar(s.copy(modeV = v))
+    def mode(v: ProgressBarMode): ProgressBar = new ProgressBar(p.copy(modeV = v))
 
     /** Shows the value label inside the bar (default true, Prime semantics). */
-    def showValue(v: Boolean): ProgressBar = new ProgressBar(s.copy(showValueFlag = v))
+    def showValue(v: Boolean): ProgressBar = new ProgressBar(p.copy(showValueFlag = v))
 
     /** Formats the label from the current value (e.g. `v => s"$v/100"`). */
-    def valueTemplate(f: Int => String): ProgressBar = new ProgressBar(s.copy(valueTemplateV = Present(f)))
+    def valueTemplate(f: Int => String): ProgressBar = new ProgressBar(p.copy(valueTemplateV = Present(f)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressBar(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressBar(p.copy(accessV = v))
     private[uic] def render(using Frame): UI                   =
         modeV match
             case ProgressBarMode.Indeterminate => indeterminateBody
@@ -85,7 +85,7 @@ final class ProgressBar private[uic] (private[uic] val s: ProgressBar.State) ext
 end ProgressBar
 
 object ProgressBar:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueBinding: Maybe[ReactiveValue[Int]] = Absent,
         modeV: ProgressBarMode = ProgressBarMode.Determinate,
         showValueFlag: Boolean = true,
@@ -93,5 +93,5 @@ object ProgressBar:
         accessV: Accessibility = Accessibility.none
     )
 
-    def apply(): ProgressBar = new ProgressBar(State())
+    def apply(): ProgressBar = new ProgressBar(Props())
 end ProgressBar

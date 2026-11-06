@@ -9,10 +9,10 @@ import scala.annotation.targetName
   * and `onToggle` reports), a `disabled` flag, and an optional `headerUI` slot that
   * wins over the plain header text.
   */
-final class AccordionPanel[K] private[uic] (private[uic] val s: AccordionPanel.State[K]) extends Stated derives CanEqual
+final class AccordionPanel[K] private[uic] (private[uic] val p: AccordionPanel.Props[K]) extends HasProps derives CanEqual
 
 object AccordionPanel:
-    final private[uic] case class State[K](
+    final private[uic] case class Props[K](
         header: TextValue,
         content: UI,
         id: K,
@@ -29,7 +29,7 @@ object AccordionPanel:
         id: K,
         disabled: Boolean = false,
         headerUI: Maybe[UI] = Absent
-    ): AccordionPanel[K] = new AccordionPanel(State(TextValue.Const(header), content, id, disabled, headerUI))
+    ): AccordionPanel[K] = new AccordionPanel(Props(TextValue.Const(header), content, id, disabled, headerUI))
 end AccordionPanel
 
 /** An Accordion panel, built directly or as `_.panel(...)` (see [[AccordionPanelScope]]). */
@@ -51,7 +51,7 @@ final class AccordionPanelScope[K] private ():
         id: K,
         disabled: Boolean = false,
         headerUI: Maybe[UI] = Absent
-    ): AccordionPanel[K] = new AccordionPanel(AccordionPanel.State(ReactiveValue(header), content, id, disabled, headerUI))
+    ): AccordionPanel[K] = new AccordionPanel(AccordionPanel.Props(ReactiveValue(header), content, id, disabled, headerUI))
 end AccordionPanelScope
 
 object AccordionPanelScope:
@@ -111,8 +111,8 @@ end AccordionPanelScope
   * its content and its transition. Every row shares the list's one region, so
   * the first-child and last-child radii still see one run of panels.
   */
-final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) extends Node, Stated:
-    import s.*
+final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) extends Node, HasProps:
+    import p.*
 
     type Self = Accordion[K]
 
@@ -124,15 +124,15 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
       * The panel's DOM ids and its row in a live list are named by the id's text, so two panels need ids that print
       * differently, as two tabs of [[Tabs]] do.
       */
-    def panels(ps: AccordionPanelLiveEntry[K]*): Accordion[K] = new Accordion(s.copy(panelSources = panelSources ++ ps))
+    def panels(ps: AccordionPanelLiveEntry[K]*): Accordion[K] = new Accordion(p.copy(panelSources = panelSources ++ ps))
 
     /** Appends a single panel (ergonomic builder: no need to construct
       * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
     def panel(header: String | Signal[String], id: K)(content: UI): Accordion[K] =
-        new Accordion(s.copy(panelSources =
-            panelSources :+ new AccordionPanel(AccordionPanel.State(ReactiveValue(header), content, id, false, Absent))
+        new Accordion(p.copy(panelSources =
+            panelSources :+ new AccordionPanel(AccordionPanel.Props(ReactiveValue(header), content, id, false, Absent))
         ))
 
     /** Binds the open panel, SINGLE mode (Prime's default): at most one panel open, the value holding its id (`Absent` =
@@ -142,30 +142,30 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
       * hears is reported in a card; [[onToggle]] hears it too.
       */
     def value(v: Maybe[K] | Signal[Maybe[K]]): Accordion[K] =
-        new Accordion(s.copy(singleSlot = singleSlot.bind(v), multiSlot = multiSlot.copy(binding = Absent)))
+        new Accordion(p.copy(singleSlot = singleSlot.bind(v), multiSlot = multiSlot.copy(binding = Absent)))
 
     /** The same accordion in MULTIPLE mode (Prime's `multiple`): a [[MultipleAccordion]] over the set of open ids, which
       * header clicks toggle membership of. Bound like the single value. The single value and its event do not carry over.
       */
     @targetName("valueMultiple")
     def value(v: Set[K] | Signal[Set[K]]): MultipleAccordion[K] =
-        new MultipleAccordion(new Accordion(s.copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v))))
+        new MultipleAccordion(new Accordion(p.copy(singleSlot = Slot[Maybe[K]](), multiSlot = multiSlot.bind(v))))
 
     /** Fired with the panel now open (`Absent` once all are closed) after a header click, after a two-way [[value]] is
       * written and before [[onToggle]].
       */
-    def onValueChange(f: Maybe[K] => UI.Action)(using Frame): Accordion[K] = new Accordion(s.copy(singleSlot = singleSlot.hear(f)))
+    def onValueChange(f: Maybe[K] => UI.Action)(using Frame): Accordion[K] = new Accordion(p.copy(singleSlot = singleSlot.hear(f)))
 
     /** Package-internal: the event [[MultipleAccordion]] sets. */
     private[uic] def withValuesChange(f: Set[K] => UI.Action)(using Frame): Accordion[K] =
-        new Accordion(s.copy(multiSlot = multiSlot.hear(f)))
+        new Accordion(p.copy(multiSlot = multiSlot.hear(f)))
 
     /** A constant nobody hears is fixed: the open panels stay, and every header is inert. */
     private def fixed: Boolean = singleSlot.fixed || multiSlot.fixed
 
     /** Fired with the panel id after a header click (after the value write). */
     def onToggle(f: K => UI.Action)(using Frame): Accordion[K] =
-        new Accordion(s.copy(onToggleF = Present(Callback.of(f)), singleSlot = singleSlot.heardToo, multiSlot = multiSlot.heardToo))
+        new Accordion(p.copy(onToggleF = Present(Callback.of(f)), singleSlot = singleSlot.heardToo, multiSlot = multiSlot.heardToo))
 
     /** The panels as ONE reading: fixed unless one of them was handed over as a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[AccordionPanel[K]]] = AccordionPanelScope.reading(panelSources)
@@ -184,7 +184,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
 
     private[uic] def render(using Frame): UI =
         val drawn =
-            if !interactive then entries.and(openIds).render((ps, open) => new Accordion(s.copy(panelList = ps)).body(open))
+            if !interactive then entries.and(openIds).render((ps, open) => new Accordion(p.copy(panelList = ps)).body(open))
             else
                 UI.mounted {
                     for
@@ -192,7 +192,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
                         // Unbound, the accordion keeps the open panel itself, in single mode, starting with all closed.
                         self <-
                             if multiSlot.binding.isEmpty then
-                                singleSlot.owned(Maybe.empty[K]).map(s => new Accordion(this.s.copy(singleSlot = s)))
+                                singleSlot.owned(Maybe.empty[K]).map(s => new Accordion(this.p.copy(singleSlot = s)))
                             else Kyo.lift(this)
                     yield self.wired(base, focusById)
                 }
@@ -212,7 +212,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
             case ReactiveValue.Const(ps) => ps.map(row)
             case ReactiveValue.Dyn(sig)  =>
                 given CanEqual[Chunk[AccordionPanel[K]], Chunk[AccordionPanel[K]]] = CanEqual.derived
-                List(sig.map(Chunk.from(_)).foreachKeyed(_.s.id.toString)(row))
+                List(sig.map(Chunk.from(_)).foreachKeyed(_.p.id.toString)(row))
         div.cssClass("p-accordion").cssClass("p-component")(UI.children(rows)*)
     end wired
 
@@ -245,11 +245,11 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
     private def headerMove(base: String, self: K, focus: String => UI.Action)(using Frame): KeyboardEvent => UI.Action = e =>
         current.map { ps =>
             // A disabled header is not focusable, so ArrowDown steps over it.
-            val navigable = ps.zipWithIndex.collect { case (p, i) if !p.s.disabled => i }
-            val at        = ps.indexWhere(_.s.id == self)
+            val navigable = ps.zipWithIndex.collect { case (p, i) if !p.p.disabled => i }
+            val at        = ps.indexWhere(_.p.id == self)
             // Prime's accordion cycles, so ArrowDown on the last header comes back to the first.
             val moved: UI.Action = ListNav.onKey(navigable, at, e.key, wrap = true) match
-                case Present(step) if step.focus != at && ps.isDefinedAt(step.focus) => focus(headerId(base, ps(step.focus).s.id))
+                case Present(step) if step.focus != at && ps.isDefinedAt(step.focus) => focus(headerId(base, ps(step.focus).p.id))
                 case _                                                               => ()
             moved
         }
@@ -257,14 +257,14 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
     private def renderAnimatedPanel(p: AccordionPanel[K], base: String, open: Signal[Set[K]], focus: String => UI.Action)(using
         Frame
     ): UI =
-        val active = open.map(_.contains(p.s.id))
-        var shell  = div.cssClass("p-accordionpanel").id(shellId(base, p.s.id)).cssClass("p-accordionpanel-active", active)
-        if p.s.disabled then shell = shell.cssClass("p-disabled")
+        val active = open.map(_.contains(p.p.id))
+        var shell  = div.cssClass("p-accordionpanel").id(shellId(base, p.p.id)).cssClass("p-accordionpanel-active", active)
+        if p.p.disabled then shell = shell.cssClass("p-disabled")
 
-        val headerSlot: UI = p.s.headerUI match
+        val headerSlot: UI = p.p.headerUI match
             case Present(u) => u
             case Absent     =>
-                p.s.header match
+                p.p.header match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)
 
@@ -276,13 +276,13 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
         // toggle-icon rule is descendant, so the inner wrapper is harmless).
         var header = button
             .cssClass("p-accordionheader")
-            .id(headerId(base, p.s.id))
+            .id(headerId(base, p.p.id))
             .jsProp("type", "button")
             .aria("expanded", active.map(_.toString))
-        if p.s.disabled then header = header.jsProp("disabled", "true")
+        if p.p.disabled then header = header.jsProp("disabled", "true")
         else
-            if interactive then header = header.onClick(toggle(p.s.id)) else header = header.aria("disabled", "true")
-            header = header.preventScrollKeys.onKeyDown(headerMove(base, p.s.id, focus))
+            if interactive then header = header.onClick(toggle(p.p.id)) else header = header.aria("disabled", "true")
+            header = header.preventScrollKeys.onKeyDown(headerMove(base, p.p.id, focus))
         end if
         val headerEl: UI = header(
             headerSlot,
@@ -291,10 +291,10 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
 
         // Content is ALWAYS present: the grid 0fr row hides a collapsed panel.
         val contentEl: UI =
-            div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId(base, p.s.id))
+            div.cssClass("p-accordioncontent").role("region").cssClass("p-uic-collapse").id(contentId(base, p.p.id))
                 .cssClass("p-uic-collapsed", active.map(!_))(
                     div.cssClass("p-accordioncontent-wrapper")(
-                        div.cssClass("p-accordioncontent-content")(p.s.content)
+                        div.cssClass("p-accordioncontent-content")(p.p.content)
                     )
                 )
 
@@ -303,18 +303,18 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
 
     private def body(open: Set[K])(using Frame): UI =
         div.cssClass("p-accordion").cssClass("p-component")(
-            UI.children(panelList.map(p => renderPanel(p, open.contains(p.s.id))))*
+            UI.children(panelList.map(p => renderPanel(p, open.contains(p.p.id))))*
         )
 
     private def renderPanel(p: AccordionPanel[K], active: Boolean)(using Frame): UI =
         var shell = div.cssClass("p-accordionpanel")
         if active then shell = shell.cssClass("p-accordionpanel-active")
-        if p.s.disabled then shell = shell.cssClass("p-disabled")
+        if p.p.disabled then shell = shell.cssClass("p-disabled")
 
-        val headerSlot: UI = p.s.headerUI match
+        val headerSlot: UI = p.p.headerUI match
             case Present(u) => u
             case Absent     =>
-                p.s.header match
+                p.p.header match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)
 
@@ -322,8 +322,8 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
             .cssClass("p-accordionheader")
             .jsProp("type", "button")
             .aria("expanded", active.toString)
-        if p.s.disabled then header = header.jsProp("disabled", "true")
-        else if interactive then header = header.onClick(toggle(p.s.id))
+        if p.p.disabled then header = header.jsProp("disabled", "true")
+        else if interactive then header = header.onClick(toggle(p.p.id))
         else header = header.aria("disabled", "true")
         val headerEl: UI = header(
             headerSlot,
@@ -335,7 +335,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
                 List(
                     div.cssClass("p-accordioncontent").role("region")(
                         div.cssClass("p-accordioncontent-wrapper")(
-                            div.cssClass("p-accordioncontent-content")(p.s.content)
+                            div.cssClass("p-accordioncontent-content")(p.p.content)
                         )
                     )
                 )
@@ -365,7 +365,7 @@ final class Accordion[K] private[uic] (private[uic] val s: Accordion.State[K]) e
 end Accordion
 
 object Accordion:
-    final private[uic] case class State[K](
+    final private[uic] case class Props[K](
         // The panels `body` draws, resolved from `panelSources` by the render.
         panelList: List[AccordionPanel[K]] = Nil,
         panelSources: List[AccordionPanelLiveEntry[K]] = Nil,
@@ -375,17 +375,17 @@ object Accordion:
     )
 
     private val valueName        = Slot.Name("Accordion", "the open panels", "a click", "onValueChange")
-    def apply[K](): Accordion[K] = new Accordion[K](State())
+    def apply[K](): Accordion[K] = new Accordion[K](Props())
 end Accordion
 
 /** An [[Accordion]] in MULTIPLE mode, from [[Accordion.value]] over a set: several panels may be open, and header clicks
   * toggle membership. It has exactly one value event, over the set, so no single-value callback can be set that never
   * fires; every other setter is the accordion's own.
   */
-final class MultipleAccordion[K] private[uic] (private[uic] val accordion: Accordion[K]) extends Node, Stated:
+final class MultipleAccordion[K] private[uic] (private[uic] val accordion: Accordion[K]) extends Node, HasProps:
     type Self = MultipleAccordion[K]
 
-    private[uic] def s: Accordion[K] = accordion
+    private[uic] def p: Accordion[K] = accordion
 
     private def on(a: Accordion[K]): MultipleAccordion[K] = new MultipleAccordion(a)
 

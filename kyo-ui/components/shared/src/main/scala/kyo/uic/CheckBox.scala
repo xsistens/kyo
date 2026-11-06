@@ -15,8 +15,8 @@ import kyo.UI.*
   * then `onChange` hears the new state), any other signal or a constant binds one way (the box shows it, and a toggle
   * only reports to `onChange`). The checked class and the native `checked` attribute follow the binding either way.
   */
-final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends Node, BooleanFormControl, HasAccessibleNameRef, Stated:
-    import s.*
+final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends Node, BooleanFormControl, HasAccessibleNameRef, HasProps:
+    import p.*
 
     type Self = CheckBox
 
@@ -26,66 +26,66 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
       * element too, by bubbling, and gets read a second time. Not public, because a checkbox
       * standing on its own must be reachable.
       */
-    private[uic] def tabbable(v: Boolean): CheckBox = new CheckBox(s.copy(tabbableFlag = v))
+    private[uic] def tabbable(v: Boolean): CheckBox = new CheckBox(p.copy(tabbableFlag = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new CheckBox(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new CheckBox(p.copy(accessV = v))
 
-    def text(v: String): CheckBox = new CheckBox(s.copy(labelText = Present(v)))
+    def text(v: String): CheckBox = new CheckBox(p.copy(labelText = Present(v)))
 
     /** The checked state. A `SignalRef` binds TWO-WAY: a toggle writes it, and its changes update the box. Any other
       * signal, or a constant, binds ONE-WAY: the box shows it, and a toggle writes nothing and only reports through
       * [[onChange]], so the app writes its own state and the box follows. `ref.readOnly` opts a ref out. With no
       * [[onChange]], a card says the reader cannot change it.
       */
-    def checked(v: Boolean | Signal[Boolean]): CheckBox = new CheckBox(s.copy(checkedSlot = checkedSlot.bind(v)))
+    def checked(v: Boolean | Signal[Boolean]): CheckBox = new CheckBox(p.copy(checkedSlot = checkedSlot.bind(v)))
 
     /** Disables the box. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the root's
       * `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
       */
-    def disabled(v: Boolean | Signal[Boolean]): CheckBox = new CheckBox(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): CheckBox = new CheckBox(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** `readonly`: the box reports `aria-readonly` and refuses to change, but
       * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
       */
-    def readonly(v: Boolean): CheckBox = new CheckBox(s.copy(readonlyFlag = Present(v)))
+    def readonly(v: Boolean): CheckBox = new CheckBox(p.copy(readonlyFlag = Present(v)))
 
     /** Marks the box required (`aria-required` + native constraint). */
-    def required(v: Boolean): CheckBox = new CheckBox(s.copy(requiredFlag = Present(v)))
+    def required(v: Boolean): CheckBox = new CheckBox(p.copy(requiredFlag = Present(v)))
 
     /** Purely informational: non-interactive (`.p-uic-display-only`, a kyo
       * extension; Prime has no displayOnly), without the disabled dimming.
       */
-    def displayOnly(v: Boolean): CheckBox = new CheckBox(s.copy(displayOnlyFlag = Present(v)))
+    def displayOnly(v: Boolean): CheckBox = new CheckBox(p.copy(displayOnlyFlag = Present(v)))
 
     /** Visual tri-state: `aria-checked="mixed"` + the minus icon in the box +
       * the native DOM `indeterminate` property (distinct from `checked`).
       */
-    def indeterminate(v: Boolean): CheckBox = new CheckBox(s.copy(indeterminateFlag = Present(v)))
+    def indeterminate(v: Boolean): CheckBox = new CheckBox(p.copy(indeterminateFlag = Present(v)))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): CheckBox = new CheckBox(s.copy(nameV = Present(v)))
+    def name(v: String): CheckBox = new CheckBox(p.copy(nameV = Present(v)))
 
     /** Native `value` submitted with the form when checked (browser default "on"). */
-    def value(v: String): CheckBox = new CheckBox(s.copy(valueV = Present(v)))
+    def value(v: String): CheckBox = new CheckBox(p.copy(valueV = Present(v)))
 
     /** Size: `.p-checkbox-sm` / default / `.p-checkbox-lg`. */
-    def size(v: Size): CheckBox = new CheckBox(s.copy(sizeV = v))
+    def size(v: Size): CheckBox = new CheckBox(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): CheckBox = new CheckBox(s.copy(variantV = v))
+    def variant(v: FieldVariant): CheckBox = new CheckBox(p.copy(variantV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CheckBox(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CheckBox(p.copy(validityV = v))
 
-    def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(s.copy(checkedSlot = checkedSlot.hear(f)))
+    def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(p.copy(checkedSlot = checkedSlot.hear(f)))
 
     /** Fires on focus loss with the box's current checked state. Unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = new CheckBox(p.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -93,7 +93,7 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new CheckBox(this.s.copy(checkedSlot = s)).drawn(validity)))
+        )(s => new CheckBox(this.p.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         val inert = readonlyFlag.getOrElse(false) || displayOnlyFlag.getOrElse(false) || disabledFlag.constTrue
         Diagnostics.after(field)("CheckBox")(Diagnostic.unheard(checkedSlot, CheckBox.checkedName, on = !inert))
@@ -106,7 +106,7 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
         Slot.drawField(checkedSlot, unbound = false)(f =>
-            (if f.fixed then new CheckBox(s.copy(readonlyFlag = Present(true))) else this).body(f.value, f.native, f.edit, validity)
+            (if f.fixed then new CheckBox(p.copy(readonlyFlag = Present(true))) else this).body(f.value, f.native, f.edit, validity)
         )
 
     private def body(
@@ -180,7 +180,7 @@ final class CheckBox private[uic] (private[uic] val s: CheckBox.State) extends N
 end CheckBox
 
 object CheckBox:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         labelText: Maybe[String] = Absent,
         checkedSlot: Slot[Boolean] = Slot(),
         disabledFlag: Maybe[BoolValue] = Absent,
@@ -200,6 +200,6 @@ object CheckBox:
 
     private val checkedName = Slot.Name("CheckBox", "checked", "a change", "onChange")
 
-    def apply(): CheckBox             = new CheckBox(State())
-    def apply(text: String): CheckBox = new CheckBox(State(labelText = Present(text)))
+    def apply(): CheckBox             = new CheckBox(Props())
+    def apply(text: String): CheckBox = new CheckBox(Props(labelText = Present(text)))
 end CheckBox

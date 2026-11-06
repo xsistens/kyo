@@ -19,19 +19,19 @@ import kyo.UI.*
   * Size the viewport via `width`/`height` (inline styles, like Prime's
   * showcase does via `style`).
   */
-final class ScrollPanel private[uic] (private[uic] val s: ScrollPanel.State) extends Node, Stated:
-    import s.*
+final class ScrollPanel private[uic] (private[uic] val p: ScrollPanel.Props) extends Node, HasProps:
+    import p.*
 
     type Self = ScrollPanel
 
     /** CSS width of the scroll viewport (inline style). */
-    def width(v: String): ScrollPanel = new ScrollPanel(s.copy(widthV = Present(v)))
+    def width(v: String): ScrollPanel = new ScrollPanel(p.copy(widthV = Present(v)))
 
     /** CSS height of the scroll viewport (inline style). */
-    def height(v: String): ScrollPanel = new ScrollPanel(s.copy(heightV = Present(v)))
+    def height(v: String): ScrollPanel = new ScrollPanel(p.copy(heightV = Present(v)))
 
     /** Adds content children. */
-    def apply(cs: UI*): ScrollPanel = new ScrollPanel(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): ScrollPanel = new ScrollPanel(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var st = Style.empty
@@ -46,14 +46,14 @@ final class ScrollPanel private[uic] (private[uic] val s: ScrollPanel.State) ext
 end ScrollPanel
 
 object ScrollPanel:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         widthV: Maybe[String] = Absent,
         heightV: Maybe[String] = Absent,
         kids: List[UI] = Nil
     )
 
-    def apply(): ScrollPanel = new ScrollPanel(State())
+    def apply(): ScrollPanel = new ScrollPanel(Props())
 
     /** A scroll panel with the given content; size it via `width`/`height`. */
-    def apply(cs: UI*): ScrollPanel = new ScrollPanel(State(kids = cs.toList))
+    def apply(cs: UI*): ScrollPanel = new ScrollPanel(Props(kids = cs.toList))
 end ScrollPanel
