@@ -76,20 +76,28 @@ final class SplitButton private[uic] (private[uic] val p: SplitButton.Props) ext
     def onClick(action: => UI.Action)(using Frame): SplitButton =
         new SplitButton(p.copy(onClickEff = Present(Callback(action))))
 
+    /** One instance per place, drawn once: it holds the menu's open state where nothing binds it, its keyboard highlight and its
+      * ids, and a host region that runs again hands it the run's props instead of starting it over. The props are read as one
+      * value, so every run draws from that run's binding, hearer and rows, and the card for a binding nobody hears follows the
+      * run too.
+      */
     private[uic] def render(using Frame): UI =
-        // The panel visibility + keyboard highlight live in signals allocated by
-        // this effectful mount; static projections render the same closed anatomy.
-        val button = UI.mounted {
+        UI.mountedWith(p) { live =>
             for
-                // Unbound, the button keeps the menu state itself, starting closed.
-                open <- openSlot.owned(false)
+                own  <- Signal.initRef(false)
                 hi   <- Anchored.init(-1)
                 base <- UI.id
-            yield new SplitButton(p.copy(openSlot = open)).wiredOver(hi, base)
+            yield Prop.render(live[SplitButton.Props](identity))(q => new SplitButton(q).drawnOver(own, hi, base))
         }
+
+    /** The button over this run's binding, or over the instance's `own` state where the run binds nothing. */
+    private def drawnOver(own: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
+        val open = if openSlot.binding.isDefined then openSlot else openSlot.copy(binding = Present(ReactiveVariable(own)))
         // A signal nobody hears: every toggle and pick the reader makes is painted away again.
-        Diagnostics.before(button)("SplitButton")(Diagnostic.unheard(openSlot, SplitButton.openName))
-    end render
+        Diagnostics.before(new SplitButton(p.copy(openSlot = open)).wiredOver(hi, base))("SplitButton")(
+            Diagnostic.unheard(openSlot, SplitButton.openName)
+        )
+    end drawnOver
 
     /** The subscription tree the mount publishes, over a two-way ref (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
@@ -176,7 +184,7 @@ object SplitButton:
         entriesV: List[MenuItemLiveEntry] = Nil,
         openSlot: Slot[Boolean] = Slot(),
         onClickEff: Maybe[UI.Action] = Absent
-    )
+    ) derives CanEqual
 
     /** A split button with `label` as its primary label. A `Signal[String]` re-renders it in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).

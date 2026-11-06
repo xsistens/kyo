@@ -1,6 +1,7 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.render
 
 /** A button reads its three switches as one region, whichever of them follow a signal, and with none it draws no region at all. */
 class ButtonTest extends UicTest:
@@ -109,6 +110,23 @@ class ButtonTest extends UicTest:
                 busy.set(true).andThen(painting.await).andThen(setSettled(disabled, true)).andThen(resume.release)
             )
         yield assert(ends, s"the last paint: ${UicTest.publishedIn(log).headOption}")
+    }
+
+    "a host region that runs again draws the run's props, with no instance of its own" in {
+        def labelled(n: Int)(t: UI): Boolean < Sync = elementsWithClass(t, "p-button-label").map(_.exists(textOf(_) == s"Save $n"))
+        for
+            tick <- Signal.initRef(0)
+            ui = UI.div(tick.render(n => UI.div(uic.Button(s"Save $n").disabled(n > 0))))
+            after <- publishedAfterReady(ui, _ => true, until = labelled(1))(_ => setSettled(tick, 1))
+            shown = after.getOrElse(ui)
+            el    <- elementWithClass(shown, "p-button")
+            mount <- holdsMount(uic.Button("Save").render)
+        yield
+            val off = el match
+                case b: UI.Ast.Button => b.disabled.contains(true)
+                case _                => false
+            assert(off && !mount, s"disabled $off, mount $mount")
+        end for
     }
 
 end ButtonTest

@@ -95,20 +95,38 @@ final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props) e
       */
     def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(p.copy(onBlurF = Present(Callback.of(f))))
 
+    /** One instance per place, drawn once: it holds the state the reader gives an unbound button, and a host region that runs
+      * again hands it the run's props instead of starting it over. The props are read as one value, so every run draws the
+      * button from that run's binding and hearer, and a click writes that run's ref and reaches that run's `onChange`.
+      */
     private[uic] def render(using Frame): UI =
+        UI.mountedWith(p) { live =>
+            Signal.initRef(false).map(own =>
+                Prop.render(live[ToggleButton.Props](identity))(q => new ToggleButton(q).drawnOver(Present(own)))
+            )
+        }
+
+    /** The button with no instance of its own, for a host that binds `checked` itself and draws its buttons in its own region
+      * (SelectButton): nothing of it is left to keep across that region's runs.
+      */
+    private[uic] def renderInPlace(using Frame): UI = drawnOver(Absent)
+
+    /** The button over its binding, or over `own` where this run binds nothing: unbound, the button keeps the reader's state
+      * in the instance's ref, which keeps it while a run binds the slot and gives it back when a run stops binding it.
+      */
+    private def drawnOver(own: Maybe[SignalRef[Boolean]])(using Frame): UI =
         val validity = FieldValidity(validityV)
-        // Unbound, the button keeps its own state, which starts unpressed: a ref it owns for as long as it is shown.
-        val field = validity.follow(Slot.owning(
-            checkedSlot,
-            start = false
-        )(s => new ToggleButton(this.p.copy(checkedSlot = s)).drawn(validity)))
+        val slot     = (checkedSlot.binding, own) match
+            case (Absent, Present(ref)) => checkedSlot.copy(binding = Present(ReactiveVariable(ref)))
+            case _                      => checkedSlot
+        val field = validity.follow(new ToggleButton(p.copy(checkedSlot = slot)).drawn(validity))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         Diagnostics.after(field)("ToggleButton")(Diagnostic.unheard(
             checkedSlot,
             ToggleButton.checkedName,
             on = !readonlyFlag && !disabledFlag
         ))
-    end render
+    end drawnOver
 
     /** The button over its binding. A click is wired only where it reaches somebody: a two-way binding, or onChange. A
       * constant nobody hears is fixed: drawn read-only, reachable and readable, with nothing to press. The button draws
@@ -191,7 +209,7 @@ object ToggleButton:
         onBlurF: Maybe[Boolean => UI.Action] = Absent,
         contentV: Maybe[UI] = Absent,
         radioV: Maybe[ToggleButton.RadioOption] = Absent
-    )
+    ) derives CanEqual
 
     def apply(): ToggleButton = new ToggleButton(Props())
 
