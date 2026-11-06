@@ -166,7 +166,7 @@ private[kyo] object HtmlRenderer:
                 (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
             case other => (ReactiveRegion.namespace(other), ReactiveRegion.contentParent(other))
         // A row is a range of its own, as the session walks a rebuilt row; its key tells its calls apart from the other rows' anyway.
-        DrawContext.inRange(renderTo(
+        DrawContext.inRegion(renderTo(
             sb,
             ui,
             path.toVector,
@@ -546,7 +546,7 @@ private[kyo] object HtmlRenderer:
                 val current = SignalNow(r.signal)(using r.frame, summon[SignalNow.Locals], summon[AllowUnsafe])
                 val host    = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
                 openInitialHost(sb, host)
-                DrawContext.inRange(renderTo(
+                DrawContext.inRegion(renderTo(
                     sb,
                     current,
                     path,
@@ -573,7 +573,7 @@ private[kyo] object HtmlRenderer:
                         val host    = ReactiveRegion.renderHost(region, parentContext, content)
                         openInitialHost(sb, host)
                         val keyed = keyFn.nonEmpty
-                        DrawContext.inRange(rendered.foreach { (key, child) =>
+                        DrawContext.inRegion(rendered.foreach { (key, child) =>
                             DrawContext.inRow(key)(renderTo(
                                 sb,
                                 child,
@@ -633,7 +633,7 @@ private[kyo] object HtmlRenderer:
                 val placeholder = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 val host        = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(placeholder))
                 openInitialHost(sb, host, ReactiveRegion.mountSlotFlags(m.key, m.frame))
-                DrawContext.inRange(renderTo(
+                DrawContext.inRegion(renderTo(
                     sb,
                     placeholder,
                     path,
@@ -685,10 +685,10 @@ private[kyo] object HtmlRenderer:
             case Absent         =>
                 MountDispatch.drawingNow.drawnNow(inner, d, occurrence) match
                     case DrawSlot.Live(instance, _) =>
-                        DrawContext.inContent(instance.children.idBase)(
+                        DrawContext.inContent(instance.children.idBase, d, inner)(
                             inRange(instance.shownNow(d), ReactiveRegion.mountSlotFlags(d.key, d.frame), Absent)
                         )
-                    case DrawSlot.Fresh(draw, _) => DrawContext.inContent(draw.base) {
+                    case DrawSlot.Fresh(draw, _) => DrawContext.inContent(draw.base, d, inner) {
                             // A failed draw shows the node's own error view here; the instance reports it with the boundaries around it.
                             val content = draw.content(MountedSpec(d, path, Nil))
                             // A walk of its own over the same content, so it counts from the start as the render does.

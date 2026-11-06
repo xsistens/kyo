@@ -771,6 +771,106 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // ---- mountedWith: props read through Live ----
+
+    private case class Labeled(label: Prop[String]) derives CanEqual
+
+    /** A node that reads its label through `Live` and keeps what it read in `read`, drawn once per instance. */
+    private def labeled(props: Labeled, read: AtomicReference[Chunk[Prop[String]]])(using Frame): UI.Ast.Drawn =
+        UI.mountedWith(props) { live =>
+            val label = live(_.label)
+            discard(read.updateAndGet(_.append(label)))
+            span(label)
+        }
+
+    "an instance no run can reach again reads a constant prop as it is, with no signal" in {
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec  = new RecordingExchange
+        val ui   = div(labeled(Labeled("plain"), read), labeled(Labeled("kept"), read).keyed("k"))
+        painted(ui, rec) { (html, _) =>
+            assert(html.contains("plain") && html.contains("kept"), html)
+            assert(read.get.nonEmpty && read.get.forall(!_.isInstanceOf[Signal[?]]), s"read: ${read.get}")
+        }
+    }
+
+    "a keyed instance in a region that runs again reads its props as a signal that follows the latest run" in {
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec  = new RecordingExchange
+        for
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(n => labeled(Labeled(s"run $n"), read).keyed("k")))
+            seen <- painted(ui, rec) { (_, _) =>
+                for
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    _ <- tick.set(1)
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    label = read.get.head.asInstanceOf[Signal[String]]
+                    _   <- assertEventually(label.current.map(_ == "run 1"))
+                    now <- label.current
+                yield (read.get.size, read.get.head.isInstanceOf[Signal[?]], now)
+            }
+        yield assert(seen == (1, true, "run 1"))
+        end for
+    }
+
+    "a mount inside a kept instance drawn in the Solid shape keeps its instance and state while the host runs again with new props" in {
+        val instances                     = new Instances
+        val read                          = new AtomicReference(Chunk.empty[Prop[String]])
+        val rec                           = new RecordingExchange
+        def host(n: Int)(using Frame): UI =
+            UI.mountedWith(Labeled(s"run $n")) { live =>
+                val label = live(_.label)
+                discard(read.updateAndGet(_.append(label)))
+                div(span(label), UI.mounted(Signal.initRef(0).map(instances.draw)))
+            }.keyed("host")
+        for
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(host))
+            held <- painted(ui, rec) { (_, _) =>
+                for
+                    first <- drawn(instances)
+                    _     <- parked(first)
+                    _     <- first.set(5)
+                    _     <- parked(first)
+                    _     <- tick.set(1)
+                    _     <- assertEventually(tick.waiters.map(_ == 1))
+                    label = read.get.head.asInstanceOf[Signal[String]]
+                    _     <- assertEventually(label.current.map(_ == "run 1"))
+                    value <- first.get
+                yield (instances.seen.size, read.get.size, value)
+            }
+        yield assert(held == (1, 1, 5), s"(inner instances, host draws, inner value): $held")
+        end for
+    }
+
+    "in a kept instance a mount without a key is held by its place, and one in a region inside it is new with each run of that region" in {
+        val rec = new RecordingExchange
+        for
+            tick  <- Signal.initRef(0)
+            local <- Signal.initRef(0)
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            count = (name: String) => runs.getAndUpdate(m => m.updated(name, m.getOrElse(name, 0) + 1)).andThen(span(name))
+            host  = (n: Int) =>
+                UI.mountedWith(Labeled(s"run $n")) { live =>
+                    div(span(live(_.label)), UI.mounted(count("placed")), local.render(_ => UI.mounted(count("in-region"))))
+                }.keyed("host")
+            ui = div(tick.render(host))
+            counts <- painted(ui, rec) { (_, _) =>
+                for
+                    _      <- assertEventually(runs.get.map(_.size == 2))
+                    _      <- tick.set(1)
+                    _      <- assertEventually(tick.waiters.map(_ == 1))
+                    before <- runs.get.map(_.getOrElse("in-region", 0))
+                    _      <- local.set(1)
+                    _      <- assertEventually(runs.get.map(_.getOrElse("in-region", 0) > before))
+                    _      <- assertEventually(local.waiters.map(_ == 1))
+                    c      <- runs.get
+                yield (c.getOrElse("placed", 0), c.getOrElse("in-region", 0) > before)
+            }
+        yield assert(counts == (1, true), s"(placed runs, in-region ran again): $counts")
+        end for
+    }
+
     // ---- whileMounted on an element ----
 
     "an element's effect does not run in a static render" in {

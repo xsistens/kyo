@@ -171,6 +171,36 @@ object UI:
             case _               => Absent
     end Prop
 
+    /** The props of one instance of a [[kyo.UI.mountedWith]] node, as its draw reads them. The draw runs once per instance, and
+      * each place in it reads the field it shows:
+      *
+      * {{{
+      * UI.mountedWith(props) { live =>
+      *     button(live(_.label)).onClick(live.call(_.onClick).flatMap(f => f()))
+      * }
+      * }}}
+      *
+      * Where the engine can hand the instance new props, a keyed node in a region that can run again, `runs` holds the props of
+      * the latest run there, and `apply` follows them: a field that is a constant on every run reads as a signal then, since the
+      * next run may bring another one. Anywhere else no run can follow the first, so `apply` gives the field as the node was
+      * called with it, and a constant stays a constant with no subscription. `call` reads a field when an event comes, so a
+      * callback is the latest run's either way and costs nothing until then.
+      */
+    final class Live[P] private[kyo] (first: P, val runs: Maybe[Signal[P]]):
+
+        /** The field `field` picks, following the latest run where one can follow, else as the node was called with it. */
+        def apply[A](field: P => Prop[A])(using CanEqual[A, A], Frame): Prop[A] =
+            runs match
+                case Present(signal) => signal.switchMap(p => Prop.signal(field(p)))
+                case Absent          => field(first)
+
+        /** The field `field` picks, read now: from the latest run where one can follow, else as the node was called with it. */
+        def call[A](field: P => A)(using Frame): A < Sync =
+            runs match
+                case Present(signal) => signal.current.map(field)
+                case Absent          => field(first)
+    end Live
+
     // ---- Factory constructors ----
 
     /** The empty UI: an [[kyo.UI.Ast.Fragment]] with no children, rendering nothing. Useful as a neutral element or a conditional
@@ -433,7 +463,9 @@ object UI:
       * `draw` runs in the render pass, so what it returns is on the page from the first paint: a static rendering shows it, a live client
       * shows it with no placeholder in between, and it takes events from that paint on. There is nothing to wait for, so the node has no
       * `.placeholder`. A pass that shows the node again shows the same instance when it is [[kyo.UI.MountedOps.keyed]] or
-      * [[kyo.UI.MountedOps.keyedOnSite]]; a node without a key gets a fresh instance whenever its enclosing reactive region re-renders. A static rendering draws too, and keeps nothing.
+      * [[kyo.UI.MountedOps.keyedOnSite]]; a node without a key gets a fresh instance whenever its enclosing reactive region re-renders.
+      * In what a drawn component draws, with no region between, its place is its identity: it lives as long as that component's instance,
+      * however often a region around the component runs. A static rendering draws too, and keeps nothing.
       *
       * Inside `draw`, [[kyo.UI.id]] names an element so that the static rendering and the live one agree, and [[kyo.UI.whileMounted]] starts
       * what has to run on a live page: a feed, an observer, a timer.
@@ -444,13 +476,13 @@ object UI:
     def mounted(draw: UI < Sync)(using Frame): Drawn =
         Drawn(draw, key = Absent, errorRender = Absent)
 
-    /** [[mounted]] for a component whose configuration, `props`, can change while its instance lives. `draw` runs once per instance and gets
-      * the props as a signal: a keyed instance that a region running again keeps is handed the props of the latest run there, and what
-      * reads them follows, while what `draw` allocates (open state, a highlight, an id) is made once and stays. Without a key the instance is
-      * new with every run anyway, so this is for a node that is `.keyed` or `.keyedOnSite`, which is how a component keeps its state across its caller's
-      * re-renders. Props compare by `==`: equal props reach no one.
+    /** [[mounted]] for a component whose configuration, `props`, can change while its instance lives. `draw` runs once per instance and
+      * reads the props through a [[Live]]: a keyed instance that a region running again keeps is handed the props of the latest run there,
+      * and what reads them follows, while what `draw` allocates (open state, a highlight, an id) is made once and stays. An instance no run
+      * can reach again, one without a key or one in no region that runs again, reads its props as it was called with them, so a constant
+      * prop costs it no subscription. Props compare by `==`: equal props reach no one.
       */
-    def mountedWith[P](props: P)(draw: Signal[P] => UI < Sync)(using CanEqual[P, P], Frame): Drawn =
+    def mountedWith[P](props: P)(draw: Live[P] => UI < Sync)(using CanEqual[P, P], Frame): Drawn =
         Drawn(UI.empty, key = Absent, errorRender = Absent, props = Present(new kyo.internal.PropsDraw(props, draw)))
 
     /** Embeds a component that waits for its UI: loading data, a round trip, anything that suspends.
@@ -461,7 +493,8 @@ object UI:
       * error node) while the enclosing region stays alive.
       *
       * Identity decides when the effect runs again. A node without a key gets a fresh instance whenever its enclosing reactive region
-      * re-renders. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
+      * re-renders; in what a drawn component draws, with no region between, its place keeps it for as long as that component's instance
+      * lives. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
       * each re-render shows it from the same `.keyed` call with an equal key in the same list row; that identity shown twice at once is
       * reported as a duplicate. A node with [[kyo.UI.MountedOps.keyedOnSite]] keeps it as long as each re-render shows it from the same
       * site in the same list row, as the same call in that order where one site is called more than once in its region.

@@ -363,7 +363,7 @@ private[kyo] object EventDispatch:
             case r: Reactive[?] =>
                 // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
                 r.signal.current(using r.frame).map(cur =>
-                    resolveTarget(cur, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                    DrawContext.inRegionScope(resolveTarget(cur, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts))
                 )
             case Fragment(children) =>
                 if targetPath.size <= nodePath.size then unresolved(controlBelow)
@@ -387,7 +387,7 @@ private[kyo] object EventDispatch:
                                 if idx >= 0 && idx < items.size then
                                     // A row's key is part of the ids of the keyed nodes in it.
                                     DrawContext.scope.use(s =>
-                                        DrawContext.scope.let(s.copy(rows = seg :: s.rows))(resolveTarget(
+                                        DrawContext.scope.let(s.copy(rows = seg :: s.rows, reach = DrawContext.Reach.Again))(resolveTarget(
                                             renderFn(idx, items(idx)),
                                             nodePath :+ seg,
                                             at.child(seg),
@@ -427,7 +427,7 @@ private[kyo] object EventDispatch:
                             case MountState.Pending(Present(_)) => unresolved(controlBelow)
                             case state                          =>
                                 val content = state.content(MountedSpec(m, nodePath, Nil))
-                                DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(
+                                DrawContext.scope.let(DrawContext.contentScope(instance.children.idBase, m, at.transparent))(
                                     resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                                 )
                         }
@@ -437,7 +437,7 @@ private[kyo] object EventDispatch:
                 mounts.instanceForEvent(at.transparent, d).map {
                     case Present(instance) =>
                         instance.cell.current.map(state =>
-                            DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(resolveTarget(
+                            DrawContext.scope.let(DrawContext.contentScope(instance.children.idBase, d, at.transparent))(resolveTarget(
                                 state.content(MountedSpec(d, nodePath, Nil)),
                                 nodePath,
                                 at.transparent,
@@ -452,7 +452,7 @@ private[kyo] object EventDispatch:
                         DrawContext.scope.use(scope =>
                             Sync.Unsafe.defer(mounts.occurrenceAt(at.transparent, d)).map(mounts.drawn(at.transparent, d, scope, _))
                         ).map((content, base) =>
-                            DrawContext.scope.let(DrawContext.IdScope(base, Nil))(
+                            DrawContext.scope.let(DrawContext.contentScope(base, d, at.transparent))(
                                 resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
                             )
                         )
