@@ -58,7 +58,7 @@ trait Node:
       * No additional `Conversion` can rescue that: there is no expected type to
       * trigger one. Project explicitly instead, `yield uic.Button(a).toUI`.
       */
-    final def toUI(using Frame): UI = render
+    final def toUI(using Frame, UI.MountSite): UI = Node.placed(this)
 end Node
 
 object Node:
@@ -69,12 +69,29 @@ object Node:
       * A `Node => UI => HtmlChildVal` chain would need two implicit hops, which Scala
       * does not perform, so this direct conversion is required.
       */
-    implicit def nodeToChild(c: Node)(using Frame): HtmlChildVal = HtmlChildVal.lift[UI](c.render)
+    implicit def nodeToChild(c: Node)(using Frame, UI.MountSite): HtmlChildVal = HtmlChildVal.lift[UI](placed(c))
 
     /** Lift into a bare `UI` for `fragment(...)`, `when(...)`, and signal-render
       * contexts that expect `UI` rather than `HtmlChildVal`.
       */
-    implicit def nodeToUI(c: Node)(using Frame): UI = c.render
+    implicit def nodeToUI(c: Node)(using Frame, UI.MountSite): UI = placed(c)
+
+    /** The component as it is placed: the place the app writes it is the identity of the instance it draws.
+      *
+      * Every placement (the two conversions above and [[Node.toUI]]) takes the `UI.MountSite` of where it is written, and a
+      * component that draws through `UI.mountedWith` is keyed on it, so a region around it that runs again keeps the
+      * instance and its state and hands it the run's new props through its `Live`. Placements of one site in one range (one
+      * placement in a `map`) are told apart by their order. A helper that places a component it was handed gives all its
+      * callers the helper's site, unless it takes `(using UI.MountSite)` itself and so hands its callers' sites on.
+      *
+      * A render that is not a props-carrying `Drawn` is left as it is. A plain `UI.mounted` has no props to hand on, so a
+      * key would keep a draw over the first run's values; it stays unkeyed and is drawn anew with each run of its region. A
+      * mount the component keyed itself keeps its own key.
+      */
+    private[uic] def placed(c: Node)(using Frame, UI.MountSite): UI =
+        c.render match
+            case d: UI.Ast.Drawn if d.props.nonEmpty && d.key.isEmpty => d.keyedOnSite(summon[UI.MountSite])
+            case ui                                                   => ui
 end Node
 
 /** A builder that shows its setters and nothing else, and is compared by what it holds.
