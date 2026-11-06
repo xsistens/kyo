@@ -15,24 +15,24 @@ import kyo.UI.*
   * success/info/warn/danger/secondary/contrast; `Primary` (and `Help`) keep
   * the unsuffixed base skin.
   */
-final class Badge private[uic] (private[uic] val s: Badge.State) extends Node, Stated:
-    import s.*
+final class Badge private[uic] (private[uic] val p: Badge.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Badge
 
     /** Extra class on the badge root, for a host that positions it (the Paginator
       * precedent): DataTable stamps `.p-datatable-sort-badge` on the multi-sort ordinal.
       */
-    private[uic] def hostClass(cls: String): Badge = new Badge(s.copy(hostClassesV = hostClassesV :+ cls))
+    private[uic] def hostClass(cls: String): Badge = new Badge(p.copy(hostClassesV = hostClassesV :+ cls))
 
     /** Semantic accent (`.p-badge-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
       * the class IN PLACE via kyo-ui's class channel on emission (no re-render), e.g. a status badge going
       * success to danger.
       */
-    def severity(v: Severity | Signal[Severity]): Badge = new Badge(s.copy(severityV = Present(ReactiveValue(v))))
+    def severity(v: Severity | Signal[Severity]): Badge = new Badge(p.copy(severityV = Present(ReactiveValue(v))))
 
     /** Size: `.p-badge-sm` / default / `.p-badge-lg` / `.p-badge-xl`. */
-    def size(v: ExtendedSize): Badge = new Badge(s.copy(sizeV = v))
+    def size(v: ExtendedSize): Badge = new Badge(p.copy(sizeV = v))
 
     /** The `.p-badge-<token>` suffix for a severity; `Primary`/`Help` render the unsuffixed base skin. */
     private def badgeToken(s: Severity): Maybe[String] = s match
@@ -76,7 +76,7 @@ final class Badge private[uic] (private[uic] val s: Badge.State) extends Node, S
 end Badge
 
 object Badge:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueV: Maybe[TextValue] = Absent,
         severityV: Maybe[SeverityValue] = Absent,
         sizeV: ExtendedSize = Size.Normal,
@@ -87,10 +87,10 @@ object Badge:
       * `.p-badge-circle` disc is not applied to a reactive value, since its length is unknown at render
       * time.
       */
-    def apply(value: String | Signal[String]): Badge = new Badge(State(valueV = Present(ReactiveValue(value))))
+    def apply(value: String | Signal[String]): Badge = new Badge(Props(valueV = Present(ReactiveValue(value))))
 
     /** A value-less badge: the `.p-badge-dot` status dot. */
-    def apply(): Badge = new Badge(State())
+    def apply(): Badge = new Badge(Props())
 end Badge
 
 /** OverlayBadge: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -103,13 +103,13 @@ end Badge
   * plain block `div`; kyo's base CSS would make it a stretching column
   * flexbox, which mispositions the corner badge).
   */
-final class OverlayBadge private[uic] (private[uic] val s: OverlayBadge.State) extends Node, Stated:
-    import s.*
+final class OverlayBadge private[uic] (private[uic] val p: OverlayBadge.Props) extends Node, HasProps:
+    import p.*
 
     type Self = OverlayBadge
 
     /** The [[Badge]] overlaid on the child's top-end corner. */
-    def badge(b: Badge): OverlayBadge = new OverlayBadge(s.copy(badgeV = Present(b)))
+    def badge(b: Badge): OverlayBadge = new OverlayBadge(p.copy(badgeV = Present(b)))
 
     private[uic] def render(using Frame): UI =
         div.cssClass("p-overlaybadge")(
@@ -118,14 +118,14 @@ final class OverlayBadge private[uic] (private[uic] val s: OverlayBadge.State) e
 end OverlayBadge
 
 object OverlayBadge:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         childV: UI,
         badgeV: Maybe[Badge] = Absent
     )
 
     /** Wraps `child`; attach the overlay via [[OverlayBadge.badge]]. */
-    def apply(child: UI): OverlayBadge = new OverlayBadge(State(child))
+    def apply(child: UI): OverlayBadge = new OverlayBadge(Props(child))
 
     /** Wraps `child` with `badge` overlaid on its top-end corner. */
-    def apply(child: UI)(badge: Badge): OverlayBadge = new OverlayBadge(State(child, Present(badge)))
+    def apply(child: UI)(badge: Badge): OverlayBadge = new OverlayBadge(Props(child, Present(badge)))
 end OverlayBadge

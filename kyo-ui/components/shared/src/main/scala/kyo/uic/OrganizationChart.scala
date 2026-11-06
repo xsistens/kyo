@@ -52,13 +52,13 @@ final case class OrgChartNode[K](
   * Every nested table puts its rows in a real `tbody`, which is what the sheet's
   * `.p-organizationchart-table > tbody > tr > td` cell rule is scoped to.
   */
-final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationChart.State[K]) extends Node, Stated:
-    import s.*
+final class OrganizationChart[K] private[uic] (private[uic] val p: OrganizationChart.Props[K]) extends Node, HasProps:
+    import p.*
 
     type Self = OrganizationChart[K]
 
     /** The root node of the chart. */
-    def node(n: OrgChartNode[K]): OrganizationChart[K] = new OrganizationChart(s.copy(rootNode = Present(n)))
+    def node(n: OrgChartNode[K]): OrganizationChart[K] = new OrganizationChart(p.copy(rootNode = Present(n)))
 
     /** Binds the EXPANDED subtrees with the polarity of [[Tree.expanded]] and [[TreeTable.expanded]]: the set holds the
       * ids whose children are shown, an empty set shows the root alone, and a toggle flips membership. Binding it renders
@@ -67,7 +67,7 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
       * inert. A signal nothing hears is reported in a card. Unbound, the chart is static and fully open; [[expanded]]
       * with no argument gives it toggles over state it keeps itself.
       */
-    def expanded(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = new OrganizationChart(s.copy(expandedSlot = expandedSlot.bind(v)))
+    def expanded(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = new OrganizationChart(p.copy(expandedSlot = expandedSlot.bind(v)))
 
     /** Whether the chart has toggle buttons. Set, it decides alone, and a signal switches them in place. Without it a binding
       * of [[expanded]] turns them on, and an unbound chart is static.
@@ -77,26 +77,26 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
       * binding and only the toggles go. [[onExpandedChange]] hears every toggle either way.
       */
     def expandable(v: Boolean | Signal[Boolean]): OrganizationChart[K] =
-        new OrganizationChart(s.copy(expandableV = Present(ReactiveValue(v))))
+        new OrganizationChart(p.copy(expandableV = Present(ReactiveValue(v))))
 
     /** Fired with the expanded ids after a toggle press, after a two-way [[expanded]] is written and before
       * [[onNodeToggle]].
       */
     def onExpandedChange(f: Set[K] => UI.Action)(using Frame): OrganizationChart[K] =
-        new OrganizationChart(s.copy(expandedSlot = expandedSlot.hear(f)))
+        new OrganizationChart(p.copy(expandedSlot = expandedSlot.hear(f)))
 
     /** Binds the selection to the set of chosen node ids. A `SignalRef` binds two way and [[onSelectionChange]] hears
       * every click; a plain `Signal` binds one way and the chart only reports; a constant nobody hears is fixed, the nodes
       * inert. Unbound, a chart with a [[selectionMode]] keeps the selection itself. A signal nothing hears is reported in
       * a card; [[onNodeClick]] hears it too.
       */
-    def selection(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = new OrganizationChart(s.copy(selectedSlot = selectedSlot.bind(v)))
+    def selection(v: Set[K] | Signal[Set[K]]): OrganizationChart[K] = new OrganizationChart(p.copy(selectedSlot = selectedSlot.bind(v)))
 
     /** Fired with the selected ids after a node click, after a two-way [[selection]] is written and before
       * [[onNodeClick]].
       */
     def onSelectionChange(f: Set[K] => UI.Action)(using Frame): OrganizationChart[K] =
-        new OrganizationChart(s.copy(selectedSlot = selectedSlot.hear(f)))
+        new OrganizationChart(p.copy(selectedSlot = selectedSlot.hear(f)))
 
     // Node ids compare the way the sets that hold them already compare them, by `equals`.
     private given CanEqual[K, K] = CanEqual.derived
@@ -112,15 +112,15 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
     /** Selection semantics: `Single`/`Multiple` on node click; `None` (default)
       * leaves nodes inert.
       */
-    def selectionMode(v: SelectionMode): OrganizationChart[K] = new OrganizationChart(s.copy(selectionModeV = v))
+    def selectionMode(v: SelectionMode): OrganizationChart[K] = new OrganizationChart(p.copy(selectionModeV = v))
 
     /** Fired with the node id after a toggle press (after the collapse write). */
     def onNodeToggle(f: K => UI.Action)(using Frame): OrganizationChart[K] =
-        new OrganizationChart(s.copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo))
+        new OrganizationChart(p.copy(onNodeToggleF = Present(Callback.of(f)), expandedSlot = expandedSlot.heardToo))
 
     /** Fired with the node id after a node-box click (after the selection write). */
     def onNodeClick(f: K => UI.Action)(using Frame): OrganizationChart[K] =
-        new OrganizationChart(s.copy(onNodeClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
+        new OrganizationChart(p.copy(onNodeClickF = Present(Callback.of(f)), selectedSlot = selectedSlot.heardToo))
 
     /** Whether a node box is something the reader picks: there is a mode to select in, or an `onNodeClick` to hear it. */
     private def pickable: Boolean = selectionModeV != SelectionMode.None || onNodeClickF.isDefined
@@ -157,7 +157,7 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
                     cursor <- Signal.initRef(Absent: Maybe[K])(using summon[Frame], CanEqual.derived)
                     exp    <- if ownsExpanded then expandedSlot.owned(parents) else Kyo.lift(expandedSlot)
                     sel    <- if ownsSelected then selectedSlot.owned(Set.empty[K]) else Kyo.lift(selectedSlot)
-                yield new OrganizationChart(s.copy(expandedSlot = exp, selectedSlot = sel)).drawn(
+                yield new OrganizationChart(p.copy(expandedSlot = exp, selectedSlot = sel)).drawn(
                     if pickable then Present(OrganizationChart.Cursor(cursor, base, focusById)) else Absent,
                     ownsExpanded
                 )
@@ -356,7 +356,7 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
 end OrganizationChart
 
 object OrganizationChart:
-    final private[uic] case class State[K](
+    final private[uic] case class Props[K](
         rootNode: Maybe[OrgChartNode[K]] = Absent,
         expandedSlot: Slot[Set[K]] = Slot[Set[K]](),
         expandableV: Maybe[BoolValue] = Absent,
@@ -368,7 +368,7 @@ object OrganizationChart:
 
     private val expandedName             = Slot.Name("OrganizationChart", "the expanded subtrees", "a toggle", "onExpandedChange")
     private val selectionName            = Slot.Name("OrganizationChart", "the selection", "a click", "onSelectionChange")
-    def apply[K](): OrganizationChart[K] = new OrganizationChart[K](State())
+    def apply[K](): OrganizationChart[K] = new OrganizationChart[K](Props())
 
     /** The node cursor a chart's mount mints: the node the reader is on, the id base its node boxes derive theirs from,
       * and the command that moves focus to one of them.

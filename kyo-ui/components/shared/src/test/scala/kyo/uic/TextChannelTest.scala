@@ -33,7 +33,7 @@ class TextChannelTest extends UicTest:
     /** The channel contract for one slot: the element carrying `cls` is built once and holds exactly one
       * reactive node, and that node carries a string signal.
       *
-      * Stated on the element rather than on the whole tree so it reads the same for a component whose
+      * HasProps on the element rather than on the whole tree so it reads the same for a component whose
       * slot sits behind an unrelated region of its own (a Terminal's history, a Panel's toggle). Under
       * the old region form this fails on the first assertion: the walk resolves the region, finds the
       * same span, and sees a plain `Text` child under it.

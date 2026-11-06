@@ -41,25 +41,25 @@ object GroupPath:
   * group(_.brand).showHeader(false).footer((_, rows) => span(total(rows)))
   * }}}
   */
-final class RowGroup[A] private[uic] (private[uic] val s: RowGroup.State[A]) extends Stated:
-    import s.*
+final class RowGroup[A] private[uic] (private[uic] val p: RowGroup.Props[A]) extends HasProps:
+    import p.*
 
     /** Content of this level's header row, from the group's path and its rows. */
-    def header(f: (GroupPath, Seq[A]) => UI): RowGroup[A] = new RowGroup(s.copy(headerF = Present(f)))
+    def header(f: (GroupPath, Seq[A]) => UI): RowGroup[A] = new RowGroup(p.copy(headerF = Present(f)))
 
     /** A summary row after this level's rows, seeing exactly the rows of that one group.
       * [[Column.footer]] is the same idea for the table as a whole, per column.
       */
-    def footer(f: (GroupPath, Seq[A]) => UI): RowGroup[A] = new RowGroup(s.copy(footerF = Present(f)))
+    def footer(f: (GroupPath, Seq[A]) => UI): RowGroup[A] = new RowGroup(p.copy(footerF = Present(f)))
 
     /** Whether this level draws a header row (default true). A level without one cannot be
       * collapsed either, since the toggle button lives in that row.
       */
-    def showHeader(v: Boolean): RowGroup[A] = new RowGroup(s.copy(showHeaderFlag = v))
+    def showHeader(v: Boolean): RowGroup[A] = new RowGroup(p.copy(showHeaderFlag = v))
 end RowGroup
 
 object RowGroup:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         keyF: A => String,
         headerF: Maybe[(GroupPath, Seq[A]) => UI] = Absent,
         footerF: Maybe[(GroupPath, Seq[A]) => UI] = Absent,
@@ -74,7 +74,7 @@ object RowGroup:
       * is therefore the way to control both at once, and for a `String` key the labelling
       * step is the identity function, so nothing changes.
       */
-    def apply[A, K](key: A => K): RowGroup[A] = new RowGroup[A](State(a => String.valueOf(key(a))))
+    def apply[A, K](key: A => K): RowGroup[A] = new RowGroup[A](Props(a => String.valueOf(key(a))))
 
     /** Lifts a prepared level list into the shape `groupBy` takes, so a table built from a
       * reusable `Seq[RowGroup[A]]` still splats: `groupBy(sharedLevels*)`. A splat applies
@@ -123,9 +123,9 @@ object RowGroup:
         levels match
             case Nil           => rows
             case level :: rest =>
-                runs(rows)(a => level.s.keyF(a)).flatMap { (key, run) =>
+                runs(rows)(a => level.p.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
-                    val closes    = collapsible && level.s.showHeaderFlag
+                    val closes    = collapsible && level.p.showHeaderFlag
                     if closes && !openGroups.contains(groupPath) then Nil
                     else visible(run, rest, groupPath.keys, openGroups, collapsible)
                 }

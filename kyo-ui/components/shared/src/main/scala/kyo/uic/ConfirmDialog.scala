@@ -27,8 +27,8 @@ import kyo.UI.*
   * an effect) is a documented follow-up; the declarative ref + callbacks cover
   * the anatomy and the interaction story.
   */
-final class ConfirmDialog private[uic] (private[uic] val s: ConfirmDialog.State) extends Node, Stated:
-    import s.*
+final class ConfirmDialog private[uic] (private[uic] val p: ConfirmDialog.Props) extends Node, HasProps:
+    import p.*
 
     type Self = ConfirmDialog
 
@@ -36,50 +36,50 @@ final class ConfirmDialog private[uic] (private[uic] val s: ConfirmDialog.State)
       * `Signal` is followed and a close only reported, a constant nobody hears is fixed, and unbound the dialog keeps
       * the state itself and starts open. A signal no choice is heard for is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(s.copy(openSlot = openSlot.bind(v)))
+    def open(v: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(p.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the visibility the reader asks for (false for every choice and dismissal), after a two-way [[open]]
       * is written and before [[onAccept]] or [[onReject]].
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): ConfirmDialog = new ConfirmDialog(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): ConfirmDialog = new ConfirmDialog(p.copy(openSlot = openSlot.hear(f)))
 
     /** The confirmation question (`span.p-confirmdialog-message`). A `Signal[String]` re-renders it in
       * place on emission, e.g. a locale-driven `I18n.t` leaf.
       */
-    def message(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(s.copy(messageV = Present(ReactiveValue(v))))
+    def message(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(p.copy(messageV = Present(ReactiveValue(v))))
 
     /** Header title (Prime's `header` option). A `Signal[String]` re-renders it in place on emission, e.g.
       * a locale-driven `I18n.t` leaf.
       */
-    def header(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(s.copy(headerV = Present(ReactiveValue(v))))
+    def header(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(p.copy(headerV = Present(ReactiveValue(v))))
 
     /** Leading icon beside the message (`span.p-confirmdialog-icon`). */
-    def icon(glyph: IconGlyph): ConfirmDialog = new ConfirmDialog(s.copy(iconV = Present(glyph)))
+    def icon(glyph: IconGlyph): ConfirmDialog = new ConfirmDialog(p.copy(iconV = Present(glyph)))
 
     /** Accept button label (default "Yes"). A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def acceptLabel(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(s.copy(acceptLabelV = ReactiveValue(v)))
+    def acceptLabel(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(p.copy(acceptLabelV = ReactiveValue(v)))
 
     /** Reject button label (default "No"). A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def rejectLabel(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(s.copy(rejectLabelV = ReactiveValue(v)))
+    def rejectLabel(v: String | Signal[String]): ConfirmDialog = new ConfirmDialog(p.copy(rejectLabelV = ReactiveValue(v)))
 
     /** Accept button severity (default primary, Prime's default; a destructive
       * confirmation typically passes [[Severity.Danger]]).
       */
-    def acceptSeverity(v: Severity): ConfirmDialog = new ConfirmDialog(s.copy(acceptSeverityV = Present(v)))
+    def acceptSeverity(v: Severity): ConfirmDialog = new ConfirmDialog(p.copy(acceptSeverityV = Present(v)))
 
     /** Runs `action` when the accept button is pressed (after the ref write). */
     def onAccept(action: => UI.Action)(using Frame): ConfirmDialog =
-        new ConfirmDialog(s.copy(onAcceptEff = Present(Callback(action))))
+        new ConfirmDialog(p.copy(onAcceptEff = Present(Callback(action))))
 
     /** Runs `action` on the reject button AND on every dismissal: Escape, the
       * header close button, a backdrop click (after the ref write).
       */
     def onReject(action: => UI.Action)(using Frame): ConfirmDialog =
-        new ConfirmDialog(s.copy(onRejectEff = Present(Callback(action))))
+        new ConfirmDialog(p.copy(onRejectEff = Present(Callback(action))))
 
     /** The slot as an accept hears it: [[onOpenChange]], or [[onAccept]]. */
     private def accepting: Slot[Boolean] = if onAcceptEff.isDefined then openSlot.heardToo else openSlot
@@ -92,7 +92,7 @@ final class ConfirmDialog private[uic] (private[uic] val s: ConfirmDialog.State)
         val drawing = Slot.owning(
             openSlot,
             start = true
-        )(s => new ConfirmDialog(this.s.copy(openSlot = s)).drawn)
+        )(s => new ConfirmDialog(this.p.copy(openSlot = s)).drawn)
         // A signal nobody hears for a choice: that choice is painted away again. One card for both, since the dialog
         // underneath is kept quiet.
         val unheard = Seq("an accept").filter(_ => accepting.deaf) ++ Seq("a reject or a dismissal").filter(_ => rejecting.deaf)
@@ -160,7 +160,7 @@ final class ConfirmDialog private[uic] (private[uic] val s: ConfirmDialog.State)
 end ConfirmDialog
 
 object ConfirmDialog:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         openSlot: Slot[Boolean] = Slot(),
         messageV: Maybe[TextValue] = Absent,
         headerV: Maybe[TextValue] = Absent,
@@ -173,10 +173,10 @@ object ConfirmDialog:
     )
 
     /** A confirm dialog whose visibility binds to `open` (see [[ConfirmDialog.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(State(openSlot = Slot().bind(open)))
+    def apply(open: Boolean | Signal[Boolean]): ConfirmDialog = new ConfirmDialog(Props(openSlot = Slot().bind(open)))
 
     /** An unbound confirm dialog: it keeps its visibility itself and starts open. */
-    def apply(): ConfirmDialog = new ConfirmDialog(State())
+    def apply(): ConfirmDialog = new ConfirmDialog(Props())
 
     private def openName(gesture: String) = Slot.Name("ConfirmDialog", "the visibility", gesture, "onOpenChange")
 end ConfirmDialog

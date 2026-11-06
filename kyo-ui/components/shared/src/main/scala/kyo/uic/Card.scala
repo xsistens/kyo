@@ -15,51 +15,51 @@ import kyo.UI.*
   * make the caption row a focusable `role="button"` activated by
   * click/Enter/Space.
   */
-final class Card private[uic] (private[uic] val s: Card.State) extends Node, HasAccessibleNameRef, Stated:
-    import s.*
+final class Card private[uic] (private[uic] val p: Card.Props) extends Node, HasAccessibleNameRef, HasProps:
+    import p.*
 
     type Self = Card
 
     /** Card title. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t`
       * leaf).
       */
-    def title(v: String | Signal[String]): Card = new Card(s.copy(titleText = Present(ReactiveValue(v))))
+    def title(v: String | Signal[String]): Card = new Card(p.copy(titleText = Present(ReactiveValue(v))))
 
     /** Subtitle under the title. A `Signal[String]` re-renders it in place on emission.
       */
-    def subtitle(v: String | Signal[String]): Card = new Card(s.copy(subtitleText = Present(ReactiveValue(v))))
+    def subtitle(v: String | Signal[String]): Card = new Card(p.copy(subtitleText = Present(ReactiveValue(v))))
 
     /** Right-aligned status text in the caption row (kyo extension, `p-uic-card-additional`). A
       * `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def additionalText(v: String | Signal[String]): Card = new Card(s.copy(additionalTextV = Present(ReactiveValue(v))))
+    def additionalText(v: String | Signal[String]): Card = new Card(p.copy(additionalTextV = Present(ReactiveValue(v))))
 
     /** Avatar slot rendered before the caption (kyo extension, `p-uic-card-avatar`). */
-    def headerAvatar(v: UI): Card = new Card(s.copy(headerAvatarV = Present(v)))
+    def headerAvatar(v: UI): Card = new Card(p.copy(headerAvatarV = Present(v)))
 
     /** Action slot rendered at the caption row's far end (kyo extension, `p-uic-card-action`). */
-    def headerAction(v: UI): Card = new Card(s.copy(headerActionV = Present(v)))
+    def headerAction(v: UI): Card = new Card(p.copy(headerActionV = Present(v)))
 
     /** Makes the caption row a focusable button activated by click/Enter/Space. */
-    def interactive(v: Boolean): Card = new Card(s.copy(headerInteractiveFlag = v))
+    def interactive(v: Boolean): Card = new Card(p.copy(headerInteractiveFlag = v))
 
     /** Runs `action` when the interactive caption row is activated. Implies [[interactive]]. */
     def onHeaderClick(action: => UI.Action)(using Frame): Card =
-        new Card(s.copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true))
+        new Card(p.copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true))
 
     /** Custom header slot rendered as `div.p-card-header` above the body (Prime's
       * header slot, typically an image or free-form UI).
       */
-    def header(v: UI): Card = new Card(s.copy(customHeaderV = Present(v)))
+    def header(v: UI): Card = new Card(p.copy(customHeaderV = Present(v)))
 
     /** Footer slot rendered as `div.p-card-footer` at the body's end (Prime's footer slot). */
-    def footer(v: UI): Card = new Card(s.copy(footerV = Present(v)))
+    def footer(v: UI): Card = new Card(p.copy(footerV = Present(v)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Card(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Card(p.copy(accessV = v))
 
     /** Adds content children (rendered inside `div.p-card-content`). */
-    def apply(cs: UI*): Card = new Card(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Card = new Card(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         val headerUI: List[UI] =
@@ -137,7 +137,7 @@ final class Card private[uic] (private[uic] val s: Card.State) extends Node, Has
 end Card
 
 object Card:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         titleText: Maybe[TextValue] = Absent,
         subtitleText: Maybe[TextValue] = Absent,
         additionalTextV: Maybe[TextValue] = Absent,
@@ -151,5 +151,5 @@ object Card:
         kids: List[UI] = Nil
     )
 
-    def apply(): Card = new Card(State())
+    def apply(): Card = new Card(Props())
 end Card

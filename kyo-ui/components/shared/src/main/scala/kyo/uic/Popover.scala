@@ -31,8 +31,8 @@ import kyo.UI.*
   * for `position: fixed` descendants: do not nest another overlay's backdrop
   * expectation inside popover content that must escape it.
   */
-final class Popover private[uic] (private[uic] val s: Popover.State) extends Node, Stated:
-    import s.*
+final class Popover private[uic] (private[uic] val p: Popover.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Popover
 
@@ -42,50 +42,50 @@ final class Popover private[uic] (private[uic] val s: Popover.State) extends Nod
       * Unbound, the popover keeps the state itself: closed with a [[trigger]] to open it, open without one, so it shows
       * until the reader dismisses it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Popover = new Popover(s.copy(openSlot = openSlot.bind(v)))
+    def open(v: Boolean | Signal[Boolean]): Popover = new Popover(p.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = new Popover(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Popover = new Popover(p.copy(openSlot = openSlot.hear(f)))
 
     /** The control that opens the popover: a click on it asks for the other state, and it says the popover's state to
       * the reader (that it opens a dialog, whether the dialog is open, and that it changes nothing where the state is
       * fixed). An element that is no control of its own (a `span`, a `div`) is made one, with a button role, a tab stop
       * and Enter and Space. See [[PopupTrigger]] for what can be a trigger.
       */
-    def trigger(t: UI.Ast.Interactive | PopupTrigger): Popover = new Popover(s.copy(triggerV = Present(t)))
+    def trigger(t: UI.Ast.Interactive | PopupTrigger): Popover = new Popover(p.copy(triggerV = Present(t)))
 
     /** Which anchor corner the panel opens from (default
       * [[OverlayAnchor.BottomStart]]); `Top*` flips the arrow to the bottom edge
       * (Prime's `.p-popover-flipped`).
       */
-    def anchor(v: OverlayAnchor): Popover = new Popover(s.copy(anchorV = v))
+    def anchor(v: OverlayAnchor): Popover = new Popover(p.copy(anchorV = v))
 
     /** Whether an outside click or Escape closes the popover (default true,
       * Prime's `dismissable`).
       */
-    def dismissable(v: Boolean): Popover = new Popover(s.copy(dismissableV = v))
+    def dismissable(v: Boolean): Popover = new Popover(p.copy(dismissableV = v))
 
     /** Whether the panel seeds focus on open and restores it on close (default
       * true).
       */
-    def seedFocus(v: Boolean): Popover = new Popover(s.copy(seedFocusV = v))
+    def seedFocus(v: Boolean): Popover = new Popover(p.copy(seedFocusV = v))
 
     /** Whether the panel (and backdrop) re-home to `document.body` ([[Overlay.portal]]), the
       * escape from ancestor `overflow` clipping and `transform` containing blocks (default false).
       */
-    def portal(v: Boolean): Popover = new Popover(s.copy(portalV = v))
+    def portal(v: Boolean): Popover = new Popover(p.copy(portalV = v))
 
     /** How the open panel responds to scroll outside it (default [[Overlay.Scroll.Close]],
       * Prime's hide-on-scroll). See [[Overlay.Scroll]].
       */
-    def scroll(v: Overlay.Scroll): Popover = new Popover(s.copy(scrollV = v))
+    def scroll(v: Overlay.Scroll): Popover = new Popover(p.copy(scrollV = v))
 
     /** Adds panel content. */
-    def apply(cs: UI*): Popover = new Popover(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Popover = new Popover(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         // Unbound, the popover keeps its visibility itself: closed when a trigger can open it, open otherwise.
-        Slot.owning(openSlot, start = triggerV.isEmpty)(s => new Popover(this.s.copy(openSlot = s)).drawn)
+        Slot.owning(openSlot, start = triggerV.isEmpty)(s => new Popover(this.p.copy(openSlot = s)).drawn)
     end render
 
     private def drawn(using Frame): UI =
@@ -125,7 +125,7 @@ final class Popover private[uic] (private[uic] val s: Popover.State) extends Nod
 end Popover
 
 object Popover:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         openSlot: Slot[Boolean] = Slot(),
         triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
@@ -137,8 +137,8 @@ object Popover:
     )
 
     /** A popover over the visibility `open` (see [[Popover.open]]). */
-    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(State(openSlot = Slot().bind(open)))
+    def apply(open: Boolean | Signal[Boolean]): Popover = new Popover(Props(openSlot = Slot().bind(open)))
 
     /** An unbound popover: it keeps its visibility itself (see [[Popover.open]]). */
-    def apply(): Popover = new Popover(State())
+    def apply(): Popover = new Popover(Props())
 end Popover

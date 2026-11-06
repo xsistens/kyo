@@ -65,8 +65,8 @@ import kyo.UI.*
   * only re-styles it), so the release SLIDES via the transition and the drag
   * surface is not detached mid-flight.
   */
-final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) extends Node, Stated:
-    import s.*
+final class Carousel[A] private[uic] (private[uic] val p: Carousel.Props[A]) extends Node, HasProps:
+    import p.*
 
     type Self = Carousel[A]
 
@@ -80,7 +80,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         val source: List[A] | Signal[Seq[A]] = is match
             case sig: Signal[?] => sig.asInstanceOf[Signal[Seq[A]]]
             case as             => as.asInstanceOf[Iterable[A]].toList
-        new Carousel(s.copy(itemSources = itemSources :+ source, templateF = Present(template)))
+        new Carousel(p.copy(itemSources = itemSources :+ source, templateF = Present(template)))
     end items
 
     /** The items as ONE reading: fixed unless one of them was handed over as a signal. */
@@ -98,49 +98,49 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
       * card, and a constant nobody hears is fixed: its navigators and dots stay reachable, turn nothing and say so.
       * Unbound, the carousel keeps the page itself, starting on the first.
       */
-    def page(v: Int | Signal[Int]): Carousel[A] = new Carousel(s.copy(pageSlot = pageSlot.bind(v)))
+    def page(v: Int | Signal[Int]): Carousel[A] = new Carousel(p.copy(pageSlot = pageSlot.bind(v)))
 
     /** Items shown per page (default 1). */
-    def numVisible(v: Int): Carousel[A] = new Carousel(s.copy(numVisibleV = math.max(1, v)))
+    def numVisible(v: Int): Carousel[A] = new Carousel(p.copy(numVisibleV = math.max(1, v)))
 
     /** Items stepped per page turn (default 1). */
-    def numScroll(v: Int): Carousel[A] = new Carousel(s.copy(numScrollV = math.max(1, v)))
+    def numScroll(v: Int): Carousel[A] = new Carousel(p.copy(numScrollV = math.max(1, v)))
 
     /** Wraps prev/next past the ends (default false: the buttons disable). */
-    def circular(v: Boolean): Carousel[A] = new Carousel(s.copy(circularFlag = v))
+    def circular(v: Boolean): Carousel[A] = new Carousel(p.copy(circularFlag = v))
 
     /** Vertical orientation (`.p-carousel-vertical`, chevron-up/-down navigators);
       * pair with [[verticalViewHeight]] (default 300px, Prime's default).
       */
-    def vertical(v: Boolean): Carousel[A] = new Carousel(s.copy(verticalFlag = v))
+    def vertical(v: Boolean): Carousel[A] = new Carousel(p.copy(verticalFlag = v))
 
     /** Viewport height in vertical orientation (CSS length, Prime's
       * `verticalViewPortHeight`, an inline style there too).
       */
-    def verticalViewHeight(v: String): Carousel[A] = new Carousel(s.copy(verticalHeightV = Present(v)))
+    def verticalViewHeight(v: String): Carousel[A] = new Carousel(p.copy(verticalHeightV = Present(v)))
 
     /** Renders the prev/next buttons flanking the viewport. Default true, which is
       * PrimeVue/PrimeReact's own Carousel default. [[Galleria]] spells the same
       * feature `showItemNavigators` and defaults it to false because Prime's
       * Galleria does, not because the two components disagree about the concept.
       */
-    def showItemNavigators(v: Boolean): Carousel[A] = new Carousel(s.copy(showItemNavigatorsFlag = v))
+    def showItemNavigators(v: Boolean): Carousel[A] = new Carousel(p.copy(showItemNavigatorsFlag = v))
 
     /** Renders the indicator dots. Default true, Prime's own Carousel default;
       * [[Galleria.showIndicators]] is the same feature defaulted to false, again
       * following Prime.
       */
-    def showIndicators(v: Boolean): Carousel[A] = new Carousel(s.copy(showIndicatorsFlag = v))
+    def showIndicators(v: Boolean): Carousel[A] = new Carousel(p.copy(showIndicatorsFlag = v))
 
     /** Advances the page automatically every `intervalMs` (0 or negative = off).
       * A built-in scope-bound fiber inside the interactive mount does the stepping
       * (see the class doc); it wraps to page 0 at the end even without [[circular]],
       * so the carousel keeps cycling. Requires a bound [[page]] ref.
       */
-    def autoplay(intervalMs: Int): Carousel[A] = new Carousel(s.copy(autoplayMsV = math.max(0, intervalMs)))
+    def autoplay(intervalMs: Int): Carousel[A] = new Carousel(p.copy(autoplayMsV = math.max(0, intervalMs)))
 
     /** Fired with the page a turn (nav, indicator, swipe, autoplay) asks for, after a two-way [[page]] is written. */
-    def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = new Carousel(s.copy(pageSlot = pageSlot.hear(f)))
+    def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = new Carousel(p.copy(pageSlot = pageSlot.hear(f)))
 
     /** Prime's page count over `n` items: one page per `numScroll` step over the overhang. */
     private def pagesOf(n: Int): Int = Carousel.pageCount(numScrollV, numVisibleV, n)
@@ -148,7 +148,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
     private[uic] def render(using Frame): UI =
         // Unbound, the carousel keeps the page the reader turns to itself, starting on the first.
         if pageSlot.fixed then
-            entries.render(as => new Carousel(s.copy(itemList = as)).body(pageSlot.binding.flatMap(_.const).getOrElse(0)))
+            entries.render(as => new Carousel(p.copy(itemList = as)).body(pageSlot.binding.flatMap(_.const).getOrElse(0)))
         else
             // A signal nobody hears: every turn the reader takes is painted away again.
             Diagnostics.before(turning)("Carousel")(Diagnostic.unheard(pageSlot, Carousel.pageName))
@@ -160,7 +160,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         UI.mounted {
             for
                 page <- pageSlot.owned(0)
-                self = new Carousel(s.copy(pageSlot = page))
+                self = new Carousel(p.copy(pageSlot = page))
                 r    = page.reading(0).signal
                 stripId  <- UI.id
                 startPos <- Signal.initRef(0.0)
@@ -486,7 +486,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
 end Carousel
 
 object Carousel:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         // The items the placeholder draws, resolved from `itemSources` by the render.
         itemList: List[A] = Nil,
         itemSources: List[List[A] | Signal[Seq[A]]] = Nil,
@@ -503,7 +503,7 @@ object Carousel:
     )
 
     private val pageName        = Slot.Name("Carousel", "the page", "a turn", "onPageChange")
-    def apply[A](): Carousel[A] = new Carousel[A](State())
+    def apply[A](): Carousel[A] = new Carousel[A](Props())
 
     /** Drag distance (px) past which a swipe turns the page. */
     private[uic] val SwipeThreshold = 40.0

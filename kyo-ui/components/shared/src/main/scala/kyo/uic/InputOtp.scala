@@ -24,13 +24,13 @@ import kyo.UI.*
   * transport attaches) the cells carry no ids and focus stays put; Tab /
   * Shift-Tab and the pointer always work.
   */
-final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends Node, TextFormControl, HasAccessibleName, Stated:
-    import s.*
+final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends Node, TextFormControl, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = InputOtp
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputOtp(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputOtp(p.copy(accessV = v))
 
     /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
       * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
@@ -38,10 +38,10 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
       * constant is the starting code. Unbound or from a constant, the field keeps the code itself, so a cell edit writes
       * there and [[onChange]] hears the whole code the cells hold. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): InputOtp = new InputOtp(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): InputOtp = new InputOtp(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** Number of cells (Prime default 4). */
-    def length(n: Int): InputOtp = new InputOtp(s.copy(lengthV = math.max(1, n)))
+    def length(n: Int): InputOtp = new InputOtp(p.copy(lengthV = math.max(1, n)))
 
     /** Accepts only digits (Prime's `integerOnly`): other characters never reach
       * the BOUND value. Each cell carries the fork's client-local `inputFilter("int")`,
@@ -49,36 +49,36 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
       * matching Prime's client-side block. (A server-side `filter` still guards
       * the stored code as defense in depth.)
       */
-    def integerOnly(v: Boolean): InputOtp = new InputOtp(s.copy(integerOnlyFlag = v))
+    def integerOnly(v: Boolean): InputOtp = new InputOtp(p.copy(integerOnlyFlag = v))
 
     /** Renders password-type cells (Prime's `mask`). */
-    def mask(v: Boolean): InputOtp = new InputOtp(s.copy(maskFlag = v))
+    def mask(v: Boolean): InputOtp = new InputOtp(p.copy(maskFlag = v))
 
     /** Disables all cells; a `Signal[Boolean]` toggles it reactively (re-render). */
-    def disabled(v: Boolean | Signal[Boolean]): InputOtp = new InputOtp(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): InputOtp = new InputOtp(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly` on every cell. */
-    def readonly(v: Boolean): InputOtp = new InputOtp(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): InputOtp = new InputOtp(p.copy(readonlyFlag = v))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the cells (the
       * sheet widens the cells per size).
       */
-    def size(v: Size): InputOtp = new InputOtp(s.copy(sizeV = v))
+    def size(v: Size): InputOtp = new InputOtp(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled` cells. */
-    def variant(v: FieldVariant): InputOtp = new InputOtp(s.copy(variantV = v))
+    def variant(v: FieldVariant): InputOtp = new InputOtp(p.copy(variantV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputOtp(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputOtp(p.copy(validityV = v))
 
     /** Fired with the FULL code after a cell write-back. */
-    def onChange(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current value; unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): InputOtp = new InputOtp(p.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
@@ -90,10 +90,10 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
             valueSlot,
             unbound = "",
             on = BoolValue.Const(interactive)
-        )(s => new InputOtp(this.s.copy(valueSlot = s)).resolved)
+        )(s => new InputOtp(this.p.copy(valueSlot = s)).resolved)
 
     private def resolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag)(d => new InputOtp(s.copy(disabledFlag = d)).renderResolved)
+        BoolValue.reactive(disabledFlag)(d => new InputOtp(p.copy(disabledFlag = d)).renderResolved)
 
     private def renderResolved(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -187,7 +187,7 @@ final class InputOtp private[uic] (private[uic] val s: InputOtp.State) extends N
 end InputOtp
 
 object InputOtp:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[String] = Slot(),
         lengthV: Int = 4,
         integerOnlyFlag: Boolean = false,
@@ -201,7 +201,7 @@ object InputOtp:
         onBlurF: Maybe[String => UI.Action] = Absent
     )
 
-    def apply(): InputOtp = new InputOtp(State())
+    def apply(): InputOtp = new InputOtp(Props())
 
     private val valueName = Slot.Name("InputOtp", "value", "a change", "onChange")
 end InputOtp

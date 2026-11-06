@@ -18,46 +18,46 @@ end LinkAccessibleRole
   * and exposes `aria-disabled` plus the `.p-disabled` skin (there is no native
   * `disabled` attribute on an anchor).
   */
-final class Link private[uic] (private[uic] val s: Link.State) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription,
-      PopupTrigger, Stated:
-    import s.*
+final class Link private[uic] (private[uic] val p: Link.Props) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription,
+      PopupTrigger, HasProps:
+    import p.*
 
     type Self = Link
 
-    def href(v: String): Link      = new Link(s.copy(hrefV = Present(v)))
-    def disabled(v: Boolean): Link = new Link(s.copy(disabledFlag = v))
+    def href(v: String): Link      = new Link(p.copy(hrefV = Present(v)))
+    def disabled(v: Boolean): Link = new Link(p.copy(disabledFlag = v))
 
     /** Whether the link text wraps onto multiple lines (default false: stays on
       * one line, `.p-uic-link-wrap`).
       */
-    def wrap(v: Boolean): Link = new Link(s.copy(wrapFlag = v))
+    def wrap(v: Boolean): Link = new Link(p.copy(wrapFlag = v))
 
     /** Icon rendered before the link text. */
-    def icon(glyph: IconGlyph): Link = new Link(s.copy(iconV = Present(glyph)))
+    def icon(glyph: IconGlyph): Link = new Link(p.copy(iconV = Present(glyph)))
 
     /** Icon rendered after the link text. */
-    def endIcon(glyph: IconGlyph): Link = new Link(s.copy(endIconV = Present(glyph)))
+    def endIcon(glyph: IconGlyph): Link = new Link(p.copy(endIconV = Present(glyph)))
 
     /** Anchor `target` (e.g. `_blank`, `_self`). `_blank` automatically also gets
       * `rel="noopener"` so the opened page cannot script this one.
       */
-    def target(v: String): Link = new Link(s.copy(targetV = Present(v)))
+    def target(v: String): Link = new Link(p.copy(targetV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Link = new Link(s.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[TextValue]): Link = new Link(p.copy(tooltipV = v))
 
     /** ARIA role override: `Button` renders `role="button"` on the anchor. */
-    def accessibleRole(v: LinkAccessibleRole): Link = new Link(s.copy(accessibleRoleV = v))
+    def accessibleRole(v: LinkAccessibleRole): Link = new Link(p.copy(accessibleRoleV = v))
 
     private[uic] def accessibility: Accessibility                         = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self            = new Link(s.copy(accessV = v))
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = new Link(s.copy(accessibleDescriptionV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self            = new Link(p.copy(accessV = v))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = new Link(p.copy(accessibleDescriptionV = v))
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
     def onClick(action: => UI.Action)(using Frame): Link =
-        new Link(s.copy(onClickEff = Present(Callback(action))))
+        new Link(p.copy(onClickEff = Present(Callback(action))))
 
     /** Adds default-slot children (typically the link text). */
-    def apply(cs: UI*): Link = new Link(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Link = new Link(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI = anchor
 
@@ -123,7 +123,7 @@ final class Link private[uic] (private[uic] val s: Link.State) extends Node, Has
 end Link
 
 object Link:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         hrefV: Maybe[String] = Absent,
         disabledFlag: Boolean = false,
         wrapFlag: Boolean = false,
@@ -138,8 +138,8 @@ object Link:
         kids: List[UI] = Nil
     )
 
-    def apply(): Link = new Link(State())
+    def apply(): Link = new Link(Props())
 
     /** A link labelled `text` (placed in the default slot). */
-    def apply(text: String)(using Frame): Link = new Link(State(kids = List(stringToUI(text))))
+    def apply(text: String)(using Frame): Link = new Link(Props(kids = List(stringToUI(text))))
 end Link

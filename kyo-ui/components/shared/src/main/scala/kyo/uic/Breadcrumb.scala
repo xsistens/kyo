@@ -12,13 +12,13 @@ import kyo.UI.*
   *
   * [[Breadcrumb.onItemClick]] hands the crumb over, and [[href]] is what a handler reads from it.
   */
-final class BreadcrumbItem private[uic] (private[uic] val s: BreadcrumbItem.State) extends Stated derives CanEqual:
+final class BreadcrumbItem private[uic] (private[uic] val p: BreadcrumbItem.Props) extends HasProps derives CanEqual:
     /** Where this crumb links to, `Absent` for one that is plain text. */
-    def href: Maybe[String] = s.href
+    def href: Maybe[String] = p.href
 end BreadcrumbItem
 
 object BreadcrumbItem:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         text: TextValue,
         href: Maybe[String],
         target: Maybe[String],
@@ -33,7 +33,7 @@ object BreadcrumbItem:
         href: Maybe[String] = Absent,
         target: Maybe[String] = Absent,
         icon: Maybe[IconGlyph] = Absent
-    ): BreadcrumbItem = new BreadcrumbItem(State(ReactiveValue(text), href, target, icon))
+    ): BreadcrumbItem = new BreadcrumbItem(Props(ReactiveValue(text), href, target, icon))
 end BreadcrumbItem
 
 /** A crumb, built directly or as `_.item(...)` (see [[BreadcrumbItemScope]]). */
@@ -75,39 +75,39 @@ end BreadcrumbItemScope
   * icon-only). `onItemClick` fires with the item's href (or text when hrefless)
   * in addition to, not instead of, native navigation.
   */
-final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Breadcrumb
 
     /** Appends the given crumbs to the trail, each built directly or from `_` (see [[BreadcrumbItemScope]]), or a signal of
       * crumbs that change while the trail is shown (see [[LiveEntry]]).
       */
-    def items(is: BreadcrumbItemLiveEntry*): Breadcrumb = new Breadcrumb(s.copy(itemSources = itemSources ++ is))
+    def items(is: BreadcrumbItemLiveEntry*): Breadcrumb = new Breadcrumb(p.copy(itemSources = itemSources ++ is))
 
     /** Appends a linked crumb. A `Signal[String]` label re-renders in place on emission. */
     def item(text: String | Signal[String], href: String): Breadcrumb =
-        new Breadcrumb(s.copy(itemSources = itemSources :+ BreadcrumbItem(text, Present(href))))
+        new Breadcrumb(p.copy(itemSources = itemSources :+ BreadcrumbItem(text, Present(href))))
 
     /** Appends a crumb with nothing to open (the current page, or a step in the trail that has
       * no page of its own). A `Signal[String]` label re-renders in place on emission. Only the
       * last crumb of the trail carries `aria-current="page"`.
       */
-    def item(text: String | Signal[String]): Breadcrumb = new Breadcrumb(s.copy(itemSources = itemSources :+ BreadcrumbItem(text)))
+    def item(text: String | Signal[String]): Breadcrumb = new Breadcrumb(p.copy(itemSources = itemSources :+ BreadcrumbItem(text)))
 
     /** Prime's home item: an icon-only crumb rendered first (`li.p-breadcrumb-home-item`). */
     def home(icon: IconGlyph, href: String): Breadcrumb =
-        new Breadcrumb(s.copy(homeV = Present(BreadcrumbItem("", Present(href), icon = Present(icon)))))
+        new Breadcrumb(p.copy(homeV = Present(BreadcrumbItem("", Present(href), icon = Present(icon)))))
 
     /** Overrides the separator glyph (default the Prime chevron, [[Icons.chevronRight]]). */
-    def separator(v: IconGlyph): Breadcrumb = new Breadcrumb(s.copy(separatorV = Present(v)))
+    def separator(v: IconGlyph): Breadcrumb = new Breadcrumb(p.copy(separatorV = Present(v)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Breadcrumb(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Breadcrumb(p.copy(accessV = v))
 
     /** Fired with the item clicked, in addition to the anchor's native navigation. */
     def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb =
-        new Breadcrumb(s.copy(onItemClickF = Present(Callback.of(f))))
+        new Breadcrumb(p.copy(onItemClickF = Present(Callback.of(f))))
 
     /** The crumbs as ONE reading: fixed unless one of the setters was handed a signal. */
     private[uic] def entries(using Frame): ReactiveValue[List[BreadcrumbItem]] = BreadcrumbItemScope.reading(itemSources)
@@ -157,12 +157,12 @@ final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) exten
         it.href match
             case Present(h) =>
                 anchor = anchor.href(Href.Path(h))
-                Breadcrumb.parseTarget(it.s.target).foreach(t => anchor = anchor.target(t))
+                Breadcrumb.parseTarget(it.p.target).foreach(t => anchor = anchor.target(t))
             case Absent =>
                 if isCurrent then anchor = anchor.aria("current", "page")
         end match
-        val iconSlot: List[UI]  = it.s.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
-        val labelSlot: List[UI] = it.s.text match
+        val iconSlot: List[UI]  = it.p.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
+        val labelSlot: List[UI] = it.p.text match
             case TextValue.Dyn(s)   => List(span.cssClass("p-breadcrumb-item-label")(s))
             case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))
         val linked = anchor(UI.children(iconSlot ++ labelSlot)*)
@@ -175,7 +175,7 @@ final class Breadcrumb private[uic] (private[uic] val s: Breadcrumb.State) exten
 end Breadcrumb
 
 object Breadcrumb:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         homeV: Maybe[BreadcrumbItem] = Absent,
         itemSources: List[BreadcrumbItemLiveEntry] = Nil,
         separatorV: Maybe[IconGlyph] = Absent,
@@ -183,7 +183,7 @@ object Breadcrumb:
         onItemClickF: Maybe[BreadcrumbItem => UI.Action] = Absent
     )
 
-    def apply(): Breadcrumb = new Breadcrumb(State())
+    def apply(): Breadcrumb = new Breadcrumb(Props())
 
     /** Maps a `target` string onto kyo's typed [[Target]] (standard values only). */
     private def parseTarget(t: Maybe[String]): Maybe[Target] =

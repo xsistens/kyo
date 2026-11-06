@@ -29,13 +29,13 @@ import scala.annotation.targetName
   * overlapping native inputs fighting for the same pointer surface, so it is deferred
   * rather than approximated.
   */
-final class Slider private[uic] (private[uic] val s: Slider.State) extends Node, NumberFormControl, HasAccessibleName, Stated:
-    import s.*
+final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node, NumberFormControl, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Slider
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Slider(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Slider(p.copy(accessV = v))
 
     /** The slider's value, in any of the three bindings a value slot holds. A constant nobody hears is
       * fixed, drawn read-only; one [[onChange]] hears is reported and the thumb put back where the
@@ -48,47 +48,47 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
       * the better answer when the value is computed rather than user-edited.
       */
     @targetName("valueNumber")
-    def value(v: Double | Signal[Double]): Slider = new Slider(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: Double | Signal[Double]): Slider = new Slider(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** Lower bound (Prime default 0). */
-    def min(v: Double): Slider = new Slider(s.copy(minV = v))
+    def min(v: Double): Slider = new Slider(p.copy(minV = v))
 
     /** Upper bound (Prime default 100). */
-    def max(v: Double): Slider = new Slider(s.copy(maxV = v))
+    def max(v: Double): Slider = new Slider(p.copy(maxV = v))
 
     /** Drag/keyboard increment (Prime default 1). */
-    def step(v: Double): Slider = new Slider(s.copy(stepV = if v <= 0 then 1.0 else v))
+    def step(v: Double): Slider = new Slider(p.copy(stepV = if v <= 0 then 1.0 else v))
 
     /** Constrains committed values to whole numbers: the value written back is rounded,
       * and the native input steps in whole units. The form layer flips this on for a
       * whole-valued (`Int`/`Long`) [[kyo.uic.form.NumberField]], so a slider bound to one
       * cannot hand it a fraction.
       */
-    def integer(v: Boolean): Slider = new Slider(s.copy(integerFlag = v))
+    def integer(v: Boolean): Slider = new Slider(p.copy(integerFlag = v))
 
     /** Track orientation: `.p-slider-horizontal` (default) or `.p-slider-vertical`. */
-    def orientation(v: Orientation): Slider = new Slider(s.copy(orientationV = v))
+    def orientation(v: Orientation): Slider = new Slider(p.copy(orientationV = v))
 
     /** Disables the control (`.p-disabled` + native disabled input); a `Signal[Boolean]`
       * toggles it reactively (re-renders this small control on change).
       */
-    def disabled(v: Boolean | Signal[Boolean]): Slider = new Slider(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): Slider = new Slider(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** `readonly`: the slider keeps its value and its normal look and stays reachable, so a reader can land on it and read
       * it, and no drag or key moves it. The browser's own move is declined in the client, like a readonly CheckBox.
       */
-    def readonly(v: Boolean): Slider = new Slider(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): Slider = new Slider(p.copy(readonlyFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Slider(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Slider(p.copy(validityV = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => UI.Action)(using Frame): Slider = new Slider(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: Double => UI.Action)(using Frame): Slider = new Slider(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the slider's current value; unlike onChange it fires even
       * when the handle was not moved. The validation layer's Blur trigger.
       */
-    def onBlur(f: Double => UI.Action)(using Frame): Slider = new Slider(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: Double => UI.Action)(using Frame): Slider = new Slider(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** Clamps into range, and rounds to a whole number under [[integer]]. */
     private def clamp(v: Double): Double =
@@ -97,12 +97,12 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
 
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader does itself.
-        if valueSlot.fixed && !readonlyFlag then new Slider(s.copy(readonlyFlag = true)).render
-        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.s.copy(valueSlot = s)).renderLive)
+        if valueSlot.fixed && !readonlyFlag then new Slider(p.copy(readonlyFlag = true)).render
+        else Slot.owning(valueSlot, start = minV)(s => new Slider(this.p.copy(valueSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
-        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Slider(s.copy(disabledFlag = d)).renderResolved(validity)))
+        val field    = validity.follow(BoolValue.reactive(disabledFlag)(d => new Slider(p.copy(disabledFlag = d)).renderResolved(validity)))
         // A signal nobody hears: every change the reader makes is put back.
         Diagnostics.after(field)("Slider")(Diagnostic.unheard(valueSlot, Slider.valueName, on = !readonlyFlag && !disabledFlag.constTrue))
     end renderLive
@@ -163,7 +163,7 @@ final class Slider private[uic] (private[uic] val s: Slider.State) extends Node,
 end Slider
 
 object Slider:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[Double] = Slot(),
         minV: Double = 0.0,
         maxV: Double = 100.0,
@@ -177,7 +177,7 @@ object Slider:
         onBlurF: Maybe[Double => UI.Action] = Absent
     )
 
-    def apply(): Slider = new Slider(State())
+    def apply(): Slider = new Slider(Props())
 
     private val valueName = Slot.Name("Slider", "value", "a change", "onChange")
 end Slider

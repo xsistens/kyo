@@ -10,78 +10,79 @@ import kyo.UI.*
   * `Bound.Ref`), `onInput`/`onChange`, and the caret-preserving morph path are
   * all inherited. The `value` binding is [[Input]]'s: a `SignalRef` two-way, any other signal one way.
   */
-final class TextArea private[uic] (private[uic] val s: TextArea.State) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef,
-      Stated:
-    import s.*
+final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, TextFormControl, HasPlaceholder,
+      HasAccessibleNameRef,
+      HasProps:
+    import p.*
 
     type Self = TextArea
 
     /** Package-internal class hook: wrappers (FloatLabel/IconField) stamp Prime's
       * state classes (`p-filled`, iconfield padding) onto the field they wrap.
       */
-    private[uic] def extraClass(cls: String): TextArea = new TextArea(s.copy(extraClassesV = extraClassesV :+ cls))
+    private[uic] def extraClass(cls: String): TextArea = new TextArea(p.copy(extraClassesV = extraClassesV :+ cls))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new TextArea(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new TextArea(p.copy(accessV = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the textarea. Any other signal
       * binds ONE-WAY: the textarea shows it, and an edit writes nothing and only reports through [[onInput]] and
       * [[onChange]]; with neither, a card says the reader cannot change it. A constant is the starting text, which the
       * reader edits freely. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): TextArea = new TextArea(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): TextArea = new TextArea(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = new TextArea(s.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = new TextArea(p.copy(placeholderText = v))
 
-    def rows(n: Int): TextArea = new TextArea(s.copy(rowsV = Present(math.max(1, n))))
+    def rows(n: Int): TextArea = new TextArea(p.copy(rowsV = Present(math.max(1, n))))
 
     /** Disables the field. A `Signal[Boolean]` toggles the native `disabled` attribute IN PLACE via kyo-
       * ui's boolean attribute channel, so there is no re-render and caret/focus survive.
       */
-    def disabled(v: Boolean | Signal[Boolean]): TextArea = new TextArea(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): TextArea = new TextArea(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles the
       * attribute IN PLACE via kyo-ui's boolean attribute channel, so there is no re-render and caret/focus
       * survive.
       */
-    def readonly(v: Boolean | Signal[Boolean]): TextArea = new TextArea(s.copy(readonlyFlag = Present(ReactiveValue(v))))
+    def readonly(v: Boolean | Signal[Boolean]): TextArea = new TextArea(p.copy(readonlyFlag = Present(ReactiveValue(v))))
 
     /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): TextArea = new TextArea(s.copy(requiredFlag = Present(v)))
+    def required(v: Boolean): TextArea = new TextArea(p.copy(requiredFlag = Present(v)))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): TextArea = new TextArea(s.copy(nameV = Present(v)))
+    def name(v: String): TextArea = new TextArea(p.copy(nameV = Present(v)))
 
     /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): TextArea = new TextArea(s.copy(maxLengthV = Present(math.max(0, n))))
+    def maxLength(n: Int): TextArea = new TextArea(p.copy(maxLengthV = Present(math.max(0, n))))
 
     /** Prime `autoResize`: the textarea grows with its content
       * (`.p-textarea-resizable` + the CSS `field-sizing: content` remainder class
       * `.p-uic-autoresize`; no JS measuring).
       */
-    def autoResize(v: Boolean): TextArea = new TextArea(s.copy(autoResizeFlag = v))
+    def autoResize(v: Boolean): TextArea = new TextArea(p.copy(autoResizeFlag = v))
 
     /** Size: `.p-textarea-sm` / default / `.p-textarea-lg`. */
-    def size(v: Size): TextArea = new TextArea(s.copy(sizeV = v))
+    def size(v: Size): TextArea = new TextArea(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): TextArea = new TextArea(s.copy(variantV = v))
+    def variant(v: FieldVariant): TextArea = new TextArea(p.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-textarea-fluid`). */
-    def fluid(v: Boolean): TextArea = new TextArea(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): TextArea = new TextArea(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(p.copy(validityV = v))
 
-    def onInput(f: String => UI.Action)(using Frame): TextArea  = new TextArea(s.copy(valueSlot = valueSlot.hear(f)))
+    def onInput(f: String => UI.Action)(using Frame): TextArea  = new TextArea(p.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): TextArea =
-        new TextArea(s.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
+        new TextArea(p.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
 
     /** Fires on focus loss with the text the field holds as focus leaves it (what
       * the reader typed, also unbound or from a constant); unlike onChange it fires
       * even when the value was not edited. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => UI.Action)(using Frame): TextArea = new TextArea(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): TextArea = new TextArea(p.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -135,7 +136,7 @@ final class TextArea private[uic] (private[uic] val s: TextArea.State) extends N
 end TextArea
 
 object TextArea:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[String] = Slot(),
         placeholderText: Maybe[TextValue] = Absent,
         rowsV: Maybe[Int] = Absent,
@@ -155,7 +156,7 @@ object TextArea:
         extraClassesV: List[String] = Nil
     )
 
-    def apply(): TextArea = new TextArea(State())
+    def apply(): TextArea = new TextArea(Props())
 
     private val valueName = Slot.Name("TextArea", "value", "a change", "onInput or onChange")
 end TextArea

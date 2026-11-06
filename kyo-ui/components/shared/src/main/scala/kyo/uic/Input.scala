@@ -24,30 +24,30 @@ end InputType
   * Validation is Prime's `.p-invalid` model: `invalid(Boolean)` plus the
   * optional `invalidMessage(String)` row below the field.
   */
-final class Input private[uic] (private[uic] val s: Input.State) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef,
-      HasAccessibleDescription, Stated:
-    import s.*
+final class Input private[uic] (private[uic] val p: Input.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef,
+      HasAccessibleDescription, HasProps:
+    import p.*
 
     type Self = Input
 
     /** Package-internal class hook: wrappers (FloatLabel/IftaLabel) stamp Prime's
       * state classes (`p-filled`) onto the field they wrap.
       */
-    private[uic] def extraClass(cls: String): Input = new Input(s.copy(extraClassesV = extraClassesV :+ cls))
+    private[uic] def extraClass(cls: String): Input = new Input(p.copy(extraClassesV = extraClassesV :+ cls))
 
     /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose
       * own events are what hear it ([[InputMask]]).
       */
     private[uic] def unheardAs(component: String, events: String): Input =
-        new Input(s.copy(unheardAsV = Input.valueName(component, events)))
+        new Input(p.copy(unheardAsV = Input.valueName(component, events)))
 
     /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
       * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
       */
-    private[uic] def filledOn(cls: String, closest: String): Input = new Input(s.copy(filledUpV = Present((cls, closest))))
+    private[uic] def filledOn(cls: String, closest: String): Input = new Input(p.copy(filledUpV = Present((cls, closest))))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Input(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Input(p.copy(accessV = v))
 
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
@@ -59,57 +59,57 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
       * At most one focus-auto element is seeded per patch, so several fields appearing
       * together (a row of editors) hand focus to the first.
       */
-    def focusAuto(v: Boolean): Input = new Input(s.copy(focusAutoFlag = v))
+    def focusAuto(v: Boolean): Input = new Input(p.copy(focusAutoFlag = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal
       * binds ONE-WAY: the field shows it, and an edit writes nothing and only reports through [[onInput]] and
       * [[onChange]], so the app writes its own state and the field follows; with neither, a card says the reader cannot
       * change it. A constant is the starting text, which the reader edits freely. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Input = new Input(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): Input = new Input(p.copy(valueSlot = valueSlot.bind(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = new Input(s.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = new Input(p.copy(placeholderText = v))
 
     /** Disabled, constant or reactive: a `Signal[Boolean]` toggles the native `disabled` attribute IN
       * PLACE via kyo-ui's boolean-attribute channel (no re-render, so caret/focus survive), e.g. disable
       * until another field is valid; a plain `Boolean` sets it statically.
       */
-    def disabled(v: Boolean | Signal[Boolean]): Input = new Input(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): Input = new Input(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly` (focusable but not editable), constant or reactive: a `Signal[Boolean]` toggles
       * it IN PLACE via the boolean-attribute channel (no re-render, so caret/focus survive).
       */
-    def readonly(v: Boolean | Signal[Boolean]): Input = new Input(s.copy(readonlyFlag = Present(ReactiveValue(v))))
+    def readonly(v: Boolean | Signal[Boolean]): Input = new Input(p.copy(readonlyFlag = Present(ReactiveValue(v))))
 
     /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Input = new Input(s.copy(requiredFlag = Present(v)))
+    def required(v: Boolean): Input = new Input(p.copy(requiredFlag = Present(v)))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): Input = new Input(s.copy(nameV = Present(v)))
+    def name(v: String): Input = new Input(p.copy(nameV = Present(v)))
 
     /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Input = new Input(s.copy(maxLengthV = Present(math.max(0, n))))
+    def maxLength(n: Int): Input = new Input(p.copy(maxLengthV = Present(math.max(0, n))))
 
     /** Selects the native input type; defaults to [[InputType.Text]]. */
-    def inputType(t: InputType): Input = new Input(s.copy(typeV = t))
+    def inputType(t: InputType): Input = new Input(p.copy(typeV = t))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): Input = new Input(s.copy(sizeV = v))
+    def size(v: Size): Input = new Input(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): Input = new Input(s.copy(variantV = v))
+    def variant(v: FieldVariant): Input = new Input(p.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
-    def fluid(v: Boolean): Input = new Input(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): Input = new Input(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = new Input(s.copy(accDescV = v))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = new Input(p.copy(accDescV = v))
 
-    def onInput(f: String => UI.Action)(using Frame): Input  = new Input(s.copy(valueSlot = valueSlot.hear(f)))
+    def onInput(f: String => UI.Action)(using Frame): Input  = new Input(p.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): Input =
-        new Input(s.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
+        new Input(p.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it, which kyo-ui's blur carries (its two-parameter `onBlur`): what the reader typed,
@@ -117,7 +117,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): Input = new Input(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): Input = new Input(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also
       * allows one separator, any other string is a whitelist charset. The client
@@ -128,7 +128,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
       * The string stays this library's surface; kyo takes a typed
       * [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto.
       */
-    def inputFilter(pattern: String): Input = new Input(s.copy(inputFilterV = Present(pattern)))
+    def inputFilter(pattern: String): Input = new Input(p.copy(inputFilterV = Present(pattern)))
 
     /** Client-local input mask (the fork's `inputMask`), e.g. `"(999) 999-9999"`:
       * `9` = digit, `a` = letter, `*` = alphanumeric; every other character is a
@@ -136,7 +136,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
       * the MASKED value is what reaches `onInput`/`onChange`/the ref. Prefer the
       * dedicated [[InputMask]] component for phone/date/ssn fields.
       */
-    def inputMask(mask: String): Input = new Input(s.copy(inputMaskV = Present(mask)))
+    def inputMask(mask: String): Input = new Input(p.copy(inputMaskV = Present(mask)))
 
     private[uic] def render(using Frame): UI =
         val validity  = FieldValidity(validityV)
@@ -266,7 +266,7 @@ final class Input private[uic] (private[uic] val s: Input.State) extends Node, T
 end Input
 
 object Input:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[String] = Slot(),
         placeholderText: Maybe[TextValue] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
@@ -291,7 +291,7 @@ object Input:
         filledUpV: Maybe[(String, String)] = Absent
     )
 
-    def apply(): Input = new Input(State())
+    def apply(): Input = new Input(Props())
 
     private[uic] def valueName(component: String, events: String) = Slot.Name(component, "value", "a change", events)
 

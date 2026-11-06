@@ -25,16 +25,16 @@ import kyo.UI.*
   * uic.IconField(uic.Input().placeholder("Search")).iconStart(uic.Icons.search)
   * }}}
   */
-final class IconField private[uic] (private[uic] val s: IconField.State) extends Node, Stated:
-    import s.*
+final class IconField private[uic] (private[uic] val p: IconField.Props) extends Node, HasProps:
+    import p.*
 
     type Self = IconField
 
     /** Icon pinned to the field's start edge (`.p-inputicon:first-child`). */
-    def iconStart(glyph: IconGlyph): IconField = new IconField(s.copy(startIconV = Present(glyph)))
+    def iconStart(glyph: IconGlyph): IconField = new IconField(p.copy(startIconV = Present(glyph)))
 
     /** Icon pinned to the field's end edge (`.p-inputicon:last-child`). */
-    def iconEnd(glyph: IconGlyph): IconField = new IconField(s.copy(endIconV = Present(glyph)))
+    def iconEnd(glyph: IconGlyph): IconField = new IconField(p.copy(endIconV = Present(glyph)))
 
     private[uic] def render(using Frame): UI =
         val startSlot: List[UI] = startIconV.toList.map(g => GlyphSvg(g, "p-inputicon"))
@@ -57,7 +57,7 @@ final class IconField private[uic] (private[uic] val s: IconField.State) extends
 end IconField
 
 object IconField:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         hostV: IconField.Host,
         startIconV: Maybe[IconGlyph] = Absent,
         endIconV: Maybe[IconGlyph] = Absent
@@ -71,13 +71,13 @@ object IconField:
     end Host
 
     /** Wraps `input`; add icons via [[IconField.iconStart]]/[[IconField.iconEnd]]. */
-    def apply(input: Input): IconField = new IconField(State(Host.In(input)))
+    def apply(input: Input): IconField = new IconField(Props(Host.In(input)))
 
     /** Wraps `textArea` (kyo extension beyond Prime's input-only CSS). */
-    def apply(textArea: TextArea): IconField = new IconField(State(Host.Ta(textArea)))
+    def apply(textArea: TextArea): IconField = new IconField(Props(Host.Ta(textArea)))
 
     /** Wraps `select` (kyo extension; prefer `iconStart`, since the end edge hosts the
       * dropdown chevron).
       */
-    def apply(select: Select[?]): IconField = new IconField(State(Host.Sel(select)))
+    def apply(select: Select[?]): IconField = new IconField(Props(Host.Sel(select)))
 end IconField

@@ -66,7 +66,7 @@ class ElementIdTest extends UicTest:
     "a Menubar carries it on its root" in {
         val bar = uic.Menubar().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
-            refs  <- Submenus.init(submenuPaths(bar.s.entriesV).filter(p => false).toSet)
+            refs  <- Submenus.init(submenuPaths(bar.p.entriesV).filter(p => false).toSet)
             focus <- Anchored.init(List.empty[Int])
             ui   = bar.id("mine").wired(refs, focus, "minted")
             bare = bar.wired(refs, focus, "minted")
@@ -81,7 +81,7 @@ class ElementIdTest extends UicTest:
     "a TieredMenu carries it on its root" in {
         val tm = uic.TieredMenu().items(uic.MenuItem("File").items(rows*), uic.MenuItem("Edit"))
         for
-            refs  <- Submenus.init(submenuPaths(tm.s.entriesV).filter(p => false).toSet)
+            refs  <- Submenus.init(submenuPaths(tm.p.entriesV).filter(p => false).toSet)
             focus <- Anchored.init(List.empty[Int])
             ui   = tm.id("mine").wired(refs, focus, "minted")
             bare = tm.wired(refs, focus, "minted")
@@ -99,7 +99,7 @@ class ElementIdTest extends UicTest:
             uic.MegaMenuItem("Contact")
         )
         for
-            refs  <- Submenus.init(panelPaths(mm.s.entriesV).filter(p => false).toSet)
+            refs  <- Submenus.init(panelPaths(mm.p.entriesV).filter(p => false).toSet)
             focus <- Anchored.init(List.empty[Int])
             ui   = mm.id("mine").wired(refs, focus, "minted")
             bare = mm.wired(refs, focus, "minted")

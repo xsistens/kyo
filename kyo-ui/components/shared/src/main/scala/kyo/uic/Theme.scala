@@ -54,15 +54,15 @@ object Theme:
       * its tokens under that name, made by [[brand]]. The two travel together, so the name an
       * element is themed with is always one a sheet was made for. Emit `sheet` AFTER [[css]].
       */
-    final class Brand private[uic] (private[uic] val s: Brand.State) extends Palette, Stated derives CanEqual:
-        def attr: String = s.name
+    final class Brand private[uic] (private[uic] val p: Brand.Props) extends Palette, HasProps derives CanEqual:
+        def attr: String = p.name
 
         /** What declares this palette's tokens, to emit AFTER [[css]]. */
-        def sheet: Stylesheet = s.sheet
+        def sheet: Stylesheet = p.sheet
     end Brand
 
     object Brand:
-        final private[uic] case class State(name: String, sheet: Stylesheet)
+        final private[uic] case class Props(name: String, sheet: Stylesheet)
     end Brand
 
     /** The color scheme a preset's tokens resolve in, selected on the page with
@@ -263,7 +263,7 @@ object Theme:
         val sheet     =
             if darkPairs.isEmpty then base
             else base.scopedVars(scope.and(Selector.data("scheme", Scheme.Dark.attr)), darkPairs*)
-        new Brand(Brand.State(name, sheet))
+        new Brand(Brand.Props(name, sheet))
     end brand
 
     /** Prime sets no font-family of its own; the showcase look is Inter, with a system
