@@ -107,26 +107,40 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
       */
     def onBlur(f: String => UI.Action)(using Frame): Password = new Password(p.copy(onBlurSF = Present(Callback.of(f))))
 
+    /** The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the reader types
+      * is the field's to keep: from a constant (which a reveal would otherwise give back), and with the meter unbound too. Such a
+      * field is an instance, one per place, drawn once: it holds the text and the reveal, and a host region that runs again hands
+      * it the run's props instead of starting it over. The props are read as one value, so every run draws from that run's
+      * binding and hearers. Unbound without the meter or the eye, the field keeps nothing, draws no value and leaves the text to
+      * the browser, so it has no instance.
+      */
     private[uic] def render(using Frame): UI =
-        // The meter is drawn from the text and the eye's reveal draws the field again, so with either on the text the reader
-        // types is the field's to keep: from a constant (which a reveal would otherwise give back), and with the meter unbound
-        // too. Unbound without the meter, the field draws no value and the text stays the browser's. With a mask toggle the one mount
-        // keeps the reveal beside the text.
-        val keepsOwnText = keepsText && (feedbackFlag || valueSlot.binding.isDefined)
-        if !toggleMaskFlag then
-            Slot.owningFrom(valueSlot, unbound = "", on = ReactiveValue.Const(keepsOwnText)) { slot =>
-                val field = new Password(p.copy(valueSlot = slot))
-                field.validated(field.withValue(Absent, _))
-            }
+        if !toggleMaskFlag && !keepsOwnText then drawnOver(Absent, Absent)
         else
-            UI.mounted {
+            UI.mountedWith(p) { live =>
                 for
-                    value  <- if keepsOwnText then valueSlot.ownedFrom("") else Kyo.lift(valueSlot)
+                    start  <- live.call(Password.startText)
+                    own    <- Signal.initRef(start)
                     reveal <- Signal.initRef(false)
-                yield new Password(p.copy(valueSlot = value)).wired(reveal)
+                yield Prop.render(live[Password.Props](identity))(q => new Password(q).drawnOver(Present(own), Present(reveal)))
             }
-        end if
-    end render
+
+    /** Whether the text the reader types is the field's to keep, in this run's props. */
+    private def keepsOwnText: Boolean = keepsText && (feedbackFlag || valueSlot.binding.isDefined)
+
+    /** The field over its binding, or over the instance's `own` text where this run binds nothing or only where the text starts;
+      * the eye over the instance's `reveal`.
+      */
+    private def drawnOver(own: Maybe[SignalRef[String]], reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
+        val value = (own, valueSlot.binding) match
+            case (Present(ref), Absent | Present(ReactiveValue.Const(_))) if keepsOwnText =>
+                valueSlot.copy(binding = Present(ReactiveVariable(ref)))
+            case _ => valueSlot
+        val field = new Password(p.copy(valueSlot = value))
+        reveal match
+            case Present(r) if toggleMaskFlag => field.wired(r)
+            case _                            => field.validated(field.withValue(Absent, _))
+    end drawnOver
 
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the
       * reader can change.
@@ -279,9 +293,15 @@ object Password:
         accessV: Accessibility = Accessibility.none,
         onChangeSF: Maybe[String => UI.Action] = Absent,
         onBlurSF: Maybe[String => UI.Action] = Absent
-    )
+    ) derives CanEqual
 
     def apply(): Password = new Password(Props())
+
+    /** Where the field's own text starts: a constant the caller gave, else empty. */
+    private def startText(q: Props): String =
+        q.valueSlot.binding match
+            case Present(ReactiveValue.Const(a)) => a
+            case _                               => ""
 
     /** Prime's default strength rules as pure predicates: 0 = empty (prompt),
       * 1 = weak, 2 = medium (two of [a-z, A-Z, 0-9] and length â¥ 6),

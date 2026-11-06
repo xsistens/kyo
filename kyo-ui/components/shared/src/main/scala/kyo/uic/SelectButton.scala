@@ -326,7 +326,7 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
                         if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
             else if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
             end if
-            tb.render
+            tb.renderInPlace
         }
         el(UI.children(Diagnostics.cards("SelectButton")(keyCollisionCard, Diagnostic.unknown(unknown.map(labelF)), unheardCard).toList ++
             buttons)*)
