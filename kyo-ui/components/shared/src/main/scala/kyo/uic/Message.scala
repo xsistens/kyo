@@ -25,37 +25,37 @@ enum MessageVariant derives CanEqual:
   * `onClose`: `onClose` is reserved across this module for the surfaces that own
   * a visibility ref and close themselves ([[Dialog]], [[Drawer]], [[Toast]]).
   */
-final class Message private[uic] (private[uic] val s: Message.State) extends Node, HasElementId, Stated:
-    import s.*
+final class Message private[uic] (private[uic] val p: Message.Props) extends Node, HasElementId, HasProps:
+    import p.*
 
     type Self = Message
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Message(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Message(p.copy(accessV = v))
 
     /** Semantic accent (`.p-message-<token>`; Prime's message vocabulary is
       * info/success/warn/error/secondary/contrast, so `Danger` maps to `error` and `Primary`/`Help` fall
       * back to the `info` skin). A `Signal[Severity]` swaps the class IN PLACE via the class channel and
       * re-renders the default leading icon in its own small sub-region, with no whole re-render.
       */
-    def severity(v: Severity | Signal[Severity]): Message = new Message(s.copy(severityV = ReactiveValue(v)))
+    def severity(v: Severity | Signal[Severity]): Message = new Message(p.copy(severityV = ReactiveValue(v)))
 
     /** Rendering variant: `Outlined` (transparent body, colored border) or
       * `Simple` (borderless text-only); unset renders Prime's filled default.
       */
-    def variant(v: MessageVariant): Message = new Message(s.copy(variantV = Present(v)))
+    def variant(v: MessageVariant): Message = new Message(p.copy(variantV = Present(v)))
 
     /** Size: `.p-message-sm` / default / `.p-message-lg`. */
-    def size(v: Size): Message = new Message(s.copy(sizeV = v))
+    def size(v: Size): Message = new Message(p.copy(sizeV = v))
 
     /** Custom leading icon, replacing the severity's default glyph. */
-    def icon(glyph: IconGlyph): Message = new Message(s.copy(iconV = Present(glyph)))
+    def icon(glyph: IconGlyph): Message = new Message(p.copy(iconV = Present(glyph)))
 
     /** Hides the leading icon entirely (both an explicit one and the severity default). */
-    def hideIcon(v: Boolean): Message = new Message(s.copy(hideIconFlag = v))
+    def hideIcon(v: Boolean): Message = new Message(p.copy(hideIconFlag = v))
 
     /** Renders the close button (`.p-message-close-button`, hidden by default). */
-    def closable(v: Boolean): Message = new Message(s.copy(closableFlag = v))
+    def closable(v: Boolean): Message = new Message(p.copy(closableFlag = v))
 
     /** Runs `action` when the close button is pressed. Past tense on purpose: the
       * message has been dismissed by the user, and nothing has been hidden; remove
@@ -63,10 +63,10 @@ final class Message private[uic] (private[uic] val s: Message.State) extends Nod
       * which fires after the component has already written its own visibility ref.
       */
     def onDismissed(action: => UI.Action)(using Frame): Message =
-        new Message(s.copy(onDismissedEff = Present(Callback(action))))
+        new Message(p.copy(onDismissedEff = Present(Callback(action))))
 
     /** Adds default-slot children (the message text). */
-    def apply(cs: UI*): Message = new Message(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Message = new Message(p.copy(kids = kids ++ cs))
 
     /** The `.p-message-<token>` suffix for a severity (Prime's message set; `Danger` is `error`). */
     private def messageToken(s: Severity): String = s match
@@ -150,7 +150,7 @@ final class Message private[uic] (private[uic] val s: Message.State) extends Nod
 end Message
 
 object Message:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         severityV: SeverityValue = SeverityValue.Const(Severity.Info),
         variantV: Maybe[MessageVariant] = Absent,
         sizeV: Size = Size.Normal,
@@ -162,5 +162,5 @@ object Message:
         kids: List[UI] = Nil
     )
 
-    def apply(): Message = new Message(State())
+    def apply(): Message = new Message(Props())
 end Message

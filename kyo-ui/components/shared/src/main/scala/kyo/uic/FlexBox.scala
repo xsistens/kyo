@@ -22,44 +22,44 @@ enum FlexDirection derives CanEqual:
   * typed `FlexWrap` ADT has no reverse variant. `fitContainer` stretches the box
   * to `100%` of both parent dimensions via `p-uic-flex--fit`.
   */
-final class FlexBox private[uic] (private[uic] val s: FlexBox.State) extends Node, Stated:
-    import s.*
+final class FlexBox private[uic] (private[uic] val p: FlexBox.Props) extends Node, HasProps:
+    import p.*
 
     type Self = FlexBox
 
     /** Typed flow direction (default row). */
-    def direction(v: FlexDirection): FlexBox = new FlexBox(s.copy(directionV = Present(v)))
+    def direction(v: FlexDirection): FlexBox = new FlexBox(p.copy(directionV = Present(v)))
 
     /** Column direction (default is row); alias for `direction(Column/Row)`. */
     def vertical(v: Boolean): FlexBox =
-        new FlexBox(s.copy(directionV = Present(if v then FlexDirection.Column else FlexDirection.Row)))
+        new FlexBox(p.copy(directionV = Present(if v then FlexDirection.Column else FlexDirection.Row)))
 
-    def gap(px: Int): FlexBox = new FlexBox(s.copy(gapV = Present(Length.Px(px)), gapRaw = Absent))
+    def gap(px: Int): FlexBox = new FlexBox(p.copy(gapV = Present(Length.Px(px)), gapRaw = Absent))
 
     /** Gap from a CSS length string (`"8px"`, `"0.5em"`, `"1rem"`, bare number as
       * px). An unparseable value is kept as a `data-uic-gap` hook only.
       */
     def gap(v: String): FlexBox =
         FlexBox.parseGap(v) match
-            case Present(len) => new FlexBox(s.copy(gapV = Present(len), gapRaw = Absent))
-            case Absent       => new FlexBox(s.copy(gapV = Absent, gapRaw = Present(v)))
+            case Present(len) => new FlexBox(p.copy(gapV = Present(len), gapRaw = Absent))
+            case Absent       => new FlexBox(p.copy(gapV = Absent, gapRaw = Present(v)))
 
     def justify(f: Style.Justification.type => Style.Justification): FlexBox =
-        new FlexBox(s.copy(justifyV = Present(f(Style.Justification))))
+        new FlexBox(p.copy(justifyV = Present(f(Style.Justification))))
 
     def align(f: Style.Alignment.type => Style.Alignment): FlexBox =
-        new FlexBox(s.copy(alignV = Present(f(Style.Alignment))))
+        new FlexBox(p.copy(alignV = Present(f(Style.Alignment))))
 
-    def wrap(v: Boolean): FlexBox = new FlexBox(s.copy(wrapFlag = v))
+    def wrap(v: Boolean): FlexBox = new FlexBox(p.copy(wrapFlag = v))
 
     /** Wraps lines in reverse stacking order (`flex-wrap: wrap-reverse`); wins over `wrap`. */
-    def wrapReverse(v: Boolean): FlexBox = new FlexBox(s.copy(wrapReverseFlag = v))
+    def wrapReverse(v: Boolean): FlexBox = new FlexBox(p.copy(wrapReverseFlag = v))
 
     /** Stretches the box to 100% width and height of its container. */
-    def fitContainer(v: Boolean): FlexBox = new FlexBox(s.copy(fitContainerV = v))
+    def fitContainer(v: Boolean): FlexBox = new FlexBox(p.copy(fitContainerV = v))
 
     /** Adds children. */
-    def apply(cs: UI*): FlexBox = new FlexBox(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): FlexBox = new FlexBox(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var s = directionV.getOrElse(FlexDirection.Row) match
@@ -90,7 +90,7 @@ final class FlexBox private[uic] (private[uic] val s: FlexBox.State) extends Nod
 end FlexBox
 
 object FlexBox:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         directionV: Maybe[FlexDirection] = Absent,
         gapV: Maybe[Length.Px | Length.Em] = Absent,
         gapRaw: Maybe[String] = Absent,
@@ -102,7 +102,7 @@ object FlexBox:
         kids: List[UI] = Nil
     )
 
-    def apply(): FlexBox = new FlexBox(State())
+    def apply(): FlexBox = new FlexBox(Props())
 
     /** Parses a CSS gap string into the `Px | Em` union kyo's `Style.gap` accepts
       * (`rem` converts at the standard 16px root).

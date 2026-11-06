@@ -5,49 +5,51 @@ Rules that bite repeatedly when building or extending components in
 The component catalog, the composition story and the parity notes are in this
 module's `README.md`.
 
-## A component is a class over its state
+## A component is a class over its props
 
 ```scala
-final class Input private[uic] (private[uic] val s: Input.State) extends Node, TextFormControl, Stated:
-    import s.*   // reads in the body stay as they are
+final class Input private[uic] (private[uic] val p: Input.Props) extends Node, TextFormControl, HasProps:
+    import p.*   // reads in the body stay as they are
     type Self = Input
 
-    def size(v: Size): Input = new Input(s.copy(sizeV = v))
+    def size(v: Size): Input = new Input(p.copy(sizeV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
     private[uic] def accessibility: Accessibility               = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(p.copy(accessV = v))
 end Input
 
 object Input:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         sizeV: Size = Size.Normal,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         accessV: Accessibility = Accessibility.none
     )
 
-    def apply(): Input = new Input(State())
+    def apply(): Input = new Input(Props())
 end Input
 ```
 
 So a reader typing `uic.Input().` outside this package is offered the setters and what every object has: no field, no `copy`,
 no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sweeps every component; a new one belongs in it.
 
-- **Every field lives in `State`.** A setter is `new X(s.copy(...))`. A component reads another's field through its state
-  (`button.s.labelV`), and so does a test, since `private[uic]` reaches subpackages.
-- **`Stated` gives back what a case class gave**: equality over the state and a `toString` (`Anchored` finds a menu item again
+- **Every field lives in `Props`**, the configuration the setters build. A setter is `new X(p.copy(...))`. A component reads
+  another's field through its props (`button.p.labelV`), and so does a test, since `private[uic]` reaches subpackages. What a
+  component holds while it is shown (an open panel, a highlight, an id) is state, and it is made in the component's mount.
+- **`HasProps` gives back what a case class gave**: equality over the props and a `toString` (`Anchored` finds a menu item again
   by equality). A wrapper over one component (`MultipleAccordion`, `MultiSelectButton`, `MultiDatePicker`, `RangeDatePicker`) has
-  no state of its own: it holds that component and is `Stated` over it.
-- **Three things `import s.*` does not settle.** A local named `s` hides the field, so a slot handed to a lambda reads
-  `(s => new X(this.s.copy(openSlot = s)).drawn)`. A setter named like its field wins over the import, so that read is
-  `s.icon`. A `copy` in the body without `s.` is the state's and hands back a `State`, which then fails to type.
+  no props of its own: it holds that component and is `HasProps` over it.
+- **Four things `import p.*` does not settle.** A local named `p` hides the field, so a parameter `p` reads
+  `this.p.copy(...)`. A setter named like its field wins over the import, so that read is `p.icon`. A `copy` in the body
+  without `p.` is the props' and hands back a `Props`, which then fails to type. And the field hides kyo-ui's paragraph `p`
+  inside the class, so a paragraph there is `UI.p`.
 - **Two groups are shared, one case class each**, for every component that has those fields: `validityV`
   (`FieldValidity.Slots`, what `FieldValidity(validityV)` resolves per render) and `accessV` (`Accessibility`, the name, its
   reference and the id). The empty ones are shared values, so a component nobody marks stores nothing for them. Do not group
   anything else without deciding it first.
-- **A name the companion already used stays with its owner.** `ContextMenu.State` is public API, so that one state is
-  `ContextMenu.Slots`. The wired per-mount state of the pickers is `Wired`.
+- **A name the companion already used stays with its owner.** `ContextMenu.State` is public API and real state (the open menu
+  a caller drives), so it keeps its name beside `ContextMenu.Props`. The wired per-mount state of the pickers is `Wired`.
 - **What a reader needs of the state gets a named public getter, and only that** (decided 2026-11-04). `BreadcrumbItem.href`,
   since `onItemClick` hands the crumb over and a handler routes on it; `MeterGroup.Meter.labelText`, since a template composes its
   label from it and is handed the percent; `Theme.Brand.sheet`, since emitting it is what a brand is for, beside `attr` from
@@ -128,8 +130,8 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   InputNumber's ref when bound to one. With no ref InputNumber reads the carried text as a number (clamped where it is
   bound to a number), since a commit with no ref writes nowhere and only the field holds what the reader typed.
 - **A STATE slot (what the reader changes: a page, a sort, filters, expansion, a selection, a column layout) is a `Slot[A]`**
-  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `new X(s.copy(xSlot = xSlot.bind(v)))` and
-  `new X(s.copy(xSlot = xSlot.hear(f)))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
+  (`Slot.scala`): what the caller bound, and who hears a reader's change. A setter is one line, `new X(p.copy(xSlot = xSlot.bind(v)))` and
+  `new X(p.copy(xSlot = xSlot.hear(f)))`, and a field is never a binding and a callback side by side. It takes `A | Signal[A]` like any slot
   and reports every change the reader asks for: the component goes through `slot.change` (a new value) or `slot.update` (a step
   from the value shown), where a two-way binding is written first, atomically for a step, then the `on<Slot>Change` callback hears
   the new value, whatever the binding (`onPageChange`, `onSortChange`, `onColumnFiltersChange`, `onExpandedChange`, ...; the
@@ -1083,7 +1085,7 @@ version. A rename with no counterpart in the demo is a rename that has not been
 carried through.
 
 Compiling is not all of it. The demo's `ApiMacro` reads a setter's BODY to fill the Default column of its tables: it follows
-`new X(s.copy(f = v))` and `withG(g.copy(f = v))` to the field and reads what an unconfigured component holds there. A setter that
+`new X(p.copy(f = v))` and `withG(g.copy(f = v))` to the field and reads what an unconfigured component holds there. A setter that
 reaches its field another way prints no default or a wrong one, and nothing fails, since `CheckDocs` does not judge the text.
 
 ## Effect-as-value trap

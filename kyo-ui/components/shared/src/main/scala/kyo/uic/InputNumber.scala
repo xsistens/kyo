@@ -39,9 +39,9 @@ end InputNumberButtonLayout
   * (`.p-uic-inputnumber-prefix`/`-suffix`, kyo extension) beside the field,
   * never inside the typed value, and no live digit-grouping mask is applied.
   */
-final class InputNumber private[uic] (private[uic] val s: InputNumber.State) extends Node, NumberFormControl, HasPlaceholder,
-      HasAccessibleName, Stated:
-    import s.*
+final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) extends Node, NumberFormControl, HasPlaceholder,
+      HasAccessibleName, HasProps:
+    import p.*
 
     type Self = InputNumber
 
@@ -57,7 +57,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
       */
     @targetName("valueNumber")
     def value(v: Double | Signal[Double]): InputNumber =
-        new InputNumber(s.copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.copy(binding = Absent)))
+        new InputNumber(p.copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.copy(binding = Absent)))
 
     /** Binds the field's raw TEXT, for a caller that needs what was typed rather than a number. A `SignalRef` binds two
       * way and [[onTextChange]] hears every keystroke; a plain `Signal` binds one way, the field showing it and painted back
@@ -75,75 +75,75 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
       * and the spin buttons step the text they find.
       */
     def text(v: String | Signal[String]): InputNumber =
-        new InputNumber(s.copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.copy(binding = Absent)))
+        new InputNumber(p.copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.copy(binding = Absent)))
 
     /** Fired with the raw text after every keystroke and spin of a [[text]]-bound field, after a two-way text is written. */
-    def onTextChange(f: String => UI.Action)(using Frame): InputNumber = new InputNumber(s.copy(textSlot = textSlot.hear(f)))
+    def onTextChange(f: String => UI.Action)(using Frame): InputNumber = new InputNumber(p.copy(textSlot = textSlot.hear(f)))
 
     /** Lower bound: native `min` plus the clamp floor for spins and commits. */
-    def min(v: Double): InputNumber = new InputNumber(s.copy(minV = Present(v)))
+    def min(v: Double): InputNumber = new InputNumber(p.copy(minV = Present(v)))
 
     /** Upper bound: native `max` plus the clamp ceiling for spins and commits. */
-    def max(v: Double): InputNumber = new InputNumber(s.copy(maxV = Present(v)))
+    def max(v: Double): InputNumber = new InputNumber(p.copy(maxV = Present(v)))
 
     /** Spin/arrow increment (native `step`; Prime default 1). */
-    def step(v: Double): InputNumber = new InputNumber(s.copy(stepV = if v <= 0 then 1.0 else v))
+    def step(v: Double): InputNumber = new InputNumber(p.copy(stepV = if v <= 0 then 1.0 else v))
 
     /** Shows the increment/decrement buttons (Prime's `showButtons`). */
-    def showButtons(v: Boolean): InputNumber = new InputNumber(s.copy(showButtonsFlag = v))
+    def showButtons(v: Boolean): InputNumber = new InputNumber(p.copy(showButtonsFlag = v))
 
     /** Button placement: `Stacked` (default), `Horizontal` or `Vertical`. */
-    def buttonLayout(v: InputNumberButtonLayout): InputNumber = new InputNumber(s.copy(buttonLayoutV = v))
+    def buttonLayout(v: InputNumberButtonLayout): InputNumber = new InputNumber(p.copy(buttonLayoutV = v))
 
     /** Static adornment BEFORE the field (kyo extension `.p-uic-inputnumber-prefix`;
       * see the class doc: Prime's in-value formatting is deliberately not ported).
       */
-    def prefix(v: String): InputNumber = new InputNumber(s.copy(prefixV = Present(v)))
+    def prefix(v: String): InputNumber = new InputNumber(p.copy(prefixV = Present(v)))
 
     /** Static adornment AFTER the field (`.p-uic-inputnumber-suffix`). */
-    def suffix(v: String): InputNumber = new InputNumber(s.copy(suffixV = Present(v)))
+    def suffix(v: String): InputNumber = new InputNumber(p.copy(suffixV = Present(v)))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputNumber = new InputNumber(s.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputNumber = new InputNumber(p.copy(placeholderText = v))
 
     /** Disables the field + spin buttons; a `Signal[Boolean]` toggles it reactively (re-render). */
-    def disabled(v: Boolean | Signal[Boolean]): InputNumber = new InputNumber(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): InputNumber = new InputNumber(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Native `readonly`: focusable but not editable; the spin buttons stop too. */
-    def readonly(v: Boolean): InputNumber = new InputNumber(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): InputNumber = new InputNumber(p.copy(readonlyFlag = v))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): InputNumber = new InputNumber(s.copy(nameV = Present(v)))
+    def name(v: String): InputNumber = new InputNumber(p.copy(nameV = Present(v)))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
-    def size(v: Size): InputNumber = new InputNumber(s.copy(sizeV = v))
+    def size(v: Size): InputNumber = new InputNumber(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
-    def variant(v: FieldVariant): InputNumber = new InputNumber(s.copy(variantV = v))
+    def variant(v: FieldVariant): InputNumber = new InputNumber(p.copy(variantV = v))
 
     /** Spans the full container width (`.p-inputnumber-fluid`). */
-    def fluid(v: Boolean): InputNumber = new InputNumber(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): InputNumber = new InputNumber(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputNumber(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputNumber(p.copy(validityV = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(p.copy(accessV = v))
 
     /** Restricts entry to whole numbers: the client keystroke filter (`inputFilter("int")`)
       * rejects the decimal separator before it reaches the field, so the bound value stays
       * integral. The form layer turns this on automatically for `Int`/`Long` number fields.
       */
-    def integer(v: Boolean): InputNumber = new InputNumber(s.copy(integerFlag = v))
+    def integer(v: Boolean): InputNumber = new InputNumber(p.copy(integerFlag = v))
 
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. Same contract as `Input.focusAuto`: the element has to
       * be NEW for the seed to fire, which is what makes it the right tool for a field that
       * appears in place of something else.
       */
-    def focusAuto(v: Boolean): InputNumber = new InputNumber(s.copy(focusAutoFlag = v))
+    def focusAuto(v: Boolean): InputNumber = new InputNumber(p.copy(focusAutoFlag = v))
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => UI.Action)(using Frame): InputNumber = new InputNumber(s.copy(numberSlot = numberSlot.hear(f)))
+    def onChange(f: Double => UI.Action)(using Frame): InputNumber = new InputNumber(p.copy(numberSlot = numberSlot.hear(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current number: bound to
       * a ref, the number the ref holds (committed, clamped); otherwise the number in
@@ -153,7 +153,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
       * Unlike `onChange` it fires even when the value was not edited. The
       * form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: Double => UI.Action)(using Frame): InputNumber = new InputNumber(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: Double => UI.Action)(using Frame): InputNumber = new InputNumber(p.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
@@ -166,14 +166,14 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
     private[uic] def render(using Frame): UI =
         // A constant nobody hears is fixed: drawn read-only. Unbound, the field keeps what the reader types and spins itself,
         // through the same text channel a text binding uses, so it starts empty; a constant text is where it starts.
-        if numberSlot.fixed && !readonlyFlag then new InputNumber(s.copy(readonlyFlag = true)).render
+        if numberSlot.fixed && !readonlyFlag then new InputNumber(p.copy(readonlyFlag = true)).render
         else if numberSlot.binding.isDefined then renderLive
-        else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.s.copy(textSlot = s)).renderLive)
+        else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.p.copy(textSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)
         val field    =
-            validity.follow(BoolValue.reactive(disabledFlag)(d => new InputNumber(s.copy(disabledFlag = d)).renderResolved(validity)))
+            validity.follow(BoolValue.reactive(disabledFlag)(d => new InputNumber(p.copy(disabledFlag = d)).renderResolved(validity)))
         // A value bound one way that nothing hears: every change the reader makes is put back.
         val quiet = readonlyFlag || disabledFlag.constTrue
         Diagnostics.after(field)("InputNumber")(
@@ -350,7 +350,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
 end InputNumber
 
 object InputNumber:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         numberSlot: Slot[Double] = Slot(),
         textSlot: Slot[String] = Slot(),
         minV: Maybe[Double] = Absent,
@@ -374,7 +374,7 @@ object InputNumber:
         focusAutoFlag: Boolean = false
     )
 
-    def apply(): InputNumber = new InputNumber(State())
+    def apply(): InputNumber = new InputNumber(Props())
 
     /** Renders a Double for the native field: integral values without the
       * trailing `.0` (matching what a user would type), fractional as-is.

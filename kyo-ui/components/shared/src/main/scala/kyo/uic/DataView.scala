@@ -47,8 +47,8 @@ end DataViewLayout
   * template owns row layout either way, and a plain `sortBy` keeps the data
   * flow visible.
   */
-final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) extends Node, HasEmptyContent, Stated:
-    import s.*
+final class DataView[A] private[uic] (private[uic] val p: DataView.Props[A]) extends Node, HasEmptyContent, HasProps:
+    import p.*
 
     type Self = DataView[A]
 
@@ -56,7 +56,7 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
       * exclusive and the last one set wins, because a component that silently merged a static block with a
       * live one would have no answer for what an emission does to the static rows.
       */
-    def items(is: Seq[A]): DataView[A] = new DataView(s.copy(itemsV = itemsV ++ is.toList, itemsSigV = Absent))
+    def items(is: Seq[A]): DataView[A] = new DataView(p.copy(itemsV = itemsV ++ is.toList, itemsSigV = Absent))
 
     /** Reactive items: the list is carried as a signal and the rows are reconciled per emission through
       * kyo-ui's list region (`Signal.foreach`), instead of the whole content being rebuilt.
@@ -72,7 +72,7 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
       * slice is build-time arithmetic over the whole list, so the rows cannot be a list region at all; the
       * signal then drives a plain region around the component, which is the same cost as rebuilding.
       */
-    def items(sig: Signal[Chunk[A]]): DataView[A] = new DataView(s.copy(itemsSigV = Present(sig), itemsV = Nil))
+    def items(sig: Signal[Chunk[A]]): DataView[A] = new DataView(p.copy(itemsSigV = Present(sig), itemsV = Nil))
 
     /** A stable key per row, which switches reactive reconciliation from position to identity
       * (`Signal.foreachKeyed`): a row whose key survives a list change keeps its live subscriptions and its
@@ -82,46 +82,46 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
       * paginated one. The key must be an actual identity for the data: kyo-ui warns on duplicates, and a
       * key that collides applies a row's update to the wrong record.
       */
-    def itemKey(f: A => String): DataView[A] = new DataView(s.copy(itemKeyF = Present(f)))
+    def itemKey(f: A => String): DataView[A] = new DataView(p.copy(itemKeyF = Present(f)))
 
     /** Item template for the list layout (and the grid fallback). */
-    def itemTemplate(f: A => UI): DataView[A] = new DataView(s.copy(itemF = Present(f)))
+    def itemTemplate(f: A => UI): DataView[A] = new DataView(p.copy(itemF = Present(f)))
 
     /** Item template for the grid layout (falls back to [[itemTemplate]]). */
-    def gridItemTemplate(f: A => UI): DataView[A] = new DataView(s.copy(gridItemF = Present(f)))
+    def gridItemTemplate(f: A => UI): DataView[A] = new DataView(p.copy(gridItemF = Present(f)))
 
     /** Presentation mode: `List` (default) or `Grid`. */
-    def layout(v: DataViewLayout): DataView[A] = new DataView(s.copy(layoutV = v))
+    def layout(v: DataViewLayout): DataView[A] = new DataView(p.copy(layoutV = v))
 
     /** Header slot (`div.p-dataview-header`). */
-    def header(ui: UI): DataView[A] = new DataView(s.copy(headerV = Present(ui)))
+    def header(ui: UI): DataView[A] = new DataView(p.copy(headerV = Present(ui)))
 
     /** Footer slot (`div.p-dataview-footer`). */
-    def footer(ui: UI): DataView[A] = new DataView(s.copy(footerV = Present(ui)))
+    def footer(ui: UI): DataView[A] = new DataView(p.copy(footerV = Present(ui)))
 
     /** Slices the items into pages of `size` and embeds the [[Paginator]]; `page` is the 0-based page index (clamped at
       * render). A `SignalRef` binds two way: a page click writes it. A plain `Signal` or a constant binds one way: the view
       * shows that page and hands the reader's pick to [[onPageChange]] without writing.
       */
     def paginate(size: Int)(page: Int | Signal[Int]): DataView[A] =
-        new DataView(s.copy(pageSizeV = Present(math.max(1, size)), pageSlot = pageSlot.bind(page)))
+        new DataView(p.copy(pageSizeV = Present(math.max(1, size)), pageSlot = pageSlot.bind(page)))
 
     /** Slices the items into pages of `size` with the page the view's own, starting on the first: [[paginate]] for a page
       * nobody else reads. [[onPageChange]] still hears every pick.
       */
-    def paginate(size: Int): DataView[A] = new DataView(s.copy(pageSizeV = Present(math.max(1, size))))
+    def paginate(size: Int): DataView[A] = new DataView(p.copy(pageSizeV = Present(math.max(1, size))))
 
     /** Fired with the page the reader asked for, after a two-way [[paginate]] page is written. */
-    def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = new DataView(s.copy(pageSlot = pageSlot.hear(f)))
+    def onPageChange(f: Int => UI.Action)(using Frame): DataView[A] = new DataView(p.copy(pageSlot = pageSlot.hear(f)))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataView[A] = new DataView(s.copy(emptyContentV = v))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataView[A] = new DataView(p.copy(emptyContentV = v))
 
     /** Busy state: a spinner overlay (`.p-dataview-loading-overlay`) dims the content while data is being
       * fetched (PrimeReact's `loading`). Bind a `Signal[Boolean]` to the data-fetch in-flight signal: the
       * overlay toggles in its own sub-region and the `.p-dataview-loading` class swaps IN PLACE via the
       * class channel, with no re-render of the data list.
       */
-    def loading(v: Boolean | Signal[Boolean]): DataView[A] = new DataView(s.copy(loadingV = Present(ReactiveValue(v))))
+    def loading(v: Boolean | Signal[Boolean]): DataView[A] = new DataView(p.copy(loadingV = Present(ReactiveValue(v))))
 
     private given CanEqual[Chunk[A], Chunk[A]] = CanEqual.derived
 
@@ -131,7 +131,7 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
             pageSlot,
             start = 0,
             on = ReactiveValue.Const(pageSizeV.isDefined)
-        )(s => new DataView(this.s.copy(pageSlot = s)).drawn)
+        )(s => new DataView(this.p.copy(pageSlot = s)).drawn)
 
     /** Only the rows follow the page and the items. The header, the footer and the paginator are built once: each may
       * hold a control with a mount of its own (a sort SelectButton in the header, the paginator's dropdowns), and a
@@ -224,7 +224,7 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
 end DataView
 
 object DataView:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         itemsV: List[A] = Nil,
         itemsSigV: Maybe[Signal[Chunk[A]]] = Absent,
         itemKeyF: Maybe[A => String] = Absent,
@@ -239,5 +239,5 @@ object DataView:
         loadingV: Maybe[BoolValue] = Absent
     )
 
-    def apply[A](): DataView[A] = new DataView[A](State())
+    def apply[A](): DataView[A] = new DataView[A](Props())
 end DataView

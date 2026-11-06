@@ -33,16 +33,16 @@ import kyo.UI.*
   * focusable, a `Form`-level error can target it (`form.check(code, focusId =
   * Present(id))`) and the focus-jump lands on the group's FIRST focusable field.
   */
-final class InputGroup private[uic] (private[uic] val s: InputGroup.State) extends Node, HasElementId, Stated:
-    import s.*
+final class InputGroup private[uic] (private[uic] val p: InputGroup.Props) extends Node, HasElementId, HasProps:
+    import p.*
 
     type Self = InputGroup
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputGroup(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputGroup(p.copy(accessV = v))
 
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
-    def apply(cs: UI*): InputGroup = new InputGroup(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): InputGroup = new InputGroup(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-inputgroup").cssClass("p-component")
@@ -52,12 +52,12 @@ final class InputGroup private[uic] (private[uic] val s: InputGroup.State) exten
 end InputGroup
 
 object InputGroup:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         kids: List[UI] = Nil,
         accessV: Accessibility = Accessibility.none
     )
 
-    def apply(): InputGroup = new InputGroup(State())
+    def apply(): InputGroup = new InputGroup(Props())
 
     /** One addon cell (`span.p-inputgroupaddon`): text, an icon, or a Button
       * (the CSS strips the padding around a nested `.p-button`).

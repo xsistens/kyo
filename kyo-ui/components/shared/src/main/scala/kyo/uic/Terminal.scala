@@ -36,18 +36,18 @@ final case class TerminalCommand(command: String, response: String) derives CanE
   * is while the terminal itself is in view; `UI.scrollIntoView` scrolls to the block's
   * start, and moved the page with every line. A static render runs no effect.
   */
-final class Terminal private[uic] (private[uic] val s: Terminal.State) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Terminal
 
     /** Text of the `div.p-terminal-welcome-message` above the history. A `Signal[String]` re-renders it in
       * place on emission.
       */
-    def welcomeMessage(v: String | Signal[String]): Terminal = new Terminal(s.copy(welcomeMessageV = Present(ReactiveValue(v))))
+    def welcomeMessage(v: String | Signal[String]): Terminal = new Terminal(p.copy(welcomeMessageV = Present(ReactiveValue(v))))
 
     /** The prompt label (default `$`), shown before the input and each history row. */
-    def prompt(v: String): Terminal = new Terminal(s.copy(promptV = v))
+    def prompt(v: String): Terminal = new Terminal(p.copy(promptV = v))
 
     /** Binds the command history. A `SignalRef` binds two way: a committed command is appended to it, then
       * [[onCommandsChange]] hears the history, and external writes re-render the list (write `Seq.empty` to clear the
@@ -56,13 +56,13 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
       * keeps the history itself. A signal nothing hears is reported in a card.
       */
     def commands(v: Seq[TerminalCommand] | Signal[Seq[TerminalCommand]]): Terminal =
-        new Terminal(s.copy(commandsSlot = commandsSlot.bind(v)))
+        new Terminal(p.copy(commandsSlot = commandsSlot.bind(v)))
 
     /** Fired with the history the reader's commit asks for (the history with the new command appended), after a
       * two-way [[commands]] is written.
       */
     def onCommandsChange(f: Seq[TerminalCommand] => UI.Action)(using Frame): Terminal =
-        new Terminal(s.copy(commandsSlot = commandsSlot.hear(f)))
+        new Terminal(p.copy(commandsSlot = commandsSlot.hear(f)))
 
     /** A constant nobody hears is fixed: the history shows, and the prompt takes no command. */
     private def fixed: Boolean = commandsSlot.fixed
@@ -73,10 +73,10 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
     /** The command interpreter, an effect: the committed line in, the response
       * text out. Runs where the UI runs (server-side under server-push).
       */
-    def commandHandler(f: String => String < Async): Terminal = new Terminal(s.copy(handlerF = Present(f)))
+    def commandHandler(f: String => String < Async): Terminal = new Terminal(p.copy(handlerF = Present(f)))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Terminal(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Terminal(p.copy(accessV = v))
     private[uic] def render(using Frame): UI                   =
         // Without a handler nothing can be committed, so the terminal only shows its history.
         val static: UI = commandsSlot.reading(Seq.empty).render(h => body(h, Absent, Absent))
@@ -91,7 +91,7 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
                         history <- commandsSlot.owned(Seq.empty[TerminalCommand])
                         // Counts the repaints a one-way history asks for, so a commit the owner declines clears the prompt.
                         paints <- Signal.initRef(0)
-                    yield new Terminal(s.copy(commandsSlot = history)).wiredOver(
+                    yield new Terminal(p.copy(commandsSlot = history)).wiredOver(
                         endId,
                         id => UI.commands.map(_.scrollIntoViewId(id)),
                         Present(paints)
@@ -107,7 +107,7 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
       * inject a fake to observe the seam).
       */
     private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], endId: String, scrollTo: String => UI.Action)(using Frame): UI =
-        new Terminal(s.copy(commandsSlot = commandsSlot.bind(ref))).wiredOver(endId, scrollTo, Absent)
+        new Terminal(p.copy(commandsSlot = commandsSlot.bind(ref))).wiredOver(endId, scrollTo, Absent)
 
     /** [[wired]] over the history however it is bound. */
     private def wiredOver(
@@ -200,7 +200,7 @@ final class Terminal private[uic] (private[uic] val s: Terminal.State) extends N
 end Terminal
 
 object Terminal:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         welcomeMessageV: Maybe[TextValue] = Absent,
         promptV: String = "$",
         commandsSlot: Slot[Seq[TerminalCommand]] = Slot[Seq[TerminalCommand]](),
@@ -210,5 +210,5 @@ object Terminal:
 
     private val commandsName =
         Slot.Name("Terminal", "the history", "a command", "onCommandsChange", consequence = "the reader's commit reaches nobody")
-    def apply(): Terminal = new Terminal(State())
+    def apply(): Terminal = new Terminal(Props())
 end Terminal

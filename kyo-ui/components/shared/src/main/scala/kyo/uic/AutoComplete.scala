@@ -38,9 +38,9 @@ import kyo.UI.Ast.HtmlChildVal
   * the page underneath: the field declares `preventScrollKeys` (vertical keys
   * navigate; the caret still moves with Left/Right/Home/End).
   */
-final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State[A]) extends Node, TextFormControl, HasEmptyContent,
-      HasPlaceholder, HasAccessibleNameRef, Stated:
-    import s.*
+final class AutoComplete[A] private[uic] (private[uic] val p: AutoComplete.Props[A]) extends Node, TextFormControl, HasEmptyContent,
+      HasPlaceholder, HasAccessibleNameRef, HasProps:
+    import p.*
 
     type Self = AutoComplete[A]
 
@@ -48,23 +48,23 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
       * is stamped inside this control's own region, from the text it already reads, so the wrapper needs no region of its
       * own around the mount (a region there rebuilds the mount, and the open panel with it, when the field fills).
       */
-    private[uic] def stampFilled: AutoComplete[A] = new AutoComplete(s.copy(stampFilledFlag = true))
+    private[uic] def stampFilled: AutoComplete[A] = new AutoComplete(p.copy(stampFilledFlag = true))
 
     // The options are compared as a list where they are read as a signal; the rows are matched by key, never by `==`.
     private given CanEqual[A, A] = CanEqual.derived
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new AutoComplete(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new AutoComplete(p.copy(accessV = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of suggestions for a list that
       * changes while the field is shown (a server's answer to the query, say), read in the field's own region.
       */
     def options(is: Iterable[A] | Signal[Seq[A]])(label: A => String): AutoComplete[A] =
-        new AutoComplete(s.copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label))
+        new AutoComplete(p.copy(optionSources = optionSources :+ OptionSource.of(is), labelF = label))
 
     /** Convenience for plain string options (label = identity), a collection or a signal. */
     def options(is: Iterable[String] | Signal[Seq[String]])(using ev: String =:= A): AutoComplete[A] =
-        new AutoComplete(s.copy(
+        new AutoComplete(p.copy(
             optionSources = optionSources :+ OptionSource.of(ev.substituteCo[[X] =>> Iterable[X] | Signal[Seq[X]]](is)),
             labelF = a => ev.flip(a)
         ))
@@ -77,15 +77,15 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
       * that empties a group removes its header with it.
       */
     def optionGroups(is: Iterable[OptionItem[A]] | Signal[Seq[OptionItem[A]]])(label: A => String): AutoComplete[A] =
-        new AutoComplete(s.copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label))
+        new AutoComplete(p.copy(optionSources = optionSources :+ OptionSource.rows(is), labelF = label))
 
     /** Stable per-option key (defaults to the label projection). */
-    def optionKey(f: A => String): AutoComplete[A] = new AutoComplete(s.copy(keyF = Present(f)))
+    def optionKey(f: A => String): AutoComplete[A] = new AutoComplete(p.copy(keyF = Present(f)))
 
     /** Custom suggestion-row content, replacing the plain label text (the way to
       * render secondary columns, icons, highlights, ...).
       */
-    def itemTemplate(f: A => UI): AutoComplete[A] = new AutoComplete(s.copy(itemTemplateF = Present(f)))
+    def itemTemplate(f: A => UI): AutoComplete[A] = new AutoComplete(p.copy(itemTemplateF = Present(f)))
 
     /** The raw text. A `SignalRef` binds TWO-WAY: typing, option picks and a clear write back into the ref, and ref
       * changes update the field and re-filter the suggestions. Any other signal binds ONE-WAY: the field shows it, and an
@@ -94,7 +94,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
       * a constant, the field keeps the text itself, so the suggestions follow what the reader types, a pick shows its
       * label and the clear button empties it. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): AutoComplete[A] = new AutoComplete(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): AutoComplete[A] = new AutoComplete(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** How a suggestion matches the typed text, as `(option, text) => Boolean` with the text as typed. [[Filter]]
       * holds the ready-made ones: `filter(Filter.contains(_.name, _.email))` suggests an option by either text, and
@@ -103,78 +103,78 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
       * strategy alone: an AutoComplete filters by construction and its text is the query, so `filterable` and
       * `filterQuery` (the other pickers' words) have nothing to mean here.
       */
-    def filter(f: (A, String) => Boolean): AutoComplete[A] = new AutoComplete(s.copy(filterF = Present(f)))
+    def filter(f: (A, String) => Boolean): AutoComplete[A] = new AutoComplete(p.copy(filterF = Present(f)))
 
     /** Minimum number of typed characters before typing opens the suggestion
       * panel (Prime's `minLength`; default 1). The dropdown trigger ignores it.
       */
-    def minQueryLength(n: Int): AutoComplete[A] = new AutoComplete(s.copy(minQueryLengthV = math.max(0, n)))
+    def minQueryLength(n: Int): AutoComplete[A] = new AutoComplete(p.copy(minQueryLengthV = math.max(0, n)))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): AutoComplete[A] = new AutoComplete(s.copy(emptyContentV = v))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): AutoComplete[A] = new AutoComplete(p.copy(emptyContentV = v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): AutoComplete[A] = new AutoComplete(s.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): AutoComplete[A] = new AutoComplete(p.copy(placeholderText = v))
 
     /** Busy state: renders Prime's spinning `span.p-autocomplete-loader` inside
       * the field while suggestions are being fetched. Bind a `Signal[Boolean]` to the
       * suggestion-fetch in-flight signal; only the in-field loader spinner toggles in its
       * own sub-region on emission (no re-render of the field).
       */
-    def loading(v: Boolean | Signal[Boolean]): AutoComplete[A] = new AutoComplete(s.copy(loadingV = Present(ReactiveValue(v))))
+    def loading(v: Boolean | Signal[Boolean]): AutoComplete[A] = new AutoComplete(p.copy(loadingV = Present(ReactiveValue(v))))
 
     /** Renders Prime's `.p-autocomplete-clear-icon` button inside the field
       * (visible while the bound text is non-empty) that clears it: it writes `""` where the text binds two-way, and
       * reports the clear to [[onChange]] either way.
       */
-    def showClear(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(showClearFlag = v))
+    def showClear(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(showClearFlag = v))
 
     /** Renders Prime's dropdown trigger (`button.p-autocomplete-dropdown`) fused
       * to the field's end; clicking it toggles the panel with the FULL,
       * unfiltered option list (Prime's `dropdown` prop).
       */
-    def dropdown(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(dropdownFlag = v))
+    def dropdown(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(dropdownFlag = v))
 
-    def disabled(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(disabledFlag = v))
 
     /** Native `readonly` on the text field; the suggestion panel is suppressed so
       * picks cannot mutate the value either.
       */
-    def readonly(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(readonlyFlag = v))
 
     /** Marks the field required (`aria-required` + native constraint). */
-    def required(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(requiredFlag = v))
+    def required(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(requiredFlag = v))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): AutoComplete[A] = new AutoComplete(s.copy(nameV = Present(v)))
+    def name(v: String): AutoComplete[A] = new AutoComplete(p.copy(nameV = Present(v)))
 
     /** Size of the field: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): AutoComplete[A] = new AutoComplete(s.copy(sizeV = v))
+    def size(v: Size): AutoComplete[A] = new AutoComplete(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): AutoComplete[A] = new AutoComplete(s.copy(variantV = v))
+    def variant(v: FieldVariant): AutoComplete[A] = new AutoComplete(p.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
-    def fluid(v: Boolean): AutoComplete[A] = new AutoComplete(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): AutoComplete[A] = new AutoComplete(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new AutoComplete(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new AutoComplete(p.copy(validityV = v))
 
     /** Fired on every keystroke with the current text. */
-    def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(s.copy(onInputF = Present(Callback.of(f))))
+    def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(p.copy(onInputF = Present(Callback.of(f))))
 
     /** Fired when the field commits (blur/Enter) or an option is picked, with the
       * committed text (a pick commits the option's label).
       */
-    def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fired with the picked option after its label is written into the ref. */
-    def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(s.copy(onSelectF = Present(Callback.of(f))))
+    def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(p.copy(onSelectF = Present(Callback.of(f))))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it, what the reader typed or picked. Unlike `onChange` it fires even
       * when the value was not edited. The form-validation layer wires its `Blur`
       * trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = new AutoComplete(p.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
@@ -256,7 +256,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
         if !interactive then
             val validity = FieldValidity(validityV)
             validity.follow(OptionItem.reading(optionSources).and(text).render((opts, cur) =>
-                new AutoComplete(s.copy(optionsV = opts)).body(cur, Absent, validity)
+                new AutoComplete(p.copy(optionsV = opts)).body(cur, Absent, validity)
             ))
         else
             val field = UI.mounted {
@@ -266,7 +266,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
                     open  <- Signal.initRef(false)
                     hi    <- Signal.initRef(-1)
                     all   <- Signal.initRef(false)
-                yield new AutoComplete(s.copy(valueSlot = value)).wired(open, hi, all, Present(base), focusById)
+                yield new AutoComplete(p.copy(valueSlot = value)).wired(open, hi, all, Present(base), focusById)
             }
             Diagnostics.after(field)("AutoComplete")(
                 Diagnostic.naming(
@@ -306,7 +306,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
         val panel    = ReactiveValue.Dyn(open).and(ReactiveValue.Dyn(hi)).and(ReactiveValue.Dyn(all))
         validity.follow(panel.and(text).and(OptionItem.reading(optionSources)).render {
             case (((((o, h), a), cur), opts)) =>
-                val self = new AutoComplete(s.copy(optionsV = opts))
+                val self = new AutoComplete(p.copy(optionsV = opts))
                 self.body(cur, Present(self.Wired(open, o, hi, h, all, a, base, focus)), validity)
         })
     end wired
@@ -532,7 +532,7 @@ final class AutoComplete[A] private[uic] (private[uic] val s: AutoComplete.State
 end AutoComplete
 
 object AutoComplete:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         // The rows the body draws, resolved from `optionSources` by the region that draws them.
         optionsV: List[OptionItem[A]],
         labelF: A => String,
@@ -562,5 +562,5 @@ object AutoComplete:
         optionSources: List[OptionSource[A]] = Nil
     )
 
-    def apply[A](): AutoComplete[A] = new AutoComplete[A](State(Nil, _.toString))
+    def apply[A](): AutoComplete[A] = new AutoComplete[A](Props(Nil, _.toString))
 end AutoComplete

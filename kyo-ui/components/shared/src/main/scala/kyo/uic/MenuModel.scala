@@ -12,11 +12,11 @@ import kyo.UI.*
   *
   * `MenuItem.separator` is the divider row (`li.p-<component>-separator`).
   */
-final class MenuItem private[uic] (private[uic] val s: MenuItem.State) extends Stated:
-    import s.*
+final class MenuItem private[uic] (private[uic] val p: MenuItem.Props) extends HasProps:
+    import p.*
 
     /** Leading icon (`.p-<component>-item-icon`). */
-    def icon(glyph: IconGlyph): MenuItem = new MenuItem(s.copy(iconV = Present(glyph)))
+    def icon(glyph: IconGlyph): MenuItem = new MenuItem(p.copy(iconV = Present(glyph)))
 
     /** Renders the row non-interactive (`.p-disabled`; skipped by keyboard
       * navigation).
@@ -37,12 +37,12 @@ final class MenuItem private[uic] (private[uic] val s: MenuItem.State) extends S
       * trap `BoolValue` carries everywhere and is pinned per host by a test.
       */
     def disabled(v: Boolean | Signal[Boolean]): MenuItem =
-        new MenuItem(s.copy(disabledFlag = Present(ReactiveValue(v))))
+        new MenuItem(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Navigation target: the row renders as a real `<a href=...>`, so plain
       * clicks (and Enter on the focused row) navigate natively.
       */
-    def url(v: String): MenuItem = new MenuItem(s.copy(urlV = Present(v)))
+    def url(v: String): MenuItem = new MenuItem(p.copy(urlV = Present(v)))
 
     /** THIS row is the page the reader is on: `aria-current="page"` on the row's link plus
       * `.p-uic-menu-item-current` on the row, for a menu carrying [[url]] rows, which is what
@@ -69,35 +69,35 @@ final class MenuItem private[uic] (private[uic] val s: MenuItem.State) extends S
       * carry no such slot; SpeedDial renders buttons rather than links and carries none either.
       */
     def current(v: Boolean | Signal[Boolean]): MenuItem =
-        new MenuItem(s.copy(currentFlag = Present(ReactiveValue(v))))
+        new MenuItem(p.copy(currentFlag = Present(ReactiveValue(v))))
 
     /** Runs `action` (any kyo `Async` effect) when the item is selected; the
       * hosting menu closes afterwards.
       */
     def onSelect(action: => UI.Action)(using Frame): MenuItem =
-        new MenuItem(s.copy(actionV = Present(Callback(action))))
+        new MenuItem(p.copy(actionV = Present(Callback(action))))
 
     /** Nested items: a labelled flat section in the plain Menu, a nested floating
       * submenu in Menubar/TieredMenu. Each is an item or `_.item(...)` (see [[MenuItemScope]]).
       */
-    def items(is: MenuItemEntry*): MenuItem = new MenuItem(s.copy(itemsV = itemsV ++ MenuItemScope.resolve(is)))
+    def items(is: MenuItemEntry*): MenuItem = new MenuItem(p.copy(itemsV = itemsV ++ MenuItemScope.resolve(is)))
 
     /** Package-internal: hosts (MegaMenu) carry an already-deferred effect over. */
-    private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = new MenuItem(s.copy(actionV = eff))
+    private[uic] def withAction(eff: Maybe[UI.Action]): MenuItem = new MenuItem(p.copy(actionV = eff))
 
     /** Package-internal: [[MenuRender.readDisabled]] pins the resolved slot back in.
       * A writer, so that `MenuRender` need not know the state.
       */
-    private[uic] def withDisabled(v: Maybe[BoolValue]): MenuItem = new MenuItem(s.copy(disabledFlag = v))
+    private[uic] def withDisabled(v: Maybe[BoolValue]): MenuItem = new MenuItem(p.copy(disabledFlag = v))
 
     /** Package-internal: replaces the submenu wholesale (the resolution rebuilds a
       * branch), where the public `items` appends.
       */
-    private[uic] def withItems(is: List[MenuItem]): MenuItem = new MenuItem(s.copy(itemsV = is))
+    private[uic] def withItems(is: List[MenuItem]): MenuItem = new MenuItem(p.copy(itemsV = is))
 end MenuItem
 
 object MenuItem:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         labelV: TextValue,
         iconV: Maybe[IconGlyph] = Absent,
         disabledFlag: Maybe[BoolValue] = Absent,
@@ -114,32 +114,32 @@ object MenuItem:
     /** An item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): MenuItem = new MenuItem(State(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): MenuItem = new MenuItem(Props(ReactiveValue(label)))
 
     /** Package-internal: build an item from an already-carried label carrier
       * (hosts such as [[MegaMenuItem.asMenuItem]] forward their own `TextValue`).
       */
-    private[uic] def fromText(label: TextValue): MenuItem = new MenuItem(State(label))
+    private[uic] def fromText(label: TextValue): MenuItem = new MenuItem(Props(label))
 
     /** The divider row (`li.p-<component>-separator`, `role="separator"`). */
-    val separator: MenuItem = new MenuItem(State(TextValue.Const(""), separatorFlag = true))
+    val separator: MenuItem = new MenuItem(Props(TextValue.Const(""), separatorFlag = true))
 end MenuItem
 
 /** One labelled group of items inside a [[MegaMenu]] panel column: the group
   * heading (`li.p-megamenu-submenu-label`) followed by its item rows.
   */
-final class MenuGroup private[uic] (private[uic] val s: MenuGroup.State) extends Stated:
-    import s.*
+final class MenuGroup private[uic] (private[uic] val p: MenuGroup.Props) extends HasProps:
+    import p.*
 
     /** Appends items to the group. Each is an item or `_.item(...)` (see [[MenuItemScope]]). */
-    def items(is: MenuItemEntry*): MenuGroup = new MenuGroup(s.copy(itemsV = itemsV ++ MenuItemScope.resolve(is)))
+    def items(is: MenuItemEntry*): MenuGroup = new MenuGroup(p.copy(itemsV = itemsV ++ MenuItemScope.resolve(is)))
 
     /** Package-internal: replaces the items wholesale (see [[MenuItem.withItems]]). */
-    private[uic] def withItems(is: List[MenuItem]): MenuGroup = new MenuGroup(s.copy(itemsV = is))
+    private[uic] def withItems(is: List[MenuItem]): MenuGroup = new MenuGroup(p.copy(itemsV = is))
 end MenuGroup
 
 object MenuGroup:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         labelV: TextValue,
         itemsV: List[MenuItem] = Nil
     )
@@ -147,7 +147,7 @@ object MenuGroup:
     /** A group headed by `label`. A `Signal[String]` re-renders the heading in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String | Signal[String]): MenuGroup = new MenuGroup(State(ReactiveValue(label)))
+    def apply(label: String | Signal[String]): MenuGroup = new MenuGroup(Props(ReactiveValue(label)))
 
 end MenuGroup
 
@@ -365,8 +365,8 @@ private[uic] object MenuRender:
     private def dynamicDisabled(items: List[MenuItem], prefix: List[Int] = Nil): List[(List[Int], Signal[Boolean])] =
         items.zipWithIndex.flatMap { (it, i) =>
             val p    = prefix :+ i
-            val here = it.s.disabledFlag.dynSig.toList.map(s => (p, s))
-            here ++ dynamicDisabled(it.s.itemsV, p)
+            val here = it.p.disabledFlag.dynSig.toList.map(s => (p, s))
+            here ++ dynamicDisabled(it.p.itemsV, p)
         }
 
     /** Rewrites the item at `path` with its `disabled` pinned to `v`. */
@@ -377,7 +377,7 @@ private[uic] object MenuRender:
                 items.zipWithIndex.map { (it, j) =>
                     if j != i then it
                     else if rest.isEmpty then it.withDisabled(Present(BoolValue.Const(v)))
-                    else it.withItems(pinDisabled(it.s.itemsV, rest, v))
+                    else it.withItems(pinDisabled(it.p.itemsV, rest, v))
                 }
         end match
     end pinDisabled
@@ -443,10 +443,10 @@ private[uic] object MenuRender:
         val dyns =
             for
                 (root, ri)  <- items.zipWithIndex
-                (col, ci)   <- root.s.columnsV.zipWithIndex
+                (col, ci)   <- root.p.columnsV.zipWithIndex
                 (group, gi) <- col.zipWithIndex
-                (item, ii)  <- group.s.itemsV.zipWithIndex
-                sig         <- item.s.disabledFlag.dynSig.toList
+                (item, ii)  <- group.p.itemsV.zipWithIndex
+                sig         <- item.p.disabledFlag.dynSig.toList
             yield (List(ri, ci, gi, ii), sig)
 
         def pin(acc: List[MegaMenuItem], path: List[Int], v: Boolean): List[MegaMenuItem] =
@@ -455,11 +455,11 @@ private[uic] object MenuRender:
                     acc.updated(
                         ri, {
                             val root = acc(ri)
-                            val col  = root.s.columnsV(ci)
+                            val col  = root.p.columnsV(ci)
                             val grp  = col(gi)
                             val its  =
-                                grp.s.itemsV.updated(ii, grp.s.itemsV(ii).withDisabled(Present(BoolValue.Const(v))))
-                            root.withColumns(root.s.columnsV.updated(ci, col.updated(gi, grp.withItems(its))))
+                                grp.p.itemsV.updated(ii, grp.p.itemsV(ii).withDisabled(Present(BoolValue.Const(v))))
+                            root.withColumns(root.p.columnsV.updated(ci, col.updated(gi, grp.withItems(its))))
                         }
                     )
                 case _ => acc
@@ -495,7 +495,7 @@ private[uic] object MenuRender:
         val runActivate: UI.Action =
             if !step.activate then ()
             else
-                MenuNav.itemAt(items, step.focus).flatMap(_.s.actionV) match
+                MenuNav.itemAt(items, step.focus).flatMap(_.p.actionV) match
                     case Present(eff) => eff
                     case _            => ()
         for
@@ -516,7 +516,7 @@ private[uic] object MenuRender:
       * nothing is returned untouched, so every existing render is byte-identical.
       */
     def markCurrent[E <: UI.Ast.Element { type Self <: E }](row: E, it: MenuItem): E =
-        it.s.currentFlag.foldFlag(row)(on => row.cssClass("p-uic-menu-item-current", on))
+        it.p.currentFlag.foldFlag(row)(on => row.cssClass("p-uic-menu-item-current", on))
 
     /** The shared row content: `div.p-<prefix>-item-content` >
       * `a.p-<prefix>-item-link` holding icon + label (+ trailing submenu glyph).
@@ -531,17 +531,17 @@ private[uic] object MenuRender:
         roving: Boolean = false
     )(using Frame): UI =
         var link = a.cssClass(s"p-$prefix-item-link")
-        it.s.urlV.foreach(u => link = link.href(Href.Path(u)))
+        it.p.urlV.foreach(u => link = link.href(Href.Path(u)))
         // `aria-current` belongs on the LINK, not on the row: it says "this link points at the
         // page you are on". The reactive form is the attribute channel (patched in place), and
         // the negative spelling is written out rather than omitted so the attribute the channel
         // writes into exists from the first render.
-        it.s.currentFlag match
+        it.p.currentFlag match
             case Present(BoolValue.Const(true)) => link = link.aria("current", "page")
             case Present(BoolValue.Dyn(sig))    => link = link.aria("current", sig.map(if _ then "page" else "false"))
             case _                              => ()
         end match
-        if !it.s.disabledFlag.constTrue then
+        if !it.p.disabledFlag.constTrue then
             // Roving hosts give the enclosing list the single tab stop and handle keys
             // centrally (the WAI-ARIA aria-activedescendant model the `.p-focus` CSS
             // expects); the legacy path makes every link its own tab stop with a
@@ -558,8 +558,8 @@ private[uic] object MenuRender:
                 end if
             }
         end if
-        val icon: List[UI] = it.s.iconV.toList.map(g => GlyphSvg(g, s"p-$prefix-item-icon", "p-icon"))
-        val label: UI      = it.s.labelV match
+        val icon: List[UI] = it.p.iconV.toList.map(g => GlyphSvg(g, s"p-$prefix-item-icon", "p-icon"))
+        val label: UI      = it.p.labelV match
             case TextValue.Const(t) => span.cssClass(s"p-$prefix-item-label")(t)
             case TextValue.Dyn(s)   => span.cssClass(s"p-$prefix-item-label")(s)
         val subIcon: List[UI] =

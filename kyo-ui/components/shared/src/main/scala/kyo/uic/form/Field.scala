@@ -693,7 +693,7 @@ end FormField
   * observed exactly once and none is missed, whichever comes first. The field's own value is observed from the start:
   * its change observer already reports every edit, and a rule reading it must not hear the edit twice.
   */
-final private[form] class RuleChain[A, B] private (own: Signal[?], state: AtomicRef[RuleChain.State[A, B]]):
+final private[form] class RuleChain[A, B] private (own: Signal[?], state: AtomicRef[RuleChain.Props[A, B]]):
     import RuleChain.*
 
     /** Run the chain under `ctx`. */
@@ -707,8 +707,8 @@ final private[form] class RuleChain[A, B] private (own: Signal[?], state: Atomic
         state.getAndUpdate(st =>
             st.wiring match
                 case Wiring.Wired(observed, fibers) =>
-                    State(st.rules.andCheck(v), Wiring.Wired(observed ++ unobserved(observed, v.dependencies), fibers))
-                case _ => State(st.rules.andCheck(v), st.wiring)
+                    Props(st.rules.andCheck(v), Wiring.Wired(observed ++ unobserved(observed, v.dependencies), fibers))
+                case _ => Props(st.rules.andCheck(v), st.wiring)
         ).map(old =>
             old.wiring match
                 case Wiring.Wired(observed, _) => unobserved(observed, v.dependencies)
@@ -722,7 +722,7 @@ final private[form] class RuleChain[A, B] private (own: Signal[?], state: Atomic
         state.getAndUpdate(st =>
             st.wiring match
                 case Wiring.Unwired =>
-                    State(st.rules, Wiring.Wired(Chunk(own) ++ unobserved(Chunk(own), st.rules.dependencies), Chunk.empty))
+                    Props(st.rules, Wiring.Wired(Chunk(own) ++ unobserved(Chunk(own), st.rules.dependencies), Chunk.empty))
                 case _ => st
         ).map(old =>
             old.wiring match
@@ -734,7 +734,7 @@ final private[form] class RuleChain[A, B] private (own: Signal[?], state: Atomic
     def keep(fibers: Chunk[Fiber[Unit, Any]])(using Frame): Unit < Sync =
         state.getAndUpdate(st =>
             st.wiring match
-                case Wiring.Wired(observed, held) => State(st.rules, Wiring.Wired(observed, held ++ fibers))
+                case Wiring.Wired(observed, held) => Props(st.rules, Wiring.Wired(observed, held ++ fibers))
                 case _                            => st
         ).map(old =>
             old.wiring match
@@ -744,7 +744,7 @@ final private[form] class RuleChain[A, B] private (own: Signal[?], state: Atomic
 
     /** End the wiring: interrupt every observer, and observe nothing appended later. */
     def close(using Frame): Unit < Sync =
-        state.getAndUpdate(st => State(st.rules, Wiring.Unwired)).map(old =>
+        state.getAndUpdate(st => Props(st.rules, Wiring.Unwired)).map(old =>
             old.wiring match
                 case Wiring.Wired(_, fibers) => Kyo.foreachDiscard(fibers)(_.interrupt)
                 case _                       => Kyo.unit
@@ -754,10 +754,10 @@ end RuleChain
 private[form] object RuleChain:
 
     def init[A, B](rules: Rule[A, B], own: Signal[?])(using Frame): RuleChain[A, B] < Sync =
-        AtomicRef.init(State(rules, Wiring.Unwired)).map(new RuleChain(own, _))
+        AtomicRef.init(Props(rules, Wiring.Unwired)).map(new RuleChain(own, _))
 
     /** The rules, and where the field stands with observing what they read. */
-    final case class State[A, B](rules: Rule[A, B], wiring: Wiring)
+    final case class Props[A, B](rules: Rule[A, B], wiring: Wiring)
 
     enum Wiring derives CanEqual:
         /** Not observing: not wired yet, when the wiring will claim whatever the chain reads by then, or the mount or the

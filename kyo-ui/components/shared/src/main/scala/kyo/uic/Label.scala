@@ -17,19 +17,19 @@ import kyo.UI.*
   *     they can stamp classes on it: [[FloatLabel]], [[IftaLabel]], [[IconField]];
   *   - a container of already-built children in visual order: [[InputGroup]].
   */
-final class Label private[uic] (private[uic] val s: Label.State) extends Node, Stated:
-    import s.*
+final class Label private[uic] (private[uic] val p: Label.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Label
 
-    def forId(id: String): Label     = new Label(s.copy(forIdV = Present(id)))
-    def required(v: Boolean): Label  = new Label(s.copy(requiredFlag = v))
-    def showColon(v: Boolean): Label = new Label(s.copy(showColon = v))
+    def forId(id: String): Label     = new Label(p.copy(forIdV = Present(id)))
+    def required(v: Boolean): Label  = new Label(p.copy(requiredFlag = v))
+    def showColon(v: Boolean): Label = new Label(p.copy(showColon = v))
 
     private[uic] def render(using Frame): UI =
         val base = label.cssClass("p-uic-label")
         val b1   = if requiredFlag then base.cssClass("p-uic-label-required") else base
-        val b2   = if s.showColon then b1.cssClass("p-uic-label-colon") else b1
+        val b2   = if p.showColon then b1.cssClass("p-uic-label-colon") else b1
         val b3   = forIdV.map(b2.forId).getOrElse(b2)
         text match
             case TextValue.Const(t) => b3(t)
@@ -38,7 +38,7 @@ final class Label private[uic] (private[uic] val s: Label.State) extends Node, S
 end Label
 
 object Label:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         text: TextValue,
         forIdV: Maybe[String] = Absent,
         requiredFlag: Boolean = false,
@@ -48,5 +48,5 @@ object Label:
     /** A label showing `text`. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven
       * `I18n.t` leaf).
       */
-    def apply(v: String | Signal[String]): Label = new Label(State(ReactiveValue(v)))
+    def apply(v: String | Signal[String]): Label = new Label(Props(ReactiveValue(v)))
 end Label

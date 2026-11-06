@@ -37,9 +37,9 @@ class GoldenRenderTest extends UicTest:
             cursor <- Signal.initRef("")
             // The mount lifts a caller's view ref and mints one at the kind's own grid otherwise;
             // rendering the seam by hand has to do the same or the golden shows the wrong grid.
-            view <- dp.s.currentViewSlot.binding match
+            view <- dp.p.currentViewSlot.binding match
                 case Present(v) => Kyo.lift(v)
-                case _          => Signal.initRef(dp.s.kind.view).map(r => uic.ReactiveValue[uic.DatePickerView](r))
+                case _          => Signal.initRef(dp.p.kind.view).map(r => uic.ReactiveValue[uic.DatePickerView](r))
             seed    <- Signal.initRef(false)
             restore <- Signal.initRef(Maybe.empty[uic.DatePicker.Restore])
             draft   <- Signal.initRef(Maybe.empty[String])
@@ -4713,7 +4713,7 @@ class GoldenRenderTest extends UicTest:
             )
         def wiredHtml(openPaths: List[List[Int]], focus: List[Int] = Nil, setId: Boolean = false): String < Async =
             for
-                refs <- Submenus.init(submenuPaths(mb.s.entriesV).filter(p => openPaths.contains(p)).toSet)
+                refs <- Submenus.init(submenuPaths(mb.p.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Anchored.init(focus)
                 out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs, fref, "mint")).take(1).run
             yield out.mkString
@@ -4769,7 +4769,7 @@ class GoldenRenderTest extends UicTest:
                     case Present(_) => tm.popup(oref)
                     case Absent     => tm
                 m = if setId then m0.id("tm1") else m0
-                refs <- Submenus.init(submenuPaths(m.s.entriesV).filter(p => openPaths.contains(p)).toSet)
+                refs <- Submenus.init(submenuPaths(m.p.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Anchored.init(focus)
                 out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
@@ -4821,7 +4821,7 @@ class GoldenRenderTest extends UicTest:
             val m0 = if vertical then mm.orientation(uic.Orientation.Vertical) else mm
             val m  = if setId then m0.id("mg1") else m0
             for
-                refs <- Submenus.init(panelPaths(m.s.entriesV).filter(p => openPaths.contains(p)).toSet)
+                refs <- Submenus.init(panelPaths(m.p.entriesV).filter(p => openPaths.contains(p)).toSet)
                 fref <- Anchored.init(focus)
                 out  <- UI.runRender(m.wired(refs, fref, "mint")).take(1).run
             yield out.mkString
@@ -5322,7 +5322,7 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(open)
                 fref <- Anchored.init(focus)
                 at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
-                refs <- Submenus.init(submenuPaths(cm.s.entriesV).filter(p => openPaths.contains(p)).toSet)
+                refs <- Submenus.init(submenuPaths(cm.p.entriesV).filter(p => openPaths.contains(p)).toSet)
                 out  <- UI.runRender(cm.wired(oref, fref, at, refs, "mint")).take(1).run
             yield out.mkString
         val base = uic.ContextMenu(
@@ -6740,15 +6740,15 @@ class GoldenRenderTest extends UicTest:
         for
             menuHi     <- Anchored.init(0)
             menu       <- renderHtml(uic.Menu().items(menuItems*).wired(menuHi, "mint"))
-            tieredRefs <- paths(submenuPaths(tiered.s.entriesV), Nil)
+            tieredRefs <- paths(submenuPaths(tiered.p.entriesV), Nil)
             tieredHi   <- Anchored.init(List(0))
             tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
-            megaRefs   <- paths(panelPaths(mega.s.entriesV), List(List(0)))
+            megaRefs   <- paths(panelPaths(mega.p.entriesV), List(List(0)))
             megaHi     <- Anchored.init(List(0))
             megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen    <- Signal.initRef(true)
             ctxHi      <- Anchored.init(List(0))
-            ctxRefs    <- paths(submenuPaths(ctx.s.entriesV), Nil)
+            ctxRefs    <- paths(submenuPaths(ctx.p.entriesV), Nil)
             ctxAt      <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
         yield
@@ -6781,22 +6781,22 @@ class GoldenRenderTest extends UicTest:
             menuPopOpen <- Signal.initRef(true)
             menuPopHi   <- Anchored.init(0)
             menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi, "mint"))
-            barRefs     <- paths(submenuPaths(bar.s.entriesV), List(List(0)))
+            barRefs     <- paths(submenuPaths(bar.p.entriesV), List(List(0)))
             barHi       <- Anchored.init(List(0, 0))
             menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi, "mint"))
-            tieredRefs  <- paths(submenuPaths(tiered.s.entriesV), Nil)
+            tieredRefs  <- paths(submenuPaths(tiered.p.entriesV), Nil)
             tieredHi    <- Anchored.init(List(0))
             tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
             tmPopOpen   <- Signal.initRef(true)
-            tmPopRefs   <- paths(submenuPaths(tiered.s.entriesV), Nil)
+            tmPopRefs   <- paths(submenuPaths(tiered.p.entriesV), Nil)
             tmPopHi     <- Anchored.init(List(0))
             tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi, "mint"))
-            megaRefs    <- paths(panelPaths(mega.s.entriesV), List(List(0)))
+            megaRefs    <- paths(panelPaths(mega.p.entriesV), List(List(0)))
             megaHi      <- Anchored.init(List(0))
             megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen     <- Signal.initRef(true)
             ctxHi       <- Anchored.init(List(0))
-            ctxRefs     <- paths(submenuPaths(ctx.s.entriesV), Nil)
+            ctxRefs     <- paths(submenuPaths(ctx.p.entriesV), Nil)
             ctxAt       <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
             tsOpen      <- Signal.initRef(true)

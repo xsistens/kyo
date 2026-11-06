@@ -109,8 +109,8 @@ end OverlayAnchor
   * keyframe on close via the body-level leave ghost. Opt out with `animate(false)`
   * (menu-family hosts that gate the panel's presence themselves do so).
   */
-final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Node, Stated:
-    import s.*
+final class Overlay private[uic] (private[uic] val p: Overlay.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Overlay
 
@@ -122,10 +122,10 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * trigger: that it opens a popup (`aria-haspopup`) and whether that popup is open
       * (`aria-expanded`). See [[PopupTrigger]] for what can be a trigger.
       */
-    def trigger(t: UI.Ast.Interactive | PopupTrigger): Overlay = new Overlay(s.copy(triggerV = Present(t)))
+    def trigger(t: UI.Ast.Interactive | PopupTrigger): Overlay = new Overlay(p.copy(triggerV = Present(t)))
 
     /** Which anchor corner the panel opens from (default [[OverlayAnchor.BottomStart]]). */
-    def anchor(v: OverlayAnchor): Overlay = new Overlay(s.copy(anchorV = v))
+    def anchor(v: OverlayAnchor): Overlay = new Overlay(p.copy(anchorV = v))
 
     /** Whether the panel measures itself continuously (self-addressing:
       * on open, then on every window scroll/resize) and flips its vertical anchor
@@ -137,7 +137,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * the host-gated [[renderOpen]] (menu-family submenus) keeps the declared
       * anchor to preserve its single-subscription contract.
       */
-    def autoFlip(v: Boolean): Overlay = new Overlay(s.copy(autoFlipV = v))
+    def autoFlip(v: Boolean): Overlay = new Overlay(p.copy(autoFlipV = v))
 
     /** Whether the open panel and backdrop re-home to `document.body` (default false), the escape
       * from ancestor `overflow` clipping, `transform`/`filter` containing blocks and stacking
@@ -148,7 +148,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * doc). Only the standard `render` path portals; the host-gated [[renderOpen]] keeps its
       * single-subscription, in-tree contract.
       */
-    def portal(v: Boolean): Overlay = new Overlay(s.copy(portalV = v))
+    def portal(v: Boolean): Overlay = new Overlay(p.copy(portalV = v))
 
     /** Places the panel at a POINT rather than at the anchor box: the pointer position a
       * [[kyo.UI.MouseEvent.position]] carries, in viewport coordinates.
@@ -168,7 +168,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       *
       * `matchWidth` is meaningless here (a point has no width) and is ignored.
       */
-    def pointerAnchor(sig: Signal[Maybe[UI.Point]]): Overlay = new Overlay(s.copy(pointerAnchorV = Present(sig)))
+    def pointerAnchor(sig: Signal[Maybe[UI.Point]]): Overlay = new Overlay(p.copy(pointerAnchorV = Present(sig)))
 
     /** Package-internal: the DOM id to stamp on the panel, for the host-gated [[renderOpen]],
       * [[renderShown]] and [[renderGated]] paths (the last two take it as a parameter), which have
@@ -178,7 +178,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * (`s"$id-panel"`), so it is stable across those re-renders and the measured placement
       * outlives them.
       */
-    private[uic] def panelId(id: String): Overlay = new Overlay(s.copy(panelIdV = Present(id)))
+    private[uic] def panelId(id: String): Overlay = new Overlay(p.copy(panelIdV = Present(id)))
 
     /** Package-internal: what a right-click landing on the outside-click backdrop means.
       *
@@ -188,7 +188,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * pointer-anchored host wires this.
       */
     private[uic] def onBackdropContextMenu(f: MouseEvent => UI.Action): Overlay =
-        new Overlay(s.copy(backdropCtxV = Present(f)))
+        new Overlay(p.copy(backdropCtxV = Present(f)))
 
     /** Package-internal: ends every click from inside the panel at the panel itself.
       *
@@ -206,66 +206,66 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * The backdrop stops there too: an outside click closes the overlay at the backdrop and goes no
       * further, so the host's toggle does not answer it a second time.
       */
-    private[uic] def containClicks(v: Boolean): Overlay = new Overlay(s.copy(containClicksV = v))
+    private[uic] def containClicks(v: Boolean): Overlay = new Overlay(p.copy(containClicksV = v))
 
     /** How the open overlay responds to scroll input outside its panel (default
       * [[Overlay.Scroll.Close]], the Prime family's hide-on-scroll). See [[Overlay.Scroll]].
       */
-    def scroll(v: Overlay.Scroll): Overlay = new Overlay(s.copy(scrollV = v))
+    def scroll(v: Overlay.Scroll): Overlay = new Overlay(p.copy(scrollV = v))
 
     /** `min-width: 100%` of the anchor on the panel (default true, Prime's
       * field-panel behavior).
       */
-    def matchWidth(v: Boolean): Overlay = new Overlay(s.copy(matchWidthV = v))
+    def matchWidth(v: Boolean): Overlay = new Overlay(p.copy(matchWidthV = v))
 
     /** Caps the panel height (CSS length) and makes it scroll (`overflow-y: auto`):
       * the viewport-edge answer, same as Prime's scrollable panels.
       */
-    def maxHeight(v: String): Overlay = new Overlay(s.copy(maxHeightV = Present(v)))
+    def maxHeight(v: String): Overlay = new Overlay(p.copy(maxHeightV = Present(v)))
 
     /** Caps the panel height in pixels; see [[maxHeight(v:String)*]]. */
-    def maxHeight(px: Int): Overlay = new Overlay(s.copy(maxHeightV = Present(s"${px}px")))
+    def maxHeight(px: Int): Overlay = new Overlay(p.copy(maxHeightV = Present(s"${px}px")))
 
     /** Whether a click outside the panel closes the overlay (default true). */
-    def dismissOnOutsideClick(v: Boolean): Overlay = new Overlay(s.copy(dismissOnOutsideClickV = v))
+    def dismissOnOutsideClick(v: Boolean): Overlay = new Overlay(p.copy(dismissOnOutsideClickV = v))
 
     /** Whether Escape (with focus in the panel) closes the overlay (default true). */
-    def dismissOnEscape(v: Boolean): Overlay = new Overlay(s.copy(dismissOnEscapeV = v))
+    def dismissOnEscape(v: Boolean): Overlay = new Overlay(p.copy(dismissOnEscapeV = v))
 
     /** Whether the panel seeds focus on open and restores it on close via the
       * `data-kyo-focus-*` client contract (default true).
       */
-    def seedFocus(v: Boolean): Overlay = new Overlay(s.copy(seedFocusV = v))
+    def seedFocus(v: Boolean): Overlay = new Overlay(p.copy(seedFocusV = v))
 
     /** Whether the panel animates on open/close (default true): a fade-in on open
       * (the fork's `enterTransition` from-state) and Prime's own
       * `p-anchored-overlay-leave-active` keyframe on close (via the leave ghost).
       * Opt out for menu-family panels that manage their own presence.
       */
-    def animate(v: Boolean): Overlay = new Overlay(s.copy(animateV = v))
+    def animate(v: Boolean): Overlay = new Overlay(p.copy(animateV = v))
 
     /** Package-internal class hook: hosts (Select) stamp Prime's panel skin class
       * (`p-select-overlay`) onto the panel element.
       */
-    private[uic] def panelClass(cls: String): Overlay = new Overlay(s.copy(panelClassesV = panelClassesV :+ cls))
+    private[uic] def panelClass(cls: String): Overlay = new Overlay(p.copy(panelClassesV = panelClassesV :+ cls))
 
     /** Package-internal: extra keydown handling on the panel (hosts wire their
       * keyboard navigation here). Runs for every key; the overlay's own Escape
       * dismissal runs first.
       */
     private[uic] def onPanelKeyDown(f: KeyboardEvent => UI.Action): Overlay =
-        new Overlay(s.copy(keyHandlerV = Present(f)))
+        new Overlay(p.copy(keyHandlerV = Present(f)))
 
     /** Adds panel children. */
-    def apply(cs: UI*): Overlay = new Overlay(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Overlay = new Overlay(p.copy(kids = kids ++ cs))
 
     /** Fired with the visibility the reader asks for (false for an outside click, an outside scroll and Escape), after
       * a two-way [[Overlay.apply open]] binding is written.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Overlay = new Overlay(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Overlay = new Overlay(p.copy(openSlot = openSlot.hear(f)))
 
     /** Package-internal: the component a binding mistake is reported for, when a host hands its own binding on. */
-    private[uic] def reportedAs(component: String): Overlay = new Overlay(s.copy(reportedAsV = component))
+    private[uic] def reportedAs(component: String): Overlay = new Overlay(p.copy(reportedAsV = component))
 
     private[uic] def render(using Frame): UI =
         // Shown while the binding says so: a constant needs no region, a signal is one boundary.
@@ -462,7 +462,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * reads the open state and always draws the trigger.
       */
     private[uic] def renderGated(open: Boolean, panelId: Maybe[String])(using Frame): UI =
-        val content: List[UI] = if open then List(new Overlay(s.copy(panelIdV = panelId.orElse(panelIdV))).openContent) else Nil
+        val content: List[UI] = if open then List(new Overlay(p.copy(panelIdV = panelId.orElse(panelIdV))).openContent) else Nil
         triggerV match
             case Present(t) =>
                 val announced = PopupTrigger.announced(t, "dialog", open.toString)
@@ -580,7 +580,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
 end Overlay
 
 object Overlay:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         // Unbound for a panel its host gates and closes itself (see [[Overlay.gated]]).
         openSlot: Slot[Boolean],
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
@@ -613,21 +613,21 @@ object Overlay:
       * one way: the panel follows it and only reports a dismissal. A constant nobody hears is fixed: an open panel
       * stays, and nothing outside dismisses it. A signal nothing hears is reported in a card.
       */
-    def apply(open: Boolean | Signal[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(Slot().bind(open), siteV = site))
+    def apply(open: Boolean | Signal[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(Slot().bind(open), siteV = site))
 
     /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
       * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
       */
     private[uic] def gated(close: UI.Action)(using site: UI.MountSite): Overlay =
-        new Overlay(State(Slot(), closeV = Present(close), siteV = site))
+        new Overlay(Props(Slot(), closeV = Present(close), siteV = site))
 
     /** Package-internal: the panel of a host over the host's own open slot, reporting a dismissal to whoever hears it.
       * Quiet, since the host reports its binding itself.
       */
-    private[uic] def hosted(open: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(open.quieted, siteV = site))
+    private[uic] def hosted(open: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(open.quieted, siteV = site))
 
     /** Package-internal: the slot of a host that embeds this overlay, as the host wants it heard. */
-    private[uic] def withOpen(slot: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(slot, siteV = site))
+    private[uic] def withOpen(slot: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(Props(slot, siteV = site))
 
     private val openAdvice = Slot.Name("Overlay", "the visibility", "a dismissal", "onOpenChange").advice
 

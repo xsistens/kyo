@@ -38,18 +38,18 @@ end PanelAccessibleRole
   * swap), so the grid-rows transition plays. The content (and footer) is ALWAYS
   * present; the grid 0fr row hides it when collapsed.
   */
-final class Panel private[uic] (private[uic] val s: Panel.State) extends Node, HasElementId, HasAccessibleName, Stated:
-    import s.*
+final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, HasElementId, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = Panel
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(v: String | Signal[String]): Panel = new Panel(s.copy(headerText = Present(ReactiveValue(v))))
+    def header(v: String | Signal[String]): Panel = new Panel(p.copy(headerText = Present(ReactiveValue(v))))
 
     /** Custom header slot (wins over the `header(String)` title). */
-    def header(u: UI): Panel = new Panel(s.copy(headerUIV = Present(u)))
+    def header(u: UI): Panel = new Panel(p.copy(headerUIV = Present(u)))
 
     /** Renders the toggle button (`.p-panel-toggleable`). Set, it decides alone, and a signal switches the button and the
       * collapse in place. Without it a binding of [[collapsed]] turns them on, and an unbound panel is plain.
@@ -57,7 +57,7 @@ final class Panel private[uic] (private[uic] val s: Panel.State) extends Node, H
       * On and unbound, the panel keeps the collapse state itself. Under a signal it holds the state while the switch is off,
       * when the panel is plain and its content shows, and comes back to it.
       */
-    def toggleable(v: Boolean | Signal[Boolean]): Panel = new Panel(s.copy(toggleableV = Present(ReactiveValue(v))))
+    def toggleable(v: Boolean | Signal[Boolean]): Panel = new Panel(p.copy(toggleableV = Present(ReactiveValue(v))))
 
     /** Binds the collapse state, which turns the toggle on unless [[toggleable]] says otherwise. A `SignalRef` binds two way: a press of the
       * toggle writes it, then [[onCollapsedChange]] hears the new state. A plain `Signal` binds one way: the panel
@@ -65,29 +65,29 @@ final class Panel private[uic] (private[uic] val s: Panel.State) extends Node, H
       * still reachable, changes nothing. Unbound, a toggleable panel keeps the state itself, starting expanded. A
       * signal nothing hears is reported in a card.
       */
-    def collapsed(v: Boolean | Signal[Boolean]): Panel = new Panel(s.copy(collapsedSlot = collapsedSlot.bind(v)))
+    def collapsed(v: Boolean | Signal[Boolean]): Panel = new Panel(p.copy(collapsedSlot = collapsedSlot.bind(v)))
 
     /** Fired with the new collapse state after a press of the toggle, after a two-way [[collapsed]] is written. */
-    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Panel = new Panel(s.copy(collapsedSlot = collapsedSlot.hear(f)))
+    def onCollapsedChange(f: Boolean => UI.Action)(using Frame): Panel = new Panel(p.copy(collapsedSlot = collapsedSlot.hear(f)))
 
     /** Heading level of the header title (rendered as `aria-level`, default H2). */
-    def headerLevel(v: TitleLevel): Panel = new Panel(s.copy(headerLevelV = v))
+    def headerLevel(v: TitleLevel): Panel = new Panel(p.copy(headerLevelV = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Panel(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Panel(p.copy(accessV = v))
 
     /** ARIA role of the panel (default [[PanelAccessibleRole.Region]]). */
-    def accessibleRole(v: PanelAccessibleRole): Panel = new Panel(s.copy(accessibleRoleV = v))
+    def accessibleRole(v: PanelAccessibleRole): Panel = new Panel(p.copy(accessibleRoleV = v))
 
     /** Footer slot rendered as `div.p-panel-footer` below the content. */
-    def footer(v: UI): Panel = new Panel(s.copy(footerV = Present(v)))
+    def footer(v: UI): Panel = new Panel(p.copy(footerV = Present(v)))
 
     /** Adds content children. */
-    def apply(cs: UI*): Panel = new Panel(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Panel = new Panel(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         // Unbound, a toggleable panel keeps its collapse state itself, starting expanded.
-        Slot.draw(collapsedSlot, Panel.collapsedName, start = false, on = toggleOn)(s => new Panel(this.s.copy(collapsedSlot = s)).body)
+        Slot.draw(collapsedSlot, Panel.collapsedName, start = false, on = toggleOn)(s => new Panel(this.p.copy(collapsedSlot = s)).body)
 
     /** The switch as this panel reads it: set, it decides alone; unset, a binding of [[collapsed]] turns the toggle on. */
     private def toggleOn: BoolValue = toggleableV.getOrElse(ReactiveValue.Const(collapsedSlot.binding.isDefined))
@@ -191,7 +191,7 @@ final class Panel private[uic] (private[uic] val s: Panel.State) extends Node, H
 end Panel
 
 object Panel:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         headerText: Maybe[TextValue] = Absent,
         headerUIV: Maybe[UI] = Absent,
         collapsedSlot: Slot[Boolean] = Slot(),
@@ -203,7 +203,7 @@ object Panel:
         kids: List[UI] = Nil
     )
 
-    def apply(): Panel = new Panel(State())
+    def apply(): Panel = new Panel(Props())
 
     private val collapsedName = Slot.Name("Panel", "the collapse state", "a press", "onCollapsedChange")
 end Panel

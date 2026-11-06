@@ -18,9 +18,9 @@ import kyo.UI.*
   * [[BooleanFormControl]] for the same reason, so `uic.ToggleButton().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   */
-final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) extends Node, BooleanFormControl, HasAccessibleNameRef,
-      Stated:
-    import s.*
+final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props) extends Node, BooleanFormControl, HasAccessibleNameRef,
+      HasProps:
+    import p.*
 
     type Self = ToggleButton
 
@@ -33,48 +33,48 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
       * toggle button and has none of this.
       */
     private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => UI.Action): ToggleButton =
-        new ToggleButton(s.copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey))))
+        new ToggleButton(p.copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey))))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleButton(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleButton(p.copy(accessV = v))
 
     /** Package-internal content slot: SelectButton's `itemTemplate` replaces the
       * icon+label pair inside `.p-togglebutton-content` with arbitrary UI (the
       * kyo analogue of Prime's default slot).
       */
-    private[uic] def content(ui: UI): ToggleButton = new ToggleButton(s.copy(contentV = Present(ui)))
+    private[uic] def content(ui: UI): ToggleButton = new ToggleButton(p.copy(contentV = Present(ui)))
 
     /** The checked state. A `SignalRef` binds TWO-WAY: a click writes the toggled value, and its changes re-render.
       * Any other signal, or a constant, binds ONE-WAY: the button shows it, and a click writes nothing and only
       * reports through [[onChange]], so the app writes its own state and the button follows. `ref.readOnly` opts a
       * ref out. With no [[onChange]], a card says the reader cannot change it.
       */
-    def checked(v: Boolean | Signal[Boolean]): ToggleButton = new ToggleButton(s.copy(checkedSlot = checkedSlot.bind(v)))
+    def checked(v: Boolean | Signal[Boolean]): ToggleButton = new ToggleButton(p.copy(checkedSlot = checkedSlot.bind(v)))
 
     /** Label while checked (Prime default "Yes"). A `Signal[String]` re-renders it in place on emission.
       */
-    def onLabel(v: String | Signal[String]): ToggleButton = new ToggleButton(s.copy(onLabelV = Present(ReactiveValue(v))))
+    def onLabel(v: String | Signal[String]): ToggleButton = new ToggleButton(p.copy(onLabelV = Present(ReactiveValue(v))))
 
     /** Label while unchecked (Prime default "No"). A `Signal[String]` re-renders it in place on emission.
       */
-    def offLabel(v: String | Signal[String]): ToggleButton = new ToggleButton(s.copy(offLabelV = Present(ReactiveValue(v))))
+    def offLabel(v: String | Signal[String]): ToggleButton = new ToggleButton(p.copy(offLabelV = Present(ReactiveValue(v))))
 
     /** Drops both labels: the label span renders a non-breaking space (icon-only look). */
-    def noLabels: ToggleButton = new ToggleButton(s.copy(onLabelV = Absent, offLabelV = Absent))
+    def noLabels: ToggleButton = new ToggleButton(p.copy(onLabelV = Absent, offLabelV = Absent))
 
     /** Icon while checked (`.p-togglebutton-icon`). */
-    def onIcon(glyph: IconGlyph): ToggleButton = new ToggleButton(s.copy(onIconV = Present(glyph)))
+    def onIcon(glyph: IconGlyph): ToggleButton = new ToggleButton(p.copy(onIconV = Present(glyph)))
 
     /** Icon while unchecked (`.p-togglebutton-icon`). */
-    def offIcon(glyph: IconGlyph): ToggleButton = new ToggleButton(s.copy(offIconV = Present(glyph)))
+    def offIcon(glyph: IconGlyph): ToggleButton = new ToggleButton(p.copy(offIconV = Present(glyph)))
 
     /** Size: `.p-togglebutton-sm` / default / `.p-togglebutton-lg`. */
-    def size(v: Size): ToggleButton = new ToggleButton(s.copy(sizeV = v))
+    def size(v: Size): ToggleButton = new ToggleButton(p.copy(sizeV = v))
 
     /** Spans the full width of its container (`.p-togglebutton-fluid`). */
-    def fluid(v: Boolean): ToggleButton = new ToggleButton(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): ToggleButton = new ToggleButton(p.copy(fluidFlag = v))
 
-    def disabled(v: Boolean): ToggleButton = new ToggleButton(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): ToggleButton = new ToggleButton(p.copy(disabledFlag = v))
 
     /** `readonly`: the button never toggles and reports `aria-disabled`, which is what
       * `role="button"` has to say it with (there is no readonly state for that role), but
@@ -82,18 +82,18 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
       * land on it and read its value, and every key and click that would change it runs into
       * nothing.
       */
-    def readonly(v: Boolean): ToggleButton = new ToggleButton(s.copy(readonlyFlag = v))
+    def readonly(v: Boolean): ToggleButton = new ToggleButton(p.copy(readonlyFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ToggleButton(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ToggleButton(p.copy(validityV = v))
 
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
-    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(s.copy(checkedSlot = checkedSlot.hear(f)))
+    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(p.copy(checkedSlot = checkedSlot.hear(f)))
 
     /** Fires on focus loss with the button's current checked state; unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(p.copy(onBlurF = Present(Callback.of(f))))
 
     private[uic] def render(using Frame): UI =
         val validity = FieldValidity(validityV)
@@ -101,7 +101,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
         val field = validity.follow(Slot.owning(
             checkedSlot,
             start = false
-        )(s => new ToggleButton(this.s.copy(checkedSlot = s)).drawn(validity)))
+        )(s => new ToggleButton(this.p.copy(checkedSlot = s)).drawn(validity)))
         // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
         Diagnostics.after(field)("ToggleButton")(Diagnostic.unheard(
             checkedSlot,
@@ -116,7 +116,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
       */
     private def drawn(validity: FieldValidity)(using Frame): UI =
         Slot.drawField(checkedSlot, unbound = false)(f =>
-            (if f.fixed then new ToggleButton(s.copy(readonlyFlag = true)) else this).body(f.value, f.edit, validity)
+            (if f.fixed then new ToggleButton(p.copy(readonlyFlag = true)) else this).body(f.value, f.edit, validity)
         )
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action], validity: FieldValidity)(using Frame): UI =
@@ -176,7 +176,7 @@ final class ToggleButton private[uic] (private[uic] val s: ToggleButton.State) e
 end ToggleButton
 
 object ToggleButton:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         checkedSlot: Slot[Boolean] = Slot(),
         onLabelV: Maybe[TextValue] = Present(TextValue.Const("Yes")),
         offLabelV: Maybe[TextValue] = Present(TextValue.Const("No")),
@@ -193,7 +193,7 @@ object ToggleButton:
         radioV: Maybe[ToggleButton.RadioOption] = Absent
     )
 
-    def apply(): ToggleButton = new ToggleButton(State())
+    def apply(): ToggleButton = new ToggleButton(Props())
 
     private val checkedName = Slot.Name("ToggleButton", "checked", "a change", "onChange")
 

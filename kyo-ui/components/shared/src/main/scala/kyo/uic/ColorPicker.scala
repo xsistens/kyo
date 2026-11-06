@@ -59,13 +59,13 @@ import kyo.UI.*
   * `id` lands on the element a Tab reaches first: the preview swatch of the overlay picker, the plane's slider
   * of an inline one (its root where an inline picker has no slider, which is while it is disabled).
   */
-final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) extends Node, TextFormControl, HasAccessibleName, Stated:
-    import s.*
+final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) extends Node, TextFormControl, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = ColorPicker
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ColorPicker(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new ColorPicker(p.copy(accessV = v))
 
     /** The color. A `SignalRef` binds TWO-WAY: drags write the recomputed hex back, ref changes move the picker. Any
       * other signal binds ONE-WAY: the picker shows it, and a drag or key writes nothing and only reports the hex it asks
@@ -73,31 +73,31 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
       * starts from: unbound or from a constant, the picker keeps the colour itself, so a drag or key moves it and
       * [[onChange]] hears each one. `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): ColorPicker = new ColorPicker(s.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): ColorPicker = new ColorPicker(p.copy(valueSlot = valueSlot.bind(v)))
 
     /** Renders the panel inline (`.p-colorpicker-panel-inline`) instead of the
       * default overlay behind a swatch trigger (Prime's `inline`).
       */
-    def inline(v: Boolean): ColorPicker = new ColorPicker(s.copy(inlineFlag = v))
+    def inline(v: Boolean): ColorPicker = new ColorPicker(p.copy(inlineFlag = v))
 
     /** Disables the control (`.p-disabled`, no pointer interaction); a `Signal[Boolean]`
       * toggles it reactively (re-render).
       */
-    def disabled(v: Boolean | Signal[Boolean]): ColorPicker = new ColorPicker(s.copy(disabledFlag = Present(ReactiveValue(v))))
+    def disabled(v: Boolean | Signal[Boolean]): ColorPicker = new ColorPicker(p.copy(disabledFlag = Present(ReactiveValue(v))))
 
     /** Which corner the overlay panel opens from (overlay mode only; default below). */
-    def anchor(v: OverlayAnchor): ColorPicker = new ColorPicker(s.copy(anchorV = v))
+    def anchor(v: OverlayAnchor): ColorPicker = new ColorPicker(p.copy(anchorV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ColorPicker(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new ColorPicker(p.copy(validityV = v))
 
     /** Fired with the NEW hex after the ref write-back (one-way, with the hex the reader asked for). */
-    def onChange(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(s.copy(valueSlot = valueSlot.hear(f)))
+    def onChange(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(p.copy(valueSlot = valueSlot.hear(f)))
 
     /** Fires on focus loss with the current hex; unlike onChange it fires even when the
       * color was not changed. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): ColorPicker = new ColorPicker(p.copy(onBlurF = Present(Callback.of(f))))
 
     private def interactive: Boolean = !disabledFlag.constTrue
 
@@ -112,7 +112,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
     private[uic] def render(using Frame): UI =
         if inlineFlag then
             Slot.owningFrom(valueSlot, unbound = ColorPicker.DefaultHex, on = BoolValue.Const(interactive))(s =>
-                new ColorPicker(this.s.copy(valueSlot = s)).resolved
+                new ColorPicker(this.p.copy(valueSlot = s)).resolved
             )
         else
             val start = valueSlot.binding.flatMap(_.const).getOrElse(ColorPicker.DefaultHex)
@@ -121,13 +121,13 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
                     value  <- if interactive then valueSlot.ownedFrom(ColorPicker.DefaultHex) else Kyo.lift(valueSlot)
                     open   <- Signal.initRef(false)
                     opened <- Signal.initRef(start)
-                yield new ColorPicker(s.copy(valueSlot = value, panelV = Present(ColorPicker.Panel(open, opened)))).resolved
+                yield new ColorPicker(p.copy(valueSlot = value, panelV = Present(ColorPicker.Panel(open, opened)))).resolved
             }
         end if
     end render
 
     private def resolved(using Frame): UI =
-        BoolValue.reactive(disabledFlag)(d => new ColorPicker(s.copy(disabledFlag = d)).renderResolved)
+        BoolValue.reactive(disabledFlag)(d => new ColorPicker(p.copy(disabledFlag = d)).renderResolved)
 
     private def renderResolved(using Frame): UI =
         val field = valueSlot.binding match
@@ -447,7 +447,7 @@ final class ColorPicker private[uic] (private[uic] val s: ColorPicker.State) ext
 end ColorPicker
 
 object ColorPicker:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         valueSlot: Slot[String] = Slot(),
         // An overlay picker's open state, which the mount around it allocates beside the value.
         panelV: Maybe[Panel] = Absent,
@@ -468,10 +468,10 @@ object ColorPicker:
     final private[uic] case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
 
     /** A color picker whose hex value binds two-way to `ref`. */
-    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(State(valueSlot = Slot().bind(ref)))
+    def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(Props(valueSlot = Slot().bind(ref)))
 
     /** An unbound color picker; set the value via [[ColorPicker.value]]. */
-    def apply(): ColorPicker = new ColorPicker(State())
+    def apply(): ColorPicker = new ColorPicker(Props())
 
     private[uic] val DefaultHex = "#ff0000"
 

@@ -15,16 +15,16 @@ import kyo.UI.*
   * Prime's 100px default). Always animating: Prime's spinner has no
   * active/delay/text surface.
   */
-final class ProgressSpinner private[uic] (private[uic] val s: ProgressSpinner.State) extends Node, HasAccessibleName, Stated:
-    import s.*
+final class ProgressSpinner private[uic] (private[uic] val p: ProgressSpinner.Props) extends Node, HasAccessibleName, HasProps:
+    import p.*
 
     type Self = ProgressSpinner
 
     /** Size preset: `Small` (2rem) / `Normal` (Prime's 100px default) / `Large` (8rem). */
-    def size(v: Size): ProgressSpinner = new ProgressSpinner(s.copy(sizeV = v))
+    def size(v: Size): ProgressSpinner = new ProgressSpinner(p.copy(sizeV = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressSpinner(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressSpinner(p.copy(accessV = v))
     private[uic] def render(using Frame): UI                   =
         var el = div.cssClass("p-progressspinner").role("progressbar")
         sizeV match
@@ -55,10 +55,10 @@ final class ProgressSpinner private[uic] (private[uic] val s: ProgressSpinner.St
 end ProgressSpinner
 
 object ProgressSpinner:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         sizeV: Size = Size.Normal,
         accessV: Accessibility = Accessibility.none
     )
 
-    def apply(): ProgressSpinner = new ProgressSpinner(State())
+    def apply(): ProgressSpinner = new ProgressSpinner(Props())
 end ProgressSpinner

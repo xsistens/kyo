@@ -342,8 +342,8 @@ final private[uic] case class CellFilter[A](
     end predicate
 end CellFilter
 
-final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.State[A]) extends ColumnTree[A], Stated:
-    import s.*
+final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val p: Column.Props[A]) extends ColumnTree[A], HasProps:
+    import p.*
 
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -355,17 +355,17 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
     private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A] = this
 
     /** Custom cell content, replacing (or standing in for) the text projection. */
-    def body(f: A => UI): Column[A, K] = new Column(s.copy(bodyF = Present(f)))
+    def body(f: A => UI): Column[A, K] = new Column(p.copy(bodyF = Present(f)))
 
     /** Whether this column is part of an export (Prime's `exportable`, and `true` by
       * default). A column left out contributes neither a heading nor a field.
       */
-    def exportable(v: Boolean): Column[A, K] = new Column(s.copy(exportableFlag = v))
+    def exportable(v: Boolean): Column[A, K] = new Column(p.copy(exportableFlag = v))
 
     /** The heading this column writes into an export, where it differs from the one it
       * shows (Prime's `exportHeader`).
       */
-    def exportHeader(v: String): Column[A, K] = new Column(s.copy(exportHeaderV = Present(v)))
+    def exportHeader(v: String): Column[A, K] = new Column(p.copy(exportHeaderV = Present(v)))
 
     /** What this column writes into an export, where the text on the screen is not it
       * (Prime's table-wide `exportFunction`, put on the column the way the rest of this
@@ -375,7 +375,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * rendering only a [[body]], exports an empty field: what a cell shows is a `UI`,
       * and there is no honest way to read a string out of one.
       */
-    def exportAs(f: A => String): Column[A, K] = new Column(s.copy(exportF = Present(f)))
+    def exportAs(f: A => String): Column[A, K] = new Column(p.copy(exportF = Present(f)))
 
     /** Makes this column editable: `read` projects the cell's value out of the row, `write`
       * puts an edited one back, and the [[CellType]] in scope supplies the editor, the
@@ -399,7 +399,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * a type carrying its own rules through `CellType.validate`.
       */
     def editableAs[V](ct: CellType[V])(read: A => V)(write: (A, V) => A): Column[A, EditableFlatOnly] =
-        new Column(s.copy(editV =
+        new Column(p.copy(editV =
             Present(CellEdit[A](
                 show = a => ct.format(read(a)),
                 commit = (a, raw) =>
@@ -420,14 +420,14 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * does not open, and Tab passes over it.
       */
     def editableWhen(p: A => Boolean)(using IsEditable[K]): Column[A, K] =
-        new Column(s.copy(editV = editV.map(_.copy(when = p))))
+        new Column(this.p.copy(editV = editV.map(_.copy(when = p))))
 
     /** Runs after a committed edit of THIS column, with the row before and after the
       * write. The table-wide `onCellValueChanged` fires for every column; this one is for
       * a rule that belongs to a single field.
       */
     def onValueChanged(f: (A, A) => UI.Action)(using IsEditable[K], Frame): Column[A, K] =
-        new Column(s.copy(editV = editV.map(_.copy(changed = Present(Callback.of2(f))))))
+        new Column(p.copy(editV = editV.map(_.copy(changed = Present(Callback.of2(f))))))
 
     /** Gives this column its own filter, over the value `read` projects out of the row.
       * The [[CellType]] in scope decides how it reads: a type that compares (every
@@ -444,7 +444,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * and what gives the table its filter row.
       */
     def filterBy[V](read: A => V)(using ct: CellType[V]): Column[A, FlatOnly] =
-        new Column(s.copy(filterV = Present(cellFilter(read, ct))))
+        new Column(p.copy(filterV = Present(cellFilter(read, ct))))
 
     /** Filters by this column's own text projection, which is the projection nine times
       * in ten and would otherwise be written twice on one line. [[HasText]] confines the
@@ -456,7 +456,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
     def filterBy(using HasText[K]): Column[A, FlatOnly] =
         // The evidence is exactly the proof that this projection is there.
         textF.map(f =>
-            new Column(s.copy(filterV =
+            new Column(p.copy(filterV =
                 Present(CellFilter[A](
                     ColumnFilter.textModes,
                     MatchMode.Contains,
@@ -476,13 +476,13 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
     /** Static footer label for this column; any column carrying a footer gives the
       * table a `tfoot`.
       */
-    def footer(v: String): Column[A, FlatOnly] = new Column(s.copy(footerTextV = Present(v), footerF = Absent))
+    def footer(v: String): Column[A, FlatOnly] = new Column(p.copy(footerTextV = Present(v), footerF = Absent))
 
     /** Footer content computed from the rows that survive the table's global filter,
       * across every page rather than the visible one. The table owns filtering, so an
       * aggregate over what the reader is looking at cannot be computed by the caller.
       */
-    def footer(f: Seq[A] => UI): Column[A, FlatOnly] = new Column(s.copy(footerF = Present(f), footerTextV = Absent))
+    def footer(f: Seq[A] => UI): Column[A, FlatOnly] = new Column(p.copy(footerF = Present(f), footerTextV = Absent))
 
     /** Makes the column sortable by the projected key (header clicks cycle
       * ascending → descending → unsorted when the table has a `sort` ref).
@@ -490,7 +490,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * This is HOW the column sorts; [[sortable]] is whether the reader may change it.
       */
     def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A, K] =
-        new Column(s.copy(orderingV = Present(Ordering.by(f))))
+        new Column(p.copy(orderingV = Present(Ordering.by(f))))
 
     /** Whether the reader may change this column's place in the sort spec, which is a separate question
       * from whether the column HAS an ordering ([[sortBy]]) and from whether it currently sorts (the spec).
@@ -508,7 +508,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * Bound to a `Signal[Boolean]`, the affordance follows the signal, which is what suspends re-sorting
       * while a mutation is in flight.
       */
-    def sortable(v: Boolean | Signal[Boolean]): Column[A, K] = new Column(s.copy(sortableV = Present(ReactiveValue(v))))
+    def sortable(v: Boolean | Signal[Boolean]): Column[A, K] = new Column(p.copy(sortableV = Present(ReactiveValue(v))))
 
     /** Whether this column is rendered at all. A hidden column contributes no header cell, no body cells
       * and no footer cell, so the table is exactly as wide as the columns the reader can see and every
@@ -524,7 +524,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * Bound to a `Signal[Boolean]`, this is how a column becomes one the reader shows and hides: pass the
       * signal a toggle writes.
       */
-    def visible(v: Boolean | Signal[Boolean]): Column[A, K] = new Column(s.copy(visibleV = Present(ReactiveValue(v))))
+    def visible(v: Boolean | Signal[Boolean]): Column[A, K] = new Column(p.copy(visibleV = Present(ReactiveValue(v))))
 
     /** How wide this column is, in CSS pixels.
       *
@@ -536,7 +536,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       *
       * Columns with no width share what the ones that have it leave over.
       */
-    def width(px: Double): Column[A, K] = new Column(s.copy(widthV = Present(px)))
+    def width(px: Double): Column[A, K] = new Column(p.copy(widthV = Present(px)))
 
     /** Whether the reader may drag this column's width, which is a separate question from
       * whether it HAS one ([[width]]) and needs [[DataTable.columnWidths]] bound to write
@@ -546,7 +546,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * appears only where both sides allow it, and a column that answers false pins its
       * own width and its neighbour's edge with it.
       */
-    def resizable(v: Boolean): Column[A, K] = new Column(s.copy(resizableFlag = v))
+    def resizable(v: Boolean): Column[A, K] = new Column(p.copy(resizableFlag = v))
 
     /** Holds this column against the leading edge of the table while the columns beside
       * it scroll past, Prime's `frozen`.
@@ -563,12 +563,12 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * the height; freezing on its own scrolls sideways, which is all a wide table needs.
       */
     def frozen(v: Boolean): Column[A, FlatOnly] =
-        new Column(s.copy(frozenV = if v then Present(FrozenEdge.Start) else Absent))
+        new Column(p.copy(frozenV = if v then Present(FrozenEdge.Start) else Absent))
 
     /** [[frozen]] against a chosen edge: `End` holds the column against the trailing one,
       * which is where a column of row actions belongs.
       */
-    def frozen(edge: FrozenEdge): Column[A, FlatOnly] = new Column(s.copy(frozenV = Present(edge)))
+    def frozen(edge: FrozenEdge): Column[A, FlatOnly] = new Column(p.copy(frozenV = Present(edge)))
 
     /** Whether the reader may drag this column to another place, which needs
       * [[DataTable.columnOrder]] bound to write the new order into.
@@ -577,9 +577,9 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * it, which is how a column that means something by its position (a leading
       * identifier, a trailing total) keeps it while the rest of the header stays free.
       */
-    def reorderable(v: Boolean): Column[A, K] = new Column(s.copy(reorderableFlag = v))
+    def reorderable(v: Boolean): Column[A, K] = new Column(p.copy(reorderableFlag = v))
 
-    def align(v: ColumnAlign): Column[A, K] = new Column(s.copy(alignV = v))
+    def align(v: ColumnAlign): Column[A, K] = new Column(p.copy(alignV = v))
 
     /** Whether the keyboard cursor may land on this column's cells, AG Grid's
       * `suppressNavigable`. A column that answers false is stepped OVER by the arrows
@@ -588,7 +588,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * It says nothing about the mouse or about the value: a non-navigable column still
       * renders, still sorts, and a click still reaches whatever it renders.
       */
-    def navigable(v: Boolean): Column[A, K] = new Column(s.copy(navigableFlag = v))
+    def navigable(v: Boolean): Column[A, K] = new Column(p.copy(navigableFlag = v))
 
     /** Merges this column's cells across consecutive rows whose key is equal: one cell per
       * run, spanning it. The marker rides on the column, so unlike a string-keyed prop it
@@ -609,7 +609,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       * order the outer-to-inner order, which is how a merged table reads anyway.
       */
     def rowSpan[K2](key: A => K2)(using CanEqual[K2, K2]): Column[A, FlatOnly] =
-        new Column(s.copy(rowSpanEqF = Present((x, y) => key(x) == key(y))))
+        new Column(p.copy(rowSpanEqF = Present((x, y) => key(x) == key(y))))
 
     /** Merges by this column's own text projection, which is the key nine times in ten and
       * would otherwise be written twice on one line. [[HasText]] is what confines the form
@@ -618,7 +618,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
       */
     def rowSpan(using HasText[K]): Column[A, FlatOnly] =
         // The evidence is exactly the proof that this projection is there.
-        textF.map(f => new Column(s.copy(rowSpanEqF = Present((x, y) => f(x) == f(y))))).getOrElse(this)
+        textF.map(f => new Column(p.copy(rowSpanEqF = Present((x, y) => f(x) == f(y))))).getOrElse(this)
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
 
@@ -671,7 +671,7 @@ final class Column[A, +K <: FlatOnly] private[uic] (private[uic] val s: Column.S
 end Column
 
 object Column:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         headerV: String,
         textF: Maybe[A => String] = Absent,
         bodyF: Maybe[A => UI] = Absent,
@@ -696,12 +696,12 @@ object Column:
 
     /** A column rendering (and filtering by) the plain-text projection. */
     def apply[A](header: String)(text: A => String): Column[A, TextAnyTable] =
-        new Column[A, TextAnyTable](State(header, textF = Present(text)))
+        new Column[A, TextAnyTable](Props(header, textF = Present(text)))
 
     /** A column without a text projection; give it a [[Column.body]] template.
       * (No text projection also means the global filter cannot match it.)
       */
-    def apply[A](header: String): Column[A, AnyTable] = new Column[A, AnyTable](State(header))
+    def apply[A](header: String): Column[A, AnyTable] = new Column[A, AnyTable](Props(header))
 
 end Column
 
@@ -712,8 +712,8 @@ end Column
   * group itself carries nothing else: sorting, filtering, footers and merging all belong
   * to the leaves, which is what keeps the body a function of the columns alone.
   */
-final class HeaderGroup[A] private[uic] (private[uic] val s: HeaderGroup.State[A]) extends ColumnTree[A], Stated:
-    import s.*
+final class HeaderGroup[A] private[uic] (private[uic] val p: HeaderGroup.Props[A]) extends ColumnTree[A], HasProps:
+    import p.*
 
     private[uic] def label: String                        = labelV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = childrenV.flatMap(_.leaves)
@@ -722,18 +722,18 @@ final class HeaderGroup[A] private[uic] (private[uic] val s: HeaderGroup.State[A
     private[uic] def rowspan(depth: Int, row: Int): Int   = 1
     private[uic] def asColumn: Maybe[Column[A, FlatOnly]] = Absent
 
-    private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A] = new HeaderGroup(s.copy(childrenV = cs))
+    private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A] = new HeaderGroup(p.copy(childrenV = cs))
 end HeaderGroup
 
 object HeaderGroup:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         labelV: String,
         childrenV: List[ColumnTree[A]]
     )
 
     /** A group over columns, other groups, or a mix of both. */
     def apply[A](label: String)(children: ColumnTree[A]*): HeaderGroup[A] =
-        new HeaderGroup[A](State(label, children.toList))
+        new HeaderGroup[A](Props(label, children.toList))
 end HeaderGroup
 
 /** The typing context a [[column]] constructor reads its row type from.

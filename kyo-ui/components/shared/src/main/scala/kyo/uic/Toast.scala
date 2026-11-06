@@ -25,8 +25,8 @@ import kyo.UI.*
   * ToastService with `add(...)` queueing) use [[ToastService]], a kyo
   * Env/Layer service whose `render` region stacks queued messages.
   */
-final class Toast private[uic] (private[uic] val s: Toast.State) extends Node, Stated:
-    import s.*
+final class Toast private[uic] (private[uic] val p: Toast.Props) extends Node, HasProps:
+    import p.*
 
     type Self = Toast
 
@@ -36,42 +36,42 @@ final class Toast private[uic] (private[uic] val s: Toast.State) extends Node, S
       * reachable and inert. Unbound, the toast keeps the state itself and starts open, so it shows until the reader
       * closes it. A signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): Toast = new Toast(s.copy(openSlot = openSlot.bind(v)))
+    def open(v: Boolean | Signal[Boolean]): Toast = new Toast(p.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the visibility the reader asks for (false for every close), after a two-way [[open]] is written.
       * External writes fire nothing.
       */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): Toast = new Toast(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): Toast = new Toast(p.copy(openSlot = openSlot.hear(f)))
 
     /** Auto-dismiss duration in milliseconds (emitted as `data-uic-duration`;
       * Prime's `life`).
       */
-    def duration(ms: Int): Toast = new Toast(s.copy(durationMs = ms))
+    def duration(ms: Int): Toast = new Toast(p.copy(durationMs = ms))
 
     /** Screen position (`.p-toast-<token>`; Prime's default is top-right). */
-    def position(v: OverlayPosition): Toast = new Toast(s.copy(positionV = v))
+    def position(v: OverlayPosition): Toast = new Toast(p.copy(positionV = v))
 
     /** Semantic tint of the message (`.p-toast-message-<token>`; Prime's toast
       * vocabulary is info/success/warn/error/secondary/contrast; `Danger` maps to
       * `error`, `Primary`/`Help` fall back to the `info` skin).
       */
-    def severity(v: Severity): Toast = new Toast(s.copy(severityV = v))
+    def severity(v: Severity): Toast = new Toast(p.copy(severityV = v))
 
     /** Bold first line (`span.p-toast-summary`). A `Signal[String]` re-renders it in place on emission
       * (e.g. a locale-driven `I18n.t` leaf).
       */
-    def summary(v: String | Signal[String]): Toast = new Toast(s.copy(summaryV = Present(ReactiveValue(v))))
+    def summary(v: String | Signal[String]): Toast = new Toast(p.copy(summaryV = Present(ReactiveValue(v))))
 
     /** Detail line below the summary (`div.p-toast-detail`). A `Signal[String]` re-renders it in place on
       * emission.
       */
-    def detail(v: String | Signal[String]): Toast = new Toast(s.copy(detailV = Present(ReactiveValue(v))))
+    def detail(v: String | Signal[String]): Toast = new Toast(p.copy(detailV = Present(ReactiveValue(v))))
 
     /** Renders Prime's close button; pressing it asks for `false` (see [[open]]). */
-    def closable(v: Boolean): Toast = new Toast(s.copy(closableFlag = v))
+    def closable(v: Boolean): Toast = new Toast(p.copy(closableFlag = v))
 
     /** Adds custom body children, rendered after summary/detail inside the text slot. */
-    def apply(cs: UI*): Toast = new Toast(s.copy(kids = kids ++ cs))
+    def apply(cs: UI*): Toast = new Toast(p.copy(kids = kids ++ cs))
 
     /** The `.p-toast-message-<token>` suffix (Prime's toast set; `Danger` is `error`). */
     private def token: String = Toast.severityToken(severityV)
@@ -83,7 +83,7 @@ final class Toast private[uic] (private[uic] val s: Toast.State) extends Node, S
         // Unbound, the toast keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in, so the
         // static page does not call its close button fixed. A toast with no close button has nothing to hear.
         Slot.draw(if closableFlag then openSlot else openSlot.quieted, Toast.openName, start = true)(s =>
-            new Toast(this.s.copy(openSlot = s)).drawn
+            new Toast(this.p.copy(openSlot = s)).drawn
         )
 
     private def drawn(using Frame): UI =
@@ -144,7 +144,7 @@ final class Toast private[uic] (private[uic] val s: Toast.State) extends Node, S
 end Toast
 
 object Toast:
-    final private[uic] case class State(
+    final private[uic] case class Props(
         openSlot: Slot[Boolean] = Slot(),
         durationMs: Int = 3000,
         positionV: OverlayPosition = OverlayPosition.TopRight,
@@ -155,7 +155,7 @@ object Toast:
         kids: List[UI] = Nil
     )
 
-    def apply(): Toast = new Toast(State())
+    def apply(): Toast = new Toast(Props())
 
     private val openName = Slot.Name("Toast", "the visibility", "a close", "onOpenChange")
 

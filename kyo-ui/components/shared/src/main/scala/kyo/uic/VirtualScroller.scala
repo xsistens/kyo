@@ -51,22 +51,22 @@ import kyo.UI.*
   * `requestMeasure` targets, so the viewport height is taken explicitly. The measure
   * round-trip is exercised in the demo, where the measured element's path is known.
   */
-final class VirtualScroller[A] private[uic] (private[uic] val s: VirtualScroller.State[A]) extends Node, Stated:
-    import s.*
+final class VirtualScroller[A] private[uic] (private[uic] val p: VirtualScroller.Props[A]) extends Node, HasProps:
+    import p.*
 
     type Self = VirtualScroller[A]
 
     /** Fixed row height in px (Prime's `itemSize`; every row is clipped to it). */
-    def itemSize(px: Int): VirtualScroller[A] = new VirtualScroller(s.copy(itemSizeV = math.max(1, px)))
+    def itemSize(px: Int): VirtualScroller[A] = new VirtualScroller(p.copy(itemSizeV = math.max(1, px)))
 
     /** Fixed viewport height in px (Prime's scroll-height). */
-    def height(px: Int): VirtualScroller[A] = new VirtualScroller(s.copy(heightV = math.max(1, px)))
+    def height(px: Int): VirtualScroller[A] = new VirtualScroller(p.copy(heightV = math.max(1, px)))
 
     /** Extra rows rendered above and below the visible window (default 3). */
-    def overscan(n: Int): VirtualScroller[A] = new VirtualScroller(s.copy(overscanV = math.max(0, n)))
+    def overscan(n: Int): VirtualScroller[A] = new VirtualScroller(p.copy(overscanV = math.max(0, n)))
 
     /** Sets the per-item template and completes the builder. */
-    def apply(f: A => UI): VirtualScroller[A] = new VirtualScroller(s.copy(template = Present(f)))
+    def apply(f: A => UI): VirtualScroller[A] = new VirtualScroller(p.copy(template = Present(f)))
 
     /** The window arithmetic, which is [[RowSource.Viewport]]'s and shared with the
       * windowed [[DataTable]]: what fits, what to ask for, and how far the list reaches.
@@ -205,7 +205,7 @@ final class VirtualScroller[A] private[uic] (private[uic] val s: VirtualScroller
 end VirtualScroller
 
 object VirtualScroller:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         items: Seq[A],
         sourceV: Maybe[RowSource[?, A]] = Absent,
         itemSizeV: Int = 40,
@@ -215,12 +215,12 @@ object VirtualScroller:
     )
 
     /** A virtual scroller over `items`; set the row template via `apply(template)`. */
-    def apply[A](items: Seq[A]): VirtualScroller[A] = new VirtualScroller[A](State(items))
+    def apply[A](items: Seq[A]): VirtualScroller[A] = new VirtualScroller[A](Props(items))
 
     /** A virtual scroller over a [[RowSource]], which holds no sequence at all: the
       * visible range is written into the source on every scroll, and what has not arrived
       * yet is drawn as a slot of the same height.
       */
     def apply[A](source: RowSource[?, A]): VirtualScroller[A] =
-        new VirtualScroller[A](State(Seq.empty, Present(source)))
+        new VirtualScroller[A](Props(Seq.empty, Present(source)))
 end VirtualScroller

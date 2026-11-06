@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 
 /** Base type of every uic component.
   *
-  * A component is a plain immutable builder over its state ([[Stated]]), NOT a `kyo.UI`. The kyo HTML AST
+  * A component is a plain immutable builder over its state ([[HasProps]]), NOT a `kyo.UI`. The kyo HTML AST
   * (`UI` / `Element` / `HtmlContent`) is `sealed` and cannot be extended from
   * outside `kyo/UI.scala`, so a component instead renders itself into a `UI` on
   * demand and is auto-lifted at placement, mirroring how kyo lifts a bare
@@ -87,14 +87,14 @@ end Node
   * A wrapper over another component ([[MultipleAccordion]], [[MultiSelectButton]], [[MultiDatePicker]], [[RangeDatePicker]])
   * holds that component as its state, which is why classes are compared as well.
   */
-private[uic] trait Stated:
-    private[uic] def s: Any
+private[uic] trait HasProps:
+    private[uic] def p: Any
 
     override def equals(other: Any): Boolean = other match
-        case that: Stated => getClass.equals(that.getClass) && s.equals(that.s)
-        case _            => false
+        case that: HasProps => getClass.equals(that.getClass) && p.equals(that.p)
+        case _              => false
 
-    override def hashCode: Int = s.hashCode
+    override def hashCode: Int = p.hashCode
 
-    override def toString: String = s"${getClass.getSimpleName}($s)"
-end Stated
+    override def toString: String = s"${getClass.getSimpleName}($p)"
+end HasProps

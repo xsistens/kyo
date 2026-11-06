@@ -583,14 +583,14 @@ final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
   * without a key therefore renders a loud `.p-uic-diagnostic` card above itself
   * rather than shipping that failure to production data.
   */
-final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) extends Node, HasElementId, HasEmptyContent,
-      HasLoadingContent, HasAccessibleNameRef, Stated:
-    import s.*
+final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) extends Node, HasElementId, HasEmptyContent,
+      HasLoadingContent, HasAccessibleNameRef, HasProps:
+    import p.*
 
     type Self = DataTable[A]
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new DataTable(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new DataTable(p.copy(accessV = v))
 
     /** The rows. A second call replaces the first.
       *
@@ -608,12 +608,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       *
       * A [[source]] holds the rows as well, so binding both is a mistake and says so; the source is what renders.
       */
-    def rows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = new DataTable(s.copy(rowsTyped = Present(ReactiveValue(v))))
+    def rows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = new DataTable(p.copy(rowsTyped = Present(ReactiveValue(v))))
 
     /** Stable row identity: the selection/expansion key and the `onRowClick`
       * payload. Required for reliable selection/expansion.
       */
-    def rowKey(f: A => String): DataTable[A] = new DataTable(s.copy(rowKeyF = Present(f)))
+    def rowKey(f: A => String): DataTable[A] = new DataTable(p.copy(rowKeyF = Present(f)))
 
     /** Appends columns. Each argument is authored against the table's row type, so
       * [[column]] needs no type argument of its own, and each may be a single [[column]]
@@ -621,7 +621,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     def columns(cs: HeaderOf[A]*): DataTable[A] =
         given ColumnScope[A] = new ColumnScope[A]()
-        new DataTable(s.copy(cols = cols ++ cs.map(c => (c: ColumnTree[A])).toList))
+        new DataTable(p.copy(cols = cols ++ cs.map(c => (c: ColumnTree[A])).toList))
     end columns
 
     /** The real columns, left to right, with any [[headerGroup]] flattened away. The
@@ -666,23 +666,23 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * click on the same header puts the column back at the rank it had.
       */
     def sort(v: List[SortKey] | Signal[List[SortKey]]): DataTable[A] =
-        new DataTable(s.copy(sortSlot = Present(ReactiveValue[List[SortKey]](v))))
+        new DataTable(p.copy(sortSlot = Present(ReactiveValue[List[SortKey]](v))))
 
     /** Fired with the spec a header press (a click, Enter or Space, with Ctrl or Cmd for several columns) asks for, after
       * a two-way [[sort]] is written.
       */
-    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onSortF = Present(Callback.of(f))))
+    def onSortChange(f: List[SortKey] => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onSortF = Present(Callback.of(f))))
 
     /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
       * and descending, which is Prime's default.
       */
-    def removableSort(v: Boolean): DataTable[A] = new DataTable(s.copy(removableSortFlag = v))
+    def removableSort(v: Boolean): DataTable[A] = new DataTable(p.copy(removableSortFlag = v))
 
     /** The global filter query: case-insensitive contains-match over the columns' text
       * projections. The table never writes it, since the field a reader types it into is
       * the caller's own, so a constant, a signal and a ref all just filter.
       */
-    def globalFilter(v: String | Signal[String]): DataTable[A] = new DataTable(s.copy(filterSlot = Present(ReactiveValue[String](v))))
+    def globalFilter(v: String | Signal[String]): DataTable[A] = new DataTable(p.copy(filterSlot = Present(ReactiveValue[String](v))))
 
     /** The per-column filters, keyed by the column path the sort spec already names a
       * column by, which gives the table its filter row: one input per [[Column.filterBy]]
@@ -721,16 +721,16 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * on the way to the second condition. Closing the panel without applying leaves the
       * table as it was.
       */
-    def filterDisplay(v: FilterDisplay): DataTable[A] = new DataTable(s.copy(filterDisplayV = v))
+    def filterDisplay(v: FilterDisplay): DataTable[A] = new DataTable(p.copy(filterDisplayV = v))
 
     def columnFilters(v: Map[List[String], ColumnFilter] | Signal[Map[List[String], ColumnFilter]]): DataTable[A] =
-        new DataTable(s.copy(columnFiltersSlot = Present(ReactiveValue[Map[List[String], ColumnFilter]](v))))
+        new DataTable(p.copy(columnFiltersSlot = Present(ReactiveValue[Map[List[String], ColumnFilter]](v))))
 
     /** Fired with the filters the reader asked for (a keystroke in the filter row, an apply, a clear or a mode pick in
       * the filter menu), after two-way [[columnFilters]] are written.
       */
     def onColumnFiltersChange(f: Map[List[String], ColumnFilter] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onColumnFiltersF = Present(Callback.of(f))))
+        new DataTable(p.copy(onColumnFiltersF = Present(Callback.of(f))))
 
     /** The column widths, keyed by the column path the sort spec already names a column
       * by, which gives every boundary between two resizable columns a drag handle.
@@ -751,7 +751,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * Binding it turns the drag on unless [[resizableColumns]] says otherwise.
       */
     def columnWidths(v: Map[List[String], Double] | Signal[Map[List[String], Double]]): DataTable[A] =
-        new DataTable(s.copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v))))
+        new DataTable(p.copy(columnWidthsSlot = Present(ReactiveValue[Map[List[String], Double]](v))))
 
     /** Whether the column boundaries take a drag. Set, it decides alone, and a signal switches them in place. Without it a
       * binding of [[columnWidths]] turns them on, and an unbound table has none.
@@ -760,11 +760,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * while the switch is off, when the columns lay out as an unsized table does, and comes back to them. Off over a binding
       * the columns keep the widths and only the handles go, as with fixed widths. [[onColumnWidthsChange]] hears every move.
       */
-    def resizableColumns(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(resizableColumnsV = Present(ReactiveValue(v))))
+    def resizableColumns(v: Boolean | Signal[Boolean]): DataTable[A] =
+        new DataTable(p.copy(resizableColumnsV = Present(ReactiveValue(v))))
 
     /** Fired with the widths after every move of a boundary drag, after two-way [[columnWidths]] are written. */
     def onColumnWidthsChange(f: Map[List[String], Double] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onColumnWidthsF = Present(Callback.of(f))))
+        new DataTable(p.copy(onColumnWidthsF = Present(Callback.of(f))))
 
     /** What a resize drag moves, Prime's `columnResizeMode`, and `Fit` by default.
       *
@@ -782,7 +783,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * without one is named in a card and the table resizes to fit instead, which is the
       * mode that needs no widths at all.
       */
-    def columnResizeMode(v: ColumnResizeMode): DataTable[A] = new DataTable(s.copy(resizeModeV = v))
+    def columnResizeMode(v: ColumnResizeMode): DataTable[A] = new DataTable(p.copy(resizeModeV = v))
 
     /** Binds the order the columns render in, as their paths from left to right, and lets
       * the reader drag a header cell to another place.
@@ -801,7 +802,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * not offered, since freezing is what the reader would silently lose.
       */
     def columnOrder(v: List[List[String]] | Signal[List[List[String]]]): DataTable[A] =
-        new DataTable(s.copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v))))
+        new DataTable(p.copy(columnOrderSlot = Present(ReactiveValue[List[List[String]]](v))))
 
     /** Whether the headers take a drag. Set, it decides alone, and a signal switches them in place. Without it a binding of
       * [[columnOrder]] turns them on, and an unbound table has none.
@@ -811,14 +812,14 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * the order and only the drag goes, as with a fixed order. [[onColumnOrderChange]] hears every drop.
       */
     def reorderableColumns(v: Boolean | Signal[Boolean]): DataTable[A] =
-        new DataTable(s.copy(reorderableColumnsV = Present(ReactiveValue(v))))
+        new DataTable(p.copy(reorderableColumnsV = Present(ReactiveValue(v))))
 
     /** Fired with the whole order a header drop asks for, after a two-way [[columnOrder]] is written. With a signal or a
       * constant bound the table lays out by that and only reports the drop; a one-way order with no handler here is
       * reported in a card.
       */
     def onColumnOrderChange(f: List[List[String]] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onColumnOrderF = Present(Callback.of(f))))
+        new DataTable(p.copy(onColumnOrderF = Present(Callback.of(f))))
 
     /** Slices the rows into pages of `size` and renders the embedded paginator; `page` is the 0-based page index
       * (clamped at render).
@@ -834,10 +835,14 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         ReactiveValue[Int](size) match
             case ReactiveValue.Const(n) =>
                 val clamped = math.max(1, n)
-                new DataTable(s.copy(pageSizeV = Present(clamped), pageSizeSlot = Present(ReactiveValue.Const(clamped)), pageSlot = pageV))
+                new DataTable(p.copy(
+                    pageSizeV = Present(clamped),
+                    pageSizeSlot = Present(ReactiveValue.Const(clamped)),
+                    pageSlot = pageV
+                ))
             case bound =>
                 // The value is read with the rest of the table's state; one stands in until then, so that paging is on.
-                new DataTable(s.copy(pageSizeV = Present(1), pageSizeSlot = Present(bound), pageSlot = pageV))
+                new DataTable(p.copy(pageSizeV = Present(1), pageSizeSlot = Present(bound), pageSlot = pageV))
         end match
     end paginate
 
@@ -845,12 +850,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * rows-per-page pick moves to), after a two-way [[paginate]] page is written. The write-side counterpart of a
       * one-way page.
       */
-    def onPageChange(f: Int => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onPageF = Present(Callback.of(f))))
+    def onPageChange(f: Int => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onPageF = Present(Callback.of(f))))
 
     /** Fired with the rows per page the reader picked in the paginator's dropdown, after a two-way [[paginate]] size is
       * written, and before the page the pick moves to is reported.
       */
-    def onPageSizeChange(f: Int => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onPageSizeF = Present(Callback.of(f))))
+    def onPageSizeChange(f: Int => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onPageSizeF = Present(Callback.of(f))))
 
     /** Configures the [[Paginator]] the table renders below its rows: which elements it
       * shows and in which order ([[Paginator.template]]), the current-page report, the
@@ -868,7 +873,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * written to. Those are the table's own state, and a paginator
       * disagreeing with the rows above it would page a list nobody is looking at.
       */
-    def paginator(f: Paginator => Paginator): DataTable[A] = new DataTable(s.copy(paginatorF = Present(f)))
+    def paginator(f: Paginator => Paginator): DataTable[A] = new DataTable(p.copy(paginatorF = Present(f)))
 
     /** The rows are a WINDOW onto `total` rows filtered, sorted and paged somewhere else:
       * the table renders them verbatim and paginates over the total, instead of computing
@@ -899,7 +904,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * arrives with the page it counts.
       */
     def lazyRows(total: Total | Signal[Total]): DataTable[A] =
-        new DataTable(s.copy(lazyTotalV = Present(ReactiveValue(total))))
+        new DataTable(p.copy(lazyTotalV = Present(ReactiveValue(total))))
 
     /** Takes the rows, the total, the busy flag and the paginator from a [[RowSource]],
       * which is the whole wiring of a lazily loaded table in one call.
@@ -911,7 +916,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * paginator's rows-per-page dropdown change it, and one opened over a constant does not.
       */
     def source(src: RowSource[?, A]): DataTable[A] =
-        new DataTable(s.copy(
+        new DataTable(p.copy(
             sourceV = Present(src),
             lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
             loadingV = Present(BoolValue.Dyn(src.loading))
@@ -920,7 +925,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     /** Selection semantics: `Single`/`Multiple` select on row click, `Checkbox`
       * via Prime's checkbox column; `None` (default) leaves rows inert.
       */
-    def selectionMode(v: SelectionMode): DataTable[A] = new DataTable(s.copy(selectionModeV = v))
+    def selectionMode(v: SelectionMode): DataTable[A] = new DataTable(p.copy(selectionModeV = v))
 
     /** The selected rows, matched by [[rowKey]].
       *
@@ -939,7 +944,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * `onRowClick` cannot move at all; both are reported as cards rather than left silent.
       */
     def selection(v: Set[A] | Signal[Set[A]]): DataTable[A] =
-        new DataTable(s.copy(selectedTyped = Present(ReactiveValue(v))))
+        new DataTable(p.copy(selectedTyped = Present(ReactiveValue(v))))
 
     /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
       *
@@ -968,7 +973,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * not `metaKeySelection` is set. Here the two arrive together, so a table that never asked
       * for modifier semantics keeps a render with no state in it.
       */
-    def metaKeySelection(v: Boolean): DataTable[A] = new DataTable(s.copy(metaKeyFlag = v))
+    def metaKeySelection(v: Boolean): DataTable[A] = new DataTable(p.copy(metaKeyFlag = v))
 
     /** Binds the row a shift-click measures its range from, so the caller owns it.
       *
@@ -991,11 +996,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * range starts at that row. A signal nothing hears is reported in a card. Never read for
       * display, so nothing re-renders when it changes.
       */
-    def selectionAnchor(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = new DataTable(s.copy(anchorSlot = Present(ReactiveValue(v))))
+    def selectionAnchor(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = new DataTable(p.copy(anchorSlot = Present(ReactiveValue(v))))
 
     /** Fired with the new anchor when a click without shift moves it, after a two-way [[selectionAnchor]] is written. */
     def onSelectionAnchorChange(f: Maybe[A] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onAnchorF = Present(Callback.of(f))))
+        new DataTable(p.copy(onAnchorF = Present(Callback.of(f))))
 
     /** The selection's write-back ref, where the caller bound one that can be written.
       *
@@ -1024,7 +1029,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * the click.
       */
     def selectedCells(v: Set[CellPath[A]] | Signal[Set[CellPath[A]]]): DataTable[A] =
-        new DataTable(s.copy(cellsTyped = Present(ReactiveValue(v))))
+        new DataTable(p.copy(cellsTyped = Present(ReactiveValue(v))))
 
     /** Whether a click picks cells. Set, it decides alone, and a signal switches it in place. Without it a binding of
       * [[selectedCells]] turns it on, and an unbound table picks none.
@@ -1033,11 +1038,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * back to them. Off, a click picks no cell and no cell shows picked, whatever is bound. [[onSelectedCellsChange]] hears
       * every pick.
       */
-    def cellSelection(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(cellSelectionV = Present(ReactiveValue(v))))
+    def cellSelection(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(p.copy(cellSelectionV = Present(ReactiveValue(v))))
 
     /** Fired with the picked cells after a click changes them, after a two-way [[selectedCells]] is written. */
     def onSelectedCellsChange(f: Set[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onCellsF = Present(Callback.of(f))))
+        new DataTable(p.copy(onCellsF = Present(Callback.of(f))))
 
     /** Restricts selection to the rows `p` accepts (Prime's `isDataSelectable`).
       *
@@ -1047,7 +1052,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * predicate is read wherever the selection is written, so a row the caller starts
       * rejecting mid-session cannot stay selected by having been selectable earlier.
       */
-    def selectableWhen(p: A => Boolean): DataTable[A] = new DataTable(s.copy(selectableF = Present(p)))
+    def selectableWhen(p: A => Boolean): DataTable[A] = new DataTable(this.p.copy(selectableF = Present(p)))
 
     /** Binds the row a context menu was opened on, as the row itself (Prime's
       * `contextMenuSelection`).
@@ -1067,7 +1072,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * row it was opened on, and the binding is the caller's to clear when the menu closes,
       * since the table cannot see a panel it does not render.
       */
-    def contextMenuRow(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = new DataTable(s.copy(contextTyped = Present(ReactiveValue(v))))
+    def contextMenuRow(v: Maybe[A] | Signal[Maybe[A]]): DataTable[A] = new DataTable(p.copy(contextTyped = Present(ReactiveValue(v))))
 
     /** Runs on a right-click over a row with what that click was aimed at (the row under the
       * pointer and the rows selected at that moment, as a [[RowContext]]), after a two-way
@@ -1082,10 +1087,10 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * a menu item that runs later reads what this handler put in a ref of yours.
       */
     def onContextMenuRowChange(f: RowContext[A] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onRowContextF = Present(Callback.of(f))))
+        new DataTable(p.copy(onRowContextF = Present(Callback.of(f))))
 
     /** The field separator [[csv]] writes (Prime's `csvSeparator`, and a comma by default). */
-    def csvSeparator(v: String): DataTable[A] = new DataTable(s.copy(csvSeparatorV = v))
+    def csvSeparator(v: String): DataTable[A] = new DataTable(p.copy(csvSeparatorV = v))
 
     /** `rows` as CSV, using this table's columns: one heading row from each exportable
       * column's [[Column.exportHeader]] or header, then one line per row from each
@@ -1104,7 +1109,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * what they are looking at has not said anything about what a file should hold.
       */
     def csv(rows: Seq[A]): String =
-        val cols  = leafPaths.map(_._2).filter(_.s.exportableFlag)
+        val cols  = leafPaths.map(_._2).filter(_.p.exportableFlag)
         val head  = cols.map(c => DataTable.csvField(c.exportTitle, csvSeparatorV))
         val lines = rows.toList.map(a => cols.map(c => DataTable.csvField(c.exportCell(a), csvSeparatorV)))
         (head :: lines).map(_.mkString(csvSeparatorV)).mkString("\n")
@@ -1128,7 +1133,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         yield
             // In the reader's column order too, since that is as much a part of what they
             // are looking at as the sort is.
-            val shown = if order.isEmpty then this else new DataTable(s.copy(cols = ColumnTree.reorder(cols, order)))
+            val shown = if order.isEmpty then this else new DataTable(p.copy(cols = ColumnTree.reorder(cols, order)))
             shown.csv(arranged(rows.toList, sort, query, if lazyOn then Nil else filterReads(specs)))
 
     /** What the reader has changed about this table, read off the refs they changed it
@@ -1261,7 +1266,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * A cell is styled through [[Column.body]], which is any UI; this is the row half
       * of the same question. Frozen rows are data rows and carry them too.
       */
-    def rowClasses(f: A => Seq[String]): DataTable[A] = new DataTable(s.copy(rowClassF = Present(f)))
+    def rowClasses(f: A => Seq[String]): DataTable[A] = new DataTable(p.copy(rowClassF = Present(f)))
 
     /** The expanded rows, matched by [[rowKey]]; pair with [[rowExpansionTemplate]].
       *
@@ -1270,15 +1275,15 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * expansion held in a route or a parent is changed there. A one-way binding with no [[onExpandedChange]] is
       * reported in a card.
       */
-    def expanded(v: Set[A] | Signal[Set[A]]): DataTable[A] = new DataTable(s.copy(expandedTyped = Present(ReactiveValue[Set[A]](v))))
+    def expanded(v: Set[A] | Signal[Set[A]]): DataTable[A] = new DataTable(p.copy(expandedTyped = Present(ReactiveValue[Set[A]](v))))
 
     /** Fired with the rows open after a row toggle, after a two-way [[expanded]] is written. */
-    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onExpandedF = Present(Callback.of(f))))
+    def onExpandedChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onExpandedF = Present(Callback.of(f))))
 
     /** Content of the full-colspan expansion row below an expanded data row; setting
       * it auto-adds the expander-button column.
       */
-    def rowExpansionTemplate(f: A => UI): DataTable[A] = new DataTable(s.copy(expansionF = Present(f)))
+    def rowExpansionTemplate(f: A => UI): DataTable[A] = new DataTable(p.copy(expansionF = Present(f)))
 
     /** Binds row editing (the set of rows being edited, matched by [[rowKey]]): every column carrying
       * a [[Column.editable]] pipeline shows its editor for those rows, and an
@@ -1297,7 +1302,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * on the screen it failed on.
       */
     def editingRows(v: Set[A] | Signal[Set[A]]): DataTable[A] =
-        new DataTable(s.copy(editingRowsTyped = Present(ReactiveValue(v))))
+        new DataTable(p.copy(editingRowsTyped = Present(ReactiveValue(v))))
 
     /** Whether rows open for editing. Set, it decides alone, and a signal switches it in place. Without it a binding of
       * [[editingRows]] turns it on, and an unbound table edits no row.
@@ -1306,11 +1311,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * back to them. Off, there is no editor column and no row opens, whatever is bound. [[onEditingRowsChange]] hears every
       * row opened or closed.
       */
-    def rowEditing(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(rowEditingV = Present(ReactiveValue(v))))
+    def rowEditing(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(p.copy(rowEditingV = Present(ReactiveValue(v))))
 
     /** Fired with the rows being edited after a button opens or closes one, after a two-way [[editingRows]] is written. */
     def onEditingRowsChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onEditingRowsF = Present(Callback.of(f))))
+        new DataTable(p.copy(onEditingRowsF = Present(Callback.of(f))))
 
     /** Binds cell editing: at most one cell shows its column's editor, and clicking a cell
       * of an editable column moves the editor there. Enter commits, Escape discards, and
@@ -1321,7 +1326,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * A [[CellPath]], since a cell is a row crossed with a column.
       */
     def editingCell(v: Maybe[CellPath[A]] | Signal[Maybe[CellPath[A]]]): DataTable[A] =
-        new DataTable(s.copy(editingCellTyped = Present(ReactiveValue(v))))
+        new DataTable(p.copy(editingCellTyped = Present(ReactiveValue(v))))
 
     /** Whether a click opens a cell's editor. Set, it decides alone, and a signal switches it in place. Without it a binding of
       * [[editingCell]] turns it on, and an unbound table opens none.
@@ -1329,11 +1334,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * On and unbound, the table keeps the open cell itself. Under a signal it holds it while the switch is off, and comes back
       * to it. Off, no cell opens, whatever is bound. [[onEditingCellChange]] hears every move.
       */
-    def cellEditing(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(cellEditingV = Present(ReactiveValue(v))))
+    def cellEditing(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(p.copy(cellEditingV = Present(ReactiveValue(v))))
 
     /** Fired with the open cell after the reader moves or closes the editor, after a two-way [[editingCell]] is written. */
     def onEditingCellChange(f: Maybe[CellPath[A]] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onEditingCellF = Present(Callback.of(f))))
+        new DataTable(p.copy(onEditingCellF = Present(Callback.of(f))))
 
     /** Whether the reader may move a cursor over the cells: arrows move it, Home and End
       * take it to the ends of a row (of the grid under ctrl or cmd), Page keys move it a
@@ -1346,7 +1351,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * from an editable table that is driven by the mouse. A table that opts out renders
       * exactly the markup and the tab order it rendered before this existed.
       */
-    def cellNavigation(v: Boolean): DataTable[A] = new DataTable(s.copy(cellNavV = Present(v)))
+    def cellNavigation(v: Boolean): DataTable[A] = new DataTable(p.copy(cellNavV = Present(v)))
 
     /** Runs after a committed cell edit, with the row before and after the column's write,
       * after [[onRowsChange]]. With a two-way [[rows]] bound this is a notification;
@@ -1358,17 +1363,17 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     /** Fired with the row list a commit or a drop produced, after a two-way [[rows]] is written, and before the event
       * that says what changed.
       */
-    def onRowsChange(f: Seq[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onRowsF = Present(Callback.of(f))))
+    def onRowsChange(f: Seq[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onRowsF = Present(Callback.of(f))))
 
     def onCellValueChanged(f: CellChange[A] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onCellChangedF = Present(Callback.of(f))))
+        new DataTable(p.copy(onCellChangedF = Present(Callback.of(f))))
 
     /** Runs after a committed row edit, once, with the row before and after every editable
       * column's write. The per-cell [[onCellValueChanged]] fires for each column that
       * actually changed, before this.
       */
     def onRowValueChanged(f: RowChange[A] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onRowChangedF = Present(Callback.of(f))))
+        new DataTable(p.copy(onRowChangedF = Present(Callback.of(f))))
 
     /** Lets the reader drag a row to another place, Prime's `reorderableRows`.
       *
@@ -1385,7 +1390,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * the query's, the grips are not offered and a card says which of them it is. Paging
       * is fine: a page is a contiguous slice, and both indices are counted in the list.
       */
-    def reorderableRows(v: Boolean): DataTable[A] = new DataTable(s.copy(reorderRowsFlag = v))
+    def reorderableRows(v: Boolean): DataTable[A] = new DataTable(p.copy(reorderRowsFlag = v))
 
     /** Runs after a completed row drag, with the list that came out of it.
       *
@@ -1393,14 +1398,15 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * notification, the table has already stored the list; without it, storing it is the
       * caller's.
       */
-    def onRowReorder(f: RowMove[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onRowReorderF = Present(Callback.of(f))))
+    def onRowReorder(f: RowMove[A] => UI.Action)(using Frame): DataTable[A] =
+        new DataTable(p.copy(onRowReorderF = Present(Callback.of(f))))
 
     /** Turns a refused commit's [[kyo.uic.form.FieldError]] into the message shown under
       * the open editor. Defaults to `ErrorTranslator.default`, which shows the error's own
       * fallback text, or its code when it has none; an app with i18n passes its own, the
       * way a `Form` takes one.
       */
-    def errorTranslator(t: ErrorTranslator): DataTable[A] = new DataTable(s.copy(translatorV = t))
+    def errorTranslator(t: ErrorTranslator): DataTable[A] = new DataTable(p.copy(translatorV = t))
 
     /** Groups the rows, one nested level per argument, outermost first. Every run of
       * CONSECUTIVE rows sharing a level's key becomes a group of that level, and the
@@ -1416,7 +1422,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     def groupBy(gs: GroupOf[A]*): DataTable[A] =
         given GroupScope[A] = new GroupScope[A]()
-        new DataTable(s.copy(groupsV = groupsV ++ gs.map(g => (g: RowGroup[A])).toList))
+        new DataTable(p.copy(groupsV = groupsV ++ gs.map(g => (g: RowGroup[A])).toList))
     end groupBy
 
     /** Makes the groups collapsible over the set of EXPANDED paths, so an empty set
@@ -1434,7 +1440,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * others. A level with [[RowGroup.showHeader]] off has no toggle and stays open.
       */
     def expandedGroups(v: Set[GroupPath] | Signal[Set[GroupPath]]): DataTable[A] =
-        new DataTable(s.copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v))))
+        new DataTable(p.copy(expandedGroupsSlot = Present(ReactiveValue[Set[GroupPath]](v))))
 
     /** Whether the groups collapse. Set, it decides alone, and a signal switches it in place. Without it a binding of
       * [[expandedGroups]] turns it on, and an unbound table keeps every group open.
@@ -1444,27 +1450,27 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * binding and only the toggles go. [[onExpandedGroupsChange]] hears every toggle.
       */
     def collapsibleGroups(v: Boolean | Signal[Boolean]): DataTable[A] =
-        new DataTable(s.copy(collapsibleGroupsV = Present(ReactiveValue(v))))
+        new DataTable(p.copy(collapsibleGroupsV = Present(ReactiveValue(v))))
 
     /** Fired with the groups open after a group header toggle, after two-way [[expandedGroups]] are written. */
     def onExpandedGroupsChange(f: Set[GroupPath] => UI.Action)(using Frame): DataTable[A] =
-        new DataTable(s.copy(onExpandedGroupsF = Present(Callback.of(f))))
+        new DataTable(p.copy(onExpandedGroupsF = Present(Callback.of(f))))
 
     /** Zebra striping (`.p-datatable-striped` + `.p-row-odd` rows). */
-    def stripedRows(v: Boolean): DataTable[A] = new DataTable(s.copy(stripedFlag = v))
+    def stripedRows(v: Boolean): DataTable[A] = new DataTable(p.copy(stripedFlag = v))
 
     /** Cell borders on every edge (`.p-datatable-gridlines`). */
-    def showGridlines(v: Boolean): DataTable[A] = new DataTable(s.copy(gridlinesFlag = v))
+    def showGridlines(v: Boolean): DataTable[A] = new DataTable(p.copy(gridlinesFlag = v))
 
     /** Size: `.p-datatable-sm` / default / `.p-datatable-lg` cell paddings. */
-    def size(v: Size): DataTable[A] = new DataTable(s.copy(sizeV = v))
+    def size(v: Size): DataTable[A] = new DataTable(p.copy(sizeV = v))
 
-    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = new DataTable(s.copy(emptyContentV = v))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = new DataTable(p.copy(emptyContentV = v))
 
-    private[uic] def withLoadingContent(v: Maybe[LoadingContent]): DataTable[A] = new DataTable(s.copy(loadingContentV = v))
+    private[uic] def withLoadingContent(v: Maybe[LoadingContent]): DataTable[A] = new DataTable(p.copy(loadingContentV = v))
 
     /** Fired with the row after any selection write from a row click. */
-    def onRowClick(f: A => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onRowClickF = Present(Callback.of(f))))
+    def onRowClick(f: A => UI.Action)(using Frame): DataTable[A] = new DataTable(p.copy(onRowClickF = Present(Callback.of(f))))
 
     /** Runs with the selection the table WORKED OUT, whenever a click changes it.
       *
@@ -1479,23 +1485,24 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * select-all header. With a two-way binding the ref is written first and this fires after,
       * so both forms see the same value and a caller may bind either or both.
       */
-    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] = new DataTable(s.copy(onSelectionF = Present(Callback.of(f))))
+    def onSelectionChange(f: Set[A] => UI.Action)(using Frame): DataTable[A] =
+        new DataTable(p.copy(onSelectionF = Present(Callback.of(f))))
 
     /** Toolbar slot above the table (`div.p-datatable-header`), the place for a
       * global-filter input, a title, or action buttons.
       */
-    def header(ui: UI): DataTable[A] = new DataTable(s.copy(headerV = Present(ui)))
+    def header(ui: UI): DataTable[A] = new DataTable(p.copy(headerV = Present(ui)))
 
     /** Slot below the table and the paginator (`div.p-datatable-footer`). For per
       * column summary cells use [[Column.footer]], which renders a real `tfoot`.
       */
-    def footer(ui: UI): DataTable[A] = new DataTable(s.copy(footerV = Present(ui)))
+    def footer(ui: UI): DataTable[A] = new DataTable(p.copy(footerV = Present(ui)))
 
     /** Busy state: a spinner over a dimming mask (`.p-datatable-mask`) covers the table while data is being
       * fetched. Bind a `Signal[Boolean]` to the data-fetch in-flight signal and the mask toggles in its own
       * sub-region without re-rendering the rows.
       */
-    def loading(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(loadingV = Present(ReactiveValue(v))))
+    def loading(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(p.copy(loadingV = Present(ReactiveValue(v))))
 
     /** Whether `loading` lays Prime's mask over the table: the dimming `.p-datatable-mask` with its
       * spinner, which also takes every click while it is up. Unset, it is on over the skeletons, as in
@@ -1506,12 +1513,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * table whose readers keep working while it loads, or one whose loading content they use. A
       * `Signal` switches the mask alone, as a region of its own beside the table.
       */
-    def loadingMask(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(s.copy(loadingMaskV = Present(ReactiveValue(v))))
+    def loadingMask(v: Boolean | Signal[Boolean]): DataTable[A] = new DataTable(p.copy(loadingMaskV = Present(ReactiveValue(v))))
 
     /** Caps the table container at a CSS length and scrolls it, pinning the `thead`
       * (and the `tfoot`, when columns carry footers) to the container edges.
       */
-    def scrollHeight(v: String): DataTable[A] = new DataTable(s.copy(scrollHeightV = Present(v)))
+    def scrollHeight(v: String): DataTable[A] = new DataTable(p.copy(scrollHeightV = Present(v)))
 
     /** Scrolls the table against its PARENT's height instead of a length of its own
       * (Prime's `scrollHeight="flex"`).
@@ -1523,7 +1530,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * knows it: [[scrollRows]] cannot window against it, and [[frozenRows]] can hold
       * against it, since holding needs a scroll container and not a number.
       */
-    def flexScroll(v: Boolean): DataTable[A] = new DataTable(s.copy(flexScrollFlag = v))
+    def flexScroll(v: Boolean): DataTable[A] = new DataTable(p.copy(flexScrollFlag = v))
 
     /** Renders only the rows the reader can see, plus `overscan` of them on either side,
       * inside the scroll container [[scrollHeight]] gives the table. `itemSize` is the row
@@ -1550,7 +1557,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * and wrong.
       */
     def scrollRows(itemSize: Int, overscan: Int = 3): DataTable[A] =
-        new DataTable(s.copy(rowHeightV = Present(math.max(1, itemSize)), scrollOverscanV = math.max(0, overscan)))
+        new DataTable(p.copy(rowHeightV = Present(math.max(1, itemSize)), scrollOverscanV = math.max(0, overscan)))
 
     /** Rows that hold under the header while the rest of the body scrolls past them (Prime's
       * `frozenValue`): a running total, the record being compared against, the one the reader pinned.
@@ -1568,7 +1575,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       *
       * A `Signal[Seq[A]]` tracks a pinned set the reader changes.
       */
-    def frozenRows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = new DataTable(s.copy(frozenRowsV = Present(ReactiveValue(v))))
+    def frozenRows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = new DataTable(p.copy(frozenRowsV = Present(ReactiveValue(v))))
     // ---- render ----
 
     /** A row's identity. Without a [[rowKey]] it falls back to the row's position in the
@@ -1951,8 +1958,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     private def resizable: Boolean =
         widthsOn && (resizeModeV match
-            case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.s.resizableFlag))
-            case ColumnResizeMode.Expand => leafCols.exists(_.s.resizableFlag))
+            case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.p.resizableFlag))
+            case ColumnResizeMode.Expand => leafCols.exists(_.p.resizableFlag))
 
     /** The visible columns with no width, which is what `Expand` cannot work without:
       * the table's own width is the sum of the columns, and a column with no width has
@@ -1981,7 +1988,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * otherwise.
       */
     private def widthOf(path: List[String], c: Column[A, FlatOnly], size: SizeState): Maybe[Double] =
-        Maybe.fromOption(size.widths.get(path)).orElse(c.s.widthV)
+        Maybe.fromOption(size.widths.get(path)).orElse(c.p.widthV)
 
     /** Whether the boundary to the RIGHT of visible leaf `i` is draggable. A boundary
       * moves two columns, so it needs both of them to allow it, and the last column has
@@ -1989,8 +1996,10 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * nothing to trade against.
       */
     private def resizableAt(i: Int, size: SizeState): Boolean =
-        widthsOn && !widthsFixed && !switchOff(resizableColumnsV) && leafCols.lift(i).exists(_.s.resizableFlag) && (resizeModeAt(size) match
-            case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).s.resizableFlag
+        widthsOn && !widthsFixed && !switchOff(resizableColumnsV) && leafCols.lift(i).exists(_.p.resizableFlag) && (resizeModeAt(
+            size
+        ) match
+            case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).p.resizableFlag
             case ColumnResizeMode.Expand => true)
 
     /** The id one header cell carries so a grab can measure it. Every leaf header gets
@@ -2041,7 +2050,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         val rows     = at("rows", rowEditingV)
         val cell     = at("cell", cellEditingV)
         val cellsNow = !switchOff(cells) && (cellsTyped.isDefined || switchOn(cells))
-        new DataTable(s.copy(
+        new DataTable(p.copy(
             resizableColumnsV = widths,
             reorderableColumnsV = order,
             collapsibleGroupsV = groups,
@@ -2074,7 +2083,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
       */
-    private def hasWidths: Boolean = widthsOn || leafCols.exists(_.s.widthV.isDefined)
+    private def hasWidths: Boolean = widthsOn || leafCols.exists(_.p.widthV.isDefined)
 
     /** Whether the reader may move a column, which needs the order bound to write into
       * and two columns willing to trade places.
@@ -2084,7 +2093,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     /** Whether two columns are willing to trade places under an order the page asked for, whatever binds it. A fixed
       * order is one of them: its headers stand where it says and offer no drag, and it is no mistake.
       */
-    private def reorderable: Boolean = orderOn && leafCols.count(_.s.reorderableFlag) > 1
+    private def reorderable: Boolean = orderOn && leafCols.count(_.p.reorderableFlag) > 1
 
     /** The full order this table renders in, hidden columns included: what a drop rewrites.
       * Before a bound order has been resolved it is the authored one.
@@ -2112,8 +2121,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 val label = leafPaths(i)._1.lift(parent.length)
                 i == under.head || leafPaths(i - 1)._1.lift(parent.length) != label
             }
-            val edges = leafCols.map(_.s.frozenV)
-            val free  = leafCols.map(_.s.reorderableFlag)
+            val edges = leafCols.map(_.p.frozenV)
+            val free  = leafCols.map(_.p.reorderableFlag)
             (starts :+ (under.last + 1)).filter { b =>
                 (b < from || b > until) &&
                 DataTable.adrift(DataTable.moveBlock(edges, from, until, b)).isEmpty &&
@@ -2126,7 +2135,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * table in a scroll container: a column can only be frozen against something that
       * scrolls, and a wide table with no cap on its height still scrolls sideways.
       */
-    private def frozenOn: Boolean = leafCols.exists(_.s.frozenV.isDefined)
+    private def frozenOn: Boolean = leafCols.exists(_.p.frozenV.isDefined)
 
     /** The component's own columns between the leading edge and the first data column,
       * as the CSS terms an offset reaching past them is written in.
@@ -2156,14 +2165,14 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
 
     /** The frozen columns with no width to compute an offset from. */
     private def unsizedFrozen(size: SizeState): List[List[String]] =
-        leafPaths.collect { case (p, c) if c.s.frozenV.isDefined && widthOf(p, c, size).isEmpty => p }
+        leafPaths.collect { case (p, c) if c.p.frozenV.isDefined && widthOf(p, c, size).isEmpty => p }
 
     /** The frozen columns a free one stands between and their edge, which is the
       * arrangement that cannot be rendered: the free column scrolls, and it would carry
       * the frozen one along or leave it standing over the gap it left.
       */
     private def adriftFrozen: List[List[String]] =
-        DataTable.adrift(leafCols.map(_.s.frozenV)).map(i => leafPaths(i)._1)
+        DataTable.adrift(leafCols.map(_.p.frozenV)).map(i => leafPaths(i)._1)
 
     /** The header groups spanning a frozen column and a free one, or two frozen against
       * opposite edges. One cell cannot half scroll, so the group says the columns under
@@ -2175,7 +2184,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         }
 
     private def mixedEdges(from: Int, until: Int): Boolean =
-        val edges = (from until until).toList.map(i => leafCols(i).s.frozenV)
+        val edges = (from until until).toList.map(i => leafCols(i).p.frozenV)
         edges.exists(_.isDefined) && edges.distinct.length > 1
 
     /** Where every frozen cell of this table holds, or nothing at all.
@@ -2190,8 +2199,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         if !frozenOn || unsizedFrozen(size).nonEmpty || adriftFrozen.nonEmpty || splitFrozenGroups.nonEmpty then
             FrozenPlan()
         else
-            val anyStart                                                 = leafCols.exists(_.s.frozenV.exists(_ == FrozenEdge.Start))
-            val anyEnd                                                   = leafCols.exists(_.s.frozenV.exists(_ == FrozenEdge.End))
+            val anyStart                                                 = leafCols.exists(_.p.frozenV.exists(_ == FrozenEdge.Start))
+            val anyEnd                                                   = leafCols.exists(_.p.frozenV.exists(_ == FrozenEdge.End))
             def widthPx(p: List[String], c: Column[A, FlatOnly]): Double = widthOf(p, c, size).getOrElse(0.0)
 
             // Every one of the component's own leading columns stands between the edge and
@@ -2199,12 +2208,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             // the variable part of it is the same for all.
             val fromStart = leafPaths.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
                 case ((px, acc), (p, c)) =>
-                    if !c.s.frozenV.exists(_ == FrozenEdge.Start) then (px, acc :+ Absent)
+                    if !c.p.frozenV.exists(_ == FrozenEdge.Start) then (px, acc :+ Absent)
                     else (px + widthPx(p, c), acc :+ Present(FrozenSlot(FrozenEdge.Start, offset(px, leadTerms))))
             }._2
             val fromEnd = leafPaths.reverse.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
                 case ((px, acc), (p, c)) =>
-                    if !c.s.frozenV.exists(_ == FrozenEdge.End) then (px, Absent :: acc)
+                    if !c.p.frozenV.exists(_ == FrozenEdge.End) then (px, Absent :: acc)
                     else (px + widthPx(p, c), Present(FrozenSlot(FrozenEdge.End, offset(px, trailTerms))) :: acc)
             }._2
             FrozenPlan(
@@ -2237,7 +2246,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         live: HeadLive
     )(using Frame): Ast.Th =
         val mine  = (from until until).toList
-        val stops = if !reorderOn || !mine.forall(i => leafCols(i).s.reorderableFlag) then Nil else dropStops(path, from, until)
+        val stops = if !reorderOn || !mine.forall(i => leafCols(i).p.reorderableFlag) then Nil else dropStops(path, from, until)
         var c     = cell
         // Whatever cell the pointer was over when it let go still owes the browser a
         // click, and after the drop that is not the cell the drag started on: the columns
@@ -2623,7 +2632,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                             Signal.initRef(Absent: Maybe[A])(using summon[Frame], CanEqual.derived)
                                 .map(r => Maybe(ReactiveValue[Maybe[A]](r)))
                         else Kyo.lift(contextTyped)
-                yield new DataTable(s.copy(
+                yield new DataTable(p.copy(
                     sortSlot = sort,
                     columnFiltersSlot = filters,
                     expandedTyped = exp,
@@ -2682,7 +2691,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     // One draft per filterable column, seeded when the menu opens. A row
                     // display never reads them, since one input is the whole filter.
                     drafts0 <- Kyo.foreach(filterableLeaves)((path, c) =>
-                        Signal.initRef(ColumnFilter.empty(c.s.filterV.map(_.default).getOrElse(MatchMode.Contains)))
+                        Signal.initRef(ColumnFilter.empty(c.p.filterV.map(_.default).getOrElse(MatchMode.Contains)))
                             .map(path -> _)
                     )
                     typed <- Kyo.foreach(filterableLeaves)((path, _) =>
@@ -2939,7 +2948,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
 
     /** This table paging by `size`, where it pages at all. */
     private def sized(size: Int): DataTable[A] =
-        if pageSizeV.isEmpty || pageSizeV.contains(size) then this else new DataTable(s.copy(pageSizeV = Present(size)))
+        if pageSizeV.isEmpty || pageSizeV.contains(size) then this else new DataTable(p.copy(pageSizeV = Present(size)))
 
     /** The table's root. Its classes follow the table's configuration, and the one that also follows its state (whether
       * an `Expand` table states its width, which depends on which columns are shown and how wide they are) is a class
@@ -3338,7 +3347,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     private def reordered(o: List[List[String]]): DataTable[A] =
         val tree = ColumnTree.reorder(cols, o)
-        new DataTable(s.copy(cols = tree, orderedPaths = ColumnTree.leafPaths(tree).map(_._1)))
+        new DataTable(p.copy(cols = tree, orderedPaths = ColumnTree.leafPaths(tree).map(_._1)))
 
     /** This table WITHOUT the columns their [[Column.visible]] flags hide (`vis` holds the reactive ones, resolved), so
       * the header spans, the body cells, the footer, the filter, the colspans and the keyboard grid all narrow at once and
@@ -3361,7 +3370,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * `hiddenPaths`.
       */
     private def pruned(keep: Int => Boolean): DataTable[A] =
-        new DataTable(s.copy(
+        new DataTable(p.copy(
             cols = ColumnTree.prune(cols, keep),
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         ))
@@ -3475,7 +3484,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 if query.isEmpty then rows
                 else
                     val q = query.toLowerCase
-                    rows.filter(a => leafCols.exists(c => c.s.textF.exists(f => f(a).toLowerCase.contains(q))))
+                    rows.filter(a => leafCols.exists(c => c.p.textF.exists(f => f(a).toLowerCase.contains(q))))
             // 1b. Column filters: every bound one has to pass. A query this table cannot
             //     read as a value of its column's type filters nothing and says so on its
             //     own input, rather than emptying the table behind a typo.
@@ -3484,7 +3493,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             //    first one ends up the primary key. Unsorted entries hold a slot in the
             //    priority order and contribute nothing here.
             SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-                allPaths.find(_._1 == k.path).flatMap(_._2.s.orderingV.toOption) match
+                allPaths.find(_._1 == k.path).flatMap(_._2.p.orderingV.toOption) match
                     case Some(ord) =>
                         rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
                     case None => rs
@@ -3550,7 +3559,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         if specs.isEmpty then Nil
         else
             leafPaths.flatMap { (path, c) =>
-                (Maybe.fromOption(specs.get(path)), c.s.filterV) match
+                (Maybe.fromOption(specs.get(path)), c.p.filterV) match
                     case (Present(f), Present(cf)) if f.active.nonEmpty => List((path, cf.predicate(f)))
                     case _                                              => Nil
             }
@@ -3569,7 +3578,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * nobody asked for.
       */
     private def canSortBy(c: Column[A, FlatOnly]): Boolean =
-        if lazyOn then c.s.sortableV.isDefined || c.s.orderingV.isDefined else c.s.orderingV.isDefined
+        if lazyOn then c.p.sortableV.isDefined || c.p.orderingV.isDefined else c.p.orderingV.isDefined
 
     /** Whether the READER may re-sort this column: one the spec can name, and one the flag
       * leaves free. A locked column still sorts by the spec, it only takes no clicks.
@@ -3939,12 +3948,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       */
     private def footerCell(c: Column[A, FlatOnly], inFilter: List[A])(using Frame): Ast.Element =
         var cell = td
-        c.s.alignV match
+        c.p.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
         end match
-        val content: List[UI] = (c.s.footerTextV, c.s.footerF) match
+        val content: List[UI] = (c.p.footerTextV, c.p.footerF) match
             case (Present(t), _) => List(span.cssClass("p-datatable-column-footer")(t))
             case (_, Present(f)) => List(span.cssClass("p-datatable-column-footer")(f(inFilter)))
             case _               => Nil
@@ -4009,7 +4018,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             if lazyOn then Nil
             else
                 leafPaths.collect {
-                    case (p, c) if c.s.orderingV.isEmpty && c.s.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
+                    case (p, c) if c.p.orderingV.isEmpty && c.p.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
                 }
         val emptyCard = Diagnostic.naming(
             "a headerGroup holds no column, so it renders nothing; give it columns or drop it",
@@ -4198,7 +4207,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         Diagnostics.cards("DataTable")(
             Diagnostic(expansionF.isDefined && ReactiveValue.deaf(expandedTyped, onExpandedF), DataTable.expandedName.advice),
             Diagnostic(
-                groupsV.exists(_.s.showHeaderFlag) && !switchOff(collapsibleGroupsV) && ReactiveValue.deaf(
+                groupsV.exists(_.p.showHeaderFlag) && !switchOff(collapsibleGroupsV) && ReactiveValue.deaf(
                     expandedGroupsSlot,
                     onExpandedGroupsF
                 ),
@@ -4522,7 +4531,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         Frame
     ): Ast.Element =
         val cell = th.cssClass("p-datatable-header-cell")
-        c.s.filterV match
+        c.p.filterV match
             case Absent      => cell
             case Present(cf) =>
                 given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
@@ -4549,7 +4558,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                         .value(cur.query)
                         .fluid(true)
                         .invalid(unusable)
-                        .accessibleName(s"Filter by ${c.s.headerV}")
+                        .accessibleName(s"Filter by ${c.p.headerV}")
                     // A fixed filter is drawn, not removed: the field shows the query read-only and takes no keystroke.
                     if filtersFixed then input = input.readonly(true)
                     else
@@ -4594,7 +4603,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     .severity(Severity.Secondary)
                     .rounded(true)
                     .size(Size.Small)
-                    .accessibleName(s"Filter mode for ${c.s.headerV}")
+                    .accessibleName(s"Filter mode for ${c.p.headerV}")
                     .extraClass("p-datatable-column-filter-button")
                 onOpen.foreach(ref => b = b.onClick(ref.getAndUpdate(!_)))
                 b
@@ -4652,7 +4661,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     ): List[UI] =
         if !filterMenuOn then Nil
         else
-            c.s.filterV match
+            c.p.filterV match
                 case Absent      => Nil
                 case Present(cf) =>
                     given CanEqual[ColumnFilter, ColumnFilter] = CanEqual.derived
@@ -4668,7 +4677,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                             .severity(Severity.Secondary)
                             .rounded(true)
                             .size(Size.Small)
-                            .accessibleName(s"Filter by ${c.s.headerV}")
+                            .accessibleName(s"Filter by ${c.p.headerV}")
                             .extraClass("p-datatable-column-filter-button")
                         if cur.active.nonEmpty then b = b.extraClass("p-datatable-column-filter-button-active")
                         (open, openRef) match
@@ -4733,7 +4742,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 val pick = Select[FilterOperator]()
                     .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
                     .current(Present(d.operator))
-                    .accessibleName(s"Match mode for ${c.s.headerV}")
+                    .accessibleName(s"Match mode for ${c.p.headerV}")
                     .extraClass("p-datatable-filter-operator-dropdown")
                 List((if fixed then pick.readonly(true) else pick.onChange(operatorPicked(draft, d))).render)
 
@@ -4741,12 +4750,12 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             val pick = Select[MatchMode]()
                 .options(cf.modes)(_.label)
                 .current(Present(rule.mode))
-                .accessibleName(s"Condition ${i + 1} for ${c.s.headerV}")
+                .accessibleName(s"Condition ${i + 1} for ${c.p.headerV}")
             val modes = (if fixed then pick.readonly(true) else pick.onChange(modePicked(draft, d, i))).render
             val field = Input()
                 .value(rule.query)
                 .fluid(true)
-                .accessibleName(s"Filter ${c.s.headerV} by condition ${i + 1}")
+                .accessibleName(s"Filter ${c.p.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
                     (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
@@ -5001,7 +5010,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             else if resizeModeV == ColumnResizeMode.Expand then live.widths.map(w => resizableAt(index, size.copy(widths = w)))
             else ReactiveValue.Const(resizableAt(index, size))
         cell = classWhen(cell, "p-datatable-resizable-column", resizable)
-        c.s.alignV match
+        c.p.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
@@ -5063,7 +5072,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
 
         val content: UI =
             div.cssClass("p-datatable-column-header-content")(
-                UI.children((span.cssClass("p-datatable-column-title")(c.s.headerV): UI) ::
+                UI.children((span.cssClass("p-datatable-column-title")(c.p.headerV): UI) ::
                     sortMarks :: filterFunnel(path, c, filter, live))*
             )
         val grip: List[UI] =
@@ -5130,19 +5139,19 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         levels match
             case Nil           => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
             case level :: rest =>
-                RowGroup.runs(rows)((a, _) => level.s.keyF(a)).flatMap { (key, run) =>
+                RowGroup.runs(rows)((a, _) => level.p.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
                     val groupRows = run.map(_._1)
                     // A level without a header row has nowhere to put a toggle, so it can
                     // never be collapsed: collapsing it would hide its rows with no way
                     // back.
-                    val collapses = groupsOn && level.s.showHeaderFlag
+                    val collapses = groupsOn && level.p.showHeaderFlag
                     val open      = !collapses || openGroups.contains(groupPath)
                     // Switched off over a binding the groups follow it, with no toggle to change it.
                     val collapsible = collapses && !switchOff(collapsibleGroupsV)
 
                     val headerRow: List[RowSpec[A]] =
-                        if !level.s.showHeaderFlag then Nil
+                        if !level.p.showHeaderFlag then Nil
                         else List(RowSpec.GroupHead(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[RowSpec[A]] =
                         if !open then Nil
@@ -5165,7 +5174,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                             )
                     val footerRow: List[RowSpec[A]] =
                         if !open then Nil
-                        else level.s.footerF.toList.map(f => RowSpec.GroupFoot(f, groupPath, groupRows, colCount))
+                        else level.p.footerF.toList.map(f => RowSpec.GroupFoot(f, groupPath, groupRows, colCount))
                     headerRow ++ innerRows ++ footerRow
                 }
     end groupSegments
@@ -5265,7 +5274,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 // Fixed open groups show their toggle, a button that says it opens or closes nothing.
                 b = if groupsFixed then b.aria("disabled", "true") else b.onClick(toggleGroup(path))
                 List(b(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
-        val content: UI = level.s.headerF match
+        val content: UI = level.p.headerF match
             case Present(f) => f(path, rows)
             case Absent     => stringToUI(path.key)
         tr.cssClass("p-datatable-row-group-header")(
@@ -5345,7 +5354,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     case Some(SpanCell.Head(n)) if n > 1 => cell = cell.rowspan(n)
                     case _                               => ()
                 end match
-                c.s.alignV match
+                c.p.alignV match
                     case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
                     case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
                     case ColumnAlign.Start  => ()
@@ -5400,9 +5409,9 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 val content: HtmlChildVal =
                     if editing then editorCell(here, a, c, nav, edit)
                     else
-                        c.s.bodyF match
+                        c.p.bodyF match
                             case Present(f) => f(a)
-                            case Absent     => stringToUI(c.s.textF.map(_(a)).getOrElse(""))
+                            case Absent     => stringToUI(c.p.textF.map(_(a)).getOrElse(""))
                 List(freeze(cell(content), frozen.at(i)))
             end if
         }
@@ -5735,7 +5744,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     private def editorCell(cell: CellKey, row: A, c: Column[A, FlatOnly], nav: NavState[A], edit: EditState)(
         using Frame
     ): UI =
-        (c.s.editV, edit.draftOf(cell.column)) match
+        (c.p.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(draft)) =>
                 val params = EditorParams(
                     draft = draft,
@@ -5754,7 +5763,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
             case _ =>
                 // A draft map with no entry for this column means the table is rendering
                 // its placeholder (no mount, no refs), which is the static projection.
-                stringToUI(c.s.editV.map(_.show(row)).getOrElse(""))
+                stringToUI(c.p.editV.map(_.show(row)).getOrElse(""))
 
     // ---- keyboard navigation ----
 
@@ -5956,7 +5965,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
       * in a pure position and cannot write into anything.
       */
     private def seedDraft(row: A, path: List[String], c: Column[A, FlatOnly], edit: EditState)(using Frame): UI.Action =
-        (c.s.editV, edit.draftOf(path)) match
+        (c.p.editV, edit.draftOf(path)) match
             case (Present(ed), Present(ref)) => ref.set(ed.show(row))
             case _                           => ()
 
@@ -6064,7 +6073,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     private def commitCell(cell: CellKey, row: A, c: Column[A, FlatOnly], edit: EditState)(using
         Frame
     ): Boolean < (Async & Abort[Any]) =
-        (c.s.editV, edit.draftOf(cell.column)) match
+        (c.p.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(ref)) =>
                 for
                     text <- ref.get
@@ -6111,7 +6120,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                 case Nil               => Kyo.lift(Result.succeed((acc, changes.reverse)))
                 case (path, c) :: tail =>
                     val cell = CellKey(id, path)
-                    (c.s.editV, edit.draftOf(path)) match
+                    (c.p.editV, edit.draftOf(path)) match
                         case (Present(ed), Present(ref)) =>
                             for
                                 text <- ref.get
@@ -6127,7 +6136,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                         case _ => loop(tail, acc, changes)
                     end match
         for
-            res <- loop(editableLeaves.filter((_, c) => c.s.editV.exists(_.when(row))), row, Nil)
+            res <- loop(editableLeaves.filter((_, c) => c.p.editV.exists(_.when(row))), row, Nil)
             out <- res match
                 case Result.Success((after, changes)) =>
                     val store: UI.Action = if changes.isEmpty then () else applyRow(id, after, changes)
@@ -6211,7 +6220,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
 end DataTable
 
 object DataTable:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         rowsTyped: Maybe[ReactiveValue[Seq[A]]] = Absent,
         rowKeyF: Maybe[A => String] = Absent,
         cols: List[ColumnTree[A]] = Nil,
@@ -6361,7 +6370,7 @@ object DataTable:
         lazy val staticSpecs: List[RowSpec[A]] = staticSpecs0
     end Drawn
 
-    def apply[A](): DataTable[A] = new DataTable[A](State())
+    def apply[A](): DataTable[A] = new DataTable[A](Props())
 
     /** The keys from `from` to `to` inclusive, in either direction: what a shift-click picks.
       *

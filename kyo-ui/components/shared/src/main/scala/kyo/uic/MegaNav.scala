@@ -21,20 +21,20 @@ import kyo.uic.MenuNav.Step
 private[uic] object MegaNav:
 
     private def rootIdxs(items: List[MegaMenuItem]): List[Int] =
-        items.zipWithIndex.collect { case (it, i) if !it.s.disabledFlag => i }
+        items.zipWithIndex.collect { case (it, i) if !it.p.disabledFlag => i }
 
     private def hasPanel(items: List[MegaMenuItem], r: Int): Boolean =
-        r >= 0 && r < items.size && items(r).s.columnsV.nonEmpty
+        r >= 0 && r < items.size && items(r).p.columnsV.nonEmpty
 
     private def colCount(items: List[MegaMenuItem], r: Int): Int =
-        if r >= 0 && r < items.size then items(r).s.columnsV.size else 0
+        if r >= 0 && r < items.size then items(r).p.columnsV.size else 0
 
     /** Navigable [[MenuItem]]s of column `c` in root `r` (groups flattened,
       * separators and disabled rows dropped).
       */
     private[uic] def colItems(items: List[MegaMenuItem], r: Int, c: Int): List[MenuItem] =
-        if r >= 0 && r < items.size && c >= 0 && c < items(r).s.columnsV.size then
-            items(r).s.columnsV(c).flatMap(_.s.itemsV).filter(it => !it.s.separatorFlag && !it.s.disabledFlag.constTrue)
+        if r >= 0 && r < items.size && c >= 0 && c < items(r).p.columnsV.size then
+            items(r).p.columnsV(c).flatMap(_.p.itemsV).filter(it => !it.p.separatorFlag && !it.p.disabledFlag.constTrue)
         else Nil
 
     private def moveRoot(items: List[MegaMenuItem], r: Int, dir: Int): Int =

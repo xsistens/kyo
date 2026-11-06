@@ -80,14 +80,14 @@ end CascadeItem
   * `id` lands on the field root, the combobox that holds the tab stop, and the chain derives `$id-list` and the
   * travelling highlight `$id-active` from it (a minted base stands in where none is given).
   */
-final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.State[A]) extends Node, ChoiceFormControl[A], HasTooltip,
-      HasPlaceholder, HasAccessibleNameRef, Stated:
-    import s.*
+final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Props[A]) extends Node, ChoiceFormControl[A], HasTooltip,
+      HasPlaceholder, HasAccessibleNameRef, HasProps:
+    import p.*
 
     type Self = CascadeSelect[A]
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new CascadeSelect(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new CascadeSelect(p.copy(accessV = v))
 
     /** Appends typed option-tree roots with the leaf text projection: a collection, or a signal of roots for a tree
       * that changes while the field is shown, read in the field's own region.
@@ -96,13 +96,13 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         val more: List[LiveEntry[CascadeItem[A], Unit]] = is match
             case sig: Signal[?] => List(sig.asInstanceOf[Signal[Seq[CascadeItem[A]]]])
             case roots          => roots.asInstanceOf[Iterable[CascadeItem[A]]].toList
-        new CascadeSelect(s.copy(itemSources = itemSources ++ more, labelF = label))
+        new CascadeSelect(p.copy(itemSources = itemSources ++ more, labelF = label))
     end options
 
     /** Stable per-leaf key: the value written into the bound ref (defaults to
       * the label projection).
       */
-    def optionKey(f: A => String): CascadeSelect[A] = new CascadeSelect(s.copy(keyF = Present(f)))
+    def optionKey(f: A => String): CascadeSelect[A] = new CascadeSelect(p.copy(keyF = Present(f)))
 
     /** Binds the selection to the leaf itself: the field shows the leaf whose [[optionKey]] the value carries, and a pick
       * writes the leaf. A `SignalRef` binds two-way. Any other `Signal`, or a
@@ -110,14 +110,14 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
       * [[onPick]], so the app writes its own state (a route, say) and the field follows. `ref.readOnly` opts a ref out.
       * With neither event set, a card says the reader cannot change it.
       */
-    def selection(v: A | Signal[A]): CascadeSelect[A] = new CascadeSelect(s.copy(choice = Present(SingleChoice.Value(ReactiveValue(v)))))
+    def selection(v: A | Signal[A]): CascadeSelect[A] = new CascadeSelect(p.copy(choice = Present(SingleChoice.Value(ReactiveValue(v)))))
 
     /** Binds the selection to the leaf or none: `Absent` shows the placeholder, a pick writes `Present(leaf)`. Two-way and
       * one-way as for the leaf binding above. `@targetName` because both `selection` bindings erase to one signature.
       */
     @targetName("selectionMaybe")
     def selection(v: Maybe[A] | Signal[Maybe[A]]): CascadeSelect[A] =
-        new CascadeSelect(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(v)))))
+        new CascadeSelect(p.copy(choice = Present(SingleChoice.Optional(ReactiveValue(v)))))
 
     /** Binds the panel visibility. A `SignalRef` binds two way: the trigger, a pick that closes, Escape, Tab and an
       * outside click write it, then [[onOpenChange]] hears the new state. A plain `Signal` binds one way: the panel
@@ -127,10 +127,10 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
       * list, so that says nothing beyond `aria-expanded`. Unbound, the field keeps the state itself, starting closed. A
       * signal nothing hears is reported in a card.
       */
-    def open(v: Boolean | Signal[Boolean]): CascadeSelect[A] = new CascadeSelect(s.copy(openSlot = openSlot.bind(v)))
+    def open(v: Boolean | Signal[Boolean]): CascadeSelect[A] = new CascadeSelect(p.copy(openSlot = openSlot.bind(v)))
 
     /** Fired with the panel visibility the reader asks for, after a two-way [[open]] is written. */
-    def onOpenChange(f: Boolean => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(s.copy(openSlot = openSlot.hear(f)))
+    def onOpenChange(f: Boolean => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(p.copy(openSlot = openSlot.hear(f)))
 
     /** Asks for the panel open or closed: a two-way binding is written, then the change reported. */
     private def askOpen(open: Slot[Boolean], v: Boolean)(using Frame): UI.Action = open.change(v)
@@ -141,48 +141,48 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(s.copy(placeholderV = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(p.copy(placeholderV = v))
 
-    def disabled(v: Boolean): CascadeSelect[A] = new CascadeSelect(s.copy(disabledFlag = v))
+    def disabled(v: Boolean): CascadeSelect[A] = new CascadeSelect(p.copy(disabledFlag = v))
 
     /** HTML form participation: emits a hidden `<input name=...>` carrying the
       * current leaf key.
       */
-    def name(v: String): CascadeSelect[A] = new CascadeSelect(s.copy(nameV = Present(v)))
+    def name(v: String): CascadeSelect[A] = new CascadeSelect(p.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(s.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(p.copy(tooltipV = v))
 
     /** Size: `.p-cascadeselect-sm` / default / `.p-cascadeselect-lg`. */
-    def size(v: Size): CascadeSelect[A] = new CascadeSelect(s.copy(sizeV = v))
+    def size(v: Size): CascadeSelect[A] = new CascadeSelect(p.copy(sizeV = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): CascadeSelect[A] = new CascadeSelect(s.copy(variantV = v))
+    def variant(v: FieldVariant): CascadeSelect[A] = new CascadeSelect(p.copy(variantV = v))
 
     /** Spans the full width of its container (`.p-cascadeselect-fluid`). */
-    def fluid(v: Boolean): CascadeSelect[A] = new CascadeSelect(s.copy(fluidFlag = v))
+    def fluid(v: Boolean): CascadeSelect[A] = new CascadeSelect(p.copy(fluidFlag = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CascadeSelect(s.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new CascadeSelect(p.copy(validityV = v))
 
     /** Fired with the leaf now chosen, after the write. A pick of the leaf already chosen changes nothing and fires nothing.
       * Fires before [[onPick]].
       */
-    def onChange(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(s.copy(onChangeF = Present(Callback.of(f))))
+    def onChange(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(p.copy(onChangeF = Present(Callback.of(f))))
 
     /** Fired with the leaf picked, after a pick that changed what the field holds: [[onChange]] without the `Maybe`, for a
       * field that is never empty or a one-way [[selection]] that writes its own state here. Fires after [[onChange]].
       */
-    def onPick(f: A => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(s.copy(onPickF = Present(Callback.of(f))))
+    def onPick(f: A => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(p.copy(onPickF = Present(Callback.of(f))))
 
     /** Fires on focus loss (native `blur`) with the leaf held (`Absent` for none). Unlike `onChange` it fires even when
       * nothing was changed. The form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(s.copy(onBlurF = Present(Callback.of(f))))
+    def onBlur(f: Maybe[A] => UI.Action)(using Frame): CascadeSelect[A] = new CascadeSelect(p.copy(onBlurF = Present(Callback.of(f))))
 
     /** Says the option tree is still arriving: the dropdown icon turns into Prime's spinner, and a held leaf no leaf of the
       * tree carries yet is shown from the value itself rather than reported in a `.p-uic-diagnostic` card.
       */
-    def loading(v: Boolean | Signal[Boolean]): CascadeSelect[A] = new CascadeSelect(s.copy(loadingV = Present(ReactiveValue(v))))
+    def loading(v: Boolean | Signal[Boolean]): CascadeSelect[A] = new CascadeSelect(p.copy(loadingV = Present(ReactiveValue(v))))
 
     /** The stable leaf key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -220,8 +220,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
                 own <-
                     if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
                     else Kyo.lift(Maybe.empty[SignalRef[Maybe[A]]])
-                self = own.fold(this)(r => new CascadeSelect(s.copy(choice = Present(SingleChoice.Optional(ReactiveValue(r))))))
-            yield new CascadeSelect(self.s.copy(openSlot = open)).wiredOver(subs, focus, Present(base))
+                self = own.fold(this)(r => new CascadeSelect(p.copy(choice = Present(SingleChoice.Optional(ReactiveValue(r))))))
+            yield new CascadeSelect(self.p.copy(openSlot = open)).wiredOver(subs, focus, Present(base))
         }
     end renderLive
 
@@ -237,7 +237,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
         focus: Anchored[List[Int]],
         base: Maybe[String] = Absent
     )(using Frame): UI =
-        new CascadeSelect(s.copy(openSlot = openSlot.bind(open))).wiredOver(subs, focus, base)
+        new CascadeSelect(p.copy(openSlot = openSlot.bind(open))).wiredOver(subs, focus, base)
     end wired
 
     /** [[wired]] over the panel state however it is bound. */
@@ -253,7 +253,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
             val sv = subs.view(openSet, rs)
             val fv = focus.view(f, rs)
             val st = CascadeSelect.Wired(openSlot, sv, fv, fv.value, base)
-            new CascadeSelect(s.copy(items = rs)).body(held, o, sv.open, st, ph, ld, validity)
+            new CascadeSelect(p.copy(items = rs)).body(held, o, sv.open, st, ph, ld, validity)
         }
     end wiredOver
 
@@ -547,7 +547,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val s: CascadeSelect.Sta
 end CascadeSelect
 
 object CascadeSelect:
-    final private[uic] case class State[A](
+    final private[uic] case class Props[A](
         // The roots the body draws, resolved from `itemSources` by the region that draws them.
         items: List[CascadeItem[A]],
         labelF: A => String,
@@ -574,7 +574,7 @@ object CascadeSelect:
     private val openName      = Slot.Name("CascadeSelect", "the panel", "an open or a close", "onOpenChange")
     private val selectionName = Slot.Name("CascadeSelect", "the selection", "a pick", "onChange or onPick")
 
-    def apply[A](): CascadeSelect[A] = new CascadeSelect[A](State(Nil, _.toString))
+    def apply[A](): CascadeSelect[A] = new CascadeSelect[A](Props(Nil, _.toString))
 
     /** The wired interaction state, allocated per mount: the root panel's open flag, the
       * open groups the nested panels ride on, and the keyboard focus path.

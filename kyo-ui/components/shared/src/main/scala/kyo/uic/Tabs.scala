@@ -10,8 +10,8 @@ import kyo.UI.*
   * extension: `span.p-uic-tab-count`), an optional `url` (renders the header as
   * a real anchor), and a `disabled` flag (non-clickable).
   */
-final class Tab[K] private[uic] (private[uic] val s: Tab.State[K]) extends Stated derives CanEqual:
-    import s.*
+final class Tab[K] private[uic] (private[uic] val p: Tab.Props[K]) extends HasProps derives CanEqual:
+    import p.*
 
     /** Navigation target: the header renders as a real `<a href=…>` instead of a
       * `<button>`, so a plain click navigates, a middle click opens a new tab, the
@@ -38,11 +38,11 @@ final class Tab[K] private[uic] (private[uic] val s: Tab.State[K]) extends State
       * one. (Measured in a browser: a url tab without `onSelectedChange` leaves a
       * Ctrl-click unprevented; with one, it is prevented.)
       */
-    def url(v: String): Tab[K] = new Tab(s.copy(urlV = Present(v)))
+    def url(v: String): Tab[K] = new Tab(p.copy(urlV = Present(v)))
 end Tab
 
 object Tab:
-    final private[uic] case class State[K](
+    final private[uic] case class Props[K](
         text: TextValue,
         content: UI,
         id: K,
@@ -62,7 +62,7 @@ object Tab:
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         disabled: Boolean = false
-    ): Tab[K] = new Tab(State(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent))
+    ): Tab[K] = new Tab(Props(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent))
 end Tab
 
 /** A tab, built directly or as `_.tab(...)` (see [[TabScope]]). */
@@ -83,7 +83,7 @@ final class TabScope[K] private ():
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         disabled: Boolean = false
-    ): Tab[K] = new Tab(Tab.State(ReactiveValue(text), content, id, icon, additionalText, disabled, Absent))
+    ): Tab[K] = new Tab(Tab.Props(ReactiveValue(text), content, id, icon, additionalText, disabled, Absent))
 end TabScope
 
 object TabScope:
@@ -136,8 +136,8 @@ end TabScope
   * Either way a tab a signal adds later (see [[LiveEntry]]) derives its id the
   * same way, with nothing more to mint.
   */
-final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Node, HasElementId, Stated:
-    import s.*
+final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Node, HasElementId, HasProps:
+    import p.*
 
     type Self = Tabs[K]
 
@@ -147,12 +147,12 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
     /** Appends the given tabs, each built directly or from `_` (see [[TabScope]]), or a signal of tabs that change while the
       * strip is shown (see [[LiveEntry]]). A tab whose id stays in the signal keeps its panel, and what the reader left in it.
       */
-    def tabs(ts: TabLiveEntry[K]*): Tabs[K] = new Tabs(s.copy(tabSources = tabSources ++ ts))
+    def tabs(ts: TabLiveEntry[K]*): Tabs[K] = new Tabs(p.copy(tabSources = tabSources ++ ts))
 
     /** Appends a single tab from bare content children (ergonomic builder). */
     def tab(text: String | Signal[String], id: K)(content: UI*)(using Frame): Tabs[K] =
-        new Tabs(s.copy(tabSources =
-            tabSources :+ new Tab(Tab.State(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
+        new Tabs(p.copy(tabSources =
+            tabSources :+ new Tab(Tab.Props(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
         ))
 
     /** The tabs as ONE reading: fixed unless one of them was handed over as a signal. */
@@ -179,7 +179,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
         // The setter takes no Frame, and a public signature does not change for this. Nothing here runs: a Frame only names
         // where a signal was built.
         given Frame = Frame.internal
-        new Tabs(s.copy(selectedSlot = selectedSlot.bind(v match
+        new Tabs(p.copy(selectedSlot = selectedSlot.bind(v match
             case r: SignalRef[K] @unchecked => r.zoom(Maybe(_))((old, m) => m.getOrElse(old))
             case s: Signal[K] @unchecked    => s.map(Maybe(_))
             case k: K @unchecked            => Maybe(k))))
@@ -187,7 +187,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
 
     /** Fired with the id of the tab the reader picks, after a two-way [[selected]] is written. */
     def onSelectedChange(f: K => UI.Action)(using Frame): Tabs[K] =
-        new Tabs(s.copy(selectedSlot = selectedSlot.hear(_.fold[UI.Action](())(f))))
+        new Tabs(p.copy(selectedSlot = selectedSlot.hear(_.fold[UI.Action](())(f))))
 
     /** Renders the active panel alone, and builds a panel again each time its tab is chosen
       * (PrimeVue's `lazy`). Off by default: every panel is rendered once and a switch only
@@ -195,10 +195,10 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
       * an editor, an open row) is still there when they come back to it. Turn it on where the
       * panels are expensive to build and nothing in them needs to survive a switch.
       */
-    def lazyPanels(v: Boolean): Tabs[K] = new Tabs(s.copy(lazyPanelsFlag = v))
+    def lazyPanels(v: Boolean): Tabs[K] = new Tabs(p.copy(lazyPanelsFlag = v))
 
     private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Tabs(s.copy(accessV = v))
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tabs(p.copy(accessV = v))
 
     private[uic] def render(using Frame): UI =
         val strip = renderLive
@@ -207,7 +207,11 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
         if !selectedSlot.deaf then strip
         else
             val card = entries.render(ts =>
-                fragment(Diagnostics.cards("Tabs")(Diagnostic.unheard(selectedSlot, Tabs.selectedName, on = ts.exists(_.s.urlV.isEmpty)))*)
+                fragment(Diagnostics.cards("Tabs")(Diagnostic.unheard(
+                    selectedSlot,
+                    Tabs.selectedName,
+                    on = ts.exists(_.p.urlV.isEmpty)
+                ))*)
             )
             fragment(card, strip)
         end if
@@ -222,9 +226,9 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
                 case Absent     => UI.id
             // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
             val first: Maybe[K] < Sync = entries match
-                case ReactiveValue.Const(ts) => Maybe.fromOption(ts.headOption.map(_.s.id))
-                case ReactiveValue.Dyn(sig)  => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.s.id)))
-            val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => new Tabs(this.s.copy(selectedSlot = s)))
+                case ReactiveValue.Const(ts) => Maybe.fromOption(ts.headOption.map(_.p.id))
+                case ReactiveValue.Dyn(sig)  => sig.current.map(ts => Maybe.fromOption(ts.headOption.map(_.p.id)))
+            val self: Tabs[K] < Sync = selectedSlot.owned(first).map(s => new Tabs(this.p.copy(selectedSlot = s)))
             base.map(b => self.map(_.wired(b, focusById)))
         }
 
@@ -236,13 +240,13 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
       * strip: a usable tab strip whose inactive headers are reachable by clicking, with the arrow wiring arriving with the
       * mount.
       */
-    private def headerId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"$b-${t.s.id}")
+    private def headerId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"$b-${t.p.id}")
 
     /** The tab a selection shows among `ts`: the one it names, or the first when it names none. Resolved against the tabs
       * read with it, since a live list may no longer hold the tab a selection names.
       */
     private def resolveIn(ts: List[Tab[K]], selected: Maybe[K]): Maybe[K] =
-        selected.filter(s => ts.exists(_.s.id == s)).orElse(Maybe.fromOption(ts.headOption.map(_.s.id)))
+        selected.filter(s => ts.exists(_.p.id == s)).orElse(Maybe.fromOption(ts.headOption.map(_.p.id)))
 
     /** Hides the panel of tab `id` while another tab is active. A live selection toggles the attribute in place, which is
       * what keeps the panel's subtree alive across a switch.
@@ -292,7 +296,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
             // A lazy strip has only the active panel in the page, so only its header may point at one.
             if !lazyPanelsFlag || isActive then out = out.aria("controls", pid)
         end for
-        if t.s.disabled then out = out.cssClass("p-disabled")
+        if t.p.disabled then out = out.cssClass("p-disabled")
         else
             out = out.tabIndex(if isActive then 0 else -1)
             // A url header gets a click handler only if there is something for it to
@@ -301,12 +305,12 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
             // on any anchor that declares one (DomBackend, "the handler, not the href,
             // drives the action"), which also takes the middle-click and the
             // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
-            if (t.s.urlV.isEmpty || selectedSlot.hearer.isDefined) && !selectedSlot.fixed then
-                out = out.onClick(select(t.s.id, write = t.s.urlV.isEmpty))
+            if (t.p.urlV.isEmpty || selectedSlot.hearer.isDefined) && !selectedSlot.fixed then
+                out = out.onClick(select(t.p.id, write = t.p.urlV.isEmpty))
             // A fixed strip keeps every header a stop the arrows reach, and an inactive one says it switches nothing: a
             // tab has no readonly state, so it says it the way a radio does. A url header still navigates, so it says
             // nothing.
-            else if selectedSlot.fixed && !isActive && t.s.urlV.isEmpty then out = out.aria("disabled", "true")
+            else if selectedSlot.fixed && !isActive && t.p.urlV.isEmpty then out = out.aria("disabled", "true")
             end if
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
@@ -320,7 +324,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
       * any tab id, so a tab named "two-panel" would print the panel id of "two". The underscore after the base is what no
       * header id has there.
       */
-    private def panelId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"${b}_panel-${t.s.id}")
+    private def panelId(base: Maybe[String], t: Tab[K]): Maybe[String] = base.map(b => s"${b}_panel-${t.p.id}")
 
     /** The strip and the panels. Only the strip lives in the active-tab region: the panels sit
       * outside it, each hiding itself while another tab is active, so choosing a tab repaints
@@ -343,15 +347,15 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
             if lazyPanelsFlag then
                 listed.render { (ts, sel) =>
                     val a = resolveIn(ts, sel)
-                    div.cssClass("p-tabpanels")(UI.children(ts.filter(t => a.contains(t.s.id)).map(t => panel(t)(t.s.content)))*)
+                    div.cssClass("p-tabpanels")(UI.children(ts.filter(t => a.contains(t.p.id)).map(t => panel(t)(t.p.content)))*)
                 }
             else
-                def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.s.id, act)(t.s.content)
+                def shown(t: Tab[K]): UI = hideUnlessActive(panel(t), t.p.id, act)(t.p.content)
                 entries match
                     case ReactiveValue.Const(ts) => div.cssClass("p-tabpanels")(UI.children(ts.map(t => shown(t)))*)
                     case ReactiveValue.Dyn(sig)  =>
                         given CanEqual[Chunk[Tab[K]], Chunk[Tab[K]]] = CanEqual.derived
-                        div.cssClass("p-tabpanels")(sig.map(Chunk.from(_)).foreachKeyed(_.s.id.toString)(shown))
+                        div.cssClass("p-tabpanels")(sig.map(Chunk.from(_)).foreachKeyed(_.p.id.toString)(shown))
                 end match
         // The caller's id on the component's own root, as HasElementId requires of a container.
         // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
@@ -359,7 +363,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
         var root = div.cssClass("p-tabs").cssClass("p-component")
         accessV.idV.foreach(v => root = root.id(v))
         val headers = listed.render { (ts, sel) =>
-            new Tabs(s.copy(tabList = ts)).tablistWith(resolveIn(ts, sel), base, focus)
+            new Tabs(p.copy(tabList = ts)).tablistWith(resolveIn(ts, sel), base, focus)
         }
         root(headers, panels)
     end body
@@ -368,26 +372,26 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
         val ids = tabList.flatMap(t => headerId(base, t).toList)
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
-        val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.s.disabled => i }
+        val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.p.disabled => i }
         val headers: List[UI] = tabList.zipWithIndex.map { (t, i) =>
-            val isActive            = active.contains(t.s.id)
-            val iconSlot: List[UI]  = t.s.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
-            val countSlot: List[UI] = t.s.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
+            val isActive            = active.contains(t.p.id)
+            val iconSlot: List[UI]  = t.p.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
+            val countSlot: List[UI] = t.p.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
             val barSlot: List[UI]   =
                 if isActive then List(span.cssClass("p-tablist-active-bar").aria("hidden", "true"))
                 else Nil
-            val textSlot: UI = t.s.text match
+            val textSlot: UI = t.p.text match
                 case TextValue.Const(x) => span(x): UI
                 case TextValue.Dyn(s)   => span(s): UI
             val content: List[UI] = (iconSlot :+ textSlot) ++ countSlot ++ barSlot
             val kids              = UI.children(content)
-            t.s.urlV match
+            t.p.urlV match
                 case Present(u) =>
                     // An anchor has no native `disabled`, so a disabled nav tab drops its
                     // href and says so through ARIA instead: Link's handling, for the same
                     // reason.
                     var el = interactive(a.cssClass("p-tab"), t, isActive, i, base, ids, focus, navigable)
-                    if t.s.disabled then el = el.aria("disabled", "true")
+                    if t.p.disabled then el = el.aria("disabled", "true")
                     else el = el.href(Href.Path(u))
                     el(kids*)
                 case Absent =>
@@ -401,7 +405,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
                         focus,
                         navigable
                     )
-                    if t.s.disabled then el = el.disabled(true)
+                    if t.p.disabled then el = el.disabled(true)
                     el(kids*)
             end match
         }
@@ -426,7 +430,7 @@ final class Tabs[K] private[uic] (private[uic] val s: Tabs.State[K]) extends Nod
 end Tabs
 
 object Tabs:
-    final private[uic] case class State[K](
+    final private[uic] case class Props[K](
         // The tabs the header strip draws, resolved from `tabSources` by the render.
         tabList: List[Tab[K]] = Nil,
         tabSources: List[TabLiveEntry[K]] = Nil,
@@ -436,7 +440,7 @@ object Tabs:
         lazyPanelsFlag: Boolean = false
     )
 
-    def apply[K](): Tabs[K] = new Tabs[K](State())
+    def apply[K](): Tabs[K] = new Tabs[K](Props())
 
     private val selectedName = Slot.Name("Tabs", "selected", "a change", "onSelectedChange")
 end Tabs
