@@ -159,9 +159,10 @@ private[kyo] object MorphScript:
           |    // and the regions inside the discarded subtree leave the registry with it while the instance
           |    // republishes asynchronously: a subscription emitting in between dies on an unknown range for good.
           |    // An UNNAMED slot waits for `m`: without a key nothing tells one instance from the next.
+          |    // `f` says the incoming content was drawn for a new instance: no owner is left to repaint what the slot holds.
           |    var lf=__kyoSpanFlags(fromNode),tf=__kyoSpanFlags(toNode),slot=__kyoHasFlag(tf,"s");
           |    var sameKey=__kyoFlagKey(lf)===__kyoFlagKey(tf),named=__kyoFlagKey(tf)!==null&&sameKey;
-          |    if((__kyoHasFlag(lf,"m")||(named&&__kyoHasFlag(lf,"s")))&&slot&&sameKey)return fromNode;
+          |    if((__kyoHasFlag(lf,"m")||(named&&__kyoHasFlag(lf,"s")))&&slot&&sameKey&&!__kyoHasFlag(tf,"f"))return fromNode;
           |    __kyoMorphRun(parent,fromNode.nextSibling,fclose,toNode.nextSibling,tclose);
           |    if(slot){var k=__kyoFlagKey(tf);fromNode.data="kyo-rs:"+fid+(k===null?" m":" m k="+k);}
           |    return fromNode;}

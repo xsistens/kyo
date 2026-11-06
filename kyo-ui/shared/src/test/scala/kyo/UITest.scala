@@ -114,3 +114,8 @@ abstract class UITest extends kyo.test.Test[Any]:
         }
 
 end UITest
+
+/** A mount that goes through the waiting path whatever its effect does, which is what the overload of [[kyo.UI.mounted]] picks by the effect's
+  * type: for a test about the placeholder, the instance's fiber or the effect's start, with an effect that has nothing to wait for.
+  */
+private[kyo] def waitingMount(effect: UI < (Abort[Any] & Async & Scope))(using Frame): UI.Ast.Mounted = UI.mounted(effect)

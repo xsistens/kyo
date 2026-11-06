@@ -392,14 +392,15 @@ private[kyo] object DomBackend:
         for
             _        <- Sync.defer(discard(morphScript))
             _        <- DomStyleSheet.injectBase()
-            root     <- ReactiveUI.normalize(ui, Seq.empty)
-            html     <- HtmlRenderer.render(ui, Seq.empty)
             commands <- UI.Commands.init(op => applyOpLocal(op, session))
             _ = session.commands = commands
-            // Installed so component handlers and mounted effects reach `UI.commands`: the region fibers subscribe
-            // forks and the event drain all start inside it.
+            // Installed so component handlers and mounted effects reach `UI.commands`: the first paint draws mounts, and the region
+            // fibers subscribe forks and the event drain all start inside it.
             _ <- UICommands.commands.let(Present(commands)) {
                 for
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    // Drawn into the table the subscription below reads, so an instance takes the content this paint shows.
+                    html <- MountDispatch.live.let(root.mountDispatch)(HtmlRenderer.render(ui, Seq.empty))
                     // The first paint is on the page before the session behind it runs, and the browser hands over the reader's events in
                     // between. So the queue, its drain and the listeners come before the paint, and what they hear waits in the queue until
                     // the subscription lets the drain go, as the server-push client's `__q` keeps what is raised before its session is live.
@@ -786,8 +787,11 @@ private[kyo] object DomBackend:
                         // an attribute that only a later re-render brings in (see noteMarkers), and where a
                         // devtools sink learns whether this render produced anything (see noteWasted).
                         noteMarkers(html)
-                        noteWasted(previous, html, lastFingerprint(region))(
-                            HtmlRenderer.renderRegion(_, path, contentContext, region, parentContext, boundaryMode)
+                        noteWasted(previous, html, lastFingerprint(region))(ui =>
+                            // Rendered for its fingerprint only: nothing it draws goes on the page.
+                            MountDispatch.live.let(Absent)(
+                                HtmlRenderer.renderRegion(ui, path, contentContext, region, parentContext, boundaryMode)
+                            )
                         ).map(noted => (noted, open)).flatMap { (noted, stillOpen) =>
                             if !stillOpen then Kyo.unit
                             else

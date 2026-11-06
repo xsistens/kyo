@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.internal.HeldCommand
 import kyo.internal.HtmlRenderer
 import kyo.internal.MountDispatch
 import kyo.internal.MountedSpec
@@ -10,8 +11,9 @@ import kyo.internal.RecordingExchange
 import kyo.internal.UIEvent
 import kyo.internal.UIExchange
 
-/** Behavior of [[kyo.UI.mounted]] on the shared engine, without a browser: a tree is normalized and subscribed against an exchange that
-  * records every paint, and events go straight to the subscription's handler.
+/** Behavior of a waiting [[kyo.UI.mounted]] on the shared engine, without a browser: a tree is normalized and subscribed against an exchange
+  * that records every paint, and events go straight to the subscription's handler. Every mount here goes through [[waitingMount]], whatever
+  * its effect does: what a mount with a `Sync` effect does differently is in [[UIDrawnTest]].
   *
   * What a path shows is the last paint at that path or at one of its ancestors, since an ancestor's paint replaces everything below it.
   */
@@ -40,7 +42,7 @@ class MountedTest extends kyo.test.Test[Any]:
             if !keepsRows then super.onListPatch(region, path, contentContext, parentContext, previous, rows)
             else
                 Kyo.foreachDiscard(rows.filter(_.changed)) { row =>
-                    HtmlRenderer.render(row.ui, path :+ row.key).map(html =>
+                    HtmlRenderer.renderRegion(row.ui, path :+ row.key, contentContext.child(row.key)).map(html =>
                         Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path :+ row.key, html)))))
                     )
                 }.andThen(true)
@@ -53,7 +55,7 @@ class MountedTest extends kyo.test.Test[Any]:
             previous: Maybe[UI],
             ui: UI
         )(using Frame): Unit < Async =
-            HtmlRenderer.render(ui, path).map(html =>
+            HtmlRenderer.renderRegion(ui, path, context).map(html =>
                 beforePaint(path, html).andThen(Sync.Unsafe.defer(discard(pages.getAndUpdate(_.append((path, html))))))
             )
 
@@ -102,13 +104,19 @@ class MountedTest extends kyo.test.Test[Any]:
     private def mountSession[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
         f: (Recorder, ReactiveUI.Subscription) => A < (Async & Scope)
     )(using Frame, kyo.test.AssertScope): A < Async =
+        mountDispatched(ui, keepsRows, beforePaint)((recorder, sub, _) => f(recorder, sub))
+
+    /** [[mountSession]] with the dispatch of the page too, where its mounts and boundaries are registered. */
+    private def mountDispatched[A](ui: UI, keepsRows: Boolean = false, beforePaint: (Seq[String], String) => Unit < Async = (_, _) => ())(
+        f: (Recorder, ReactiveUI.Subscription, MountDispatch) => A < (Async & Scope)
+    )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             val recorder = new Recorder(keepsRows, beforePaint)
             for
-                _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                 sub  <- subscribeAudited(root, recorder)
-                a    <- f(recorder, sub)
+                a    <- f(recorder, sub, root.mountDispatch.get)
                 _    <- assertConsistent(sub)
             yield (a, sub.mountSession)
             end for
@@ -124,7 +132,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "a mounted node shows its placeholder until the effect publishes, then the content" in {
         for
             gate <- Promise.init[Unit, Any]
-            ui = div(UI.mounted(gate.get.andThen(span("ready"))).placeholder(span("loading")))
+            ui = div(waitingMount(gate.get.andThen(span("ready"))).placeholder(span("loading")))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0"), "loading")
@@ -140,8 +148,8 @@ class MountedTest extends kyo.test.Test[Any]:
     // one the content keeps. The demo's pages are exactly that, a section per keyed mount inside the tabs' panel, and a
     // section whose own content was still on its way when the tabs revealed theirs never left its placeholder.
     private def nestedKeyed(outerGate: Promise[Unit, Any], innerGate: Promise[Unit, Any])(using Frame): UI =
-        def inner: UI = UI.mounted(innerGate.get.andThen(span("inner-ready"))).keyed("section").placeholder(span("inner-loading"))
-        div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), inner))).placeholder(div(span("outer-loading"), inner)))
+        def inner: UI = waitingMount(innerGate.get.andThen(span("inner-ready"))).keyed("section").placeholder(span("inner-loading"))
+        div(waitingMount(outerGate.get.andThen(div(span("outer-ready"), inner))).placeholder(div(span("outer-loading"), inner)))
 
     "a keyed mount the outer placeholder started is revealed once its effect publishes after the outer reveal" in {
         for
@@ -169,10 +177,10 @@ class MountedTest extends kyo.test.Test[Any]:
             innerGate <- Promise.init[Unit, Any]
             slowGate  <- Promise.init[Unit, Any]
             innerRan  <- Promise.init[Unit, Any]
-            inner = UI.mounted(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(span("inner-ready")))
+            inner = waitingMount(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(span("inner-ready")))
                 .keyed("section").placeholder(span("inner-loading"))
-            slow = UI.mounted(slowGate.get.andThen(span("slow-ready")))
-            ui   = div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), inner, slow))).placeholder(span("outer-loading")))
+            slow = waitingMount(slowGate.get.andThen(span("slow-ready")))
+            ui   = div(waitingMount(outerGate.get.andThen(div(span("outer-ready"), inner, slow))).placeholder(span("outer-loading")))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _     <- showsEventually(recorder, Seq("0"), "outer-loading")
@@ -207,12 +215,12 @@ class MountedTest extends kyo.test.Test[Any]:
                 revealing <- Promise.init[Unit, Any]
                 release   <- Promise.init[Unit, Any]
                 tick      <- Signal.initRef(0)
-                bottom = UI.mounted(bottomRan.completeUnitDiscard.andThen(span("bottom-ready")))
+                bottom = waitingMount(bottomRan.completeUnitDiscard.andThen(span("bottom-ready")))
                     .keyed("bottom").placeholder(span("bottom-loading"))
-                mid = UI.mounted(midRan.completeUnitDiscard.andThen(div(tick.render(n => span(s"tick:$n")), bottom)))
+                mid = waitingMount(midRan.completeUnitDiscard.andThen(div(tick.render(n => span(s"tick:$n")), bottom)))
                     .keyed("mid").placeholder(span("mid-loading"))
-                slow       = UI.mounted(slowGate.get.andThen(span("slow-ready")))
-                ui         = div(UI.mounted(outerGate.get.andThen(div(span("outer-ready"), mid, slow))).placeholder(span("outer-loading")))
+                slow = waitingMount(slowGate.get.andThen(span("slow-ready")))
+                ui   = div(waitingMount(outerGate.get.andThen(div(span("outer-ready"), mid, slow))).placeholder(span("outer-loading")))
                 holdReveal = (path: Seq[String], html: String) =>
                     if path == Seq("0") && html.contains("slow-ready") then revealing.completeUnitDiscard.andThen(release.get) else Kyo.unit
                 _ <- mount(ui, beforePaint = holdReveal) { (recorder, _) =>
@@ -239,31 +247,54 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     // The same, with the inner boundary in a keyed list row, which is where a tab strip keeps its panels: inside a waiting
-    // boundary a list goes the whole-region way, and its rows are resolved from the live state on the reveal too.
+    // boundary a list goes the whole-region way, and its rows are resolved from the live state on the reveal too. The outer
+    // boundary does not wait for the inner one, so the test waits for the inner reveal before it lets the slow sibling load.
     "a boundary in a keyed row that revealed while the boundary around it was waiting shows its content after the reveal" in {
+        // The inner boundary's range in the row; a boundary registers its gate one level inside its range.
+        val innerRange = Seq("0", "0", "0", "panel", "0")
         for
             outerGate <- Promise.init[Unit, Any]
             innerGate <- Promise.init[Unit, Any]
             slowGate  <- Promise.init[Unit, Any]
-            innerRan  <- Promise.init[Unit, Any]
+            sent      <- Promise.init[Unit, Any]
+            dropped   <- AtomicBoolean.init(false)
             rows      <- Signal.initRef(Chunk("panel"))
-            inner = UI.mounted(innerGate.get.andThen(innerRan.completeUnitDiscard).andThen(span("inner-ready")))
-                .keyed("section").placeholder(span("inner-loading"))
-            slow = UI.mounted(slowGate.get.andThen(span("slow-ready")))
-            ui   = div(UI.mounted(outerGate.get.andThen(div(div(rows.foreachKeyed(identity)(_ => div(inner))), slow)))
+            inner = waitingMount(innerGate.get.andThen(span("inner-ready"))).keyed("section").placeholder(span("inner-loading"))
+            slow  = waitingMount(slowGate.get.andThen(span("slow-ready")))
+            ui    = div(waitingMount(outerGate.get.andThen(div(div(rows.foreachKeyed(identity)(_ => div(inner))), slow)))
                 .placeholder(span("outer-loading")))
-            _ <- mount(ui) { (recorder, _) =>
+            _ <- mountDispatched(ui) { (recorder, _, dispatch) =>
+                def gateOf(range: Seq[String])   = dispatch.boundary(ReactiveRegion.RegionIdentity(range, 1))
+                def revealed(range: Seq[String]) = gateOf(range).map(_.exists(_.isRevealed))
                 for
                     _ <- showsEventually(recorder, Seq("0"), "outer-loading")
                     _ <- outerGate.completeUnitDiscard
                     _ <- innerGate.completeUnitDiscard
-                    _ <- innerRan.get
-                    _ <- slowGate.completeUnitDiscard
-                    _ <- showsEventually(recorder, Seq("0"), "slow-ready")
-                    _ <- showsEventually(recorder, Seq("0"), "inner-ready")
-                yield ()
+                    // Bounded only so that a gate that never reveals fails here rather than at the suite's timeout.
+                    _          <- assertEventually(revealed(innerRange), within = 10.seconds)
+                    innerBound <- gateOf(innerRange).map(_.get)
+                    // A command takes the inner gate's lock, which its reveal holds while it paints, so this returns once the reveal
+                    // paint has gone up to the outer gate. The command goes out behind the outer reveal's paints, nested ones included.
+                    _                <- innerBound.afterShown(HeldCommand(sent.completeUnitDiscard, dropped.set(true)))
+                    outerWaited      <- revealed(Seq("0")).map(!_)
+                    innerBeforeOuter <- recorder.paintsAt(innerRange)
+                    sentBeforeOuter  <- sent.done
+                    painted          <- recorder.paintCount
+                    _                <- slowGate.completeUnitDiscard
+                    _                <- assertEventually(sent.done, within = 10.seconds)
+                    reveal           <- recorder.paintsAfter(painted)
+                    shown            <- recorder.shown(innerRange)
+                    lost             <- dropped.get
+                yield
+                    assert(outerWaited && innerBeforeOuter == 0 && !sentBeforeOuter, "the inner boundary revealed after the outer one")
+                    val outerPaint = reveal.find(_._1 == Seq("0")).map(_._2).getOrElse("")
+                    assert(outerPaint.contains("slow-ready") && outerPaint.contains("inner-ready"), s"the outer reveal: $outerPaint")
+                    assert(shown.contains("inner-ready"), s"the inner range after the outer reveal: $shown")
+                    assert(!lost, "the command through the inner gate was dropped")
+                end for
             }
         yield succeed
+        end for
     }
 
     // A placeholder is painted, not subscribed, so the keyed mount inside it starts with the content; an effect that has
@@ -288,7 +319,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs <- AtomicInt.init(0)
             tick <- Signal.initRef(0)
-            ui = div(tick.render(_ => div(UI.mounted(runs.incrementAndGet.map(n => span(s"runs:$n"))))))
+            ui = div(tick.render(_ => div(waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "0"), "runs:1")
@@ -303,7 +334,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs <- AtomicInt.init(0)
             tick <- Signal.initRef(0)
-            ui = div(tick.render(n => div(span(s"tick:$n"), UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
+            ui = div(tick.render(n => div(span(s"tick:$n"), waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "1"), "runs:1")
@@ -336,7 +367,7 @@ class MountedTest extends kyo.test.Test[Any]:
             runs  <- AtomicInt.init(0)
             outer <- Signal.initRef(0)
             inner <- Signal.initRef("x")
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
             ui   = div(outer.render(n => div(span(s"outer:$n"), inner.render(_ => div(node)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -362,7 +393,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs  <- AtomicInt.init(0)
             outer <- Signal.initRef(0)
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r")))
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r")))
             ui   = div(outer.render(n => div(span(s"outer:$n"), outer.map(_ => "x").render(_ => div(node)))))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -384,7 +415,7 @@ class MountedTest extends kyo.test.Test[Any]:
             runs  <- AtomicInt.init(0)
             extra <- Signal.initRef(false)
             items = Signal.initConst(Chunk("a"))
-            node  = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("row")
+            node  = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("row")
             row   = (show: Boolean) =>
                 if show then UI.Ast.Div(children = Chunk(span("inserted"), node)) else UI.Ast.Div(children = Chunk(node))
             deep = (show: Boolean) =>
@@ -407,7 +438,7 @@ class MountedTest extends kyo.test.Test[Any]:
             runs  <- AtomicInt.init(0)
             outer <- Signal.initRef(false)
             inner <- Signal.initRef("x")
-            node   = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
+            node   = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
             region = inner.render(_ => div(node))
             ui     = div(outer.render { extra =>
                 if extra then UI.Ast.Div(children = Chunk(span("inserted"), region)) else UI.Ast.Div(children = Chunk(region))
@@ -429,7 +460,7 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- AtomicBoolean.init(false)
             outer    <- Signal.initRef(true)
             inner    <- Signal.initRef("x")
-            node = UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("box")
+            node = waitingMount(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("box")
             ui   = div(outer.render(show => if show then div(inner.render(_ => div(node))) else div(span("gone"))))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -450,7 +481,7 @@ class MountedTest extends kyo.test.Test[Any]:
             outer    <- Signal.initRef(0)
             inner    <- Signal.initRef(true)
             node = (name: String) =>
-                UI.mounted(
+                waitingMount(
                     Scope.ensure(entered.incrementAndGet.andThen(gate.get).andThen(released.incrementAndGet.unit)).andThen(span(name))
                 ).keyed(name)
             ui = div(outer.render(_ => div(inner.render(s => if s then div(node("mount-a"), node("mount-b")) else div(span("empty"))))))
@@ -486,7 +517,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 released <- AtomicBoolean.init(false)
                 tick     <- Signal.initRef(0)
                 root     <- ReactiveUI.normalize(
-                    div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                    div(tick.render(_ => div(waitingMount(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
                     Seq.empty
                 )
                 region   = root.children.head
@@ -548,6 +579,35 @@ class MountedTest extends kyo.test.Test[Any]:
     private def paintedSince(recorder: Recorder, n: Int, text: String)(using Frame): Boolean < Sync =
         recorder.paintsAfter(n).map(_.exists(_._2.contains(text)))
 
+    "a click on a kept instance while its region paints the next value reaches that instance" in {
+        for
+            clicks  <- AtomicInt.init(0)
+            runs    <- AtomicInt.init(0)
+            tick    <- Signal.initRef(0)
+            entered <- Promise.init[Unit, Any]
+            gate    <- Promise.init[Unit, Any]
+            // The region's next paint waits here: the subscription of its last value has ended, the next one has not begun.
+            recorder = new Gated(Seq("0"), entered, gate)
+            node     = waitingMount(runs.incrementAndGet.map(_ => button("in").onClick(clicks.incrementAndGet.unit))).keyed("kept")
+            ui       = div(tick.render(n => div(span(s"t:$n"), node)))
+            heard <- mountWith(recorder, ui) { handle =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "1"), "in")
+                    _ <- Sync.defer(recorder.arm())
+                    _ <- tick.set(1)
+                    _ <- entered.get
+                    _ <- handle(Seq("0", "1"), click("0", "1"))
+                    n <- clicks.get
+                    _ <- gate.completeUnitDiscard
+                    _ <- showsEventually(recorder, Seq("0", "0"), "t:1")
+                yield n
+            }
+            total <- runs.get
+        yield
+            assert(heard == 1, s"clicks heard while the region painted: $heard")
+            assert(total == 1, s"runs: $total")
+    }
+
     "a closed page leaves nothing behind in its mount table, its watches or its dispatch" in {
         for
             runs     <- AtomicInt.init(0)
@@ -557,7 +617,7 @@ class MountedTest extends kyo.test.Test[Any]:
             items    <- Signal.initRef(Chunk("a", "b", "c"))
             tick     <- Signal.initRef(0)
             node = (name: String, waits: Boolean) =>
-                UI.mounted(
+                waitingMount(
                     Scope.ensure(released.incrementAndGet.unit)
                         .andThen(runs.incrementAndGet)
                         .andThen(if waits then gate.get else Kyo.unit)
@@ -571,8 +631,8 @@ class MountedTest extends kyo.test.Test[Any]:
                 UI.boundary.placeholder(span("skel"))(div(node("late", true)))
             )
             recorder = new Recorder(keepsRows = true)
-            _                               <- recorder.initial(ui)
             root                            <- ReactiveUI.normalize(ui, Seq.empty)
+            _                               <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
             (session, cellsOpen, gatesOpen) <- Scope.run {
                 for
                     sub <- subscribeAudited(root, recorder)
@@ -625,7 +685,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "a region whose watch ends after its table was evicted leaves no decision behind" in {
         for
             tick <- Signal.initRef(0)
-            root <- ReactiveUI.normalize(div(tick.render(_ => div(UI.mounted(Kyo.lift(span("held"))).keyed("k")))), Seq.empty)
+            root <- ReactiveUI.normalize(div(tick.render(_ => div(waitingMount(Kyo.lift(span("held"))).keyed("k")))), Seq.empty)
             region   = root.children.head
             node     = mountedNodes(root).head
             spec     = node.mounted.get
@@ -670,7 +730,7 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- AtomicBoolean.init(false)
             tick     <- Signal.initRef(0)
             root     <- ReactiveUI.normalize(
-                div(tick.render(_ => div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
+                div(tick.render(_ => div(waitingMount(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k")))),
                 Seq.empty
             )
             region   = root.children.head
@@ -704,7 +764,7 @@ class MountedTest extends kyo.test.Test[Any]:
             dispatch <- MountDispatch.init
             path = Seq("0", "1")
             at   = ReactiveRegion.RegionIdentity(path, 1)
-            node = UI.mounted(Kyo.lift(UI.empty))
+            node = waitingMount(Kyo.lift(UI.empty))
             (table, _) <- kyo.internal.MountTable.root(Seq.empty)
             instance   <- kyo.internal.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil, table)
             _          <- dispatch.register(at, instance)
@@ -717,7 +777,7 @@ class MountedTest extends kyo.test.Test[Any]:
 
     "two mounts at one path, one the content of the other, made under one frame, are each found by their own content" in {
         // A helper taking a `Frame` makes both under its caller's, so only how deep each one's content sits at the path tells them apart.
-        def nested(using Frame)    = (UI.mounted(Kyo.lift(UI.empty)), UI.mounted(Kyo.lift(UI.empty)))
+        def nested(using Frame)    = (waitingMount(Kyo.lift(UI.empty)), waitingMount(Kyo.lift(UI.empty)))
         val (outerNode, innerNode) = nested
         val path                   = Seq("0")
         val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
@@ -745,7 +805,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs  <- AtomicInt.init(0)
             extra <- Signal.initRef(false)
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")
             ui   = div(extra.render { show =>
                 val before = if show then Chunk[UI](span("first"), span("second")) else Chunk.empty[UI]
                 UI.Ast.Div(children = before.append(node))
@@ -769,8 +829,8 @@ class MountedTest extends kyo.test.Test[Any]:
             bRuns  <- AtomicInt.init(0)
             choice <- Signal.initRef(true)
             ui = div(choice.render { a =>
-                if a then div(UI.mounted(aRuns.incrementAndGet.map(n => span(s"a:$n"))).keyed(1))
-                else div(UI.mounted(bRuns.incrementAndGet.map(n => span(s"b:$n"))).keyed(1))
+                if a then div(waitingMount(aRuns.incrementAndGet.map(n => span(s"a:$n"))).keyed(1))
+                else div(waitingMount(bRuns.incrementAndGet.map(n => span(s"b:$n"))).keyed(1))
             })
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -790,8 +850,8 @@ class MountedTest extends kyo.test.Test[Any]:
         runs.updateAndGet(m => m.updated(name, m.getOrElse(name, 0) + 1)).map(m => span(s"$name:${m(name)}"))
 
     private def panels(id: String, saveFirst: Boolean, runs: AtomicRef[Map[String, Int]])(using Frame): UI =
-        val cover = UI.mounted(counted(runs, "cover")).keyed(id)
-        val save  = UI.mounted(counted(runs, "save")).keyed(id)
+        val cover = waitingMount(counted(runs, "cover")).keyed(id)
+        val save  = waitingMount(counted(runs, "save")).keyed(id)
         div(if saveFirst then save else cover, if saveFirst then cover else save)
     end panels
 
@@ -814,9 +874,82 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     private def tile(ref: String, runs: AtomicInt, released: AtomicInt)(using Frame): UI =
-        UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n")))).keyed(ref)
+        waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n")))).keyed(ref)
+
+    // A component that keys itself on where its caller made it, as uic's components do, so the caller writes no key.
+    private def siteTile(ref: String, runs: AtomicInt, released: AtomicInt)(using Frame, UI.MountSite): UI =
+        waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n"))))
+            .keyedOnSite(summon[UI.MountSite])
+
+    // A site-keyed tile that names its instance by the number its effect drew, and says which instances were released.
+    private def namedSiteTile(ref: String, runs: AtomicInt, released: AtomicRef[Chunk[Int]])(using Frame, UI.MountSite): UI =
+        waitingMount(runs.incrementAndGet.map(n => Scope.ensure(released.getAndUpdate(_.append(n)).unit).andThen(span(s"$ref#$n"))))
+            .keyedOnSite(summon[UI.MountSite])
+
+    private val instancePattern = """#(\d+)""".r
+
+    /** The instance a [[namedSiteTile]] place shows, by its number. */
+    private def instanceOf(shown: String): Int = instancePattern.findFirstMatchIn(shown).map(_.group(1).toInt).getOrElse(-1)
+
+    "two calls of one site-keyed component in a fixed range keep each its own instance across a repaint, told apart by their order" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            tick     <- Signal.initRef(0)
+            // One call in a map is one site: the two tiles share it, and only their order in the range tells them apart.
+            ui = div(tick.render(_ => UI.Ast.Div(children = Chunk("x", "x").map(siteTile(_, runs, released)))))
+            // Either outcome counts as shown, so a place that shows an error fails the asserts below instead of waiting.
+            settled = (recorder: Recorder, path: Seq[String]) =>
+                assertEventually(recorder.shown(path).map(s => s.contains("x:") || s.contains("kyo-mount-error")))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- settled(recorder, Seq("0", "0"))
+                    _      <- settled(recorder, Seq("0", "1"))
+                    first  <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1")))(recorder.shown)
+                    _      <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _      <- settled(recorder, Seq("0", "0"))
+                    _      <- settled(recorder, Seq("0", "1"))
+                    second <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1")))(recorder.shown)
+                    total  <- runs.get
+                    gone   <- released.get
+                yield
+                    assert(first.map(_.contains("x:1")) == Seq(true, false) || first.map(_.contains("x:2")) == Seq(true, false), s"$first")
+                    assert(first.forall(!_.contains("kyo-mount-error")), s"$first")
+                    assert(second == first, s"before the repaint: $first, after: $second")
+                    assert(total == 2 && gone == 0, s"runs: $total, released: $gone")
+            }
+        yield succeed
+    }
+
+    "two rows of an unkeyed foreach that call one keyed site keep each its own instance across a repaint, told apart by their index" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            tick     <- Signal.initRef(0)
+            ui = div(tick.render(_ => div(Signal.initConst(Chunk("x", "x")).foreach(tile(_, runs, released)))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "0"), "x:")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1"), "x:")
+                    first  <- Kyo.foreach(Seq(Seq("0", "0", "0"), Seq("0", "0", "1")))(recorder.shown)
+                    _      <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _      <- showsEventually(recorder, Seq("0", "0", "0"), "x:")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1"), "x:")
+                    second <- Kyo.foreach(Seq(Seq("0", "0", "0"), Seq("0", "0", "1")))(recorder.shown)
+                    total  <- runs.get
+                    gone   <- released.get
+                yield
+                    assert(first.forall(!_.contains("kyo-mount-error")), s"$first")
+                    assert(first.distinct.size == 2, s"$first")
+                    assert(second == first, s"before the repaint: $first, after: $second")
+                    assert(total == 2 && gone == 0, s"runs: $total, released: $gone")
+            }
+        yield succeed
+    }
 
     "the same keyed tile shown twice in one region is reported at both places, and a tile shown once keeps its instance" in {
+        // Decided 2026-11-06, refined: a key the caller chose that repeats in one range is a duplicate, as React, Svelte and Compose
+        // treat it. Only calls keyed on their site are told apart by their order.
         for
             runs     <- AtomicInt.init(0)
             released <- AtomicInt.init(0)
@@ -864,6 +997,152 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    "a site-keyed component called from one map over x, y, x is one site: dropping the first item keeps the first two instances at the first two places and releases the third" in {
+        // All three calls share one site, so only their order tells them apart: the state stays at its place and the data moves through
+        // it, as calls without a key do in Compose.
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicRef.init(Chunk.empty[Int])
+            items    <- Signal.initRef(Chunk("x", "y", "x"))
+            ui = div(items.render(is => UI.Ast.Div(children = is.map(namedSiteTile(_, runs, released)))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "x#")
+                    _      <- showsEventually(recorder, Seq("0", "1"), "y#")
+                    _      <- showsEventually(recorder, Seq("0", "2"), "x#")
+                    before <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                    _      <- afterRepaint(recorder, Seq("0"))(items.set(Chunk("y", "x")))
+                    _      <- assertEventually(released.get.map(_.size == 1))
+                    // Each kept instance paints its slot again after the region's paint.
+                    _     <- showsEventually(recorder, Seq("0", "0"), "#")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "#")
+                    after <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1")))(recorder.shown)
+                    gone  <- released.get
+                    total <- runs.get
+                yield
+                    val instances = before.map(instanceOf)
+                    assert(instances.toSet == Set(1, 2, 3), s"before: $before")
+                    // The first place, where y is now, still shows the first instance, which a waiting mount's effect made for x; the
+                    // second place shows the second instance, and the third instance is the one released.
+                    assert(after.map(instanceOf) == instances.take(2), s"before: $before, after dropping the first: $after")
+                    assert(gone == Chunk(instances(2)), s"released: $gone, the instances were: $instances")
+                    assert(total == 3, s"runs: $total")
+            }
+        yield succeed
+    }
+
+    "plain unkeyed mounts restart when their region runs again: dropping the first of three tiles starts the other two again" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicRef.init(Chunk.empty[Int])
+            show     <- Signal.initRef(true)
+            plain = (ref: String) =>
+                waitingMount(runs.incrementAndGet.map(n => Scope.ensure(released.getAndUpdate(_.append(n)).unit).andThen(span(s"$ref#$n"))))
+            ui = div(show.render(s => UI.Ast.Div(children = Chunk.from((if s then Seq("a") else Seq.empty) ++ Seq("b", "c")).map(plain))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "a#")
+                    _      <- showsEventually(recorder, Seq("0", "1"), "b#")
+                    _      <- showsEventually(recorder, Seq("0", "2"), "c#")
+                    before <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                    _      <- afterRepaint(recorder, Seq("0"))(show.set(false))
+                    _      <- assertEventually(released.get.map(_.size == 3))
+                    _      <- assertEventually(recorder.shown(Seq("0", "0")).map(s => s.contains("b#") && instanceOf(s) > 3))
+                    _      <- assertEventually(recorder.shown(Seq("0", "1")).map(s => s.contains("c#") && instanceOf(s) > 3))
+                    after  <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1")))(recorder.shown)
+                    gone   <- released.get
+                    total  <- runs.get
+                yield
+                    assert(before.map(instanceOf).toSet == Set(1, 2, 3), s"before: $before")
+                    // The region ran again, so it built new content: every tile is a new instance, and all three old ones are released.
+                    assert(after.map(instanceOf).toSet == Set(4, 5), s"after dropping the first: $after")
+                    assert(gone.toSet == Set(1, 2, 3), s"released: $gone")
+                    assert(total == 5, s"runs: $total")
+            }
+        yield succeed
+    }
+
+    "the same site-keyed component as three calls on three lines, the first under an if: dropping the first moves nothing" in {
+        // Each line is a site of its own, so no call has an order to lose: the two calls left keep their own instances.
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicRef.init(Chunk.empty[Int])
+            show     <- Signal.initRef(true)
+            ui = div(show.render { s =>
+                div(
+                    if s then namedSiteTile("a", runs, released) else UI.empty,
+                    namedSiteTile("b", runs, released),
+                    namedSiteTile("c", runs, released)
+                )
+            })
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0"), "a#")
+                    _      <- showsEventually(recorder, Seq("0", "1"), "b#")
+                    _      <- showsEventually(recorder, Seq("0", "2"), "c#")
+                    before <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                    _      <- afterRepaint(recorder, Seq("0"))(show.set(false))
+                    _      <- assertEventually(released.get.map(_.size == 1))
+                    _      <- showsEventually(recorder, Seq("0", "1"), "b#")
+                    _      <- showsEventually(recorder, Seq("0", "2"), "c#")
+                    after  <- Kyo.foreach(Seq(Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                    gone   <- released.get
+                    total  <- runs.get
+                yield
+                    val instances = before.map(instanceOf)
+                    assert(instances.toSet == Set(1, 2, 3), s"before: $before")
+                    assert(after.map(instanceOf) == instances.drop(1), s"before: $before, after dropping the first: $after")
+                    assert(gone == Chunk(instances(0)), s"released: $gone, the instances were: $instances")
+                    assert(total == 3, s"runs: $total")
+            }
+        yield succeed
+    }
+
+    // A helper that keys one mount on a key its caller chose and one on its site, from one call position and with equal values: only where
+    // each key came from tells the two apart.
+    private def callerAndSite(runs: AtomicRef[Map[String, Int]])(using Frame, UI.MountSite): UI =
+        div(
+            waitingMount(counted(runs, "caller")).keyed(summon[UI.MountSite]),
+            waitingMount(counted(runs, "site")).keyedOnSite(summon[UI.MountSite])
+        )
+
+    "a key the caller chose and a key a component took from its site are different identities, however equal their values" in {
+        for
+            runs <- AtomicRef.init(Map.empty[String, Int])
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(_ => callerAndSite(runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "caller:1")
+                    _ <- showsEventually(recorder, Seq("0", "1"), "site:1")
+                    _ <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _ <- showsEventually(recorder, Seq("0", "0"), "caller:1")
+                    _ <- showsEventually(recorder, Seq("0", "1"), "site:1")
+                yield ()
+            }
+            counts <- runs.get
+        yield assert(counts == Map("caller" -> 1, "site" -> 1), s"runs: $counts")
+    }
+
+    "a caller key whose value is a MountSite stays the caller's: used twice in one range it is reported, not told apart by order" in {
+        for
+            runs <- AtomicInt.init(0)
+            site = summon[UI.MountSite]
+            ui = div(UI.Ast.Div(children = Chunk(1, 2).map(_ => waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed(site))))
+            shown <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0"), "kyo-mount-error")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "kyo-mount-error")
+                    shown <- recorder.shown(Seq("0", "0"))
+                yield shown
+            }
+            total <- runs.get
+        yield
+            assert(shown.contains("shown in 2 places") && shown.contains("0.0") && shown.contains("0.1"), shown)
+            assert(total == 0, s"a duplicated identity ran its effect: $total runs")
+        end for
+    }
+
     "duplicates whose places all shift stay reported, and run nothing" in {
         for
             runs     <- AtomicInt.init(0)
@@ -885,9 +1164,36 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    "two calls of one site-keyed component whose places all shift keep their instances" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            lead     <- Signal.initRef(false)
+            ui = div(lead.render { l =>
+                UI.Ast.Div(children = Chunk.from((if l then Seq(span("lead"))
+                                                  else Seq.empty) ++ Seq("x", "x").map(siteTile(_, runs, released))))
+            })
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0"), "x:")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "x:")
+                    first <- Kyo.foreach(Seq(Seq("0", "0"), Seq("0", "1")))(recorder.shown)
+                    _     <- afterRepaint(recorder, Seq("0"))(lead.set(true))
+                    _     <- showsEventually(recorder, Seq("0", "1"), "x:")
+                    _     <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    after <- Kyo.foreach(Seq(Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                    total <- runs.get
+                    gone  <- released.get
+                yield
+                    assert(after == first && first.distinct.size == 2, s"before: $first, after the shift: $after")
+                    assert(total == 2 && gone == 0, s"runs: $total, released: $gone")
+            }
+        yield succeed
+    }
+
     private def editorOrViewer(editing: Boolean, id: String, runs: AtomicRef[Map[String, Int]])(using Frame): UI =
-        if editing then UI.mounted(counted(runs, "editor")).keyed(id)
-        else UI.mounted(counted(runs, "viewer")).keyed(id)
+        if editing then waitingMount(counted(runs, "editor")).keyed(id)
+        else waitingMount(counted(runs, "viewer")).keyed(id)
 
     "two .keyed sites in one helper at one position are separate instances" in {
         for
@@ -907,7 +1213,7 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     private def card(name: String, runs: AtomicRef[Map[String, Int]])(using Frame, UI.MountSite): UI =
-        UI.mounted(counted(runs, name)).keyed("card")
+        waitingMount(counted(runs, name)).keyed("card")
 
     "a helper that takes the MountSite makes each of its callers a place of its own" in {
         for
@@ -931,7 +1237,7 @@ class MountedTest extends kyo.test.Test[Any]:
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("a", "b"))
             row = (id: String) =>
-                UI.mounted(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"$id:${m(id)}")))
+                waitingMount(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"$id:${m(id)}")))
                     .keyed("row")
             ui = div(items.foreachKeyed(identity)(id => div(row(id))))
             _ <- mount(ui, keepsRows) { (recorder, _) =>
@@ -961,7 +1267,7 @@ class MountedTest extends kyo.test.Test[Any]:
             items <- Signal.initRef(Chunk("a"))
             row = (_: String) =>
                 UI.Ast.Div(children =
-                    Chunk.from(Seq(1, 2).map(_ => UI.mounted(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
+                    Chunk.from(Seq(1, 2).map(_ => waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
                 )
             ui = div(items.foreachKeyed(identity)(row))
             _ <- mount(ui, keepsRows = true) { (recorder, _) =>
@@ -977,11 +1283,42 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(total == 0, s"runs: $total")
     }
 
+    "the same site-keyed call shown twice inside a list row gets an instance at each place, and keeps both when another row comes first" in {
+        for
+            runs  <- AtomicInt.init(0)
+            items <- Signal.initRef(Chunk("a"))
+            row = (_: String) =>
+                UI.Ast.Div(children =
+                    Chunk.from(Seq(1, 2).map(_ =>
+                        waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyedOnSite(summon[UI.MountSite])
+                    ))
+                )
+            ui = div(items.foreachKeyed(identity)(row))
+            _ <- mount(ui, keepsRows = true) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "a", "0"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    first  <- Kyo.foreach(Seq(Seq("0", "a", "0"), Seq("0", "a", "1")))(recorder.shown)
+                    _      <- items.set(Chunk("b", "a"))
+                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "a", "0"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    second <- Kyo.foreach(Seq(Seq("0", "a", "0"), Seq("0", "a", "1")))(recorder.shown)
+                    total  <- runs.get
+                yield
+                    assert(first.distinct.size == 2 && first.forall(!_.contains("kyo-mount-error")), s"$first")
+                    assert(second == first, s"row a before: $first, after b came first: $second")
+                    assert(total == 4, s"runs: $total")
+            }
+        yield succeed
+    }
+
     "the same call site shown twice with one key outside any region is reported at both places" in {
         for
             runs <- AtomicInt.init(0)
             ui = UI.Ast.Div(children =
-                Chunk.from(Seq(1, 2).map(_ => UI.mounted(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
+                Chunk.from(Seq(1, 2).map(_ => waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -991,6 +1328,27 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             total <- runs.get
         yield assert(total == 0, s"runs: $total")
+    }
+
+    "the same site-keyed call shown twice outside any region gets an instance at each place" in {
+        for
+            runs <- AtomicInt.init(0)
+            ui = UI.Ast.Div(children =
+                Chunk.from(Seq(1, 2).map(_ =>
+                    waitingMount(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyedOnSite(summon[UI.MountSite])
+                ))
+            )
+            shown <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0"), "runs:")
+                    _     <- showsEventually(recorder, Seq("1"), "runs:")
+                    shown <- Kyo.foreach(Seq(Seq("0"), Seq("1")))(recorder.shown)
+                yield shown
+            }
+            total <- runs.get
+        yield
+            assert(shown.distinct.size == 2, s"$shown")
+            assert(total == 2, s"runs: $total")
     }
 
     "a key change releases the old instance completely before the new effect starts" in {
@@ -1005,7 +1363,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     Scope.ensure(releasing.completeUnitDiscard.andThen(finishRelease.get).andThen(released.set(true)))
                         .andThen(span("a"))
                 else released.get.map(r => sawReleaseAtStart.completeDiscard(Result.succeed(r))).andThen(span("b"))
-            ui = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            ui = div(key.render(k => div(waitingMount(effect(k)).keyed(k))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _        <- showsEventually(recorder, Seq("0", "0"), ">a<")
@@ -1033,10 +1391,10 @@ class MountedTest extends kyo.test.Test[Any]:
                     Kyo.lift(div(
                         span("old"),
                         button("hit").onClick(clicks.incrementAndGet.unit),
-                        UI.mounted(nestedRuns.incrementAndGet.map(n => span(s"nested:$n")))
+                        waitingMount(nestedRuns.incrementAndGet.map(n => span(s"nested:$n")))
                     ))
                 else gate.get.andThen(span("new"))
-            ui = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            ui = div(key.render(k => div(waitingMount(effect(k)).keyed(k))))
             _ <- mount(ui) { (recorder, handle) =>
                 for
                     _      <- showsEventually(recorder, Seq("0", "0", "2"), "nested:1")
@@ -1068,11 +1426,11 @@ class MountedTest extends kyo.test.Test[Any]:
                 if k == "a" then
                     Kyo.lift(div(
                         span("old"),
-                        UI.mounted(Kyo.lift(span("keyless:a"))),
-                        UI.mounted(Kyo.lift(span("thread:a"))).keyed("thread-a")
+                        waitingMount(Kyo.lift(span("keyless:a"))),
+                        waitingMount(Kyo.lift(span("thread:a"))).keyed("thread-a")
                     ))
                 else gate.get.andThen(span("new"))
-            ui = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            ui = div(key.render(k => div(waitingMount(effect(k)).keyed(k))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _      <- showsEventually(recorder, Seq("0", "0", "2"), "thread:a")
@@ -1095,7 +1453,7 @@ class MountedTest extends kyo.test.Test[Any]:
             key  <- Signal.initRef("a")
             gate <- Promise.init[Unit, Any]
             effect = (k: String) => if k == "a" then Kyo.lift(input.id("note")) else gate.get.andThen(span("new"))
-            ui     = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            ui     = div(key.render(k => div(waitingMount(effect(k)).keyed(k))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _       <- showsEventually(recorder, Seq("0", "0"), "note")
@@ -1116,7 +1474,7 @@ class MountedTest extends kyo.test.Test[Any]:
             key  <- Signal.initRef("a")
             gate <- Promise.init[Unit, Any]
             effect = (k: String) => if k == "a" then Kyo.lift(span("old")) else gate.get.andThen(span("new"))
-            ui     = div(key.render(k => div(UI.mounted(effect(k)).keyed(k))))
+            ui     = div(key.render(k => div(waitingMount(effect(k)).keyed(k))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _      <- showsEventually(recorder, Seq("0", "0"), "old")
@@ -1139,7 +1497,7 @@ class MountedTest extends kyo.test.Test[Any]:
             gate <- Promise.init[Unit, Any]
             effect = (k: String) => if k == "a" then Kyo.lift(span("old")) else gate.get.andThen(span("new"))
             ui     = div(key.render(k =>
-                div(UI.mounted(effect(k)).keyed(k).placeholder(span("waiting")).whilePending(PendingPolicy.Placeholder))
+                div(waitingMount(effect(k)).keyed(k).placeholder(span("waiting")).whilePending(PendingPolicy.Placeholder))
             ))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1160,7 +1518,7 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(tick.render(n =>
                 div(
                     span(s"tick:$n"),
-                    UI.mounted(Abort.fail(new Exception("boom")))
+                    waitingMount(Abort.fail(new Exception("boom")))
                         .onError(e => span(s"error:${e.message}:${e.source}"))
                 )
             ))
@@ -1178,7 +1536,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             feed <- Promise.init[Unit, Any]
             effect = UI.fork(feed.get.andThen(Abort.fail(new Exception("feed died")))).andThen(span("content"))
-            ui     = div(UI.mounted(effect).onError(e => span(s"error:${e.message}:${e.source}")))
+            ui     = div(waitingMount(effect).onError(e => span(s"error:${e.message}:${e.source}")))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0"), "content")
@@ -1204,7 +1562,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _     <- fiber.getResult
                     _     <- effectDone.completeUnitDiscard
                 yield span("late content")
-            ui = div(UI.mounted(effect).onError(e => span(s"error:${e.message}")))
+            ui = div(waitingMount(effect).onError(e => span(s"error:${e.message}")))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _     <- showsEventually(recorder, Seq("0"), "error:early")
@@ -1224,7 +1582,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     _     <- fiber.getResult
                     _     <- done.completeUnitDiscard
                 yield span("content")
-            ui = div(UI.mounted(effect).onError(e => span(s"error:${e.message}")))
+            ui = div(waitingMount(effect).onError(e => span(s"error:${e.message}")))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _     <- done.get
@@ -1240,7 +1598,7 @@ class MountedTest extends kyo.test.Test[Any]:
             tick   <- Signal.initRef(0)
             clicks <- AtomicInt.init(0)
             ui = div(tick.render(n =>
-                div(span(s"tick:$n"), UI.mounted(Kyo.lift(div(button("hit").onClick(clicks.incrementAndGet.unit)))).keyed("k"))
+                div(span(s"tick:$n"), waitingMount(Kyo.lift(div(button("hit").onClick(clicks.incrementAndGet.unit)))).keyed("k"))
             ))
             _ <- mount(ui) { (recorder, handle) =>
                 for
@@ -1259,8 +1617,8 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             tick      <- Signal.initRef(0)
             innerRuns <- AtomicInt.init(0)
-            inner = UI.mounted(innerRuns.incrementAndGet.map(n => span(s"inner:$n"))).keyed("inner")
-            outer = UI.mounted(Kyo.lift(div(inner))).keyed("outer")
+            inner = waitingMount(innerRuns.incrementAndGet.map(n => span(s"inner:$n"))).keyed("inner")
+            outer = waitingMount(Kyo.lift(div(inner))).keyed("outer")
             ui    = div(tick.render(n => div(span(s"tick:$n"), outer)))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1277,7 +1635,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "a button inside mounted content submits the form around the mount" in {
         for
             submits <- AtomicInt.init(0)
-            ui = UI.form.onSubmit(submits.incrementAndGet.unit)(UI.mounted(Kyo.lift(div(button("send")))))
+            ui = UI.form.onSubmit(submits.incrementAndGet.unit)(waitingMount(Kyo.lift(div(button("send")))))
             _ <- mount(ui) { (recorder, handle) =>
                 for
                     _ <- showsEventually(recorder, Seq("0"), "send")
@@ -1291,7 +1649,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "a disabled button inside mounted content does not submit the form around the mount" in {
         for
             submits <- AtomicInt.init(0)
-            ui = UI.form.onSubmit(submits.incrementAndGet.unit)(UI.mounted(Kyo.lift(div(button("send").disabled(true)))))
+            ui = UI.form.onSubmit(submits.incrementAndGet.unit)(waitingMount(Kyo.lift(div(button("send").disabled(true)))))
             _ <- mount(ui) { (recorder, handle) =>
                 for
                     _ <- showsEventually(recorder, Seq("0"), "send")
@@ -1305,7 +1663,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "closing the subscription releases what a keyed instance acquired" in {
         for
             released <- AtomicBoolean.init(false)
-            ui = div(UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k"))
+            ui = div(waitingMount(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("k"))
             _ <- mount(ui)((recorder, _) => showsEventually(recorder, Seq("0"), "held"))
             r <- released.get
         yield assert(r)
@@ -1345,15 +1703,15 @@ class MountedTest extends kyo.test.Test[Any]:
                     div(items.foreachKeyed(_._1)((k, v) =>
                         div(
                             probe.map(p => span(s"$k:$v:$p")),
-                            UI.mounted(Kyo.lift[UI, Async](span(held))).keyed("m").placeholder(span("..."))
+                            waitingMount(Kyo.lift[UI, Async](span(held))).keyed("m").placeholder(span("..."))
                         )
                     )): UI
                 else span("closed"): UI
             ))
             _ <- Scope.run {
                 for
-                    _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                     sub  <- subscribeAudited(root, holding(entered, forever))
                     _    <- assertEventually(Sync.defer(published.get()))
                     _    <- Sync.defer(armed.set(true))
@@ -1375,7 +1733,7 @@ class MountedTest extends kyo.test.Test[Any]:
     private def twoRegions(show: Boolean, a: Signal[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
         div(
             if show then a.render(x => span(x)) else span("none"),
-            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+            b.render(_ => div(waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
         )
 
     "a keyed mount in the second region of a component that takes a Frame survives the first region coming and going" in {
@@ -1400,7 +1758,7 @@ class MountedTest extends kyo.test.Test[Any]:
 
     // A helper without a `Frame` of its own: every region it builds gets the one frame derived inside it.
     private def panelRegion(sig: Signal[String], key: String, runs: AtomicRef[Map[String, Int]]): UI =
-        sig.render(_ => div(UI.mounted(counted(runs, key)).keyed(key)))
+        sig.render(_ => div(waitingMount(counted(runs, key)).keyed(key)))
 
     "two regions from one helper without a Frame keep their keyed instances when the first one goes away" in {
         for
@@ -1428,8 +1786,8 @@ class MountedTest extends kyo.test.Test[Any]:
         val neighbour: UI = mode match
             case 0 => a.render(x => span(x))
             case 1 => span("constant")
-            case _ => UI.mounted(Kyo.lift(span("other mount")))
-        div(neighbour, b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
+            case _ => waitingMount(Kyo.lift(span("other mount")))
+        div(neighbour, b.render(_ => div(waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box"))))
     end withNeighbour
 
     "an unrelated neighbour that turns from a region into a constant or a mount does not restart a keyed instance" in {
@@ -1458,13 +1816,35 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(total == 1, s"a neighbour changing kind restarted the keyed instance: $total runs")
     }
 
+    // Found as a rare hang of the neighbour case above, on HEAD too: a region running again between the change that files a new keyed
+    // instance and what lets it go (its launch, or the cut it waits for) ended that claim with the instance filed, in no cut and never
+    // launched, and the next claim took it over as running. The window is a few instructions wide, so the case runs many times side by
+    // side: with the defect, half the runs of this test hung. No wait here has a budget; a run that never shows the box is the test's timeout.
+    "a keyed instance whose region runs again while its claim is filing it is still let go" in {
+        Async.foreach(Chunk.from(1 to 640), 16) { _ =>
+            for
+                runs <- AtomicInt.init(0)
+                mode <- Signal.initRef(0)
+                a    <- Signal.initRef("a")
+                b    <- Signal.initRef("b")
+                ui = div(mode.render(m => withNeighbour(m, a, b, runs)))
+                _ <- mount(ui) { (recorder, _) =>
+                    Kyo.foreachDiscard(Seq(1, 2, 0, 2, 1)) { next =>
+                        afterRepaint(recorder, Seq("0"))(mode.set(next)).andThen(showsEventually(recorder, Seq("0", "1", "0"), "runs:"))
+                    }
+                }
+                total <- runs.get
+            yield total
+        }.map(totals => assert(totals.forall(_ == 1), s"runs per case: ${totals.groupBy(identity).view.mapValues(_.size).toMap}"))
+    }
+
     "a keyed instance that moves from one region to another in one pass keeps its instance" in {
         for
             runs <- AtomicInt.init(0)
             left <- Signal.initRef(true)
             r1   <- Signal.initRef("r1")
             r2   <- Signal.initRef("r2")
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("moving")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("moving")
             ui   = div(left.render(l =>
                 div(
                     r1.render(_ => if l then div(node) else div(span("empty-1"))),
@@ -1493,7 +1873,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs <- AtomicInt.init(0)
             both <- Signal.initRef(true)
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("twice")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("twice")
             ui   = div(both.render(b => if b then div(node, node) else div(node)))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1515,7 +1895,7 @@ class MountedTest extends kyo.test.Test[Any]:
     "the same keyed identity twice in a dynamic splice is reported like literal arguments" in {
         for
             runs <- AtomicInt.init(0)
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("spliced-twice")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("spliced-twice")
             kids = Seq[UI.Ast.HtmlChildVal](span("lead"), node, node)
             ui   = div(div(kids*))
             _ <- mount(ui) { (recorder, _) =>
@@ -1528,6 +1908,25 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(total == 0, s"a duplicated identity ran its effect: $total runs")
     }
 
+    "the same site-keyed node twice in a dynamic splice gets an instance at each place, as literal arguments do" in {
+        for
+            runs <- AtomicInt.init(0)
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyedOnSite(summon[UI.MountSite])
+            kids = Seq[UI.Ast.HtmlChildVal](span("lead"), node, node)
+            ui   = div(div(kids*))
+            shown <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "1"), "runs:")
+                    _     <- showsEventually(recorder, Seq("0", "2"), "runs:")
+                    shown <- Kyo.foreach(Seq(Seq("0", "1"), Seq("0", "2")))(recorder.shown)
+                yield shown
+            }
+            total <- runs.get
+        yield
+            assert(shown.distinct.size == 2, s"$shown")
+            assert(total == 2, s"runs: $total")
+    }
+
     // A splice is a dynamic range: positions in it shift with its length. A keyed instance does not depend on its position, so it
     // stays; a keyless one is new on every re-render of its region, as anywhere else; a region in the splice keeps its keyed mount.
     "a dynamic splice whose length changes keeps keyed instances, also inside a region in it, and renews keyless ones" in {
@@ -1537,9 +1936,9 @@ class MountedTest extends kyo.test.Test[Any]:
             freeRuns   <- AtomicInt.init(0)
             lead       <- Signal.initRef(0)
             inner      <- Signal.initRef("x")
-            keyedNode  = UI.mounted(keyedRuns.incrementAndGet.map(r => span(s"keyed:$r"))).keyed("spliced")
-            nestedNode = UI.mounted(nestedRuns.incrementAndGet.map(r => span(s"nested:$r"))).keyed("nested")
-            freeNode   = UI.mounted(freeRuns.incrementAndGet.map(r => span(s"free:$r")))
+            keyedNode  = waitingMount(keyedRuns.incrementAndGet.map(r => span(s"keyed:$r"))).keyed("spliced")
+            nestedNode = waitingMount(nestedRuns.incrementAndGet.map(r => span(s"nested:$r"))).keyed("nested")
+            freeNode   = waitingMount(freeRuns.incrementAndGet.map(r => span(s"free:$r")))
             ui         = div(lead.render { n =>
                 val leads = Seq.fill[UI.Ast.HtmlChildVal](n)(span("lead"))
                 div((leads ++ Seq[UI.Ast.HtmlChildVal](keyedNode, inner.render(_ => div(nestedNode)), freeNode))*)
@@ -1572,7 +1971,7 @@ class MountedTest extends kyo.test.Test[Any]:
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("a", "b"))
             tick  <- Signal.initRef(0)
-            ui = div(items.foreachKeyed(identity)(id => div(tick.render(_ => div(UI.mounted(counted(runs, id)).keyed("m"))))))
+            ui = div(items.foreachKeyed(identity)(id => div(tick.render(_ => div(waitingMount(counted(runs, id)).keyed("m"))))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "a", "0", "0"), "a:1")
@@ -1593,7 +1992,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("a", "b"))
-            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed("m"))))
+            ui = div(items.foreach(id => div(waitingMount(counted(runs, id)).keyed("m"))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _      <- showsEventually(recorder, Seq("0", "0", "0"), "a:1")
@@ -1609,7 +2008,7 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     private def card(issue: String, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
-        div(refresh.render(_ => div(UI.mounted(counted(runs, issue)).keyed(issue))))
+        div(refresh.render(_ => div(waitingMount(counted(runs, issue)).keyed(issue))))
 
     // The page takes a `Frame` too, as application code does, so both cards and their regions get the page's caller's frame.
     private def board(pinned: Boolean, refresh: Signal[Int], runs: AtomicRef[Map[String, Int]])(using Frame): UI =
@@ -1652,7 +2051,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 if n == 1 then Sync.ensure(released.set(true))(entered.release.andThen(gate.get).andThen(counted(runs, "A")))
                 else counted(runs, "A")
             }
-            cardA = div(refresh.render(_ => div(UI.mounted(effectA).keyed("A"))))
+            cardA = div(refresh.render(_ => div(waitingMount(effectA).keyed("A"))))
             ui    = div(pinned.render(p => div(if p then cardA else span("nothing pinned"), card("B", refresh, runs))))
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1696,8 +2095,8 @@ class MountedTest extends kyo.test.Test[Any]:
             releasedB <- AtomicBoolean.init(false)
             showA     <- Signal.initRef(true)
             ui = div(
-                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
-                div(UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B"))
+                showA.render(s => if s then div(waitingMount(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(waitingMount(awaiting(shared, entered, releasedB, "B")).keyed("B"))
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1730,8 +2129,8 @@ class MountedTest extends kyo.test.Test[Any]:
                 ui = div(show.render(s =>
                     if s then
                         div(
-                            UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A"),
-                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                            waitingMount(awaiting(shared, entered, releasedA, "A")).keyed("A"),
+                            waitingMount(awaiting(shared, entered, releasedB, "B")).keyed("B")
                         )
                     else span("gone")
                 ))
@@ -1762,7 +2161,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 effect = (n: Int, name: String, released: AtomicBoolean) =>
                     if n == 0 then awaiting(shared, entered, released, name) else later.get.andThen(span(s"$name:later"))
                 ui = div(tick.render(n =>
-                    div(span(s"tick:$n"), UI.mounted(effect(n, "A", releasedA)), UI.mounted(effect(n, "B", releasedB)))
+                    div(span(s"tick:$n"), waitingMount(effect(n, "A", releasedA)), waitingMount(effect(n, "B", releasedB)))
                 ))
                 _ <- mount(ui) { (recorder, _) =>
                     for
@@ -1794,8 +2193,8 @@ class MountedTest extends kyo.test.Test[Any]:
                 ui = div(show.render(s =>
                     if s then
                         div(
-                            UI.mounted(awaiting(shared, entered, releasedA, "A")),
-                            UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")
+                            waitingMount(awaiting(shared, entered, releasedA, "A")),
+                            waitingMount(awaiting(shared, entered, releasedB, "B")).keyed("B")
                         )
                     else span("gone")
                 ))
@@ -1824,10 +2223,10 @@ class MountedTest extends kyo.test.Test[Any]:
                 releasedX <- AtomicBoolean.init(false)
                 where     <- Signal.initRef(1)
                 // One call site, so both regions show the same identity: a write that switches the regions moves the instance.
-                x  = UI.mounted(awaiting(shared, entered, releasedX, "X")).keyed("X")
+                x  = waitingMount(awaiting(shared, entered, releasedX, "X")).keyed("X")
                 ui = div(
                     where.render(w =>
-                        if w == 1 then div(UI.mounted(awaiting(shared, entered, releasedK, "K")), x) else span("first empty")
+                        if w == 1 then div(waitingMount(awaiting(shared, entered, releasedK, "K")), x) else span("first empty")
                     ),
                     where.render(w => if w == 2 then div(x) else span("second empty"))
                 )
@@ -1863,11 +2262,11 @@ class MountedTest extends kyo.test.Test[Any]:
                 // One call site, so both regions show the same identity for key 1: the write to 2 moves the instance, the write to 3
                 // shows key 2 in its place.
                 x = (key: Int) =>
-                    UI.mounted(runs.incrementAndGet.andThen(
+                    waitingMount(runs.incrementAndGet.andThen(
                         if key == 1 then awaiting(shared, entered, releasedX, "X") else span("fresh")
                     )).keyed(key).onError(e => span(s"error:${e.source}"))
                 ui = div(
-                    where.render(w => if w == 1 then div(UI.mounted(awaiting(shared, entered, releasedK, "K")), x(1)) else span("first")),
+                    where.render(w => if w == 1 then div(waitingMount(awaiting(shared, entered, releasedK, "K")), x(1)) else span("first")),
                     where.render(w => if w == 2 then div(x(1)) else if w == 3 then div(x(2)) else span("second empty"))
                 )
                 _ <- mountSession(ui) { (recorder, sub) =>
@@ -1906,8 +2305,8 @@ class MountedTest extends kyo.test.Test[Any]:
             releasedB <- AtomicBoolean.init(false)
             showA     <- Signal.initRef(true)
             ui = div(
-                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
-                div(UI.mounted(awaiting(shared, entered, releasedB, "B")))
+                showA.render(s => if s then div(waitingMount(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(waitingMount(awaiting(shared, entered, releasedB, "B")))
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1937,8 +2336,8 @@ class MountedTest extends kyo.test.Test[Any]:
                 ui = div(show.render(s =>
                     if s then
                         div(
-                            UI.mounted(awaiting(shared, entered, releasedA, "A")),
-                            inner.render(n => div(span(s"inner:$n"), UI.mounted(awaiting(shared, entered, releasedB, "B"))))
+                            waitingMount(awaiting(shared, entered, releasedA, "A")),
+                            inner.render(n => div(span(s"inner:$n"), waitingMount(awaiting(shared, entered, releasedB, "B"))))
                         )
                     else span("gone")
                 ))
@@ -1964,8 +2363,8 @@ class MountedTest extends kyo.test.Test[Any]:
             showA     <- Signal.initRef(true)
             caught: PartialFunction[MountError, UI] = { case e => span(s"caught:${e.source}") }
             ui                                      = div(
-                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
-                UI.boundary.onError(caught)(div(UI.mounted(awaiting(shared, entered, releasedB, "B")).keyed("B")))
+                showA.render(s => if s then div(waitingMount(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                UI.boundary.onError(caught)(div(waitingMount(awaiting(shared, entered, releasedB, "B")).keyed("B")))
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -1993,14 +2392,14 @@ class MountedTest extends kyo.test.Test[Any]:
                 ui = div(show.render(s =>
                     if s then
                         div(
-                            UI.mounted(awaiting(shared, entered, releasedK, "K")),
-                            UI.mounted(awaiting(shared, entered, releasedX, "X")).keyed("X")
+                            waitingMount(awaiting(shared, entered, releasedK, "K")),
+                            waitingMount(awaiting(shared, entered, releasedX, "X")).keyed("X")
                         )
                     else span("gone")
                 ))
                 recorder = new Recorder()
-                _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                 // The write runs in a batch that stays open, so the cut that would decide X is not taken while the session lives.
                 (session, batch) <- Scope.run {
                     for
@@ -2043,8 +2442,8 @@ class MountedTest extends kyo.test.Test[Any]:
                 .map(fiber => fiber.onInterrupt(_ => reached.set(true)))
                 .andThen(span("up"))
             ui = div(
-                showA.render(s => if s then div(UI.mounted(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
-                div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                showA.render(s => if s then div(waitingMount(awaiting(shared, entered, releasedA, "A")).keyed("A")) else span("gone")),
+                div(waitingMount(effect).onError(e => span(s"error:${e.source}")))
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
@@ -2068,7 +2467,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 effect = UI.fork(never.get).map { fiber =>
                     fiber.onInterrupt(_ => reached.set(true)).andThen(fiber.interrupt).andThen(fiber.getResult)
                 }.andThen(span("up"))
-                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                ui = div(waitingMount(effect).onError(e => span(s"error:${e.source}")))
                 _ <- mountSession(ui) { (recorder, sub) =>
                     for
                         _     <- showsEventually(recorder, Seq("0"), "up")
@@ -2099,7 +2498,7 @@ class MountedTest extends kyo.test.Test[Any]:
                         _      <- fiber.getResult
                     yield ()
                 }.andThen(span("up"))
-                ui = div(UI.mounted(effect).onError(e => span(s"error:${e.source}")))
+                ui = div(waitingMount(effect).onError(e => span(s"error:${e.source}")))
                 _ <- mountSession(ui) { (recorder, sub) =>
                     for
                         _     <- showsEventually(recorder, Seq("0"), "up")
@@ -2121,7 +2520,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 started <- Latch.init(1)
                 show    <- Signal.initRef(true)
                 effect = UI.fork(started.release.andThen(never.get)).andThen(span("up"))
-                ui     = div(show.render(s => if s then div(UI.mounted(effect).keyed("F")) else span("gone")))
+                ui     = div(show.render(s => if s then div(waitingMount(effect).keyed("F")) else span("gone")))
                 _ <- mountSession(ui) { (recorder, sub) =>
                     for
                         _ <- started.await
@@ -2141,7 +2540,7 @@ class MountedTest extends kyo.test.Test[Any]:
             for
                 entered <- Latch.init(1)
                 never   <- Promise.init[Unit, Any]
-                node = UI.mounted(entered.release.andThen(never.get).andThen(span("never")))
+                node = waitingMount(entered.release.andThen(never.get).andThen(span("never")))
                 (table, _) <- kyo.internal.MountTable.root(Seq.empty)
                 instance   <- kyo.internal.MountInstance.start(MountedSpec(node, Seq("0"), Nil), Absent, Nil, table)
                 _          <- entered.await
@@ -2155,7 +2554,7 @@ class MountedTest extends kyo.test.Test[Any]:
     private def draftBox(editing: Boolean, draft: SignalRef[String], b: Signal[String], runs: AtomicInt)(using Frame): UI =
         div(
             if editing then input.value(draft) else span("read only"),
-            b.render(_ => div(UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
+            b.render(_ => div(waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("box")))
         )
 
     "a bound input appearing before a region does not restart the region's keyed instance" in {
@@ -2182,7 +2581,7 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
             order <- Signal.initRef(Chunk("A", "B"))
-            ui = div(order.render(o => ul(fragment(o.toSeq.map(id => li(span(id), UI.mounted(counted(runs, id)).keyed("note")))*))))
+            ui = div(order.render(o => ul(fragment(o.toSeq.map(id => li(span(id), waitingMount(counted(runs, id)).keyed("note")))*))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "0", "0", "1"), "kyo-mount-error")
@@ -2198,11 +2597,35 @@ class MountedTest extends kyo.test.Test[Any]:
         yield assert(counts.isEmpty, s"a duplicated identity ran its effect: $counts")
     }
 
+    "rows spliced into a fragment whose mounts are keyed on one site keep their instances by order, so a reorder leaves each at its place" in {
+        // Calls of one site are told apart by the order of the calls, as calls without a key are in Compose. A key from the data, or
+        // foreachKeyed, is what lets an instance follow its row.
+        for
+            runs  <- AtomicRef.init(Map.empty[String, Int])
+            order <- Signal.initRef(Chunk("A", "B"))
+            ui = div(order.render(o =>
+                ul(fragment(o.toSeq.map(id => li(span(id), waitingMount(counted(runs, id)).keyedOnSite(summon[UI.MountSite])))*))
+            ))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "0", "0", "1"), "A:1")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1", "1"), "B:1")
+                    _      <- afterRepaint(recorder, Seq("0"))(order.set(Chunk("B", "A")))
+                    _      <- showsEventually(recorder, Seq("0", "0", "0", "1"), ":1")
+                    _      <- showsEventually(recorder, Seq("0", "0", "1", "1"), ":1")
+                    first  <- recorder.shown(Seq("0", "0", "0", "1"))
+                    second <- recorder.shown(Seq("0", "0", "1", "1"))
+                yield assert(first.contains("A:1") && second.contains("B:1"), s"after the reorder: $first, $second")
+            }
+            counts <- runs.get
+        yield assert(counts == Map("A" -> 1, "B" -> 1), s"runs: $counts")
+    }
+
     "an unkeyed foreach puts the row index into the identity, so a data-keyed mount restarts when its row shifts" in {
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("B"))
-            ui = div(items.foreach(id => div(UI.mounted(counted(runs, id)).keyed(id))))
+            ui = div(items.foreach(id => div(waitingMount(counted(runs, id)).keyed(id))))
             _ <- mount(ui) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "0", "0"), "B:1")
@@ -2219,12 +2642,12 @@ class MountedTest extends kyo.test.Test[Any]:
         for
             runs <- AtomicRef.init(Map.empty[String, Int])
             tick <- Signal.initRef(0)
-            inner = (name: String) => UI.mounted(counted(runs, name)).keyed("inner")
+            inner = (name: String) => waitingMount(counted(runs, name)).keyed("inner")
             ui    = div(tick.render(n =>
                 div(
                     span(s"tick:$n"),
-                    UI.mounted(Kyo.lift(div(inner("in-keyless")))),
-                    UI.mounted(Kyo.lift(div(inner("in-keyed")))).keyed("outer")
+                    waitingMount(Kyo.lift(div(inner("in-keyless")))),
+                    waitingMount(Kyo.lift(div(inner("in-keyed")))).keyed("outer")
                 )
             ))
             _ <- mount(ui) { (recorder, _) =>
@@ -2247,7 +2670,7 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(groups.foreachKeyed(_._1)((group, ids) =>
                 div(
                     span(group),
-                    Signal.initConst(ids).foreachKeyed(identity)(id => div(UI.mounted(counted(runs, s"$id@$group")).keyed("row")))
+                    Signal.initConst(ids).foreachKeyed(identity)(id => div(waitingMount(counted(runs, s"$id@$group")).keyed("row")))
                 )
             ))
             _ <- mount(ui) { (recorder, _) =>
@@ -2296,8 +2719,8 @@ class MountedTest extends kyo.test.Test[Any]:
     )(using Frame, kyo.test.AssertScope): A < Async =
         Scope.run {
             for
-                _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                 sub  <- subscribeAudited(root, recorder)
                 a    <- f(sub.handle)
                 _    <- assertConsistent(sub)
@@ -2319,7 +2742,7 @@ class MountedTest extends kyo.test.Test[Any]:
             gate     <- Promise.init[Unit, Any]
             held     = if holdLoser then Seq("1") else Seq("2")
             recorder = new Gated(held, entered, gate)
-            node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+            node     = waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
                 .keyed("docked")
             ui = div(
                 // Two writes on the JVM: one change only inside UI.batch.
@@ -2377,7 +2800,7 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- AtomicBoolean.init(false)
             left     <- Signal.initRef(true)
             other    <- Signal.initRef(0)
-            node = UI.mounted(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("dropped")
+            node = waitingMount(Scope.ensure(released.set(true)).andThen(span("held"))).keyed("dropped")
             ui   = div(
                 button("hide").onClick(left.set(false)),
                 left.render(l => if l then div(node) else div(span("empty"))),
@@ -2400,7 +2823,7 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- AtomicInt.init(0)
             showA    <- Signal.initRef(true)
             showB    <- Signal.initRef(false)
-            node = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+            node = waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
                 .keyed("twice-apart")
             ui = div(
                 button("both").onClick(showB.set(true)),
@@ -2432,7 +2855,7 @@ class MountedTest extends kyo.test.Test[Any]:
             entered  <- Promise.init[Unit, Any]
             gate     <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("2"), entered, gate)
-            node     = UI.mounted(Scope.ensure(released.set(true)).andThen(span("panel"))).keyed("transit")
+            node     = waitingMount(Scope.ensure(released.set(true)).andThen(span("panel"))).keyed("transit")
             ui       = div(
                 button("hide").onClick(left.set(false)),
                 left.render(l => if l then div(node) else div(span("empty-left"))),
@@ -2470,7 +2893,7 @@ class MountedTest extends kyo.test.Test[Any]:
                     gate      <- Latch.init(1)
                     released  <- AtomicBoolean.init(false)
                     show      <- Signal.initRef(true)
-                    node = UI.mounted(
+                    node = waitingMount(
                         Scope.ensure(releasing.release.andThen(gate.await).andThen(released.set(true))).andThen(span("panel"))
                     ).keyed("slow-release")
                     ui = div(show.render(s => if s then div(node) else div(span("hidden"))))
@@ -2500,8 +2923,8 @@ class MountedTest extends kyo.test.Test[Any]:
             entered  <- Promise.init[Unit, Any]
             gate     <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("1", "0", "1"), entered, gate)
-            inner    = UI.mounted(Scope.ensure(released.set(true)).andThen(span("inner"))).keyed("inner-transit")
-            owner    = UI.mounted(Kyo.lift(div(
+            inner    = waitingMount(Scope.ensure(released.set(true)).andThen(span("inner"))).keyed("inner-transit")
+            owner    = waitingMount(Kyo.lift(div(
                 left.render(l => if l then div(inner) else div(span("empty-left"))),
                 right.render(p => if p._1 then div(inner) else div(span(s"empty-right:${p._2}")))
             )))
@@ -2524,7 +2947,7 @@ class MountedTest extends kyo.test.Test[Any]:
     }
 
     private def errorBox(label: String, fail: Promise[Unit, Any])(using Frame): UI =
-        UI.mounted(UI.fork(fail.get.andThen(Abort.fail(new Exception("feed died")))).andThen(span("box")))
+        waitingMount(UI.fork(fail.get.andThen(Abort.fail(new Exception("feed died")))).andThen(span("box")))
             .onError(e => span(s"$label-error:${e.message}"))
             .keyed("error-box")
 
@@ -2564,10 +2987,10 @@ class MountedTest extends kyo.test.Test[Any]:
             right   <- Signal.initRef(false)
             trigger <- Promise.init[Unit, Any]
             between <- Promise.init[Unit, Any]
-            node = UI.mounted(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("written")
+            node = waitingMount(runs.incrementAndGet.map(r => span(s"runs:$r"))).keyed("written")
             move = left.set(false).andThen(between.get).andThen(right.set(true))
             // The writer is a fiber the effect of another mount forked: its writes are no event handler's.
-            writer = UI.mounted(UI.fork(trigger.get.andThen(if batched then UI.batch(move) else move)).andThen(span("writer")))
+            writer = waitingMount(UI.fork(trigger.get.andThen(if batched then UI.batch(move) else move)).andThen(span("writer")))
             ui     = div(
                 writer,
                 left.render(l => if l then div(node) else div(span("empty-left"))),
@@ -2605,8 +3028,8 @@ class MountedTest extends kyo.test.Test[Any]:
             recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
             counts <- Scope.run {
                 for
-                    _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                     sub  <- subscribeAudited(root, recorder)
                     c = sub.mountSession.counters
                     _ <- assertEventually(Sync.defer(c.registered.get == rows + 1))
@@ -2648,13 +3071,13 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- AtomicInt.init(0)
             items    <- Signal.initRef(Chunk.from(order))
             row = (id: String) =>
-                UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.andThen(span(id)))).keyed("m")
+                waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.andThen(span(id)))).keyed("m")
             ui       = div(items.foreachKeyed(identity)(id => div(row(id))))
             recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
             counts <- Scope.run {
                 for
-                    _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                     sub  <- subscribeAudited(root, recorder)
                     c = sub.mountSession.counters
                     _ <- assertEventually(runs.get.map(_ == rows))
@@ -2700,14 +3123,14 @@ class MountedTest extends kyo.test.Test[Any]:
             row = (id: String) =>
                 tr(
                     td(tick.render(n => span(s"$id:$n"))),
-                    td(UI.mounted(runs.incrementAndGet.andThen(span(id))).keyed("m").placeholder(span("...")))
+                    td(waitingMount(runs.incrementAndGet.andThen(span(id))).keyed("m").placeholder(span("...")))
                 )
             ui       = div(table(tbody(items.foreachKeyed(identity)(row))))
             recorder = new Recorder(keepsRows = true) // patches the list as the DOM backend does
             counts <- Scope.run {
                 for
-                    _    <- recorder.initial(ui)
                     root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- MountDispatch.live.let(root.mountDispatch)(recorder.initial(ui))
                     sub  <- subscribeAudited(root, recorder)
                     c = sub.mountSession.counters
                     _ <- items.set(Chunk.from((0 until rows).map(i => s"r$i")))
@@ -2797,7 +3220,7 @@ class MountedTest extends kyo.test.Test[Any]:
             left     <- Signal.initRef(Chunk.from(states.head._1))
             right    <- Signal.initRef(Chunk.from(states.head._2))
             row = (id: String) =>
-                UI.mounted(
+                waitingMount(
                     Scope.ensure(released.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).unit)
                         .andThen(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"[$id:${m(id)}]")))
                 ).keyed("row")
@@ -2850,7 +3273,7 @@ class MountedTest extends kyo.test.Test[Any]:
             released <- Latch.init(1)
             done     <- Latch.init(1)
             show     <- Signal.initRef(true)
-            node = UI.mounted(Scope.ensure(released.release).andThen(span("app"))).keyed("run")
+            node = waitingMount(Scope.ensure(released.release).andThen(span("app"))).keyed("run")
             ui   = div(
                 button("stop").onClick(show.set(false).andThen(released.await).andThen(done.release)),
                 show.render(s => if s then div(node) else div(span("stopped")))
@@ -2875,7 +3298,7 @@ class MountedTest extends kyo.test.Test[Any]:
             key     <- Signal.initRef("a")
             started <- Latch.init(1)
             answer  <- Latch.init(1)
-            node = (k: String) => UI.mounted((if k == "b" then started.release else Kyo.unit).andThen(span(s"content-$k"))).keyed(k)
+            node = (k: String) => waitingMount((if k == "b" then started.release else Kyo.unit).andThen(span(s"content-$k"))).keyed(k)
             ui   = div(button("save").onClick(key.set("b").andThen(answer.await)), key.render(k => div(node(k))))
             _ <- mount(ui) { (recorder, handle) =>
                 for
@@ -2903,11 +3326,11 @@ class MountedTest extends kyo.test.Test[Any]:
             value    <- Signal.initRef(0)
             show     <- Signal.initRef(true)
             // A keyless mount is released as its region's pass closes: its finalizer writes the value back then.
-            keyless = UI.mounted(
+            keyless = waitingMount(
                 Scope.ensure(armed.compareAndSet(true, false).map(go => if go then value.set(0).andThen(reverted.release) else Kyo.unit))
                     .andThen(span("keyless"))
             )
-            node = UI.mounted(Scope.ensure(released.release).andThen(span("panel"))).keyed("panel")
+            node = waitingMount(Scope.ensure(released.release).andThen(span("panel"))).keyed("panel")
             ui   = div(
                 value.render(n => div(span(s"value:$n"), keyless)),
                 show.render(s => if s then div(node) else div(span("hidden")))
@@ -2953,8 +3376,9 @@ class MountedTest extends kyo.test.Test[Any]:
                         [B, S] => (f: ((Boolean, Int)) => B < S) => right.currentWith(f),
                         [B, S] => (f: ((Boolean, Int)) => B < S) => right.nextWith(f)
                     )
-                    node = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
-                        .keyed("raw-docked")
+                    node =
+                        waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+                            .keyed("raw-docked")
                     ui = div(
                         button("move").onClick(UI.batch(left.set(false).andThen(right.getAndUpdate(p => (true, p._2)))).unit),
                         left.render(l => if l then div(node) else div(span("empty-left"))),
@@ -2992,7 +3416,7 @@ class MountedTest extends kyo.test.Test[Any]:
             entered  <- Promise.init[Unit, Any]
             gate     <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("0", "1"), entered, gate)
-            node     = UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
+            node     = waitingMount(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(r => span(s"runs:$r"))))
                 .keyed("first-mount")
             ui = div(outer.render(n => div(span(s"outer:$n"), inner.render(v => if v then div(node) else div(span("no mount"))))))
             _ <- mountWith(recorder, ui) { _ =>
@@ -3030,7 +3454,7 @@ class MountedTest extends kyo.test.Test[Any]:
             entered <- Promise.init[Unit, Any]
             gate    <- Promise.init[Unit, Any]
             recorder = new Gated(Seq("2"), entered, gate)
-            node     = UI.mounted(Kyo.lift(span("panel"))).keyed("named-twice")
+            node     = waitingMount(Kyo.lift(span("panel"))).keyed("named-twice")
             ui       = div(
                 button("both").onClick(showB.set(true)),
                 showA.render(a => if a then div(node) else div(span("no a"))),
@@ -3061,8 +3485,8 @@ class MountedTest extends kyo.test.Test[Any]:
             kReleased  <- AtomicBoolean.init(false)
             showX      <- Signal.initRef(true)
             showK      <- Signal.initRef(true)
-            nodeX = UI.mounted(Scope.ensure(xReleasing.release.andThen(xGate.await)).andThen(span("x-content"))).keyed("slow")
-            nodeK = UI.mounted(Scope.ensure(kReleased.set(true)).andThen(runs.incrementAndGet.map(r => span(s"k:$r"))))
+            nodeX = waitingMount(Scope.ensure(xReleasing.release.andThen(xGate.await)).andThen(span("x-content"))).keyed("slow")
+            nodeK = waitingMount(Scope.ensure(kReleased.set(true)).andThen(runs.incrementAndGet.map(r => span(s"k:$r"))))
                 .placeholder(span("k-pending"))
                 .whilePending(PendingPolicy.Placeholder)
                 .keyed("again")

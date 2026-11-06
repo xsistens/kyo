@@ -60,19 +60,20 @@ class ReactiveRegionValueObservationTest extends kyo.test.Test[Any]:
                 state   <- Signal.initRef(Playback(0, 65))
                 _       <- mount(state.map(_.volume).render(v => UI.button(v.toString).onClick(Kyo.unit)), slice)
                 _       <- mount(state.render(st => UI.button(st.progressMs.toString).onClick(Kyo.unit)), witness)
-                _       <- slice.await(1)
-                _       <- witness.await(1)
+                // Each region's first emission is the value the enclosing paint already showed, which paints nothing: both have started
+                // once both are parked on the source.
+                _ <- assertEventually(state.waiters.map(_ == 2))
                 // Five emissions that move the record but not the volume, each waited on through the witness.
-                _     <- Kyo.foreachDiscard(1 to 5)(i => state.set(Playback(i, 65)).andThen(witness.await(1 + i)))
+                _     <- Kyo.foreachDiscard(1 to 5)(i => state.set(Playback(i, 65)).andThen(witness.await(i)))
                 quiet <- slice.get
                 _     <- state.set(Playback(6, 70))
-                _     <- slice.await(2)
+                _     <- slice.await(1)
                 after <- slice.get
                 seen  <- witness.get
             yield assert(
-                after == 2 && seen >= 6,
-                s"the volume region painted $after times in total, expected 2 (one mount, one change); it stood at $quiet before the " +
-                    s"change, expected 1. The witness painted $seen times, expected at least 6; below that the emissions never " +
+                after == 1 && seen >= 5,
+                s"the volume region painted $after times in total, expected 1 (one change); it stood at $quiet before the " +
+                    s"change, expected 0. The witness painted $seen times, expected at least 5; below that the emissions never " +
                     s"reached the regions and this proves nothing."
             )
             end for

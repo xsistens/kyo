@@ -8,6 +8,7 @@ import kyo.internal.Reducible
 import kyo.internal.UICommands
 import kyo.internal.UIExchange
 import kyo.internal.UIServer
+import scala.annotation.targetName
 import scala.language.implicitConversions
 
 /** An immutable description of a DOM subtree.
@@ -270,7 +271,7 @@ object UI:
 
     /** Conditional rendering: shows `body` while `condition` is true and an empty node otherwise, re-evaluating when the signal emits. */
     def when[C <: UI](condition: Signal[Boolean])(body: => C)(using Frame): Reactive[C] =
-        Reactive[C](condition.map(v => if v then body else UI.empty))
+        condition.render(v => if v then body: UI else UI.empty).asInstanceOf[Reactive[C]]
 
     /** What a mounted node shows between losing its instance (a key change, or a re-render of a keyless node) and the new instance
       * publishing.
@@ -367,34 +368,85 @@ object UI:
             def unapply(e: MountError): Some[Any] = Some(e.failure)
     end MountError
 
-    /** Embeds a component that runs an effect to produce its UI: loading data, opening a subscription, starting a feed.
+    /** Embeds a component that holds state of its own: what `draw` allocates lives as long as the node's instance.
       *
-      * The effect runs when the node attaches, inside a `Scope` that lives as long as the node's instance, so whatever the effect
-      * acquires or forks is released when the instance goes away. Until it publishes, the node shows its placeholder. An `Abort` or
-      * panic renders through [[kyo.UI.MountedOps.onError]] (by default an inline error node) while the enclosing region stays alive.
+      * `draw` runs in the render pass, so what it returns is on the page from the first paint: a static rendering shows it, a live client
+      * shows it with no placeholder in between, and it takes events from that paint on. There is nothing to wait for, so the node has no
+      * `.placeholder`. A pass that shows the node again shows the same instance when it is [[kyo.UI.MountedOps.keyed]] or
+      * [[kyo.UI.MountedOps.keyedOnSite]]; a node without a key gets a fresh instance whenever its enclosing reactive region re-renders. A static rendering draws too, and keeps nothing.
+      *
+      * Inside `draw`, [[kyo.UI.id]] names an element so that the static rendering and the live one agree, and [[kyo.UI.whileMounted]] starts
+      * what has to run on a live page: a feed, an observer, a timer.
+      *
+      * A panic in `draw` renders through [[kyo.UI.MountedOps.onError]] (by default an inline error node).
+      */
+    @targetName("mountedDrawn")
+    def mounted(draw: UI < Sync)(using Frame): Drawn =
+        Drawn(draw, key = Absent, errorRender = Absent)
+
+    /** [[mounted]] for a component whose configuration, `props`, can change while its instance lives. `draw` runs once per instance and gets
+      * the props as a signal: a keyed instance that a region running again keeps is handed the props of the latest run there, and what
+      * reads them follows, while what `draw` allocates (open state, a highlight, an id) is made once and stays. Without a key the instance is
+      * new with every run anyway, so this is for a node that is `.keyed` or `.keyedOnSite`, which is how a component keeps its state across its caller's
+      * re-renders. Props compare by `==`: equal props reach no one.
+      */
+    def mountedWith[P](props: P)(draw: Signal[P] => UI < Sync)(using CanEqual[P, P], Frame): Drawn =
+        Drawn(UI.empty, key = Absent, errorRender = Absent, props = Present(new kyo.internal.PropsDraw(props, draw)))
+
+    /** Embeds a component that waits for its UI: loading data, a round trip, anything that suspends.
+      *
+      * The effect runs when the node attaches on a live page, on a fiber, inside a `Scope` that lives as long as the node's instance, so
+      * whatever the effect acquires or forks is released when the instance goes away. Until it publishes, the node shows its
+      * placeholder, in a static rendering too. An `Abort` or panic renders through [[kyo.UI.MountedOps.onError]] (by default an inline
+      * error node) while the enclosing region stays alive.
       *
       * Identity decides when the effect runs again. A node without a key gets a fresh instance whenever its enclosing reactive region
       * re-renders. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
-      * each re-render shows it from the same `.keyed` call with an equal key in the same list row.
+      * each re-render shows it from the same `.keyed` call with an equal key in the same list row; that identity shown twice at once is
+      * reported as a duplicate. A node with [[kyo.UI.MountedOps.keyedOnSite]] keeps it as long as each re-render shows it from the same
+      * site in the same list row, as the same call in that order where one site is called more than once in its region.
       *
       * The effect must return promptly: allocate and fork, never park. Anything long-lived belongs on a forked fiber, which the
-      * instance's `Scope` owns; fork it with [[kyo.UI.fork]] so its failure reaches the node.
+      * instance's `Scope` owns; fork it with [[kyo.UI.fork]] so its failure reaches the node. An effect typed wider than what it does
+      * counts as waiting: the overload goes by the type.
       */
+    @targetName("mountedWaiting")
     def mounted(effect: UI < (Abort[Any] & Async & Scope))(using Frame): Mounted =
         Mounted(effect, key = Absent, placeholderUI = Absent, errorRender = Absent, pendingPolicy = PendingPolicy.KeepLatest)
 
-    /** A node that keeps a `SignalRef` for as long as its instance lives, starting at `initial`, read when the node attaches. An instance ends
-      * when an enclosing region re-renders, unless the node is [[kyo.UI.MountedOps.keyed]]: then the state survives what `keyed` says. The
-      * placeholder is what a static page shows.
+    /** An element id for the mount being drawn. An id is an address, not a lifetime: a keyed node's comes from its identity (the instance
+      * that holds it, where its `.keyed` was written, its key and the keys of the list rows around it, and for a node keyed on its site
+      * from the second call of that site in its region on, the order of the call), never from its place, so no sibling before it changes it; a node without a key keeps its place as base, so a new instance a re-render shows there gets the
+      * same id and a morph keeps the element. Either way it is the same in a static rendering and on the live page, on the JVM and in
+      * JavaScript, and needs no session. Each call in one draw names another element. Only inside a [[kyo.UI.mounted]] effect; anywhere
+      * else it panics.
       */
-    def owned[A](initial: A < Sync)(draw: SignalRef[A] => UI)(using CanEqual[A, A], Frame): Mounted =
-        mounted(initial.map(a => Signal.initRef(a).map(draw)))
+    def id(using Frame): String < Sync =
+        kyo.internal.DrawContext.current.use {
+            case Present(context) => Sync.Unsafe.defer(context.nextId())
+            case Absent           => Abort.panic(UIException("UI.id is only available while a UI.mounted effect runs"))
+        }
+
+    /** Runs `effect` on the live page for as long as the instance of the mount being drawn lives: on the client or in the session, after
+      * its content is on the page, never in a static rendering. It runs on a fiber in the instance's `Scope`, so what it acquires or forks is
+      * released when the instance ends, which for a mount without a key is the next run of its region, and an element hidden with
+      * `.hidden(true)` keeps it running; a failure goes to the `onFailure` rules around the node, and when none matches it switches the node to its error
+      * rendering, as a [[kyo.UI.fork]] does. The effect may run for as long as the node is shown, and several run side by side.
+      *
+      * Only while a [[kyo.UI.mounted]] effect runs; anywhere else, and from a fiber that effect forked once it has returned, it panics.
+      */
+    def whileMounted(effect: => Any < (Abort[Any] & Async & Scope))(using Frame): Unit < Sync =
+        kyo.internal.DrawContext.current.use {
+            case Present(context) if context.add(Sync.defer(effect)) => Kyo.unit
+            case _ => Abort.panic(UIException("UI.whileMounted is only available while a UI.mounted effect runs"))
+        }
 
     /** Where a [[kyo.UI.MountedOps.keyed]] call is written, which is part of a keyed instance's identity.
       *
       * It is fixed at compile time from the source position of the `.keyed` call, so a `Frame` passed down through the methods that
       * build the tree does not merge two calls. A helper that applies `.keyed` itself to effects its callers supply can take a
-      * `(using UI.MountSite)`, which makes each of its callers a place of its own.
+      * `(using UI.MountSite)`, which makes each of its callers a place of its own. A component that keys itself on where it was made
+      * takes one the same way and hands it to [[kyo.UI.MountedOps.keyedOnSite]].
       */
     type MountSite = kyo.internal.MountSites.MountSite
 
@@ -586,8 +638,39 @@ object UI:
     def devtools[A, S](sink: RenderEvent => Unit)(v: A < S)(using Frame): A < S =
         Devtools.sink.let(Present(sink))(v)
 
-    /** Builder modifiers for [[kyo.UI.Ast.Mounted]]. */
+    /** Builder modifiers for [[kyo.UI.Ast.Mounted]] and [[kyo.UI.Ast.Drawn]]. */
     object MountedOps:
+        extension (d: Drawn)
+            /** Keeps the node's instance, and with it what its draw allocated, across re-renders of the reactive regions around it. The
+              * identity is what [[kyo.UI.MountedOps.keyed]] on a waiting node says: the `.keyed` call, the key and the rows of the enclosing
+              * lists, and the same identity shown twice at once is reported as a duplicate.
+              */
+            @scala.annotation.targetName("keyedDrawn")
+            def keyed[K](key: K)(using CanEqual[K, K], MountSite): Drawn =
+                given Frame = d.frame
+                d.copy(key = Present(key), site = summon[MountSite], keyOrigin = KeyOrigin.Caller)
+            end keyed
+
+            /** Keeps the node's instance, and with it what its draw allocated, keyed on `made`, where the component was made, instead of on
+              * a key its caller chose. What that identity is, and how calls of one site in one range are told apart by their order, is what
+              * [[kyo.UI.MountedOps.keyedOnSite]] on a waiting node says.
+              */
+            @scala.annotation.targetName("keyedOnSiteDrawn")
+            def keyedOnSite(made: MountSite)(using MountSite): Drawn =
+                given Frame = d.frame
+                d.copy(key = Present(made), site = summon[MountSite], keyOrigin = KeyOrigin.Site)
+            end keyedOnSite
+
+            /** Renders the node's failure: a panic in its draw, or a [[kyo.UI.whileMounted]] effect or [[kyo.UI.fork]] fiber dying once it is
+              * shown. Defaults to a minimal inline error node. The failure is also logged.
+              */
+            @scala.annotation.targetName("onErrorDrawn")
+            def onError(f: MountError => UI): Drawn =
+                given Frame = d.frame
+                d.copy(errorRender = Present(f))
+            end onError
+        end extension
+
         extension (m: Mounted)
             /** Keeps the node's instance (its `Scope`, resources and content) across re-renders of the reactive regions around it.
               *
@@ -595,9 +678,11 @@ object UI:
               * enclosing mount instance or the session root. It lives as long as a region of that content shows the identity, and is
               * torn down, before any new instance starts, once none does. Its position, its siblings, the regions around it and the
               * `Frame` they were built under are not part of it: it survives siblings and regions appearing or disappearing around it,
-              * and a move from one region to another when one render pass covers both. When one render pass shows the same identity in
-              * more than one place, none of them gets an instance: each shows a [[kyo.UI.MountErrorSource.Duplicate]] error naming
-              * all of them, since only the data can say which instance belongs where.
+              * and a move from one region to another when one render pass covers both. The key is the caller's, so the same identity
+              * shown more than once at a time, in one region or in several, is a mistake: none of its places gets an instance, and each
+              * shows a [[kyo.UI.MountErrorSource.Duplicate]] error naming all of them, since only the data can say which instance belongs
+              * where. Give each place a key of its own, such as the id of the data it shows. A component that keys itself on where it
+              * was made uses [[kyo.UI.MountedOps.keyedOnSite]] instead, whose calls in one region are told apart by their order.
               *
               * A failure is final for the instance, and a move keeps it: a failed instance that moves shows its error view in its new
               * place, rendered by that node's [[kyo.UI.MountedOps.onError]], and its effect does not run again. This holds for an interrupt that ends the
@@ -611,7 +696,23 @@ object UI:
               */
             def keyed[K](key: K)(using CanEqual[K, K], MountSite): Mounted =
                 given Frame = m.frame
-                m.copy(key = Present(key), site = summon[MountSite])
+                m.copy(key = Present(key), site = summon[MountSite], keyOrigin = KeyOrigin.Caller)
+
+            /** Keeps the node's instance across re-renders as [[kyo.UI.MountedOps.keyed]] does, keyed on `made`, where the component was
+              * made, which it takes as a `(using UI.MountSite)` from its caller, instead of on a key the caller chose: a component made at
+              * two places is two instances, and its caller writes no key.
+              *
+              * Nothing tells apart the calls of one site in one range (a region's value, or the content of an instance) but their order,
+              * as Compose tells apart calls without a key: one call in a `map` is one site, its first call is the first instance, its
+              * second the second, and so on. When the first of three calls goes away, the two left are the first and second call now, so
+              * they show the first two instances, and the third instance is released: the state stays at its place and the data moves
+              * through it. Calls written on different lines are different sites, so one of them going away moves nothing. Where the state
+              * has to follow the data, key the node with the data's id through [[kyo.UI.MountedOps.keyed]], or render it with
+              * `foreachKeyed`.
+              */
+            def keyedOnSite(made: MountSite)(using MountSite): Mounted =
+                given Frame = m.frame
+                m.copy(key = Present(made), site = summon[MountSite], keyOrigin = KeyOrigin.Site)
 
             /** Shown while the effect is pending on the first mount, and on every later re-mount under `PendingPolicy.Placeholder`.
               * Defaults to an empty node.
@@ -1484,7 +1585,35 @@ object UI:
                 withAttrs(attrs.copy(reactiveStyle = Present(sig)))
 
             // Identity & visibility
-            def id(v: String): Self      = withAttrs(attrs.copy(identifier = Present(v)))
+            def id(v: String): Self = withAttrs(attrs.copy(identifier = Present(v)))
+
+            /** Runs `effect` while this element is mounted on a live page: on the client or in the session, once the element is on the page,
+              * never in a static rendering. It runs on a fiber in a `Scope` of its own, so what it acquires or forks is released with it, and a
+              * failure goes to the `onFailure` rules around the element and otherwise fails the mount around it, as a [[kyo.UI.fork]] does.
+              *
+              * It follows the rule of an unkeyed [[kyo.UI.mounted]]: it belongs to the current run of the region around it, and the next run
+              * of that region has new content, so it starts again with it, and with the values that run captured. An effect that has to
+              * survive its region running again says so with [[whileMountedKeyed]]. The element's [[id]] is no key.
+              */
+            def whileMounted(effect: => Any < (Abort[Any] & Async & Scope))(using frame: Frame, site: UI.MountSite): Self =
+                withAttrs(attrs.copy(whileMounted = attrs.whileMounted.append(Sync.defer(effect)), whileMountedSite = site))
+
+            /** [[whileMounted]] kept across runs of the region around the element, identified as a `.keyed` mount is: by this call, `key`
+              * and the keys of the rows of the lists around it, never by its place among its siblings. It survives a move and the region running
+              * again, and a new key starts it again. A value the effect captures stays what it was when it started; what should reach a running
+              * effect belongs in a `Signal`.
+              */
+            def whileMountedKeyed[K](key: K)(effect: => Any < (Abort[Any] & Async & Scope))(
+                using
+                CanEqual[K, K],
+                Frame,
+                UI.MountSite
+            ): Self =
+                withAttrs(attrs.copy(
+                    whileMounted = attrs.whileMounted.append(Sync.defer(effect)),
+                    whileMountedKey = Present(key),
+                    whileMountedSite = summon[UI.MountSite]
+                ))
             def hidden(v: Boolean): Self = withAttrs(attrs.copy(hidden = Present(v)))
 
             /** Reactive `hidden`: toggles the attribute IN PLACE on emission, so showing and hiding keeps the
@@ -2253,6 +2382,10 @@ object UI:
             // The browser mount's element-in-the-document hook. The element is typed `Any` here because the shared
             // AST names no DOM type; the typed setter lives in the Scala.js sources (kyo.onAttached).
             onAttached: Maybe[Any => Any < (Async & Scope & Abort[Any])] = Absent,
+            // What runs while the element is on a live page, see Element.whileMounted.
+            whileMounted: Chunk[Any < (Abort[Any] & Async & Scope)] = Chunk.empty,
+            whileMountedKey: Maybe[Any] = Absent,
+            whileMountedSite: UI.MountSite = kyo.internal.MountSites.MountSite.none,
             ariaAttrs: Map[String, String] = Map.empty,
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
@@ -2313,14 +2446,33 @@ object UI:
                 def signal: Signal[A]
                 def render: A => UI
 
+                /** The value the source holds now and what it paints for it, for a pass that holds the thread. */
+                private[kyo] def paintedNow(using AllowUnsafe, Frame, kyo.internal.SignalNow.Locals): Painted =
+                    val value = kyo.internal.SignalNow(signal)
+                    Painted(value, render(value))
+
                 /** Observes the source in value space: an emission equal to the last one never reaches the projection. The passes and
-                  * rests go to `stamp` (see `Signal.observeStamped`).
+                  * rests go to `stamp` (see `Signal.observeStamped`). A first emission of the value the enclosing paint painted hands on what
+                  * that paint had, so the region can tell it is the same: two trees built from closures are never equal, and a repaint
+                  * would draw again what that paint drew.
                   */
-                private[kyo] def observe[S](stamp: Signal.ReadStamp)(paint: UI => Unit < (S & Async & Scope))(using
+                private[kyo] def observe[S](stamp: Signal.ReadStamp, painted: Maybe[Painted])(paint: UI => Unit < (S & Async & Scope))(using
                     Frame
                 ): Unit < (S & Async) =
-                    signal.observeStamped(stamp)(v => paint(render(v)))
+                    // One region's own loop reads and clears it.
+                    var first = painted
+                    signal.observeStamped(stamp) { v =>
+                        val shown = first match
+                            case Present(p) if p.value.equals(v) => p.ui
+                            case _                               => render(v)
+                        first = Absent
+                        paint(shown)
+                    }
+                end observe
             end Source
+
+            /** One value of a [[Source]] with the content a paint showed for it. */
+            final private[kyo] case class Painted(value: Any, ui: UI)
 
             object Source:
                 /** A region built by `Signal.render`. */
@@ -2370,9 +2522,32 @@ object UI:
         private[kyo] case class Bounded(settings: UI.Boundary, child: UI, display: Maybe[UI])(using val frame: Frame) extends UI
             with HtmlContent
 
-        /** A component that runs an effect to produce its content, built by [[kyo.UI.mounted]]. Its static rendering is its
-          * placeholder; the live content belongs to the instance the renderer runs. `site` is where [[kyo.UI.MountedOps.keyed]] was
-          * called, and means nothing without a key.
+        /** Where the key of a [[MountNode]] comes from, which decides what one identity shown more than once in one range is.
+          *
+          * `Caller`: the caller chose the key with [[kyo.UI.MountedOps.keyed]]. Two calls in one range with the same identity are a mistake
+          * the page reports as [[kyo.UI.MountErrorSource.Duplicate]], since only the data can say which instance belongs where.
+          *
+          * `Site`: the component keyed itself on where it was made, with [[kyo.UI.MountedOps.keyedOnSite]]. The caller chose nothing, so
+          * calls of one site in one range, such as one call in a `map`, are told apart by their order, as Compose tells apart calls
+          * without a key.
+          */
+        enum KeyOrigin derives CanEqual:
+            case Caller, Site
+        end KeyOrigin
+
+        /** What [[Mounted]] and [[Drawn]] have in common: a place with an instance of its own, found by its [[key]] from [[site]], the
+          * key coming from where [[keyOrigin]] says.
+          */
+        sealed trait MountNode extends UI with HtmlContent:
+            def key: Maybe[Any]
+            def errorRender: Maybe[UI.MountError => UI]
+            def site: UI.MountSite
+            def keyOrigin: KeyOrigin
+            def frame: Frame
+        end MountNode
+
+        /** A component that waits for its content, built by [[kyo.UI.mounted]]. Its static rendering is its placeholder; the live content
+          * belongs to the instance the renderer runs. `site` is where [[kyo.UI.MountedOps.keyed]] was called, and means nothing without a key.
           */
         case class Mounted(
             effect: UI < (Abort[Any] & Async & Scope),
@@ -2380,8 +2555,23 @@ object UI:
             placeholderUI: Maybe[UI],
             errorRender: Maybe[UI.MountError => UI],
             pendingPolicy: UI.PendingPolicy,
-            site: UI.MountSite = kyo.internal.MountSites.MountSite.none
-        )(using val frame: Frame) extends UI with HtmlContent
+            site: UI.MountSite = kyo.internal.MountSites.MountSite.none,
+            keyOrigin: KeyOrigin = KeyOrigin.Caller
+        )(using val frame: Frame) extends MountNode
+
+        /** A component whose content `draw` produces in the render pass, built by [[kyo.UI.mounted]]. `display`, when present, is what a
+          * static rendering shows instead of drawing: the live state the engine resolved for a reveal or a snapshot.
+          */
+        case class Drawn(
+            draw: UI < Sync,
+            key: Maybe[Any],
+            errorRender: Maybe[UI.MountError => UI],
+            site: UI.MountSite = kyo.internal.MountSites.MountSite.none,
+            display: Maybe[UI] = Absent,
+            // The props of a node built by `UI.mountedWith`, which its instance reads through a signal of its own.
+            props: Maybe[kyo.internal.PropsDraw[?]] = Absent,
+            keyOrigin: KeyOrigin = KeyOrigin.Caller
+        )(using val frame: Frame) extends MountNode
 
         // ====== Block containers ======
 

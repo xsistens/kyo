@@ -128,11 +128,11 @@ abstract private[kyo] class UIScreen extends kyo.test.Test[Any]:
     ): A < Async =
         Scope.run {
             for
-                initial <- HtmlRenderer.render(ui, Seq.empty)
+                root    <- ReactiveUI.normalize(ui, Seq.empty)
+                initial <- kyo.internal.MountDispatch.live.let(root.mountDispatch)(HtmlRenderer.render(ui, Seq.empty))
                 screen = new Screen(initial)
-                root <- ReactiveUI.normalize(ui, Seq.empty)
-                sub  <- ReactiveUI.subscribe(root, screen)
-                a    <- f(screen, sub.handle)
+                sub <- ReactiveUI.subscribe(root, screen)
+                a   <- f(screen, sub.handle)
             yield a
         }
 

@@ -208,7 +208,7 @@ class DomBackendTest extends UITest:
                 sel.map {
                     // both branches are reactive content -> they reconcile at the SAME positional key
                     case "a" =>
-                        UI.mounted {
+                        waitingMount {
                             Signal.initRef(0).map(_ => UI.span("A-content").id("mount-a"))
                         }.placeholder(UI.empty): UI
                     case _ =>
@@ -232,7 +232,7 @@ class DomBackendTest extends UITest:
             yield UI.div(
                 UI.button("gclose").id("gclose").onClick(open.set(false)),
                 open.map {
-                    case true  => UI.mounted { Signal.initRef(0).map(_ => UI.span("panel").id("gpanel")) }.placeholder(UI.empty): UI
+                    case true  => waitingMount { Signal.initRef(0).map(_ => UI.span("panel").id("gpanel")) }.placeholder(UI.empty): UI
                     case false => UI.empty: UI
                 }
             )
@@ -255,7 +255,7 @@ class DomBackendTest extends UITest:
                 tick.map { t =>
                     UI.div(
                         UI.span(s"t:$t").id("ktxt"),
-                        UI.mounted { Signal.initRef(0).map(_ => UI.span("kept").id("kpanel")) }.placeholder(UI.empty)
+                        waitingMount { Signal.initRef(0).map(_ => UI.span("kept").id("kpanel")) }.placeholder(UI.empty)
                     ): UI
                 }
             )
@@ -463,7 +463,7 @@ class DomBackendTest extends UITest:
             yield UI.div(
                 UI.button("gclose2").id("gclose2").onClick(open.set(false)),
                 UI.when(open)(
-                    UI.mounted {
+                    waitingMount {
                         Signal.initRef(0).map(_ => UI.div("panel").id("gopanel").leaveTransition("ghost-probe-leave"): UI)
                     }.placeholder(UI.empty)
                 )
@@ -532,7 +532,7 @@ class DomBackendTest extends UITest:
                 tick.map { t =>
                     UI.div(
                         UI.span(s"t:$t").id("gtxt"),
-                        UI.mounted {
+                        waitingMount {
                             Signal.initRef(0).map(_ =>
                                 // Effect shape is fragment(marker, panel), so the panel's path differs from
                                 // the placeholder's and the survivor set cannot match it.
@@ -591,7 +591,7 @@ class DomBackendTest extends UITest:
             for lbl <- Signal.initRef("m-first")
             yield UI.div(
                 UI.button("relabel").id("mrelabel").onClick(lbl.set("m-second")),
-                UI.mounted {
+                waitingMount {
                     Signal.initRef(0).map(_ => UI.div.id("mhost").aria("label", lbl)(UI.span("y").id("mchild")))
                 }.placeholder(UI.empty)
             )

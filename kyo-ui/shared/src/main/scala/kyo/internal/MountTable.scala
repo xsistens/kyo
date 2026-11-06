@@ -26,8 +26,113 @@ import kyo.kernel.ContextEffect
 final private[kyo] class MountDispatch(
     cells: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[MountInstance]]],
     gates: AtomicRef[Dict[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]],
-    holds: AtomicRef[Chunk[Seq[String]]]
+    holds: AtomicRef[Chunk[Seq[String]]],
+    // What the places of drawn mounts hold between a render pass and the subscription behind it (see DrawSlot).
+    draws: AtomicRef.Unsafe[Dict[ReactiveRegion.RegionIdentity, DrawSlot]],
+    // The occurrence the last walk found for a site-keyed drawn node at its place, where it is not the first call of its identity in its
+    // range (see DrawContext.Occurrences): an event that draws the node outside any walk takes it from here.
+    occurrences: AtomicRef.Unsafe[Dict[ReactiveRegion.RegionIdentity, (UI.MountSite, Any, Int)]],
+    // A kept instance between two subscriptions at its place: the region that shows it runs again, its last value's subscription has
+    // ended and the next one has not registered yet. An event that comes then still reaches it (see instanceForEvent).
+    handovers: AtomicRef.Unsafe[Dict[ReactiveRegion.RegionIdentity, MountInstance]]
 ):
+    /** A walk met the keyed drawn `node` at `at` as the `occurrence`-th call of its identity in its range. Only a later call is kept, so a
+      * page whose calls are all first ones writes nothing. Only a node keyed on its site has a later call (see [[DrawContext.occurrence]]).
+      */
+    def noteOccurrence(at: ReactiveRegion.RegionIdentity, node: Drawn, occurrence: Int)(using AllowUnsafe): Unit =
+        node.key match
+            case Present(key) if occurrence > 0 => discard(occurrences.getAndUpdate(_.update(at, (node.site, key, occurrence))))
+            case _                              =>
+                if !occurrences.get().isEmpty && occurrences.get().contains(at) then discard(occurrences.getAndUpdate(_.remove(at)))
+
+    /** The occurrence the last walk found for `node` at `at`: a first call unless a walk found it later in its range. */
+    def occurrenceAt(at: ReactiveRegion.RegionIdentity, node: Drawn)(using AllowUnsafe): Int =
+        occurrences.get().get(at) match
+            case Present((site, key, n))
+                if node.keyOrigin == UI.Ast.KeyOrigin.Site && site == node.site && node.key.exists(_.equals(key)) => n
+            case _ => 0
+
+    /** What the drawn mount `node` shows at `at`: an instance already there, what a pass drew for it, or a new draw, filed for the
+      * subscription that follows. When two fibers draw one place, the first to file wins and the other's draw is dropped.
+      */
+    def drawnNow(at: ReactiveRegion.RegionIdentity, node: Drawn, occurrence: Int)(using AllowUnsafe, Frame, SignalNow.Locals): DrawSlot =
+        drawnIn(at, node, summon[SignalNow.Locals].read(DrawContext.scope), occurrence)
+
+    /** [[drawnNow]] where the id scope comes from the caller rather than the walk. */
+    private def drawnIn(at: ReactiveRegion.RegionIdentity, node: Drawn, scope: DrawContext.IdScope, occurrence: Int)(using
+        AllowUnsafe,
+        Frame,
+        SignalNow.Locals
+    ): DrawSlot =
+        def usable(slot: DrawSlot): Boolean =
+            slot match
+                case DrawSlot.Fresh(draw, _) => draw.isFor(node)
+                case _                       => true
+        draws.get().get(at) match
+            case Present(slot) if usable(slot) => slot
+            case _                             =>
+                val fresh = DrawSlot.Fresh(SignalNow.eval(MountDraw.run(node, at, scope, occurrence)), false)
+                val prior = draws.getAndUpdate(m => if m.get(at).exists(usable) then m else m.update(at, fresh))
+                prior.get(at).filter(usable).getOrElse(fresh)
+        end match
+    end drawnIn
+
+    /** The content of the drawn mount `node` at `at`, for an event that finds no instance there yet, with the base its content's ids
+      * derive from. An event draws outside any walk, so `scope` is where the node sits, as the walk that made its handler saw it, and
+      * `occurrence` how many calls of its identity came before it in its range.
+      */
+    def drawn(at: ReactiveRegion.RegionIdentity, node: Drawn, scope: DrawContext.IdScope, occurrence: Int)(using
+        Frame
+    ): (UI, String) < Sync =
+        SignalNow.Locals.take(Sync.Unsafe.defer {
+            drawnIn(at, node, scope, occurrence) match
+                case DrawSlot.Fresh(draw, _)    => (draw.content(MountedSpec(node, Seq.empty, Nil)), draw.base)
+                case DrawSlot.Live(instance, _) => (instance.shownNow(node), instance.children.idBase)
+        })
+
+    /** Takes what a pass drew at `at`, for the instance that shows it from now on. The draw stays at its place, taken, until that
+      * instance shows there: an event or a paint that comes before meets the content and the state the instance is about to show, where
+      * an empty place would have them drawn a second time.
+      */
+    def takeDraw(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[MountDraw] < Sync =
+        Sync.Unsafe.defer {
+            draws.getAndUpdate { m =>
+                m.get(at) match
+                    case Present(DrawSlot.Fresh(draw, false)) => m.update(at, DrawSlot.Fresh(draw, true))
+                    case Present(DrawSlot.Live(_, true))      => m.remove(at)
+                    case _                                    => m
+            }.get(at) match
+                case Present(DrawSlot.Fresh(draw, false)) => Present(draw)
+                case _                                    => Absent
+        }
+
+    /** `instance` shows at `at`, so a paint around it leaves the place to the instance and draws nothing. */
+    def showing(at: ReactiveRegion.RegionIdentity, instance: MountInstance)(using AllowUnsafe): Unit =
+        discard(draws.getAndUpdate(_.update(at, DrawSlot.Live(instance, false))))
+
+    /** A pass about to paint `at` found that a live `instance` keeps that place, until the pass's subscription claims it. */
+    def keeping(at: ReactiveRegion.RegionIdentity, instance: MountInstance)(using AllowUnsafe): Unit =
+        discard(draws.getAndUpdate(_.update(at, DrawSlot.Live(instance, true))))
+
+    /** A region is about to paint a new value at `at`: what its old value left below that place is no longer about anything shown. A keyed
+      * draw no instance has taken yet stays, as a keyed instance would: the new value may show the same identity, and then that is its state.
+      * A taken draw goes like the instance that took it: if its table keeps that instance, the pass finds it there.
+      */
+    def forgetBelow(at: ReactiveRegion.RegionIdentity)(using Frame): Unit < Sync =
+        Sync.Unsafe.defer {
+            if !draws.get().isEmpty then
+                def below(key: ReactiveRegion.RegionIdentity): Boolean =
+                    key.path.startsWith(at.path) && (key.path.size > at.path.size || key.transparentDepth >= at.transparentDepth)
+                discard(draws.getAndUpdate(m =>
+                    m.filter { (key, slot) =>
+                        !below(key) ||
+                        (slot match
+                            case DrawSlot.Fresh(draw, taken) => !taken && draw.keepAcrossPaints()
+                            case _                           => false)
+                    }
+                ))
+        }
+
     /** A range a boundary keeps showing old content in while its new content loads: no event may reach the new content through it. */
     def hold(path: Seq[String])(using Frame): Unit < Sync = holds.getAndUpdate(_.append(path)).unit
 
@@ -57,22 +162,43 @@ final private[kyo] class MountDispatch(
     def boundary(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[BoundaryGate] < Sync =
         gates.get.map(_.get(at).flatMap(_.lastMaybe))
 
-    /** Registers `instance` of the mount whose content has identity `at`. */
+    /** Registers `instance` of the mount whose content has identity `at`. A hand-over it was in is over: its subscription is back,
+      * here or wherever it went.
+      */
     def register(at: ReactiveRegion.RegionIdentity, instance: MountInstance)(using Frame): Unit < Sync =
-        cells.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(instance))).unit
+        cells.getAndUpdate(m => m.update(at, m.get(at).getOrElse(Chunk.empty).append(instance))).andThen(Sync.Unsafe.defer(
+            if !handovers.get().isEmpty then
+                discard(handovers.getAndUpdate(_.filter((place, kept) => place != at && !(kept eq instance) && !kept.fate.group.released)))
+        ))
 
     /** Removes this registration only. Two subscriptions can hold one path for a moment, an old one still ending and its successor,
       * in either order; the other keeps its entry.
       */
     def unregister(at: ReactiveRegion.RegionIdentity, instance: MountInstance)(using Frame): Unit < Sync =
-        cells.getAndUpdate { m =>
+        // A kept instance its table still holds is only between two subscriptions here: the next run of its region may show it again, and
+        // until that registers, or the instance goes, an event at its place reaches it. Handed over before the registration goes, so no
+        // moment finds it in neither.
+        Sync.Unsafe.defer(
+            if instance.fate.isFiled && !instance.fate.group.released then discard(handovers.getAndUpdate(_.update(at, instance)))
+        ).andThen(cells.updateAndGet { m =>
             m.get(at) match
                 case Absent        => m
                 case Present(held) =>
                     val i    = held.lastIndexWhere(_ eq instance)
                     val left = if i < 0 then held else held.take(i).concat(held.drop(i + 1))
                     if left.isEmpty then m.remove(at) else m.update(at, left)
-        }.unit
+        }.map { m =>
+            // A later subscription of the same instance may hold the place by now; then it stays that one's.
+            val stillShown = m.get(at).exists(_.exists(_ eq instance))
+            if stillShown then Kyo.unit
+            else
+                Sync.Unsafe.defer(discard(draws.getAndUpdate { d =>
+                    d.get(at) match
+                        case Present(DrawSlot.Live(shown, false)) if shown eq instance => d.remove(at)
+                        case _                                                         => d
+                }))
+            end if
+        })
 
     /** The cell of the instance registered last for the mount whose content has identity `at`. */
     def lookup(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[Signal[MountState]] < Sync =
@@ -82,8 +208,32 @@ final private[kyo] class MountDispatch(
     def instance(at: ReactiveRegion.RegionIdentity)(using Frame): Maybe[MountInstance] < Sync =
         cells.get.map(_.get(at).flatMap(_.lastMaybe))
 
-    /** How many instances are registered over every mount: none once everything that showed one has been released. */
-    def registered(using Frame): Int < Sync = cells.get.map(_.foldLeft(0)((n, _, held) => n + held.size))
+    /** [[instance]] for an event at `at`, from `event`, the node the event's handler was made for: also a kept instance of that node
+      * between two subscriptions there (its region runs again), which an event would otherwise miss.
+      */
+    def instanceForEvent(at: ReactiveRegion.RegionIdentity, event: UI.Ast.MountNode)(using Frame): Maybe[MountInstance] < Sync =
+        instance(at).map {
+            case Absent =>
+                Sync.Unsafe.defer(handovers.get().get(at).filter { kept =>
+                    val node = kept.supervision.spec.node
+                    !kept.fate.group.released && node.site == event.site && node.keyOrigin == event.keyOrigin &&
+                    event.key.exists(k => node.key.exists(_.equals(k)))
+                })
+            case found => found
+        }
+
+    /** How many places hold an instance, a kept one between two subscriptions among them: none once everything that showed one has been
+      * released.
+      */
+    def registered(using Frame): Int < Sync =
+        cells.get.map(_.foldLeft(0)((n, _, held) => n + held.size)).map(n =>
+            Sync.Unsafe.defer(handovers.get().foldLeft(n)((count, at, kept) =>
+                if kept.fate.group.released || cells.unsafe.get().contains(at) then count else count + 1
+            ))
+        )
+
+    /** What the places of drawn mounts still hold: nothing once every pass has been subscribed and every instance released. */
+    def drawsLeft(using Frame): Int < Sync = Sync.Unsafe.defer(draws.get().size)
 
     /** How many boundary gates are registered and ranges held: none once every boundary that waited has been released. */
     def gated(using Frame): Int < Sync =
@@ -98,15 +248,305 @@ private[kyo] object MountDispatch:
         new MountDispatch(
             AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[MountInstance]]).safe,
             AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, Chunk[BoundaryGate]]).safe,
-            AtomicRef.Unsafe.init(Chunk.empty[Seq[String]]).safe
+            AtomicRef.Unsafe.init(Chunk.empty[Seq[String]]).safe,
+            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, DrawSlot]),
+            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, (UI.MountSite, Any, Int)]),
+            AtomicRef.Unsafe.init(Dict.empty[ReactiveRegion.RegionIdentity, MountInstance])
         )
+
+    /** The table of the session a render pass paints for, read by the pass from the locals of its fiber. */
+    val live: Local[Maybe[MountDispatch]] = Local.init(Maybe.empty[MountDispatch])
+
+    /** The locals of a pass, with a table to draw into. A pass outside any session gets one of its own, so a mount is drawn once in it, and
+      * what it drew goes with it.
+      */
+    def drawing(using locals: SignalNow.Locals, proof: AllowUnsafe): SignalNow.Locals =
+        locals.read(live) match
+            case Present(_) => locals
+            case Absent     => locals.bound(live, Present(initNow()))
+
+    /** The table a pass draws into, see [[drawing]]. */
+    def drawingNow(using locals: SignalNow.Locals, proof: AllowUnsafe): MountDispatch =
+        locals.read(live).getOrElse(initNow())
 end MountDispatch
+
+/** What [[kyo.UI.id]] and [[kyo.UI.whileMounted]] reach while a mount effect runs: the base the ids derive from (see [[DrawContext.base]]),
+  * and the effects to start once the node is shown.
+  */
+final private[kyo] class DrawContext(val base: String):
+    private var ids    = 0
+    private var shown  = Chunk.empty[Any < (Abort[Any] & Async & Scope)]
+    private var closed = false
+
+    /** The next id of this draw. The first is the node's own base, each later one that base and its number. */
+    def nextId(): String =
+        ids += 1
+        if ids == 1 then base else s"$base-$ids"
+    end nextId
+
+    /** Adds an effect to start once the node is shown; false once the draw is over. */
+    def add(effect: Any < (Abort[Any] & Async & Scope)): Boolean =
+        if closed then false
+        else
+            shown = shown.append(effect)
+            true
+
+    /** Ends the draw: what it added is what runs. */
+    def close(): Chunk[Any < (Abort[Any] & Async & Scope)] =
+        closed = true
+        shown
+    end close
+end DrawContext
+
+private[kyo] object DrawContext:
+    /** The context of the mount effect that runs. Installed around the effect only. */
+    val current: Local[Maybe[DrawContext]] = Local.init(Maybe.empty[DrawContext])
+
+    /** What a keyed node's id derives from besides its own site and key: the base of the instance whose table holds it (`owner`), and the
+      * keys of the list rows around it up to that instance, innermost first, as its [[MountIdentity]] has them. A walk binds it where it
+      * enters an instance's content and where it enters a list row; a node no instance holds is in the root's.
+      */
+    final case class IdScope(owner: String, rows: List[String])
+    object IdScope:
+        val root: IdScope = IdScope("kyo", Nil)
+
+    /** The scope a render pass or a boundary walk is in. */
+    val scope: Local[IdScope] = Local.init(IdScope.root)
+
+    /** `body` walked inside a list row keyed `row`. */
+    def inRow[A](row: String)(body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
+        val now = locals.read(scope)
+        body(using locals.bound(scope, now.copy(rows = row :: now.rows)))
+
+    /** `body` walked inside the content of the instance whose ids derive from `owner`, a range of its own. */
+    def inContent[A](owner: String)(body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
+        body(using locals.bound(scope, IdScope(owner, Nil)).bound(range, Present(new Occurrences)))
+
+    /** How often a walk met each site-keyed identity so far in the range it walks: the region, or the content of an instance, whose nodes
+      * one pass shows. Only the walk that holds the thread touches it.
+      */
+    final class Occurrences:
+        private val seen = new java.util.HashMap[(List[String], UI.MountSite, Any), Integer]()
+
+        /** The occurrence of the next call of `site` with `key` in rows `rows`: how many came before it. */
+        def next(rows: List[String], site: UI.MountSite, key: Any): Int =
+            val at    = (rows, site, key)
+            val count = seen.getOrDefault(at, 0)
+            discard(seen.put(at, count + 1))
+            count
+        end next
+    end Occurrences
+
+    /** The range a walk is in. A walk that is in none counts nothing, and every node in it is a first call. */
+    val range: Local[Maybe[Occurrences]] = Local.init(Maybe.empty[Occurrences])
+
+    /** `body` walked as a range of its own, as a region's value is. */
+    def inRange[A](body: SignalNow.Locals ?=> A)(using locals: SignalNow.Locals): A =
+        body(using locals.bound(range, Present(new Occurrences)))
+
+    /** The occurrence of a node with `key` from `site` in rows `rows` that the walk meets now. Only a key the node took from its site
+      * (decided 2026-11-06) is counted, since nothing else tells its calls apart: a node without a key is always the first, and so is one
+      * whose caller chose its key, whose second call in the range is the same identity and is reported as a duplicate.
+      */
+    def occurrence(rows: List[String], site: UI.MountSite, key: Maybe[Any], origin: UI.Ast.KeyOrigin)(using locals: SignalNow.Locals): Int =
+        key match
+            case Present(k) if origin == UI.Ast.KeyOrigin.Site => locals.read(range).fold(0)(_.next(rows, site, k))
+            case _                                             => 0
+
+    /** [[occurrence]] of `node` in rows `rows`. */
+    def occurrence(rows: List[String], node: UI.Ast.MountNode)(using SignalNow.Locals): Int =
+        occurrence(rows, node.site, node.key, node.keyOrigin)
+
+    /** An id is an address, not a lifetime (decided 2026-11-05). A keyed node's comes from its identity: the instance that holds it, where
+      * it was made, the rows around it, its key, written after `-n` where it came from the site and after `-k` where the caller chose it,
+      * and, from the second call of one site in its range on, the order of the call, so it is the same on every page that renders that
+      * identity and no sibling before it changes it. A node without a key keeps its place as base: a region id is unique on the page and the same wherever the page is
+      * rendered, and a new instance at that place gets the same id.
+      */
+    private[internal] def base(at: ReactiveRegion.RegionIdentity, node: UI.Ast.MountNode, scope: IdScope, occurrence: Int): String =
+        val out = new StringBuilder
+        node.key match
+            case Present(value) =>
+                discard(out.append(scope.owner).append("-s").append(Integer.toHexString(node.site.hashCode)))
+                scope.rows.reverseIterator.foreach(row => appendHex(out.append("-r"), row))
+                val origin = node.keyOrigin match
+                    case UI.Ast.KeyOrigin.Caller => "-k"
+                    case UI.Ast.KeyOrigin.Site   => "-n"
+                discard(appendHex(out.append(origin), keyText(value)))
+                // From the second call on, its order (decided 2026-11-06): the first call's id is the one it always had.
+                if occurrence > 0 then discard(out.append("-o").append(Integer.toHexString(occurrence)))
+            case _ =>
+                discard(out.append("kyo-"))
+                ReactiveRegion.htmlId(at).foreach {
+                    case '.'   => discard(out.append('-'))
+                    case '~'   => discard(out.append("--"))
+                    case other => discard(out.append(other))
+                }
+        end match
+        out.toString
+    end base
+
+    private def appendHex(out: StringBuilder, text: String): StringBuilder =
+        text.foreach(c => out.append(Integer.toHexString(c.toInt)))
+        out
+
+    /** A key as text that is the same on the JVM and in JavaScript, where a number's `toString` is not: JavaScript writes the Double 1.0 as
+      * "1" and cannot tell it from the Int 1 at all. A whole number within a Double's exact range is written as the integer; any other
+      * Double or Float by the bits of its Double; a product, and an iterable, by their parts; anything else by its `toString`, which is
+      * the key's to keep the same on both.
+      */
+    private[internal] def keyText(key: Any): String =
+        key match
+            case l: Long                          => l.toString
+            case n: (Int | Short | Byte)          => n.toString
+            case d: Double                        => numberText(d)
+            case f: Float                         => numberText(f.toDouble)
+            case s: String                        => s
+            case p: Product if p.productArity > 0 =>
+                p.productIterator.map(keyText).mkString(p.productPrefix + "(", ",", ")")
+            case it: Iterable[?] => it.iterator.map(keyText).mkString("[", ",", "]")
+            case other           => other.toString
+
+    private def numberText(d: Double): String =
+        if d.isWhole && math.abs(d) <= 9007199254740992.0 then d.toLong.toString
+        else "d" + java.lang.Long.toHexString(java.lang.Double.doubleToLongBits(d))
+end DrawContext
+
+/** What one draw of a [[kyo.UI.Ast.Drawn]] node produced, which the instance that takes it shows. */
+final private[kyo] class MountDraw(
+    val outcome: Result[Any, UI],
+    context: DrawContext,
+    node: Drawn,
+    // The props signal of a node built by `UI.mountedWith`, which the instance that takes this draw keeps.
+    val props: Maybe[SignalRef[?]] = Absent
+):
+    /** The base of this draw's ids, which the content it drew is an instance's of. */
+    def base: String = context.base
+
+    // Unsafe: set by the render pass that put this draw on the page, read by the one instance that takes it after.
+    private val onPage = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger)
+
+    // What the paint read as it put the content on the page, for the subscription that takes this draw after it.
+    @volatile private var walkedNow: Maybe[Seq[ReactiveUI]] = Absent
+
+    /** A render pass put this draw's content on the page, with the walk of that content it took right there: a subscription that walked
+      * later could read a value the page never showed, and take it for painted.
+      */
+    def painted(walked: Seq[ReactiveUI])(using AllowUnsafe): Unit =
+        walkedNow = Present(walked)
+        onPage.set(true)
+    end painted
+
+    /** The walk of the paint that put this draw on the page, if one did. */
+    def walkOnPage(using AllowUnsafe): Maybe[Seq[ReactiveUI]] = if onPage.get() then walkedNow else Absent
+
+    /** Whether this draw is one `other`, at the same place, can show: keyless it holds only within one pass, keyed it is the same identity. */
+    def isFor(other: Drawn): Boolean = other.key.equals(node.key) && other.site.equals(node.site) && other.keyOrigin == node.keyOrigin
+
+    /** Whether this draw stays when a new paint comes over its place, which leaves it as not on the page. */
+    def keepAcrossPaints()(using AllowUnsafe): Boolean =
+        val keep = node.key.nonEmpty
+        if keep then onPage.set(false)
+        keep
+    end keepAcrossPaints
+
+    def isOnPage(using AllowUnsafe): Boolean = onPage.get()
+
+    /** What the node shows for this draw: its content, or with no boundaries at hand its own error view. */
+    def content(spec: MountedSpec): UI =
+        outcome.fold(
+            identity,
+            failure => spec.errorUI(spec.mountError(failure, UI.MountErrorSource.Effect)),
+            panic => spec.errorUI(spec.mountError(panic, UI.MountErrorSource.Panic))
+        )
+
+    /** The effects to start once the node is shown. */
+    def whileMounted: Chunk[Any < (Abort[Any] & Async & Scope)] = context.close()
+end MountDraw
+
+/** The props of a node built by [[kyo.UI.mountedWith]] and the draw that reads them: the first draw makes the signal, a later run of the
+  * node offers its props to the instance that kept that signal.
+  */
+final private[kyo] class PropsDraw[P](val value: P, draw: Signal[P] => UI < Sync)(using CanEqual[P, P]):
+    /** The instance's props signal, holding this node's props, and the draw over it. */
+    def start(using Frame): (SignalRef[P], UI < Sync) < Sync = Signal.initRef(value).map(ref => (ref, draw(ref)))
+
+    /** Hands this node's props to the instance that holds `to`, unless it holds equal ones. */
+    def offer(to: SignalRef[?])(using Frame): Unit < Sync =
+        // Unsafe cast: `to` is the signal `start` made for this node's site and key, which a draw of another type cannot reach.
+        val ref = to.asInstanceOf[SignalRef[P]]
+        ref.get.map(now => if now == value then Kyo.unit else ref.set(value))
+    end offer
+end PropsDraw
+
+private[kyo] object MountDraw:
+    /** The instance an element's `whileMounted` effects run in, with no content and no place on the page of its own. Without a key it is the
+      * same as an unkeyed mount: it belongs to the current run of its region and starts again with the next one. With a key the table keeps it
+      * as it keeps a `.keyed` mount, by its site, its key and the rows of the lists around it, so a run of its region finds it again. The key
+      * is the caller's, so the same one twice in a range is a duplicate, as it is for a `.keyed` mount.
+      */
+    def ofElement(attrs: UI.Ast.Attrs, path: Seq[String], rows: List[String], frame: Frame): MountedSpec =
+        given Frame         = frame
+        val draw: UI < Sync =
+            Kyo.foreachDiscard(attrs.whileMounted)(effect => UI.whileMounted(effect)).andThen(UI.empty)
+        val node = Drawn(
+            draw,
+            key = attrs.whileMountedKey,
+            errorRender = Absent,
+            site = attrs.whileMountedSite,
+            keyOrigin = UI.Ast.KeyOrigin.Caller
+        )
+        MountedSpec(node, path, rows, headless = true)
+    end ofElement
+
+    /** Draws `node` at `at`, the `occurrence`-th call of its identity in its range, with what its effect may reach in place. */
+    def run(node: Drawn, at: ReactiveRegion.RegionIdentity, scope: DrawContext.IdScope, occurrence: Int)(using Frame): MountDraw < Sync =
+        Sync.defer(new DrawContext(DrawContext.base(at, node, scope, occurrence))).map { context =>
+            // No Abort in a draw's row: a Result of a panic is the only other outcome.
+            def drawing(draw: UI < Sync, props: Maybe[SignalRef[?]]): MountDraw < Sync =
+                DrawContext.current.let(Present(context))(Abort.run[Any](draw)).map(new MountDraw(_, context, node, props))
+            node.props match
+                case Present(props) => props.start.map((ref, draw) => drawing(draw, Present(ref)))
+                case _              => drawing(node.draw, Absent)
+        }
+end MountDraw
+
+/** What a drawn mount's place holds. A render pass draws the node as it paints it and files the draw there as [[DrawSlot.Fresh]], so the
+  * subscription behind that pass takes the very content that is on the page, with the state it allocated: a draw that ran twice would
+  * leave the page showing one state and the handlers writing another. [[DrawSlot.Live]] says an instance shows there: its own paint goes
+  * behind the pass that meets it, and nothing is drawn.
+  */
+private[kyo] enum DrawSlot:
+    // `taken`: a subscription took the draw for its instance, which has still to show it; no other subscription takes it again.
+    case Fresh(draw: MountDraw, taken: Boolean)
+    // `claiming`: a pass found the instance kept here, and its subscription has still to show it.
+    case Live(instance: MountInstance, claiming: Boolean)
+end DrawSlot
 
 /** A `Mounted` node as normalization found it: the node, its render path, and the keys of the list rows between it and the owner of
   * its mount table, innermost first.
   */
-final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String], rows: List[String]):
-    def placeholder: UI = node.placeholderUI.getOrElse(UI.empty(using node.frame))
+final private[kyo] case class MountedSpec(
+    node: UI.Ast.MountNode,
+    path: Seq[String],
+    rows: List[String],
+    // The place of the node's content, which ids drawn in it derive from.
+    context: ReactiveRegion.RegionIdentity = ReactiveRegion.RegionIdentity(Seq.empty, 0),
+    // An element's effect: it shows nothing, so it has no error view, and a failure goes straight to what is around the element.
+    headless: Boolean = false,
+    // How many calls of the same identity came before this one in its range (see [[MountIdentity]]).
+    occurrence: Int = 0
+):
+    def placeholder: UI =
+        node match
+            case m: Mounted => m.placeholderUI.getOrElse(UI.empty(using m.frame))
+            case d: Drawn   => UI.empty(using d.frame)
+
+    /** What the node shows between instances. A drawn node has nothing to wait for, so nothing to keep. */
+    def pendingPolicy: UI.PendingPolicy =
+        node match
+            case m: Mounted => m.pendingPolicy
+            case _: Drawn   => UI.PendingPolicy.Placeholder
 
     /** The node's own error view, else the first view of the boundaries around it, innermost first, that matches, else a built-in one. */
     def errorUI(error: UI.MountError, views: List[PartialFunction[UI.MountError, UI]] = Nil): UI =
@@ -128,10 +568,11 @@ final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String
 
     /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. `rows` are the keys of
       * the list rows between the node and the owner of its table, the session root or the mount instance whose content it is in, across
-      * every region in between.
+      * every region in between, and `occurrence` tells apart the calls of one site in one range, by their order, where the node is keyed
+      * on its site.
       */
     def identity: Maybe[MountIdentity] =
-        node.key.map(MountIdentity(rows, node.site, _))
+        node.key.map(MountIdentity(rows, node.site, _, node.keyOrigin, occurrence))
 end MountedSpec
 
 // ---- Mounted nodes ----
@@ -224,6 +665,12 @@ final private[kyo] class MountFate(val group: ReleaseGroup, table: MountTable):
         group.placeIn(table.group)
         placement.set(Placement.Filed(identity))
 
+    /** Whether its table holds the instance, as it holds a keyed one, rather than a scope. */
+    def isFiled: Boolean =
+        placement.get() match
+            case Placement.Filed(_) => true
+            case _                  => false
+
     /** The instance is being released: what is in it is released with it, and a verdict that waited is settled. */
     def condemn()(using AllowUnsafe): Unit =
         group.release()
@@ -293,15 +740,38 @@ final private[kyo] class MountInstance(
     val cell: SignalRef[MountState],
     val supervision: MountSupervision,
     val children: MountTable,
-    runner: Fiber[Unit, Any],
+    // What the instance runs on its own: a waiting node's effect, a drawn node's whileMounted effects. A drawn node with none has no fiber.
+    work: Maybe[(Fiber[Unit, Any], Promise[Unit, Any])],
     scope: Scope.Finalizer,
-    go: Promise[Unit, Any],
-    val fate: MountFate
+    val fate: MountFate,
+    // The walk of the render pass that already put this instance's first content on the page.
+    drawnOnPage: Maybe[Seq[ReactiveUI]] = Absent,
+    // The signal a `UI.mountedWith` draw reads its props through: each run of the node that shows this instance offers its props to it.
+    val props: Maybe[SignalRef[?]] = Absent,
+    // The state the instance starts in, which is what the render pass behind `drawnOnPage` put on the page.
+    drawnState: Maybe[MountState] = Absent
 ):
     /** Lets the effect run. An instance claimed while its table settles what is in transit is made before it may run, so it shows in
       * its place at once, and runs once the cut has released what had to go.
       */
-    def launch(using Frame): Unit < Sync = go.completeUnitDiscard
+    def launch(using Frame): Unit < Sync = work.fold(Kyo.unit)(_._2.completeUnitDiscard)
+
+    // Unsafe: taken once, by the first subscription that shows the instance.
+    private val onPage = AtomicRef.Unsafe.init(drawnOnPage)(using AllowUnsafe.embrace.danger)
+
+    /** The walk of the render pass whose paint is this subscription's first paint, which it can then leave out, while the instance is
+      * still in `state` as the pass drew it. A state that changed since, as when an effect it runs failed before the subscription read it,
+      * is not on the page, and the subscription paints it.
+      */
+    def takeOnPage(state: MountState)(using Frame): Maybe[Seq[ReactiveUI]] < Sync =
+        Sync.Unsafe.defer(onPage.getAndSet(Absent).filter(_ => drawnState.exists(_ eq state)))
+
+    /** What the instance shows now, for a pass that holds the thread. */
+    def shownNow(node: UI.Ast.MountNode)(using AllowUnsafe, Frame, SignalNow.Locals): UI =
+        SignalNow(cell) match
+            case MountState.Ready(ui)  => ui
+            case MountState.Failed(ui) => ui
+            case MountState.Pending(_) => UI.empty(using node.frame)
 
     // Unsafe: written as a subscription showing the instance ends, read when the instance leaves its snapshot after it.
     private val lastShown = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
@@ -336,8 +806,7 @@ final private[kyo] class MountInstance(
       */
     def teardown(using Frame): Unit < Async =
         Sync.Unsafe.defer(fate.condemn())
-            .andThen(runner.interrupt)
-            .andThen(runner.getResult.unit)
+            .andThen(work.fold(Kyo.unit)((runner, _) => runner.interrupt.andThen(runner.getResult.unit)))
             .andThen(children.evictAll)
             .andThen(scope.close(Absent))
             .andThen(scope.await)
@@ -348,30 +817,124 @@ private[kyo] object MountInstance:
     /** An instance a scope owns, released with `home` (the group of `parent` when Absent), its effect running. `frames` are the
       * boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one.
       */
-    def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, home: Maybe[ReleaseGroup] = Absent)(
-        using Frame
-    ): MountInstance < Sync =
-        make(spec, seed, frames, parent).map { instance =>
+    def start(
+        spec: MountedSpec,
+        seed: Maybe[UI],
+        frames: Failures.Scope,
+        parent: MountTable,
+        home: Maybe[ReleaseGroup] = Absent,
+        drawn: Maybe[MountDraw] = Absent
+    )(using Frame): MountInstance < Sync =
+        make(spec, seed, frames, parent, drawn).map { instance =>
             Sync.Unsafe.defer(instance.fate.scoped(home.getOrElse(parent.group))).andThen(instance.launch).andThen(instance)
         }
 
     /** An instance whose owner is still to be settled: its effect runs once it is placed (see [[MountFate]]) and launched. */
-    def make(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable)(using Frame): MountInstance < Sync =
+    def make(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope, parent: MountTable, drawn: Maybe[MountDraw] = Absent)(
+        using Frame
+    ): MountInstance < Sync =
+        spec.node match
+            case m: Mounted =>
+                for
+                    cell <- Signal.initRef[MountState](MountState.Pending(seed))
+                    fate        = new MountFate(ReleaseGroup.root(), parent)
+                    supervision = MountSupervision(spec, cell, frames, fate)
+                    inner       = FailureFrame.Mount(supervision) :: frames
+                    scope <- Scope.Finalizer.init(1)
+                    go    <- Promise.init[Unit, Any]
+                    base = DrawContext.base(spec.context, m, DrawContext.IdScope(parent.idBase, spec.rows), spec.occurrence)
+                    runner <-
+                        Fiber.initUnscoped(go.get.andThen(runEffect(spec, m, base, cell, scope, supervision, inner, parent.session, fate)))
+                yield new MountInstance(
+                    cell,
+                    supervision,
+                    childTable(supervision, parent, fate.group, base),
+                    Present((runner, go)),
+                    scope,
+                    fate
+                )
+            case d: Drawn =>
+                drawn.fold(MountDraw.run(d, spec.context, DrawContext.IdScope(parent.idBase, spec.rows), spec.occurrence))(Kyo.lift)
+                    .map(fromDraw(spec, _, frames, parent))
+
+    /** An instance over what a draw produced. Its content is there from the start, so it never pends; only its `whileMounted` effects, when
+      * it has any, wait for it to be let go.
+      */
+    private def fromDraw(spec: MountedSpec, draw: MountDraw, frames: Failures.Scope, parent: MountTable)(using
+        Frame
+    ): MountInstance < Sync =
+        // The state the cell starts in, kept as is: the subscription that shows the instance compares against it (see takeOnPage).
+        val start: MountState = draw.outcome.fold(
+            MountState.Ready(_),
+            _ => MountState.Pending(Absent),
+            _ => MountState.Pending(Absent)
+        )
         for
-            cell <- Signal.initRef[MountState](MountState.Pending(seed))
+            cell <- Signal.initRef[MountState](start)
             fate        = new MountFate(ReleaseGroup.root(), parent)
             supervision = MountSupervision(spec, cell, frames, fate)
-            inner       = FailureFrame.Mount(supervision) :: frames
-            scope  <- Scope.Finalizer.init(1)
-            go     <- Promise.init[Unit, Any]
-            runner <- Fiber.initUnscoped(go.get.andThen(runEffect(spec, cell, scope, supervision, inner, parent.session, fate)))
-        yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
+            inner       = supervision.own
+            _ <- supervision.afterShown.built
+            _ <- draw.outcome.fold(
+                _ => Kyo.unit,
+                failure =>
+                    Log.error(s"Mount draw failed (frame=${spec.node.frame.position.show}): $failure").andThen(supervision.fail(
+                        failure,
+                        UI.MountErrorSource.Effect
+                    )),
+                panic =>
+                    Log.error(
+                        s"Mount draw panicked (frame=${spec.node.frame.position.show})",
+                        panic
+                    ).andThen(supervision.fail(panic, UI.MountErrorSource.Panic))
+            )
+            scope <- Scope.Finalizer.init(1)
+            shown = draw.whileMounted
+            work <-
+                if shown.isEmpty || !draw.outcome.isSuccess then Kyo.lift(Maybe.empty[(Fiber[Unit, Any], Promise[Unit, Any])])
+                else
+                    for
+                        go     <- Promise.init[Unit, Any]
+                        runner <- Fiber.initUnscoped(go.get.andThen(startShown(shown, scope, supervision, inner, parent.session)))
+                    yield Present((runner, go))
+            onPage <- Sync.Unsafe.defer(if draw.outcome.isSuccess then draw.walkOnPage else Absent)
+        yield new MountInstance(
+            cell,
+            supervision,
+            childTable(supervision, parent, fate.group, draw.base),
+            work,
+            scope,
+            fate,
+            onPage,
+            draw.props,
+            Present(start)
+        )
+        end for
+    end fromDraw
+
+    /** Starts what a mount's effect asked to run while it is shown, each on a fiber of the instance's scope that reports to it. */
+    private def startShown(
+        shown: Chunk[Any < (Abort[Any] & Async & Scope)],
+        scope: Scope.Finalizer,
+        supervision: MountSupervision,
+        frames: Failures.Scope,
+        session: MountSession
+    )(using Frame): Unit < Async =
+        MountSession.current.let(Present(session))(
+            Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(
+                ContextEffect.handleInheritable(Tag[Scope], scope)(
+                    Kyo.foreachDiscard(shown)(effect =>
+                        UI.fork(ContextEffect.handleInheritable(Tag[Scope], scope)(effect))
+                    )
+                )
+            ))
+        )
 
     /** The table of the content of an instance supervised by `supervision`: its mounts meet the instance and what is around it now,
       * and its keyed instances are released with the instance's `group`.
       */
-    private def childTable(supervision: MountSupervision, parent: MountTable, group: ReleaseGroup): MountTable =
-        new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames, group)
+    private def childTable(supervision: MountSupervision, parent: MountTable, group: ReleaseGroup, base: String): MountTable =
+        new MountTable(parent.session, () => FailureFrame.Mount(supervision) :: supervision.frames, group, base)
 
     /** An instance that runs no effect and shows its node's error view for `message` from the start: what each place of an identity
       * shown more than once in one pass gets.
@@ -381,18 +944,18 @@ private[kyo] object MountInstance:
             cell <- Signal.initRef[MountState](MountState.Pending(Absent))
             fate        = new MountFate(ReleaseGroup.root(), parent)
             supervision = MountSupervision(spec, cell, frames, fate)
-            _      <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
-            _      <- Sync.Unsafe.defer(fate.scoped(parent.group))
-            scope  <- Scope.Finalizer.init(1)
-            go     <- Promise.init[Unit, Any]
-            runner <- Fiber.initUnscoped(Kyo.unit)
-        yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group), runner, scope, go, fate)
+            _     <- supervision.fail(UI.DuplicateMountException(message), UI.MountErrorSource.Duplicate)
+            _     <- Sync.Unsafe.defer(fate.scoped(parent.group))
+            scope <- Scope.Finalizer.init(1)
+        yield new MountInstance(cell, supervision, childTable(supervision, parent, fate.group, parent.idBase), Absent, scope, fate)
 
     /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. An interrupt
       * that ends the effect fails the node unless `fate` finds it is the instance's own release.
       */
     private def runEffect(
         spec: MountedSpec,
+        node: Mounted,
+        base: String,
         cell: SignalRef[MountState],
         scope: Scope.Finalizer,
         supervision: MountSupervision,
@@ -400,13 +963,17 @@ private[kyo] object MountInstance:
         session: MountSession,
         fate: MountFate
     )(using Frame): Unit < Async =
-        val effect = MountSession.current.let(Present(session))(
-            Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
+        val context = new DrawContext(base)
+        val effect  = MountSession.current.let(Present(session))(
+            Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(
+                DrawContext.current.let(Present(context))(node.effect)
+            ))
         )
         Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map { result =>
             supervision.afterShown.built.andThen(result)
         }.map {
-            case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
+            case Result.Success(ui) =>
+                cell.getAndUpdate(MountSupervision.publish(ui)).andThen(startShown(context.close(), scope, supervision, frames, session))
             case Result.Failure(failure) =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
                     .andThen(supervision.fail(failure, UI.MountErrorSource.Effect))
@@ -492,7 +1059,7 @@ final private[kyo] class MountSupervision(
             .andThen(Fiber.initUnscoped(Failures.handle(own, failure, UI.Reaction.Escalate, UI.MountErrorSource.Fork)).unit)
 
     /** The frames this node's own failures meet: the node, then what is around it. */
-    private def own: Failures.Scope = FailureFrame.Mount(this) :: frames
+    private[internal] def own: Failures.Scope = if spec.headless then frames else FailureFrame.Mount(this) :: frames
 
     def fail(raised: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
         Sync.Unsafe.defer(discard(failure.compareAndSet(Absent, Present((raised, source))))).andThen {
@@ -518,12 +1085,20 @@ private[kyo] object MountSupervision:
 end MountSupervision
 
 /** The identity a keyed mount instance keeps across re-renders: the keys of the list rows between it and the owner of its table (the
-  * session root or the mount instance whose content it is in), where its `.keyed` call is written, and its key. Neither positions among
-  * siblings nor the regions around it are part of it, so siblings that come and go, and regions that appear, disappear or re-render
-  * around it, leave it alone (see [[MountTable]]). The hash is computed once.
+  * session root or the mount instance whose content it is in), where its `.keyed` call is written, its key, where that key came from, and
+  * its occurrence. Neither positions among siblings nor the regions around it are part of it, so siblings that come and go, and regions
+  * that appear, disappear or re-render around it, leave it alone (see [[MountTable]]).
+  *
+  * `origin` says whether the caller chose the key or the component took it from where it was made, so neither stands for the other however
+  * equal their values are, and it decides what one identity met twice in one range is (decided 2026-11-06). A key from the site counts its
+  * calls: the occurrence is how many calls of that site came before it in its range, so one call in a `map` is an instance per call, told
+  * apart by order as a list without keys tells its rows apart by index. A key the caller chose has occurrence 0, so its second call in one
+  * range is the same identity again, a duplicate reported at both places, as React, Svelte and Compose treat a key that repeats. One
+  * identity in two regions at once is reported in both, whatever its origin. The hash is computed once.
   */
-final private[kyo] case class MountIdentity(rows: List[String], site: UI.MountSite, key: Any) derives CanEqual:
-    override val hashCode: Int = (rows.hashCode * 31 + site.hashCode) * 31 + key.hashCode
+final private[kyo] case class MountIdentity(rows: List[String], site: UI.MountSite, key: Any, origin: UI.Ast.KeyOrigin, occurrence: Int)
+    derives CanEqual:
+    override val hashCode: Int = (((rows.hashCode * 31 + site.hashCode) * 31 + key.hashCode) * 31 + origin.ordinal) * 31 + occurrence
 
 /** Where a region sits in the [[MountTable]] that holds the keyed mounts around it: its path and transparent depth, relative to where
   * the table's content is shown. That is the region's place in the structure of the rendered tree. A literal argument is a fixed slot,
@@ -931,7 +1506,15 @@ end RegionWatch
   * All of it is one immutable state behind one atomic reference, changed by compare-and-set: regions of a table run their passes on
   * fibers of their own.
   */
-final private[kyo] class MountTable(val session: MountSession, framesOf: () => Failures.Scope, val group: ReleaseGroup):
+/** `idBase` is the base of the instance whose content the table holds, which the ids of the keyed nodes in it derive from ("kyo" for the
+  * root); see [[DrawContext.base]].
+  */
+final private[kyo] class MountTable(
+    val session: MountSession,
+    framesOf: () => Failures.Scope,
+    val group: ReleaseGroup,
+    val idBase: String = DrawContext.IdScope.root.owner
+):
 
     // Unsafe: a table is made with `new` by the code that opens its session or content, which holds no proof to pass on to the
     // constructor (a proof there would reach every method). The fields are only read and written by methods that hold one.
@@ -1377,6 +1960,12 @@ final private[kyo] class MountScope private[internal] (
         def visit(at: RegionKey, walked: Seq[ReactiveUI]): Unit =
             val holds = scala.collection.mutable.ArrayBuffer.empty[(MountIdentity, ReactiveUI)]
             discard(covered.put(at, (walked, holds)))
+            passEffects(walked).foreach { member =>
+                member.shown.flatMap(_.identity).foreach { identity =>
+                    holds += ((identity, member))
+                    discard(seen.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(member))
+                }
+            }
             passMembers(walked).foreach { member =>
                 member.mounted match
                     case Present(spec) =>
@@ -1498,7 +2087,7 @@ final private[kyo] class MountScope private[internal] (
         }
 
     private def seedFor(s: TableState, entry: RegionEntry, kid: ReactiveUI, spec: MountedSpec, pass: MountPass): Maybe[UI] =
-        spec.node.pendingPolicy match
+        spec.pendingPolicy match
             case UI.PendingPolicy.Placeholder => Absent
             case UI.PendingPolicy.KeepLatest  =>
                 val starts = pass.duplicate(kid).isEmpty && spec.identity.forall(identity => !s.instances.contains(identity))
@@ -1534,7 +2123,7 @@ final private[kyo] class MountScope private[internal] (
       * start, what the node's `PendingPolicy` shows until the table's next cut decides. A subscription the table no longer follows
       * gets the live instance, or one of its own that its scope releases.
       */
-    def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, pass: MountPass)(using
+    def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, pass: MountPass, drawn: Maybe[MountDraw] = Absent)(using
         Frame
     ): ClaimView < (Async & Scope) =
         def view(state: ClaimState, seed: Maybe[UI]): ClaimView < Sync =
@@ -1551,13 +2140,13 @@ final private[kyo] class MountScope private[internal] (
                             live match
                                 case Present(slot) => view(ClaimState.Live(slot.instance), Absent)
                                 case Absent        =>
-                                    here.map(group => MountInstance.start(spec, Absent, frames, table, Present(group))).map(i =>
+                                    here.map(group => MountInstance.start(spec, Absent, frames, table, Present(group), drawn)).map(i =>
                                         Scope.ensure(i.teardown).andThen(view(ClaimState.Live(i), Absent))
                                     )
                         case Present(entry) =>
                             val others  = s.holders(identity) > 1
                             val pending = s.unsettled
-                            val seed    = spec.node.pendingPolicy match
+                            val seed    = spec.pendingPolicy match
                                 case UI.PendingPolicy.Placeholder => Absent
                                 case UI.PendingPolicy.KeepLatest  => entry.handoff.get(spec.path)
                             live match
@@ -1577,7 +2166,7 @@ final private[kyo] class MountScope private[internal] (
                                         .andThen(view(ClaimState.Live(slot.instance), Absent))
                                         .map(registered(identity, _, false))
                                 case Present(slot) =>
-                                    val shown = spec.node.pendingPolicy match
+                                    val shown = spec.pendingPolicy match
                                         case UI.PendingPolicy.Placeholder => Kyo.lift(Maybe.empty[UI])
                                         case UI.PendingPolicy.KeepLatest  => slot.instance.snapshot
                                     shown.map(snapshot => view(ClaimState.Waiting(snapshot), seed)).map(registered(identity, _, true))
@@ -1586,8 +2175,12 @@ final private[kyo] class MountScope private[internal] (
                                     // and shown but its effect waits for the cut: what is released goes first, and a duplicate never runs.
                                     // The effect is let go only once the instance is filed with nothing unsettled in the table.
                                     val launch = !others && !pending
-                                    MountInstance.make(spec, seed, frames, table).map { fresh =>
-                                        Sync.Unsafe.defer {
+                                    MountInstance.make(spec, seed, frames, table, drawn).map { fresh =>
+                                        // The instance goes into the table and, when it waits for a cut, into waiting in one change, so no
+                                        // claim ever finds it there unlaunched and in no cut. What lets it go (the cut asked for, or the launch)
+                                        // follows before anything can stop this fiber: a region that runs again in between would otherwise end
+                                        // this claim with the instance filed and never let go.
+                                        Async.uninterruptible(Sync.Unsafe.defer {
                                             // Placed as the table's before the table holds it, so a cut that launches it finds it placed;
                                             // the other outcomes place it again, or release it, before it runs.
                                             fresh.fate.filed(identity)
@@ -1599,13 +2192,21 @@ final private[kyo] class MountScope private[internal] (
                                                         else
                                                             val waits = !launch || now.unsettled
                                                             (
-                                                                now.copy(instances =
-                                                                    now.instances.update(identity, MountSlot(fresh, spec.path, region))
+                                                                now.copy(
+                                                                    instances =
+                                                                        now.instances.update(identity, MountSlot(fresh, spec.path, region)),
+                                                                    waiting = if waits then now.waiting + identity else now.waiting
                                                                 ),
                                                                 (Present(fresh), waits)
                                                             )
                                             }
-                                        }.map { (kept, waits) =>
+                                        }.map((kept, waits) =>
+                                            (
+                                                if !kept.exists(_ eq fresh) then Kyo.unit
+                                                else if waits then table.awaitCut()
+                                                else fresh.launch
+                                            ) .andThen((kept, waits))
+                                        )).map { (kept, waits) =>
                                             if kept.isEmpty then
                                                 // No region holds it any more: a scope that ends with this node.
                                                 here.map(group => Sync.Unsafe.defer(fresh.fate.scoped(group)))
@@ -1614,9 +2215,7 @@ final private[kyo] class MountScope private[internal] (
                                                         seed
                                                     ))
                                             else if kept.get eq fresh then
-                                                (if waits then Kyo.unit else fresh.launch)
-                                                    .andThen(view(ClaimState.Live(fresh), seed))
-                                                    .map(registered(identity, _, waits))
+                                                view(ClaimState.Live(fresh), seed).map(registered(identity, _, waits))
                                             else
                                                 fresh.teardown.andThen(view(
                                                     ClaimState.Live(kept.get),
@@ -1648,12 +2247,12 @@ final private[kyo] class MountScope private[internal] (
         }
 
     /** A keyless instance for `spec`, released with the caller's scope; only a subscription the table still follows leaves its snapshot. */
-    def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
+    def startKeyless(spec: MountedSpec, drawn: Maybe[MountDraw])(using Frame): MountInstance < (Async & Scope) =
         Sync.Unsafe.defer(entryIn(table.read)).map { entry =>
-            val seed = spec.node.pendingPolicy match
+            val seed = spec.pendingPolicy match
                 case UI.PendingPolicy.Placeholder => Absent
                 case UI.PendingPolicy.KeepLatest  => entry.flatMap(_.handoff.get(spec.path))
-            here.map(group => MountInstance.start(spec, seed, frames, table, Present(group))).map { instance =>
+            here.map(group => MountInstance.start(spec, seed, frames, table, Present(group), drawn)).map { instance =>
                 Scope.ensure(current.map(still => if still then leaveSnapshot(instance, region, spec.path) else Kyo.unit).andThen(
                     instance.teardown
                 ))
@@ -1663,6 +2262,28 @@ final private[kyo] class MountScope private[internal] (
 
     /** The group what runs now belongs to: the value, row or claim state being subscribed, or the table's own outside all of them. */
     private def here(using Frame): ReleaseGroup < Sync = ReleaseGroup.current.use(group => group.getOrElse(table.group))
+
+    /** Tells `dispatch` which places of `kids`, the walk a pass is about to paint, hold a drawn mount with a live instance in this table, so
+      * the paint leaves those to their instance instead of drawing them anew.
+      */
+    def noteLive(kids: => Seq[ReactiveUI], dispatch: MountDispatch)(using AllowUnsafe): Unit =
+        val s = table.read
+        if !s.instances.isEmpty then
+            def visit(walked: Seq[ReactiveUI]): Unit =
+                passMembers(walked).foreach { member =>
+                    member.mounted match
+                        case Present(spec) =>
+                            spec.node match
+                                case _: Drawn =>
+                                    spec.identity.foreach(identity =>
+                                        s.instances.get(identity).foreach(slot => dispatch.keeping(member.contentContext, slot.instance))
+                                    )
+                                case _: Mounted => ()
+                        case Absent => if member.containsMount then visit(member.children)
+                }
+            visit(kids)
+        end if
+    end noteLive
 end MountScope
 
 private[kyo] object MountRegions:
@@ -1673,6 +2294,13 @@ private[kyo] object MountRegions:
     private[internal] def passMembers(kids: Seq[ReactiveUI]): Iterator[ReactiveUI] =
         kids.iterator.flatMap(kid => if kid.isConst && kid.mounted.isEmpty then passMembers(kid.children) else Iterator.single(kid))
 
+    /** The elements with `whileMounted` effects one render pass of a region owns: those among its nodes, through constant nodes. */
+    private[internal] def passEffects(kids: Seq[ReactiveUI]): Iterator[ReactiveUI] =
+        kids.iterator.flatMap { kid =>
+            val below = if kid.isConst && kid.mounted.isEmpty then passEffects(kid.children) else Iterator.empty
+            if kid.shown.nonEmpty then Iterator.single(kid) ++ below else below
+        }
+
     /** The message each place of an identity shown in several places at once shows. */
     private[internal] def duplicateMessage(identity: MountIdentity, nodes: Chunk[ReactiveUI]): String =
         val places = nodes.map(_.path.mkString(".")).toSeq.sorted.mkString(", ")
@@ -1681,6 +2309,34 @@ private[kyo] object MountRegions:
             "A keyed instance can show in one place only, so none of them gets one. Give each place a key of its own, " +
             "such as the id of the data it shows, or render repeating data with foreachKeyed."
     end duplicateMessage
+
+    /** Claims the instance an element's `whileMounted` effects run in, or starts one that ends with the current scope where they have no key,
+      * as an unkeyed mount does. It paints nothing: the element is on the page with the paint around it, which the effects' commands follow.
+      */
+    private[internal] def subscribeElementEffects(
+        rui: ReactiveUI,
+        spec: MountedSpec,
+        exchange: UIExchange,
+        mounts: MountScope,
+        pass: MountPass
+    )(using Frame): Unit < (Async & Scope) =
+        spec.identity match
+            case Absent            => mounts.startKeyless(spec, Absent).map(_.supervision.afterShown.shown(exchange))
+            case Present(identity) =>
+                def shown(state: ClaimState): Unit < Async =
+                    state match
+                        case ClaimState.Live(instance) => instance.supervision.afterShown.shown(exchange)
+                        case _                         => Kyo.unit
+                mounts.claim(rui, identity, spec, pass).map { view =>
+                    view.state.get.map {
+                        case first: ClaimState.Live => shown(first)
+                        // A cut decides who shows the identity, and switches this claim if it is this one.
+                        case first =>
+                            shown(first).andThen(Fiber.init(
+                                Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval)(shown)).unit
+                            ).unit)
+                    }
+                }
 
     /** Subscribes a mounted node in the current scope. A keyed node adopts or creates the instance of its identity in the table of the
       * enclosing mount instance or session; a keyless node gets a new instance that ends with the current scope, which for a node inside
@@ -1699,50 +2355,62 @@ private[kyo] object MountRegions:
             subscribeMountContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
         // An effect may run from the moment it starts, before the content subscription counts it as loading, so what it may hold up takes
         // no event from before that. A kept instance starts nothing.
-        def beforeStart: Unit < Async = exchange.gate.fold(Kyo.unit: Unit < Async)(_.holdRanges)
-        mounts.current.map { follow =>
-            spec.identity match
-                case Absent            => beforeStart.andThen(mounts.startKeyless(spec)).map(show(_, follow))
-                case Present(identity) =>
-                    mounts.hasInstance(identity).map(kept => if kept then Kyo.unit else beforeStart).andThen(mounts.claim(
-                        rui,
-                        identity,
-                        spec,
-                        pass
-                    )).map { view =>
-                        def showClaim(state: ClaimState): Unit < (Async & Scope) =
-                            state match
-                                case ClaimState.Live(instance)     => show(instance, follow)
-                                case ClaimState.Waiting(shown)     => showWaiting(rui, shown, spec, exchange)
-                                case ClaimState.Duplicate(message) =>
-                                    MountInstance.failed(spec, message, mounts.frames, mounts.table)
-                                        .map(failed => Scope.ensure(failed.teardown).andThen(show(failed, follow)))
-                        // The state the claim starts in is shown in this pass, like any node; a cut that switches it later closes what
-                        // that showed and shows the next state in a scope of its own. What a state shows is a group of its own, released
-                        // before it closes.
-                        for
-                            first      <- view.state.get
-                            shown      <- Scope.Finalizer.init(1)
-                            firstGroup <- Sync.Unsafe.defer(view.group.child())
-                            closeFirst = Sync.Unsafe.defer(firstGroup.release()).andThen(shown.close(Absent)).andThen(shown.await)
-                            _ <- Sync.Unsafe.defer(view.showing.set(Present(firstGroup)))
-                            _ <- Scope.ensure(closeFirst)
-                            _ <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
-                                Tag[Scope],
-                                derive = (_: Maybe[Scope.Finalizer]) => shown,
-                                fork = (parent: Scope.Finalizer) => parent.forked,
-                                join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
-                            )(ReleaseGroup.current.let(Present(firstGroup))(showClaim(first)))
-                            _ <- Fiber.init(
-                                Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
-                                    closeFirst.andThen(ReleaseGroup.owning { group =>
-                                        Sync.Unsafe.defer(view.showing.set(Present(group))).andThen(showClaim(next))
-                                    })
-                                }).unit
-                            )
-                        yield ()
-                        end for
-                    }
+        def beforeStart: Unit < Async =
+            spec.node match
+                case _: Mounted => exchange.gate.fold(Kyo.unit: Unit < Async)(_.holdRanges)
+                // A draw holds nothing up.
+                case _: Drawn => Kyo.unit
+        val taken: Maybe[MountDraw] < Sync =
+            spec.node match
+                case _: Drawn   => dispatch.takeDraw(rui.contentContext)
+                case _: Mounted => Absent
+        taken.map { drawn =>
+            mounts.current.map { follow =>
+                spec.identity match
+                    case Absent            => beforeStart.andThen(mounts.startKeyless(spec, drawn)).map(show(_, follow))
+                    case Present(identity) =>
+                        mounts.hasInstance(identity).map(kept => if kept then Kyo.unit else beforeStart).andThen(mounts.claim(
+                            rui,
+                            identity,
+                            spec,
+                            pass,
+                            drawn
+                        )).map { view =>
+                            def showClaim(state: ClaimState): Unit < (Async & Scope) =
+                                state match
+                                    case ClaimState.Live(instance)     => show(instance, follow)
+                                    case ClaimState.Waiting(shown)     => showWaiting(rui, shown, spec, exchange)
+                                    case ClaimState.Duplicate(message) =>
+                                        MountInstance.failed(spec, message, mounts.frames, mounts.table)
+                                            .map(failed => Scope.ensure(failed.teardown).andThen(show(failed, follow)))
+                            // The state the claim starts in is shown in this pass, like any node; a cut that switches it later closes what
+                            // that showed and shows the next state in a scope of its own. What a state shows is a group of its own, released
+                            // before it closes.
+                            for
+                                first      <- view.state.get
+                                shown      <- Scope.Finalizer.init(1)
+                                firstGroup <- Sync.Unsafe.defer(view.group.child())
+                                closeFirst = Sync.Unsafe.defer(firstGroup.release()).andThen(shown.close(Absent)).andThen(shown.await)
+                                _ <- Sync.Unsafe.defer(view.showing.set(Present(firstGroup)))
+                                _ <- Scope.ensure(closeFirst)
+                                _ <- ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
+                                    Tag[Scope],
+                                    derive = (_: Maybe[Scope.Finalizer]) => shown,
+                                    fork = (parent: Scope.Finalizer) => parent.forked,
+                                    join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
+                                )(ReleaseGroup.current.let(Present(firstGroup))(showClaim(first)))
+                                _ <- Fiber.init(
+                                    Abort.run[Throwable](view.state.observe(Present(first), Signal.defaultRepairInterval) { next =>
+                                        closeFirst.andThen(ReleaseGroup.owning { group =>
+                                            Sync.Unsafe.defer(view.showing.set(Present(group))).andThen(showClaim(next))
+                                        })
+                                    }).unit
+                                )
+                            yield ()
+                            end for
+                        }
+                end match
+            }
         }
     end subscribeMounted
 
@@ -1773,15 +2441,50 @@ private[kyo] object MountRegions:
         // Whether the region showing the node is one its table follows; a subscription that is not takes nothing over.
         follow: Boolean
     )(using Frame): Unit < (Async & Scope) =
+        // A run of the node that shows a kept instance hands it this run's props.
+        val offered: Unit < Sync = (spec.node, instance.props) match
+            case (d: Drawn, Present(ref)) => d.props.fold(Kyo.unit)(_.offer(ref))
+            case _                        => Kyo.unit
+        // The content is the instance's: a walk that draws in it, and every region fiber it forks, derive their ids from it.
+        offered.andThen(DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(
+            showContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)
+        ))
+    end subscribeMountContent
+
+    private def showContent(
+        rui: ReactiveUI,
+        spec: MountedSpec,
+        instance: MountInstance,
+        exchange: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        dispatch: MountDispatch,
+        follow: Boolean
+    )(using Frame): Unit < (Async & Scope) =
         val svgContext = rui.region match
             case _: ReactiveRegion.HtmlRange  => false
             case _: ReactiveRegion.SvgElement => true
         for
-            _       <- dispatch.register(rui.contentContext, instance)
+            _ <- dispatch.register(rui.contentContext, instance)
+            _ <- spec.node match
+                case _: Drawn   => Sync.Unsafe.defer(dispatch.showing(rui.contentContext, instance))
+                case _: Mounted => Kyo.unit
             _       <- Scope.ensure(dispatch.unregister(rui.contentContext, instance))
             content <- instance.children.content(rui.path, rui.contentContext.transparentDepth, follow)
             watch   <- content.register
             first   <- instance.cell.current
+            walkOf = (state: MountState) =>
+                val shown = state.content(spec)
+                // The instance's content is a range of its own.
+                SignalNow.Locals.take(Sync.Unsafe.defer(DrawContext.inRange(walkStatic(
+                    shown,
+                    rui.path,
+                    svgContext,
+                    rui.contentContext,
+                    nestedParentContext(rui.parentContext, shown),
+                    dispatch,
+                    rows = 0L,
+                    deepRows = Nil
+                )._1)))
             // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
             // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
             // Until a new instance shows its own content, each paint tells the page that the slots in its range are no one's: they were
@@ -1807,9 +2510,25 @@ private[kyo] object MountRegions:
                         case MountState.Ready(_) | MountState.Failed(_) => instance.supervision.afterShown.shown(through)
                         case MountState.Pending(_)                      => Kyo.unit
                 yield ()
-            _ <- first match
-                case MountState.Pending(Absent) => Kyo.unit
-                case state                      => paint(UI.RenderCause.Created, Absent, state, exchange)
+            // The walk of what the first paint shows, taken before that paint, for the pass that subscribes it: what a region or channel in
+            // it remembers as painted is what is on the page.
+            firstWalk <- first match
+                case MountState.Pending(_) => Kyo.lift(Maybe.empty[Seq[ReactiveUI]])
+                case state                 =>
+                    // What a render pass drew for this instance is on the page already, as the paint around it put it there.
+                    instance.takeOnPage(state).map {
+                        case Present(walked) =>
+                            instance.beforeOwnContent(
+                                state
+                            ).unit.andThen(instance.supervision.afterShown.shown(exchange)).andThen(Present(walked))
+                        case Absent =>
+                            walkOf(state).map { walked =>
+                                // Shown again, its content may hold kept instances of its own, which the paint leaves to them.
+                                Sync.Unsafe.defer(content.noteLive(walked, dispatch))
+                                    .andThen(paint(UI.RenderCause.Created, Absent, state, exchange))
+                                    .andThen(Present(walked))
+                            }
+                    }
             // A snapshot takes no events, so its range is held while it shows: nothing in it looks like a field the reader can use.
             _ <- if showsSnapshot(first) then exchange.onHold(rui.region, true) else Kyo.unit
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
@@ -1821,7 +2540,12 @@ private[kyo] object MountRegions:
                 val shown = state.content(spec)
                 for
                     previous <- Sync.Unsafe.defer(painted.getAndSet(state))
-                    _        <-
+                    // Walked before the paint, or a region in it could remember a value the paint did not show as painted.
+                    walked <- state match
+                        case MountState.Pending(Present(_))                 => Kyo.lift(Seq.empty[ReactiveUI])
+                        case _ if (previous eq state) && firstWalk.nonEmpty => Kyo.lift(firstWalk.get)
+                        case _                                              => walkOf(state)
+                    _ <-
                         if previous eq state then Kyo.unit
                         else
                             Clock.now.map(signalChangeTime.set).andThen(
@@ -1834,20 +2558,9 @@ private[kyo] object MountRegions:
                     _ <- state match
                         case MountState.Pending(Present(_)) => content.recorded
                         case _                              =>
-                            for
-                                (kids, _) <- SignalNow.Locals.take(Sync.Unsafe.defer(walkStatic(
-                                    shown,
-                                    rui.path,
-                                    svgContext,
-                                    rui.contentContext,
-                                    nestedParentContext(rui.parentContext, shown),
-                                    dispatch,
-                                    rows = 0L,
-                                    deepRows = Nil
-                                )))
-                                pass <- content.beginWalk(kids)
-                                _    <- subscribeWalked(rui.path, shown, kids, pass, content, through, signalChangeTime, dispatch)
-                            yield ()
+                            content.beginWalk(walked).map(pass =>
+                                subscribeWalked(rui.path, shown, walked, pass, content, through, signalChangeTime, dispatch)
+                            )
                 yield ()
                 end for
             // Inside a waiting boundary every state is a pass with a group of its own, the first one due from now, and the mount loads
@@ -1882,7 +2595,7 @@ private[kyo] object MountRegions:
             })
         yield ()
         end for
-    end subscribeMountContent
+    end showContent
 
     /** `ui` rooted at `path` with each mount at a path of `seeds` shown as its slot holding that snapshot. Only the static part of `ui`
       * is walked: the mounts inside a region, a boundary or a mount are painted by those.

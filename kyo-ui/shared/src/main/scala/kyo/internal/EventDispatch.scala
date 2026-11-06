@@ -385,14 +385,17 @@ private[kyo] object EventDispatch:
                                     case Present(f) => items.indexWhere(it => f(it) == seg)
                                     case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                 if idx >= 0 && idx < items.size then
-                                    resolveTarget(
-                                        renderFn(idx, items(idx)),
-                                        nodePath :+ seg,
-                                        at.child(seg),
-                                        targetPath,
-                                        rootDepth,
-                                        controlBelow,
-                                        mounts
+                                    // A row's key is part of the ids of the keyed nodes in it.
+                                    DrawContext.scope.use(s =>
+                                        DrawContext.scope.let(s.copy(rows = seg :: s.rows))(resolveTarget(
+                                            renderFn(idx, items(idx)),
+                                            nodePath :+ seg,
+                                            at.child(seg),
+                                            targetPath,
+                                            rootDepth,
+                                            controlBelow,
+                                            mounts
+                                        ))
                                     )
                                 else unresolved(controlBelow)
                                 end if
@@ -417,15 +420,42 @@ private[kyo] object EventDispatch:
             case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
                 resolveTarget(Boundaries.implicitOf(m).get, nodePath, at, targetPath, rootDepth, controlBelow, mounts)
             case m: Mounted =>
-                mounts.lookup(at.transparent).map {
-                    case Absent        => unresolved(controlBelow)
-                    case Present(cell) =>
-                        cell.current.map {
+                mounts.instanceForEvent(at.transparent, m).map {
+                    case Absent            => unresolved(controlBelow)
+                    case Present(instance) =>
+                        instance.cell.current.map {
                             case MountState.Pending(Present(_)) => unresolved(controlBelow)
                             case state                          =>
                                 val content = state.content(MountedSpec(m, nodePath, Nil))
-                                resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                                DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(
+                                    resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                                )
                         }
+                }
+            // A drawn mount's content is on the page from the first paint, before an instance has taken it.
+            case d: Drawn =>
+                mounts.instanceForEvent(at.transparent, d).map {
+                    case Present(instance) =>
+                        instance.cell.current.map(state =>
+                            DrawContext.scope.let(DrawContext.IdScope(instance.children.idBase, Nil))(resolveTarget(
+                                state.content(MountedSpec(d, nodePath, Nil)),
+                                nodePath,
+                                at.transparent,
+                                targetPath,
+                                rootDepth,
+                                controlBelow,
+                                mounts
+                            ))
+                        )
+                    case Absent =>
+                        // Outside any walk, so the order of the call in its range comes from the walk that last met it there.
+                        DrawContext.scope.use(scope =>
+                            Sync.Unsafe.defer(mounts.occurrenceAt(at.transparent, d)).map(mounts.drawn(at.transparent, d, scope, _))
+                        ).map((content, base) =>
+                            DrawContext.scope.let(DrawContext.IdScope(base, Nil))(
+                                resolveTarget(content, nodePath, at.transparent, targetPath, rootDepth, controlBelow, mounts)
+                            )
+                        )
                 }
             // Held-back content is not on the page; once revealed it occupies the boundary's path.
             case b: Bounded =>

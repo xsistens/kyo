@@ -15,7 +15,7 @@ import kyo.Browser.*
 class ObserveViewportScenarioItTest extends UITest:
 
     private def app: UI < Async =
-        Kyo.lift(UI.mounted(
+        Kyo.lift(waitingMount(
             for
                 cmds <- UI.commands
                 id   <- cmds.freshId

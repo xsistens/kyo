@@ -437,6 +437,9 @@ private[kyo] object RowRegions:
                                 })
                                 // The regions inside a retained row keep their subscriptions, so the pass leaves them as they are.
                                 firstPass <- regionMounts.beginWalk(plan.allKids, plan.retainedRows, Present(plan.holdsMount))
+                                // What the old value of a rebuilt row drew is gone with it, and a place an instance keeps is left to it.
+                                _ <- Kyo.foreachDiscard(plan.rebuilt)(i => dispatch.forgetBelow(rui.contentContext.child(plan.keys(i))))
+                                _ <- Sync.Unsafe.defer(plan.rebuilt.foreach(i => regionMounts.noteLive(plan.built(i).kids, dispatch)))
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful

@@ -166,9 +166,11 @@ class DomBackendBoundaryTest extends kyo.test.Test[Any]:
             clicks <- Signal.initRef(0)
             choice <- Signal.initRef(0)
             inner = (id: String) =>
-                UI.mounted(Sync.defer(UI.button(id).id(id).onClick(clicks.getAndUpdate(_ + 1).unit))).placeholder(UI.span("inner skeleton"))
-            direct    = UI.mounted(Sync.defer(inner("direct"))).keyed("k").placeholder(UI.span("outer skeleton"))
-            throughIt = UI.mounted(Sync.defer(choice.render(_ => inner("rendered")))).placeholder(UI.span("outer skeleton"))
+                waitingMount(
+                    Sync.defer(UI.button(id).id(id).onClick(clicks.getAndUpdate(_ + 1).unit))
+                ).placeholder(UI.span("inner skeleton"))
+            direct    = waitingMount(Sync.defer(inner("direct"))).keyed("k").placeholder(UI.span("outer skeleton"))
+            throughIt = waitingMount(Sync.defer(choice.render(_ => inner("rendered")))).placeholder(UI.span("outer skeleton"))
             ready     = new DomTestEnv.MountReady
             fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div(direct, throughIt), ready)))
             _     <- assertEventually(Sync.defer(ready.installed && el("direct") != null && el("rendered") != null))
@@ -186,7 +188,7 @@ class DomBackendBoundaryTest extends kyo.test.Test[Any]:
       */
     private def nestedUnderOneFrame(gate: Promise[Unit, Any], selected: SignalRef[String], throughRegion: Boolean)(using Frame): UI =
         def inner: UI =
-            UI.mounted(Sync.defer(UI.span("picked").id("picked")))
+            waitingMount(Sync.defer(UI.span("picked").id("picked")))
                 .placeholder(selected.render(v => UI.span(s"inner skeleton $v")))
         UI.mounted(gate.get.andThen(if throughRegion then selected.render(_ => inner) else inner))
             .keyed("k")
