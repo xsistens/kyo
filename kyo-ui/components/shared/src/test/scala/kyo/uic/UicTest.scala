@@ -102,8 +102,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
       *
       * A region publishes while it settles too, so `act` runs only once every ref in `reads` has an observer parked on it
       * again (`waiters`), which the engine does only after handling the value before: the barrier
-      * [[DataTableReuseTest]] uses. `within` only turns a wait that never ends into an answer instead of a hang; it is not
-      * what passes a test.
+      * [[DataTableReuseTest]] uses. No wait here has a time budget: each waits for the state it needs, and one that never comes
+      * is the test's timeout, never an answer.
       */
     private[uic] def publishedAfter(ui: UI, reads: Signal.SignalRef[?]*)(act: UI => Any < Async)(using
         Frame,
@@ -126,8 +126,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * tree published so far, newest first, since a panel published by a mount of its own is not inside the tree its
       * field published, and it is tried again until it finds what it acts on, since that panel may not be published yet.
       * After the last gesture the answer waits for `until` to hold over everything published since that gesture (a field
-      * and the panel it opens publish as separate regions, in either order), and is that, newest first, or `Absent` if it
-      * never does.
+      * and the panel it opens publish as separate regions, in either order), and is that, newest first. It waits for as long
+      * as that takes: a tree that never comes is the test's timeout, not an answer.
       */
     private[uic] def publishedAfterReady(
         ui: UI,
@@ -137,14 +137,50 @@ abstract class UicTest extends kyo.test.Test[Any]:
     )(acts: (UI => Any < Async)*)(using Frame, kyo.test.AssertScope): Maybe[UI] < Async =
         drive(ui, ready, reads, acts) { d =>
             for
-                holds <- settles(
+                _ <- waitFor(
                     Sync.defer(d.published.size > d.publishedBefore).map(grew =>
                         if grew then d.since.map(until) else Kyo.lift(false)
-                    ),
-                    d.within
+                    )
                 )
                 answer <- d.since
-            yield if holds then Present(answer) else Absent
+            yield Present(answer)
+        }
+
+    /** `act` on `ui`, then `sw` off and on again, each step once the one before shows: `act`'s result, then the off state, then the on
+      * state again. Each is read in the newest tree published since its step that holds `root`, the component, so neither a late
+      * repaint from before the step nor a region that does not show the component can answer for it. Writing the switch twice without
+      * that barrier lets the second write overtake the first: the region then sees no change, publishes nothing, and nothing after
+      * the last write could show the state coming back. The answer is that newest tree.
+      */
+    private[uic] def publishedThroughSwitch(
+        ui: UI,
+        sw: Signal.SignalRef[Boolean],
+        root: String,
+        on: UI => Boolean < Sync,
+        off: UI => Boolean < Sync
+    )(act: UI => Any < Async)(using Frame, kyo.test.AssertScope): UI < Async =
+        drive(ui, _ => true, Nil, Seq(act)) { d =>
+            // The newest tree holding the component among those published after the first `from`, if one has come yet.
+            def newest(from: Int): Maybe[UI] < Sync =
+                Sync.defer(d.published).map(now =>
+                    Kyo.foreach(now.take(now.size - from))(t =>
+                        elementsWithClass(t, root).map(rs => if rs.nonEmpty then Present(t) else Absent)
+                    )
+                        .map(found => Maybe.fromOption(found.flatten.headOption))
+                )
+            def shows(from: Int, cond: UI => Boolean < Sync): Unit < Async =
+                waitFor(newest(from).map(_.fold(Kyo.lift(false))(cond)))
+            for
+                _      <- shows(0, on)
+                n0     <- Sync.defer(d.published.size)
+                _      <- sw.set(false)
+                _      <- shows(n0, off)
+                n1     <- Sync.defer(d.published.size)
+                _      <- sw.set(true)
+                _      <- shows(n1, on)
+                answer <- newest(n1)
+            yield answer.getOrElse(ui)
+            end for
         }
 
     /** Runs `ui` under the engine and, once what it published satisfies `ready`, the gestures in a row, each on every tree
@@ -173,11 +209,12 @@ abstract class UicTest extends kyo.test.Test[Any]:
 
     /** Sets `ref` and waits until everything that observes it has handled the value and parked again, which is the barrier a
       * test needs between two writes that must both be seen: a value the observers have not reached yet is overtaken by the
-      * next, and only the last is drawn. `settles` only turns a wait that never ends into an answer; it is not what passes a
-      * test.
+      * next, and only the last is drawn. It counts only observers parked on the ref itself (`waiters`): one that reads it through a
+      * derived signal is not counted, and with none counted the barrier passes at once. A switch the component reads that way is
+      * written through [[publishedThroughSwitch]], which waits for what the component publishes instead.
       */
     private[uic] def setSettled[A](ref: Signal.SignalRef[A], a: A)(using Frame): Unit < Async =
-        ref.waiters.map(before => ref.set(a).andThen(settles(ref.waiters.map(_ >= before), 5.seconds)).unit)
+        ref.waiters.map(before => ref.set(a).andThen(waitFor(ref.waiters.map(_ >= before))).unit)
 
     /** The first HTML a transport renders for `ui`, which is what a static page carries. */
     private[uic] def renderHtml(ui: UI)(using Frame): String < Async =
@@ -197,7 +234,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
         holds: ((String, String)) => Boolean
     )(using Frame, kyo.test.AssertScope): Boolean < Async =
         drive(ui, ready, Nil, acts)(d =>
-            settles(Sync.defer(d.patched.take(d.patched.size - d.patchedBefore).exists(holds)), d.within)
+            waitFor(Sync.defer(d.patched.take(d.patched.size - d.patchedBefore).exists(holds))).andThen(true)
         )
 
     /** What [[drive]] hands its `finish`: everything the field published and patched, and how much of each came before
@@ -206,8 +243,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     final private class Driven(
         log: kyo.internal.RecordingExchange,
         val publishedBefore: Int,
-        val patchedBefore: Int,
-        val within: Duration
+        val patchedBefore: Int
     )(using Frame):
         def published: List[UI]             = UicTest.publishedIn(log)
         def patched: List[(String, String)] = UicTest.patchedIn(log)
@@ -223,7 +259,6 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private def drive[R](ui: UI, ready: UI => Boolean < Sync, reads: Seq[Signal.SignalRef[?]], acts: Seq[UI => Any < Async])(
         finish: Driven => R < Async
     )(using Frame, kyo.test.AssertScope): R < Async =
-        val within         = 5.seconds
         val log            = new kyo.internal.RecordingExchange
         def seen: List[UI] = UicTest.publishedIn(log)
         def all: UI < Sync = Sync.defer(seen).map(trees => if trees.isEmpty then ui else UI.fragment(trees*))
@@ -234,35 +269,34 @@ abstract class UicTest extends kyo.test.Test[Any]:
             kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { _ =>
                 for
                     // A mount publishes what it wired; act on that. A field with no mount publishes nothing here, and is acted on as it
-                    // rendered, where it draws what is inside.
-                    _      <- settles(Sync.defer(seen.nonEmpty), within)
-                    parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
-                    _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
-                    set <- settles(walked(all.map(ready)), within)
-                    _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
-                    last <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
+                    // rendered, where it draws what is inside: waiting for a publish from it would wait for something that never comes.
+                    mounts <- holdsMount(ui)
+                    _      <- if mounts then waitFor(Sync.defer(seen.nonEmpty)) else Kyo.unit
+                    _      <- waitFor(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)))
+                    _      <- waitFor(walked(all.map(ready)))
+                    last   <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
                         for
                             before <- Sync.defer((seen.size, UicTest.patchedIn(log).size))
-                            done   <- settles(
+                            _      <- waitFor(
                                 walked(all).map(t =>
                                     walked(Abort.run[AssertionError](Abort.catching[AssertionError](act(t)))).map(_.isSuccess)
-                                ),
-                                within
+                                )
                             )
-                            _ = if !done then throw new AssertionError("a gesture never found what it acts on")
                         yield before
                     }
-                    r <- finish(Driven(log, last._1, last._2, within))
+                    r <- finish(Driven(log, last._1, last._2))
                 yield r
             }
         }
     end drive
 
-    /** Whether `cond` holds within `within`, polled the way `assertEventually` polls, answering instead of failing. */
-    private[uic] def settles(cond: => Boolean < Async, within: Duration)(using Frame): Boolean < Async =
-        Abort.run[Unit](Retry[Unit](Schedule.fixed(10.millis).maxDuration(within))(
-            cond.map(ok => if ok then Kyo.unit else Abort.fail(()))
-        )).map(_.isSuccess)
+    /** Waits until `cond` holds, looking again after every short pause. No budget: what passes a test is the state, and a state that
+      * never comes is the test's timeout. The pause is pacing, never a pass condition.
+      */
+    private[uic] def waitFor(cond: => Boolean < Async)(using Frame): Unit < Async =
+        Loop(()) { _ =>
+            cond.map(ok => if ok then Loop.done(()) else Async.sleep(10.millis).andThen(Loop.continue(())))
+        }
 
     /** Every element of a rendered tree, with the reactive nodes resolved to their current content.
       *
@@ -286,6 +320,23 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     case Present(ui) => elements(ui)
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
+
+    /** Whether the tree, as it renders now, holds a mount anywhere: what decides whether a live page publishes it. */
+    private[uic] def holdsMount(node: UI)(using Frame): Boolean < Sync =
+        node match
+            case _: UI.Ast.MountNode     => Kyo.lift(true)
+            case e: UI.Ast.Element       => Kyo.foreach(e.children)(holdsMount).map(_.exists(identity))
+            case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(holdsMount).map(_.exists(identity))
+            case k: UI.Ast.KeyedChild[?] => holdsMount(k.child)
+            case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(holdsMount)
+            case f: UI.Ast.Foreach[?, ?] =>
+                f.applyTyped([T] =>
+                    (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                        signal.current(using f.frame).map(items =>
+                            Kyo.foreach(items.zipWithIndex)((item, i) => holdsMount(render(i, item))).map(_.exists(identity))
+                        )
+                )
+            case _ => Kyo.lift(false)
 
     /** Every reactive node in the tree, in walk order, WITHOUT resolving it away.
       *
@@ -457,10 +508,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
       */
     /** Runs `v` as a mount effect runs, for what only works in one (`UI.id`, `ContextMenu.state`). */
     private[uic] def inDraw[A, S](v: A < S)(using Frame): A < S =
-        kyo.internal.DrawContext.current.let(Present(new kyo.internal.DrawContext(
-            kyo.internal.ReactiveRegion.RegionIdentity(Seq.empty, 0),
-            Absent
-        )))(v)
+        kyo.internal.DrawContext.current.let(Present(new kyo.internal.DrawContext("kyo-r")))(v)
 
     /** What a drawn mount shows, for a walk of the tree: its draw, at no place in particular, with nothing started. In a walk of what a live
       * page published it shows nothing: its instance publishes its content itself, and a draw of its own here would hand a gesture state no
@@ -473,7 +521,12 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 UicTest.walkingLive.use(live =>
                     if live then UI.empty
                     else
-                        kyo.internal.MountDraw.run(d, kyo.internal.ReactiveRegion.RegionIdentity(Seq.empty, 0))
+                        kyo.internal.MountDraw.run(
+                            d,
+                            kyo.internal.ReactiveRegion.RegionIdentity(Seq.empty, 0),
+                            kyo.internal.DrawContext.IdScope.root,
+                            0
+                        )
                             .map(_.content(kyo.internal.MountedSpec(d, Seq.empty, Chunk.empty)))
                 )
 
