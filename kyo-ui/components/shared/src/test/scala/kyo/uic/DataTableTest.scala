@@ -4613,11 +4613,17 @@ class DataTableTest extends ReactiveValueContract:
     /** Runs `ui` under the engine with `sw` at false and answers with what it published after the switch went on, and off, and
       * on: a flip builds the table again in the one region that reads it.
       */
-    private def flipped(ui: UI, sw: SignalRef[Boolean], until: UI => Boolean < Sync, act: UI => Any < Async = _ => Kyo.unit)(using
-        Frame,
-        kyo.test.AssertScope
-    ): Maybe[UI] < Async =
-        publishedAfterReady(ui, _ => true, until = until)(act, _ => setSettled(sw, false), _ => sw.set(true))
+    /** `act`, then `sw` off and on again, each once the step before shows (see [[publishedThroughSwitch]]); off is where `until` does
+      * not hold unless the case says otherwise. The answer is the tree that shows `until` again.
+      */
+    private def flipped(
+        ui: UI,
+        sw: SignalRef[Boolean],
+        until: UI => Boolean < Sync,
+        act: UI => Any < Async = _ => Kyo.unit,
+        off: Maybe[UI => Boolean < Sync] = Absent
+    )(using Frame, kyo.test.AssertScope): Maybe[UI] < Async =
+        publishedThroughSwitch(ui, sw, "p-datatable", until, off.getOrElse(t => until(t).map(!_)))(act).map(Present(_))
 
     "resizableColumns" - {
         "unset with a binding is on" in {
@@ -4672,7 +4678,8 @@ class DataTableTest extends ReactiveValueContract:
                     widths.resizableColumns(sw).render,
                     sw,
                     until = t => firstColWidth(t).map(_.contains(270.0.px)),
-                    act = t => resizers(t).map(hs => drag(hs.head, 0, 50))
+                    act = t => resizers(t).map(hs => drag(hs.head, 0, 50)),
+                    off = Present(t => resizers(t).map(_.isEmpty))
                 ))
             yield assert(shown.nonEmpty, "the width the reader dragged did not come back with the switch")
         }

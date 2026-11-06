@@ -105,7 +105,7 @@ class ReactiveValueTest extends UicTest:
         def delivered[A, B](sig: Signal[A], ref: SignalRef[B], write: B)(using CanEqual[A, A], Frame): A < Async =
             for
                 next <- Fiber.initUnscoped(sig.next)
-                _    <- settles(ref.waiters.map(_ > 0), 5.seconds)
+                _    <- waitFor(ref.waiters.map(_ > 0))
                 _    <- ref.set(write)
                 got  <- next.get
             yield got
