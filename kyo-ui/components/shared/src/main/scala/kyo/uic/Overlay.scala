@@ -332,7 +332,7 @@ final class Overlay private[uic] (private[uic] val p: Overlay.Props) extends Nod
                     for
                         id <- UI.id
                     yield renderOpenAt(anchorV, Present(id), portal = true, whileOpen = Present(pointerReposition(at, id)))
-                }.keyed(siteV)
+                }.keyedOnSite(siteV)
             case Absent => anchoredOpenContent
 
     /** The anchor-box placements: the portal path, the declared-anchor path, and the measured flip. */
@@ -355,7 +355,7 @@ final class Overlay private[uic] (private[uic] val p: Overlay.Props) extends Nod
                     after = List(anchorProbe(anchorId)),
                     whileOpen = Present(portalReposition(anchorId, panelId))
                 )
-            }.keyed(siteV)
+            }.keyedOnSite(siteV)
         else if !autoFlipV then renderOpenAt(anchorV, Absent)
         else
             // Self-addressing: on open, mint an id + stamp it on the panel,
@@ -366,7 +366,7 @@ final class Overlay private[uic] (private[uic] val p: Overlay.Props) extends Nod
             // replaced and its focus seed + open animation survive every scroll tick.
             UI.mounted {
                 UI.id.map(id => renderOpenAt(anchorV, Present(id), whileOpen = Present(reposition(id))))
-            }.keyed(siteV)
+            }.keyedOnSite(siteV)
 
     /* The reposition, which runs while the panel is shown (`renderOpenAt` puts it on the panel, keyed by the panel's id), so
      * `observeViewportById` resolves the freshly inserted panel
