@@ -626,6 +626,10 @@ hatch for the two things a render diff cannot express: imperative DOM commands
   survive says so with `el.whileMountedKeyed(key)(effect)` (Overlay's panel and DataTable's header by their id, DataTable's
   source by itself). The element's id is no key, and no position among siblings is part of a key. No mount with empty
   content exists for this in uic. Its `Scope` ends with its instance, and a failure reaches the `onFailure` rules around the element.
+- **A component that draws through `UI.mountedWith` is keyed on where the app places it** (`Node.placed`, behind both conversions
+  and `toUI`), so a host region that runs again keeps its instance and hands it the new props through its `Live`; placements in one
+  `map` are told apart by their order. A plain `UI.mounted` render stays unkeyed, since a held draw would keep the first run's values.
+  `NodePlacementTest` holds it.
 - **A component's mount that must survive its host's region running again is keyed on where the component was made**: Overlay
   takes `(using UI.MountSite)` at construction and keys the mounts that mint its panel's ids on it with `.keyedOnSite(site)`.
   Calls of one site in one range (one call in a `map`) are told apart by their order, so the caller writes no
