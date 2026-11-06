@@ -1,6 +1,7 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.render
 
 /** [[SplitButton]]: its rows, and whether its menu is open, held to rule A ([[ReactiveValueContract]]). */
 class SplitButtonTest extends ReactiveValueContract:
@@ -120,6 +121,23 @@ class SplitButtonTest extends ReactiveValueContract:
             h    <- held.get
             s    <- seen.get
         yield assert(h && s == Present(false), s"held $h, reported $s")
+    }
+
+    "a host region that runs again keeps the menu the reader opened and shows the run's label" in {
+        def expanded(t: UI): Boolean < Sync =
+            elementWithClass(t, "p-splitbutton-dropdown").map(_.attrs.ariaAttrs.get("expanded").contains("true"))
+        for
+            tick <- Signal.initRef(0)
+            ui = UI.div(tick.render(n => UI.div(SplitButton(s"Release $n").items(MenuItem("Draft").onSelect(())))))
+            after <- publishedAfterReady(ui, _ => true, until = t => elementsWithClass(t, "p-splitbutton-dropdown").map(_.nonEmpty))(
+                t => elementWithClass(t, "p-splitbutton-dropdown").map(click),
+                _ => setSettled(tick, 1)
+            )
+            shown = after.getOrElse(ui)
+            open  <- expanded(shown)
+            label <- elementWithClass(shown, "p-button-label")
+        yield assert(open && textOf(label) == "Release 1", s"after the host's run: open $open, label ${textOf(label)}")
+        end for
     }
 
 end SplitButtonTest

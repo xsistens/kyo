@@ -57,6 +57,31 @@ no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sw
 - **What stays a case class:** data people construct and match on (`FilterRule`, `SortKey`, `TableState`, `TreeNode`,
   `ToastMessage`, ...). Those are not components.
 
+## A component with state of its own is an instance; one without is not
+
+The Solid model (decided 2026-11-06, ISA F4): a component draws once per instance and reads each prop where it uses it. A host
+region that runs again must not start a component over and take the reader's state with it.
+
+- **Only a component that holds state of its own draws through `UI.mountedWith`**: a slot it keeps while nothing binds it (an
+  unbound `checked`, a typed text), an open panel, a highlight, minted ids. The placement keys it on where the app writes it
+  (`Node.placed`), so a region around it that runs again keeps the instance and hands it the run's props through its `Live`.
+- **A stateless component (Button) has no instance.** It reads its `Prop`s directly: a constant is a plain value, a signal a
+  channel or one region (`Prop.render`, `Prop.zip`). A host repaint has nothing of it to lose.
+- **The recipe** (`ToggleButton.render`, `Password.render`, `SplitButton.render`): mint the state once in the draw, then draw the
+  run's props as one value, `Prop.render(live[X.Props](identity))(q => new X(q).drawnOver(own, ...))`. Every run then draws from
+  that run's binding and hearer, so a click writes the ref the latest run bound and reaches its `onChange`, and a `SignalRef`
+  stays two way. Where the run binds nothing, `drawnOver` binds the instance's own ref, which keeps the reader's value while a
+  run binds the slot and gives it back when a run stops binding it. Anything that follows the binding's shape (the unheard card,
+  a fixed constant drawn read-only) is inside the per-run draw. `Props` derives `CanEqual`.
+- **A host that binds the slot itself and draws the component in its own region** (SelectButton's options) calls a mount-free
+  `renderInPlace`: nothing of it is left to keep across that region's runs, and a mount per option would be a mount inside a mount.
+- **Every converted component has a repaint test**: the reader's state survives a host run that brings new props, the new props
+  are shown, and, where it binds, a click after the run writes that run's ref (`ToggleButtonTest`, `PasswordTest`,
+  `SplitButtonTest`, `ButtonTest` for the stateless case).
+- **During the waves** a converted component's own fields are `Prop`s; the shared traits (validity, accessibility, tooltip,
+  description) and `Slot` stay on `ReactiveValue` until the last wave removes it. `Prop.map` needs its type parameters spelled
+  out on a value whose static type is already `Prop[A]` (ISA finding, task T8).
+
 ## kyo-ui is in-tree
 
 - Components build against `kyo-ui` from the same build, not a published artifact.

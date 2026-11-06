@@ -1,6 +1,7 @@
 package kyo.uic
 
 import kyo.*
+import kyo.UI.render
 
 /** The `value` slot holds to rule A ([[ReactiveValueContract]]) as a text field does: a constant is the starting text,
   * and unbound the text is the browser's. Typing reaches `onInput` and a commit `onChange`, so the slot is held through
@@ -203,6 +204,21 @@ class PasswordTest extends ReactiveValueContract:
             _     <- held.set("")
             empty <- filled(t)
         yield assert((first, empty) == (true, false), s"filled over abc, then empty: ${(first, empty)}")
+    }
+
+    "a host region that runs again keeps the text the reader typed" in {
+        for
+            tick <- Signal.initRef(0)
+            ui = UI.div(tick.render(n => UI.div(uic.Password().feedback(true).placeholder(s"run $n"))))
+            after <- publishedAfterReady(ui, _ => true, until = t => elementsWithClass(t, "p-password-input").map(_.nonEmpty))(
+                t => textField(t, "p-password-input").map(typed(_, "abcDEF12", commit = false)),
+                _ => setSettled(tick, 1)
+            )
+            shown = after.getOrElse(ui)
+            strong <- elementsWithClass(shown, "p-password-meter-strong")
+            text   <- textField(shown, "p-password-input").map(textIn)
+        yield assert(strong.nonEmpty && text == "abcDEF12", s"after the host's run: strong meter ${strong.nonEmpty}, text '$text'")
+        end for
     }
 
 end PasswordTest
