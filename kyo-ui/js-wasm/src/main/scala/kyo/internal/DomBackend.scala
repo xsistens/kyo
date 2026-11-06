@@ -394,9 +394,9 @@ private[kyo] object DomBackend:
             _        <- DomStyleSheet.injectBase()
             commands <- UI.Commands.init(op => applyOpLocal(op, session))
             _ = session.commands = commands
-            // Installed so component handlers and mounted effects reach `UI.commands`: the first paint draws mounts, and the region
-            // fibers subscribe forks and the event drain all start inside it.
-            _ <- UICommands.commands.let(Present(commands)) {
+            // Installed so component handlers and mounted effects reach `UI.commands` and `UI.scrollIntoView`, as the server session's
+            // are: the first paint draws mounts, and the region fibers subscribe forks and the event drain all start inside it.
+            _ <- UICommands.commands.let(Present(commands))(UICommands.scrollSink.let(Present(scrollLocal)) {
                 for
                     root <- ReactiveUI.normalize(ui, Seq.empty)
                     // Drawn into the table the subscription below reads, so an instance takes the content this paint shows.
@@ -412,17 +412,13 @@ private[kyo] object DomBackend:
                     // Single-consumer drain owned by the ambient page Scope. The single consumer preserves event ordering.
                     // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
                     // Panic propagates rather than being silently swallowed as a clean drain end.
-                    // The drain carries the session's scroll sink: a handler calling UI.scrollIntoView scrolls the
-                    // local document, the browser-mount counterpart of the server session's WebSocket op.
-                    drain <- Fiber.initUnscoped(UICommands.scrollSink.let(Present(scrollLocal)) {
-                        DragCommands.resolveSink.let(Present(resolveLocal)) {
-                            subscribed.get.andThen(Sync.defer(diagnostics.drainStarted())).andThen(
-                                Loop.foreach(Abort.runPartial[Closed](events.take).map {
-                                    case Result.Success(eff) => eff.andThen(Loop.continue)
-                                    case Result.Failure(_)   => Loop.done
-                                })
-                            )
-                        }
+                    drain <- Fiber.initUnscoped(DragCommands.resolveSink.let(Present(resolveLocal)) {
+                        subscribed.get.andThen(Sync.defer(diagnostics.drainStarted())).andThen(
+                            Loop.foreach(Abort.runPartial[Closed](events.take).map {
+                                case Result.Success(eff) => eff.andThen(Loop.continue)
+                                case Result.Failure(_)   => Loop.done
+                            })
+                        )
                     })
                     // Removes callbacks before closing their queue and finally interrupts and joins the drain. Registered twice: here for
                     // a mount that fails on its way up, and again after the subscription, since finalizers are LIFO and the events have to
@@ -493,12 +489,12 @@ private[kyo] object DomBackend:
                     _ <- Sync.defer(diagnostics.dragRuntimeInstalled(dragRuntime))
                     _ <- Async.never
                 yield ()
-            }
+            })
         yield ()
         end for
     end mountInto
 
-    // The local-document scroll sink installed on the mount's event-drain fiber; mirrors the embedded
+    // The local-document scroll sink, the browser-mount counterpart of the server session's WebSocket op; mirrors the embedded
     // client's ScrollIntoView handling exactly (missing id = no-op, smooth scroll to the block start),
     // so the same command behaves the same under either runner.
     private def scrollLocal(id: String)(using Frame): Unit < Async =

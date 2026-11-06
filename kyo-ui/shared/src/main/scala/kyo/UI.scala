@@ -823,9 +823,11 @@ object UI:
       */
     final case class Request(path: String, query: Map[String, String]) derives CanEqual
 
-    /** Scrolls the element with `id` into the client viewport, from inside an event handler.
+    /** Scrolls the element with `id` to the start of the client viewport, smoothly, from an event handler or an effect a mount or
+      * element runs on the live page. Every scroller around the element moves, the page included, so a component scrolling inside
+      * itself uses [[kyo.UI.Commands.scrollIntoViewId]], which goes to the nearest edge.
       *
-      * The command rides the session the handler runs in: under [[runHandlers]] it travels the same
+      * The command rides the session it runs in: under [[runHandlers]] it travels the same
       * WebSocket as the reactive updates and the connected browser scrolls the element; under a
       * browser mount (`UI.runMount`) it scrolls the local document directly. Outside any session
       * (plain SSR, [[runRender]], render-only tests) there is no client to scroll and the call is a

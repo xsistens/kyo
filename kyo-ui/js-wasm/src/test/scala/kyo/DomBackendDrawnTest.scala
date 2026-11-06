@@ -321,4 +321,28 @@ class DomBackendDrawnTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "UI.scrollIntoView reaches the page from an element's effect and from a mount's, not only from a handler" in {
+        val seen  = scalajs.Array[String]()
+        val proto = scalajs.Dynamic.global.window.Element.prototype
+        val prior = proto.scrollIntoView
+        Scope.run {
+            for
+                _ <- Scope.ensure(Sync.defer(proto.scrollIntoView = prior))
+                _ <- Sync.defer(proto.scrollIntoView =
+                    (
+                        (self: dom.Element, _: scalajs.Any) => discard(seen.push(self.id))
+                    ): scalajs.ThisFunction1[dom.Element, scalajs.Any, Unit]
+                )
+                ui = UI.div(
+                    UI.span("a").id("sink-el").whileMounted(UI.scrollIntoView("sink-el")),
+                    UI.mounted(UI.whileMounted(UI.scrollIntoView("sink-mount")).andThen(UI.span("b").id("sink-mount")))
+                )
+                on <- mounted(ui) {
+                    assertEventually(Sync.defer(seen.toSet == Set("sink-el", "sink-mount")), 5.seconds)
+                        .andThen(Sync.defer(seen.toList.sorted))
+                }
+            yield assert(on == List("sink-el", "sink-mount"))
+        }
+    }
+
 end DomBackendDrawnTest
