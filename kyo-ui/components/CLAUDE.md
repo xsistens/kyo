@@ -627,15 +627,17 @@ hatch for the two things a render diff cannot express: imperative DOM commands
   source by itself). The element's id is no key, and no position among siblings is part of a key. No mount with empty
   content exists for this in uic. Its `Scope` ends with its instance, and a failure reaches the `onFailure` rules around the element.
 - **A component's mount that must survive its host's region running again is keyed on where the component was made**: Overlay
-  takes `(using UI.MountSite)` at construction and keys the mounts that mint its panel's ids on it. An effect inside a real mount's draw that reads
+  takes `(using UI.MountSite)` at construction and keys the mounts that mint its panel's ids on it with `.keyedOnSite(site)`.
+  Calls of one site in one range (one call in a `map`) are told apart by their order, so the caller writes no
+  key; a key given with `.keyed` that repeats in one range is reported as a duplicate. An effect inside a real mount's draw that reads
   that mount's state stays `UI.whileMounted` (Carousel, VirtualScroller, DataTable's demand writes).
 - **Commands resolve ONLY in `el.whileMounted`, `UI.whileMounted`, a waiting `UI.mounted` effect or an event handler**,
   never in a draw a static page also runs: outside a session `UI.commands` panics.
 - **A reusable component has no way to learn its own render path.** Every command
   is id-addressed: in a `UI.mounted` effect, `id <- UI.id`, stamp it
   with `.id(id)` on your own element, then drive `focusId(id)` /
-  `scrollIntoViewId(id)` / `requestMeasureById(id)`. `UI.id` derives from the node's place and key,
-  so a static page and the live one agree; an id only a running session can mint would make them differ.
+  `scrollIntoViewId(id)` / `requestMeasureById(id)`. `UI.id` derives from a keyed node's identity
+  and from an unkeyed node's place, so a static page and the live one agree; an id only a running session can mint would make them differ.
 - **Handlers take `UI.Action` (`Any < (Async & Abort[Any])`)**, on `uic.Button` and on a raw kyo element alike.
   A failure a handler leaves unhandled goes to the `onFailure` rules around it.
   A setter that takes an app's callback stores it as a `Callback` (`Callback.of(f)`,
