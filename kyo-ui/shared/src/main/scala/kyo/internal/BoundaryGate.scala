@@ -285,9 +285,11 @@ end BoundaryHold
 /** The hold of one pass of a region or a mount inside a waiting boundary.
   *
   * Until the pass and every pass below it have ended, its paints wait, since the pass may still subscribe mounts that load. When they
-  * end with nothing loading, the paints go out in order, as they would without a boundary. When they end with mounts loading, the
-  * range keeps what it shows (the boundary's other content stays live), the paints are dropped, and once the mounts have loaded the
-  * range is painted once from the live state. Then the group passes everything on.
+  * end with nothing loading, a single paint goes out as it is. More than one would put each step between them on the page, the range
+  * with a mount's slot empty before that mount's own paint fills it, or with a mount still loading that loaded meanwhile, so then the
+  * range is painted once from the live state instead. When they end with mounts loading, the range keeps what it shows (the boundary's
+  * other content stays live), the paints are dropped, and once the mounts have loaded the range is painted once from the live state.
+  * Then the group passes everything on.
   */
 final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex: Meter) extends BoundaryHold(mutex):
 
@@ -382,7 +384,7 @@ final private[kyo] class PassGroup(parent: BoundaryHold, up: BoundaryPass, mutex
             if closed.get() || done || passes.get() > 0 then Kyo.unit
             else if loading.get() == 0 then
                 val out: Unit < Async =
-                    if waited then
+                    if waited || (held.size > 1 && range.nonEmpty) then
                         range match
                             case Present(r) =>
                                 Boundaries.resolveLive(r.content, r.path, r.contentContext, root.dispatch).map(ui =>

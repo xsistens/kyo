@@ -670,6 +670,35 @@ class BoundaryTest extends UIScreen:
         yield assert(halfway.isEmpty, s"issue 2 without its comments: $halfway")
     }
 
+    "navigating to a page that draws at once keeps the old page until the mount in its content has loaded" in {
+        for
+            route           <- Signal.initRef("1")
+            commentsStarted <- Promise.init[Unit, Any]
+            commentsGate    <- Promise.init[Unit, Any]
+            // The detail page draws in the pass and loads nothing itself; only the comments in it load. What the route pass holds is
+            // its own paint, the detail's and the comments', one per range: sent one after another, the page showed each step between.
+            comments = (id: String) =>
+                val load = if id == "1" then Kyo.unit else commentsStarted.completeUnitDiscard.andThen(commentsGate.get)
+                UI.mounted(load.andThen(span(s"comments:$id"))).keyed(id)
+            detail = (id: String) => UI.mounted(Kyo.lift(div(span(s"title:$id"), comments(id)))).keyed(id)
+            ui     = div(UI.boundary.placeholder(span("skel"))(div(route.render(id => div(detail(id))))))
+            states <- mount(ui) { screen =>
+                for
+                    _      <- screen.await("issue 1")(v => v.contains("title:1") && v.contains("comments:1") && !v.contains("skel"))
+                    _      <- route.set("2")
+                    _      <- commentsStarted.get
+                    _      <- commentsGate.completeUnitDiscard
+                    _      <- screen.await("issue 2")(v => v.contains("title:2") && v.contains("comments:2") && !v.contains("title:1"))
+                    states <- screen.states
+                yield states
+            }
+            // From the first page on, every state shows one whole issue: the old one, or the new one with its comments.
+            torn = states.drop(1).filterNot(v =>
+                (v.contains("title:1") && v.contains("comments:1")) || (v.contains("title:2") && v.contains("comments:2"))
+            )
+        yield assert(torn.isEmpty, s"states between the issues: $torn")
+    }
+
     "a click on the old page while the new one loads reaches no handler, and after the reveal reaches the new page" in {
         for
             route           <- Signal.initRef("1")
