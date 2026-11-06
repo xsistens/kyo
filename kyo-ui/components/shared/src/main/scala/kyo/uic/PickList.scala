@@ -152,16 +152,12 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
     /** One mount for the state the two columns rove: a highlight each, and the id each announces it
       * through. Both are minted OUTSIDE the region, since a mount inside a subscribed region re-runs
       * on every emission and would hand out a new highlight per keystroke.
-      *
-      * The static projection renders through the placeholder: each list is already its one tab
-      * stop there, with no highlight on it yet.
       */
     private[uic] def render(using Frame): UI =
         UI.mounted {
             for
-                cmds     <- UI.commands
-                sourceId <- cmds.freshId
-                targetId <- cmds.freshId
+                sourceId <- UI.id
+                targetId <- UI.id
                 sourceHi <- Signal.initRef(-1)
                 targetHi <- Signal.initRef(-1)
                 // Unbound, the list keeps its columns and what the reader picks in them itself.
@@ -174,7 +170,7 @@ final class PickList[A] private[uic] (private[uic] val s: PickList.State[A]) ext
                 Present(ListReorder.Cursor(sourceHi, sourceId)),
                 Present(ListReorder.Cursor(targetHi, targetId))
             )
-        }.placeholder(wired(Absent, Absent))
+        }
 
     /** The tree the mount publishes, the seam the tests drive, since a golden render shows a mount
       * only as its placeholder.

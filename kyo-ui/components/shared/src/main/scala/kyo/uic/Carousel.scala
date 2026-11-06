@@ -147,32 +147,28 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
 
     private[uic] def render(using Frame): UI =
         // Unbound, the carousel keeps the page the reader turns to itself, starting on the first.
-        Slot.owning(pageSlot, start = 0)(s => new Carousel(this.s.copy(pageSlot = s)).turning)(entries.render(as =>
-            new Carousel(s.copy(itemList = as)).body(0)
-        ))
-
-    private def turning(using Frame): UI =
-        // A constant nobody hears is fixed: drawn on its page, turned by nothing.
         if pageSlot.fixed then
             entries.render(as => new Carousel(s.copy(itemList = as)).body(pageSlot.binding.flatMap(_.const).getOrElse(0)))
         else
-            val r: Signal[Int] = pageSlot.reading(0).signal
-            // The stable strip needs a session id (bindStyleById target, and the base every item and dot id derives from) and a
-            // swipe start-x ref, both minted once in the mount. The autoplay fiber is spawned here too, so its Scope is this
-            // mount, which cancels it on unmount.
-            val carousel = UI.mounted {
-                for
-                    cmds     <- UI.commands
-                    stripId  <- cmds.freshId
-                    startPos <- Signal.initRef(0.0)
-                    _        <- autoplayLoop(r)
-                yield fragment(
-                    slideTrigger(cmds, stripId, r),
-                    interactive(r, stripId, startPos, id => cmds.focusId(id))
-                )
-            }.placeholder(shown(r).render((as, p) => new Carousel(s.copy(itemList = as)).body(p)))
             // A signal nobody hears: every turn the reader takes is painted away again.
-            Diagnostics.before(carousel)("Carousel")(Diagnostic.unheard(pageSlot, Carousel.pageName))
+            Diagnostics.before(turning)("Carousel")(Diagnostic.unheard(pageSlot, Carousel.pageName))
+
+    private def turning(using Frame): UI =
+        // The stable strip needs an id (bindStyleById target, and the base every item and dot id derives from) and a swipe start-x
+        // ref, drawn once in the mount, beside the page where nothing is bound. The page's slide and the autoplay fiber run while it
+        // is shown, so their Scope is this mount, which cancels them on unmount. The first paint shows the page already.
+        UI.mounted {
+            for
+                page <- pageSlot.owned(0)
+                self = new Carousel(s.copy(pageSlot = page))
+                r    = page.reading(0).signal
+                stripId  <- UI.id
+                startPos <- Signal.initRef(0.0)
+                first    <- r.current
+                _        <- UI.whileMounted(self.autoplayLoop(r))
+                _        <- UI.whileMounted(self.slide(stripId, r))
+            yield self.interactive(r, stripId, startPos, focusById, first)
+        }
     end turning
 
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
@@ -205,18 +201,12 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         end if
     end autoplayLoop
 
-    /** An invisible sibling that wires the in-place patches AFTER the strip is in
-      * the DOM (a nested `UI.mounted` whose effect runs once the enclosing content
-      * is published, so `getElementById` resolves the freshly inserted strip): it
-      * binds the strip's size and `transform` to the items and the page (the translate
-      * that slides). Each item's `p-carousel-item-active` is a reactive class on the
-      * item itself. The binding detaches when the mount's Scope closes. Captures `cmds`
-      * so the inner effect needs no Env.
+    /** Wires the in-place patches once the strip is in the DOM, so `getElementById` resolves it: it binds the strip's size and
+      * `transform` to the items and the page (the translate that slides). Each item's `p-carousel-item-active` is a reactive class on
+      * the item itself. The binding detaches when the mount's Scope closes.
       */
-    private def slideTrigger(cmds: UI.Commands, stripId: String, r: Signal[Int])(using Frame): UI =
-        UI.mounted {
-            cmds.bindStyleById(stripId, shown(r).signal.map((as, p) => stripStyle(p, as.size))).andThen(UI.empty)
-        }.placeholder(UI.empty)
+    private def slide(stripId: String, r: Signal[Int])(using Frame): Unit < (Async & Scope) =
+        UI.commands.map(_.bindStyleById(stripId, shown(r).signal.map((as, p) => stripStyle(p, as.size))))
 
     /** The strip's size and translate for a page over `n` items. The size spans `n/numVisible` viewports; the translate's
       * fraction is negative of the window's lead index over `n`, so this % of the strip's own size is exactly
@@ -235,7 +225,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
 
     /** The interactive (stable-strip + reactive siblings) subtree the mount
       * publishes: the golden seam. The transform/active-class patches (Commands)
-      * are applied separately by [[slideTrigger]], so this stays a pure render.
+      * are applied separately by [[slide]], so this stays a pure render.
       */
     private[uic] def wired(
         ref: Signal[Int],
@@ -243,7 +233,7 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         startPos: SignalRef[Double],
         focus: String => UI.Action = _ => ()
     )(using Frame): UI =
-        interactive(ref, stripId, startPos, focus)
+        interactive(ref, stripId, startPos, focus, 0)
 
     /** The runtime render: reactive nav/indicator siblings around the STABLE strip
       * of ALL items. Only the siblings re-render on a page turn; the strip is built
@@ -255,7 +245,8 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         r: Signal[Int],
         stripId: String,
         startPos: SignalRef[Double],
-        focus: String => UI.Action
+        focus: String => UI.Action,
+        startPage: Int
     )(using Frame): UI =
         val state     = shown(r)
         val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
@@ -316,6 +307,8 @@ final class Carousel[A] private[uic] (private[uic] val s: Carousel.State[A]) ext
         strip =
             if verticalFlag then strip.style(_.height(stripSpan(initial)))
             else strip.style(_.width(stripSpan(initial)))
+        // The bound style lands once the page is shown; a strip that does not start on the first page starts where it belongs.
+        if startPage != 0 then strip = strip.style(stripStyle(startPage, initial))
         // Swipe: the stable strip carries the pointer handlers; the turn
         // reads the LIVE page (r.current) and items on release, so the write patches the
         // transform in place and the strip slides without being re-rendered.

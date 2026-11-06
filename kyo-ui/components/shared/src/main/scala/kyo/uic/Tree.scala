@@ -204,17 +204,15 @@ final class Tree[K] private[uic] (private[uic] val s: Tree.State[K]) extends Nod
         // One mount for the keyboard highlight and the id it addresses rows by, allocated
         // OUTSIDE the expansion and selection subscriptions: a mount inside a subscribed
         // region re-runs on every emission and would mint a new highlight per keystroke.
-        // The placeholder is what this tree rendered before it had a keyboard.
         UI.mounted {
             for
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
                 hi   <- Signal.initRef(-1)
                 // Unbound, the tree keeps what the reader opens, and picks where it selects, itself.
                 exp <- expandedSlot.owned(Set.empty[K])
                 sel <- if selectionModeV != SelectionMode.None then selectedSlot.owned(Set.empty[K]) else Kyo.lift(selectedSlot)
             yield new Tree(s.copy(expandedSlot = exp, selectedSlot = sel)).wired(hi, base)
-        }.placeholder(subscribed(Absent))
+        }
 
     /** The subscription tree the mount publishes, with the keyboard highlight `hi` and the id base rows derive from. */
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI = subscribed(Present((hi, base)))

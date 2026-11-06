@@ -138,12 +138,11 @@ final class Galleria private[uic] (private[uic] val s: Galleria.State) extends N
     private[uic] def render(using Frame): UI =
         val gallery = UI.mounted {
             for
-                cmds <- UI.commands
-                base <- cmds.freshId
+                base <- UI.id
                 // Unbound, the gallery keeps the active image itself, starting on the first.
                 self <- activeSlot.owned(0).map(s => new Galleria(this.s.copy(activeSlot = s)))
-            yield self.shown(base, id => cmds.focusId(id))
-        }.placeholder(shown("", _ => ()))
+            yield self.shown(base, focusById)
+        }
         // An index bound one way that nothing hears: every navigation is painted away again.
         Diagnostics.before(gallery)("Galleria")(Diagnostic.unheard(activeSlot, Galleria.activeName))
     end render

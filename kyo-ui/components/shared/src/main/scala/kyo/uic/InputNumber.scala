@@ -168,7 +168,7 @@ final class InputNumber private[uic] (private[uic] val s: InputNumber.State) ext
         // through the same text channel a text binding uses, so it starts empty; a constant text is where it starts.
         if numberSlot.fixed && !readonlyFlag then new InputNumber(s.copy(readonlyFlag = true)).render
         else if numberSlot.binding.isDefined then renderLive
-        else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.s.copy(textSlot = s)).renderLive)(renderLive)
+        else Slot.owningFrom(textSlot, unbound = "")(s => new InputNumber(this.s.copy(textSlot = s)).renderLive)
 
     private def renderLive(using Frame): UI =
         val validity = FieldValidity(validityV)

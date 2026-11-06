@@ -41,12 +41,6 @@ final private[uic] case class Slot[A](
     /** The slot with no card to show, whatever it is bound to. */
     def quieted: Slot[A] = copy(quiet = true)
 
-    /** The slot over the constant signal a static placeholder draws from: the same binding class the mount's own state has,
-      * so the page as first rendered does not call it fixed, and quiet, since nobody made this binding.
-      */
-    def standIn(start: A)(using CanEqual[A, A], Frame): Slot[A] =
-        copy(binding = Present(ReactiveValue.Dyn(Signal.initConst(start))), quiet = true)
-
     /** The ref a reader's change is written into, where the slot binds two way. */
     def writable: Maybe[SignalRef[A]] = binding.flatMap(_.writable)
 
@@ -133,35 +127,21 @@ private[uic] object Slot:
       * `on` is the feature's switch. Own state is minted unless the switch is constant false: under a signal the state is held
       * while the switch is off, so it comes back as the reader left it, and whoever draws reads the switch inside.
       */
-    def owning[A](slot: Slot[A], start: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(placeholder: => UI)(
-        using
-        CanEqual[A, A],
-        Frame
-    ): UI =
+    def owning[A](slot: Slot[A], start: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
         if slot.binding.isDefined || on.const.contains(false) then draw(slot)
-        else UI.owned(start)(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))).placeholder(placeholder)
+        else UI.mounted(Signal.initRef(start).map(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))))
 
     /** [[owning]] where a constant is only where the slot starts. */
-    def owningFrom[A](slot: Slot[A], unbound: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(placeholder: => UI)(
-        using
-        CanEqual[A, A],
-        Frame
-    ): UI =
+    def owningFrom[A](slot: Slot[A], unbound: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
         slot.binding match
             case Present(ReactiveValue.Const(a)) if !on.const.contains(false) =>
-                UI.owned(a)(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))).placeholder(placeholder)
+                UI.mounted(Signal.initRef(a).map(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))))
             case Present(_) => draw(slot)
-            case _          => owning(slot, unbound, on)(draw)(placeholder)
+            case _          => owning(slot, unbound, on)(draw)
 
-    /** [[owning]] for a container: the static placeholder is the component drawn over a stand-in, so it does not call the slot
-      * fixed, and a card for a slot nobody hears goes in front, for as long as the switch is on.
-      */
-    def draw[A](slot: Slot[A], name: Name, start: A, on: BoolValue = alwaysOn)(body: Slot[A] => UI)(
-        using
-        CanEqual[A, A],
-        Frame
-    ): UI =
-        val drawn = owning(slot, start, on)(body)(body(slot.standIn(start)))
+    /** [[owning]] for a container: a card for a slot nobody hears goes in front, for as long as the switch is on. */
+    def draw[A](slot: Slot[A], name: Name, start: A, on: BoolValue = alwaysOn)(body: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
+        val drawn = owning(slot, start, on)(body)
         if slot.deaf then Diagnostics.beforeWhile(drawn)(on)(name.component)(b => Seq(Diagnostic.unheard(slot, name, b)))
         else drawn
     end draw

@@ -131,7 +131,7 @@ final class DataView[A] private[uic] (private[uic] val s: DataView.State[A]) ext
             pageSlot,
             start = 0,
             on = ReactiveValue.Const(pageSizeV.isDefined)
-        )(s => new DataView(this.s.copy(pageSlot = s)).drawn)(drawn)
+        )(s => new DataView(this.s.copy(pageSlot = s)).drawn)
 
     /** Only the rows follow the page and the items. The header, the footer and the paginator are built once: each may
       * hold a control with a mount of its own (a sort SelectButton in the header, the paginator's dropdowns), and a

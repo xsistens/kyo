@@ -153,21 +153,15 @@ final class OrganizationChart[K] private[uic] (private[uic] val s: OrganizationC
         else
             UI.mounted {
                 for
-                    cmds   <- UI.commands
-                    base   <- cmds.freshId
+                    base   <- UI.id
                     cursor <- Signal.initRef(Absent: Maybe[K])(using summon[Frame], CanEqual.derived)
                     exp    <- if ownsExpanded then expandedSlot.owned(parents) else Kyo.lift(expandedSlot)
                     sel    <- if ownsSelected then selectedSlot.owned(Set.empty[K]) else Kyo.lift(selectedSlot)
                 yield new OrganizationChart(s.copy(expandedSlot = exp, selectedSlot = sel)).drawn(
-                    if pickable then Present(OrganizationChart.Cursor(cursor, base, id => cmds.focusId(id))) else Absent,
+                    if pickable then Present(OrganizationChart.Cursor(cursor, base, focusById)) else Absent,
                     ownsExpanded
                 )
-            }.placeholder(
-                (if ownsExpanded then new OrganizationChart(s.copy(expandedSlot = expandedSlot.standIn(parents))) else this).drawn(
-                    Absent,
-                    ownsExpanded
-                )
-            )
+            }
         end if
     end charted
 

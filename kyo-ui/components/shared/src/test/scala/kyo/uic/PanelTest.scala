@@ -23,6 +23,30 @@ class PanelTest extends ReactiveValueContract:
         shows = elementsWithClass(_, "p-uic-collapsed").map(_.nonEmpty)
     ))
 
+    "a press of the toggle right after the first paint collapses the panel, and the state goes on from there" in {
+        import kyo.internal.*
+        // The hearer hears a change only if there was one: true on the first paint's press, false on the live one after it.
+        for
+            heard <- AtomicRef.init(Chunk.empty[Boolean])
+            cmds  <- UI.Commands.init(_ => Kyo.unit)
+            ui = uic.Panel().header("Details").id("pan").toggleable(true).onCollapsedChange(c => heard.getAndUpdate(_.append(c)).unit)(p(
+                "body"
+            )).render
+            _ <- Scope.run(UICommands.commands.let(Present(cmds)) {
+                for
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    page <- MountDispatch.live.let(root.mountDispatch)(HtmlRenderer.render(ui, Seq.empty))
+                    at = pathOf(page, "pan-toggle")
+                    _   <- Abort.run[Any](root.handle(at, clickAt(at)))
+                    sub <- ReactiveUI.subscribe(root, UIExchange.noop)
+                    _   <- sub.handle(at, clickAt(at))
+                yield ()
+            })
+            all <- heard.get
+        yield assert(all == Chunk(true, false), s"the hearer heard $all")
+        end for
+    }
+
     // ---- the switch ----
 
     private def bareOf(using Frame) = uic.Panel().header("Details")

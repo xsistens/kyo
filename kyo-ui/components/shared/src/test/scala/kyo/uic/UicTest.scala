@@ -44,7 +44,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
 
     /** Runs a handler's effect. None of the handlers under test is meant to fail, so a failure fails the test. */
     private[uic] def handled(action: UI.Action)(using Frame): Any < Async =
-        Abort.run[Any](action).map {
+        // A handler runs in a session: a mount draws no static copy without its focus commands any more.
+        headlessCommands.map(cmds => kyo.internal.UICommands.commands.let(Present(cmds))(Abort.run[Any](action))).map {
             case Result.Success(a) => a
             case other             => throw new AssertionError(s"the handler failed: $other")
         }
@@ -226,21 +227,26 @@ abstract class UicTest extends kyo.test.Test[Any]:
         val log            = new kyo.internal.RecordingExchange
         def seen: List[UI] = UicTest.publishedIn(log)
         def all: UI < Sync = Sync.defer(seen).map(trees => if trees.isEmpty then ui else UI.fragment(trees*))
+        // Once anything is published the walk is of a live page.
+        def walked[A, S](v: A < S)(using Frame): A < (S & Sync) =
+            Sync.defer(seen.nonEmpty).map(live => UicTest.walkingLive.let(live)(v))
         headlessCommands.map { cmds =>
             kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { _ =>
                 for
-                    // A mount publishes what it wired once its effect ran; act on that, not on the placeholder. A
-                    // field with no mount publishes nothing here, and is acted on as it rendered.
+                    // A mount publishes what it wired; act on that. A field with no mount publishes nothing here, and is acted on as it
+                    // rendered, where it draws what is inside.
                     _      <- settles(Sync.defer(seen.nonEmpty), within)
                     parked <- settles(Kyo.foreach(reads)(_.waiters).map(_.forall(_ > 0)), within)
                     _ = if !parked then throw new AssertionError(s"the field never settled on what it reads: $reads")
-                    set <- settles(all.map(ready), within)
+                    set <- settles(walked(all.map(ready)), within)
                     _ = if !set then throw new AssertionError("the field never published a tree ready for the gesture")
                     last <- Kyo.foldLeft(acts)((0, 0)) { (_, act) =>
                         for
                             before <- Sync.defer((seen.size, UicTest.patchedIn(log).size))
                             done   <- settles(
-                                all.map(t => Abort.run[AssertionError](Abort.catching[AssertionError](act(t))).map(_.isSuccess)),
+                                walked(all).map(t =>
+                                    walked(Abort.run[AssertionError](Abort.catching[AssertionError](act(t)))).map(_.isSuccess)
+                                ),
                                 within
                             )
                             _ = if !done then throw new AssertionError("a gesture never found what it acts on")
@@ -274,6 +280,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 Kyo.foreach(f.children)(elements).map(_.flatten)
             case f: UI.Ast.Foreach[?, ?] => foreachElements(f)
             case k: UI.Ast.KeyedChild[?] => elements(k.child)
+            case d: UI.Ast.Drawn         => drawnContent(d).map(elements)
             case m: UI.Ast.Mounted       =>
                 m.placeholderUI match
                     case Present(ui) => elements(ui)
@@ -304,6 +311,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                                 .map(_.flattenChunk)
                         }
                 )
+            case d: UI.Ast.Drawn   => drawnContent(d).map(reactiveNodes)
             case m: UI.Ast.Mounted =>
                 m.placeholderUI match
                     case Present(ui) => reactiveNodes(ui)
@@ -322,6 +330,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case k: UI.Ast.KeyedChild[?] => foreachNodes(k.child)
             case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(foreachNodes)
             case f: UI.Ast.Foreach[?, ?] => Kyo.lift(Chunk(f))
+            case d: UI.Ast.Drawn         => drawnContent(d).map(foreachNodes)
             case m: UI.Ast.Mounted       =>
                 m.placeholderUI match
                     case Present(ui) => foreachNodes(ui)
@@ -384,6 +393,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
         def holds(n: UI): Boolean < Sync               = elementsWithClass(n, cls).map(_.nonEmpty)
         def walk(n: UI, depth: Int): Chunk[Int] < Sync =
             n match
+                case d: UI.Ast.Drawn   => drawnContent(d).map(holds).map(found => if found then Chunk(depth) else Chunk.empty)
                 case m: UI.Ast.Mounted =>
                     m.placeholderUI match
                         case Present(ui) => holds(ui).map(found => if found then Chunk(depth) else Chunk.empty)
@@ -430,6 +440,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                             }
                     )
                 case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case d: UI.Ast.Drawn         => drawnContent(d).map(walk(_, depth))
                 case m: UI.Ast.Mounted       =>
                     m.placeholderUI match
                         case Present(ui) => walk(ui, depth)
@@ -444,6 +455,28 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * that mints its state beside its ids wants: a slot that adds a mount of its own there is a mount inside a mount for every
       * instance, and while a mount restarts kyo-ui shows an inert snapshot no click or key reaches.
       */
+    /** Runs `v` as a mount effect runs, for what only works in one (`UI.id`, `ContextMenu.state`). */
+    private[uic] def inDraw[A, S](v: A < S)(using Frame): A < S =
+        kyo.internal.DrawContext.current.let(Present(new kyo.internal.DrawContext(
+            kyo.internal.ReactiveRegion.RegionIdentity(Seq.empty, 0),
+            Absent
+        )))(v)
+
+    /** What a drawn mount shows, for a walk of the tree: its draw, at no place in particular, with nothing started. In a walk of what a live
+      * page published it shows nothing: its instance publishes its content itself, and a draw of its own here would hand a gesture state no
+      * instance holds.
+      */
+    private[uic] def drawnContent(d: UI.Ast.Drawn)(using Frame): UI < Sync =
+        d.display match
+            case Present(shown) => shown
+            case Absent         =>
+                UicTest.walkingLive.use(live =>
+                    if live then UI.empty
+                    else
+                        kyo.internal.MountDraw.run(d, kyo.internal.ReactiveRegion.RegionIdentity(Seq.empty, 0))
+                            .map(_.content(kyo.internal.MountedSpec(d, Seq.empty, Chunk.empty)))
+                )
+
     private[uic] def mountsAbove(node: UI, cls: String)(using Frame): Int < Sync =
         def walk(n: UI, depth: Int): Chunk[Int] < Sync =
             n match
@@ -460,6 +493,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                             }
                     )
                 case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case d: UI.Ast.Drawn         => drawnContent(d).map(walk(_, depth + 1))
                 case m: UI.Ast.Mounted       =>
                     m.placeholderUI match
                         case Present(ui) => walk(ui, depth + 1)
@@ -489,6 +523,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                             }
                     )
                 case k: UI.Ast.KeyedChild[?] => walk(k.child)
+                case d: UI.Ast.Drawn         => drawnContent(d).map(walk)
                 case m: UI.Ast.Mounted       => m.effect.map(walk)
                 case _                       => Chunk.empty
         headlessCommands.map { cmds =>
@@ -609,6 +644,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                                     .map(_.flatten)
                             }
                     )
+                case d: UI.Ast.Drawn   => drawnContent(d).map(chains(_, above))
                 case m: UI.Ast.Mounted =>
                     m.placeholderUI match
                         case Present(ui) => chains(ui, above)
@@ -684,6 +720,9 @@ abstract class UicTest extends kyo.test.Test[Any]:
 end UicTest
 
 object UicTest:
+
+    /** Whether a walk of a tree is of what a live page published (see [[UicTest.drawnContent]]). */
+    private[uic] val walkingLive: Local[Boolean] = Local.init(false)
 
     /** Every tree `log` was asked to paint, newest first. */
     private[uic] def publishedIn(log: kyo.internal.RecordingExchange): List[UI] =

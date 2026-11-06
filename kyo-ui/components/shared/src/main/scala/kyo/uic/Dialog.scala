@@ -170,8 +170,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
         case _                => Icons.infoCircle
 
     private[uic] def render(using Frame): UI =
-        // Unbound, the dialog keeps its visibility itself and starts open. Before the mount runs it draws from a stand-in,
-        // so the static page does not call its close button fixed.
+        // Unbound, the dialog keeps its visibility itself and starts open.
         Slot.draw(openSlot, Dialog.openName, start = true)(s => new Dialog(this.s.copy(openSlot = s)).drawn)
 
     private def drawn(using Frame): UI =
@@ -306,13 +305,10 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
                     // reactive region re-styles the box element each frame while the header
                     // and resize handle (the pointer-capture surfaces) are STABLE children
                     // reused by the positional diff, so capture never detaches.
-                    val staticPlaceholder =
-                        maskAround(buildBox(Absent, animate = true, Absent, Absent, headerBlock(Absent) ++ contentUI ++ footerUI))
                     shown(
                         UI.mounted {
                             for
-                                cmds   <- UI.commands
-                                boxId  <- cmds.freshId
+                                boxId  <- UI.id
                                 pos    <- Signal.initRef((0.0, 0.0))
                                 grab   <- Signal.initRef((0.0, 0.0))
                                 size   <- Signal.initRef[Maybe[(Double, Double)]](Absent)
@@ -338,7 +334,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
                                                 // Seed the resize origin (box top-left) + current size from a
                                                 // one-shot self-measure on grab; then follow the cursor.
                                                 .onPointerDown((_: PointerEvent) =>
-                                                    cmds.requestMeasureById(boxId).map {
+                                                    UI.commands.map(_.requestMeasureById(boxId)).map {
                                                         case Present(r) =>
                                                             origin.set(Present((r.x, r.y))).andThen(size.set(Present((r.width, r.height))))
                                                         case Absent => ()
@@ -361,7 +357,7 @@ final class Dialog private[uic] (private[uic] val s: Dialog.State) extends Node,
                                     size.render(sz => buildBox(Present(boxId), animate = false, Present(p), sz, staticInner))
                                 }
                                 maskAround(boxUI)
-                        }.placeholder(staticPlaceholder)
+                        }
                     )
                 end if
         end match

@@ -233,7 +233,7 @@ final private[uic] case class SizeState(
   */
 final private[uic] case class ScrollState(
     ref: Maybe[SignalRef[Double]] = Absent,
-    headTop: Maybe[Signal[Maybe[Int]]] = Absent
+    headTop: Maybe[SignalRef[Maybe[Int]]] = Absent
 )
 
 /** Where one frozen cell holds: which edge it holds against, and how far from it.
@@ -2643,11 +2643,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     ownEditCellFlag = ownsEditCell,
                     ownSelectionFlag = ownsSelection
                 )).renderBound
-            }.placeholder(renderBound)
+            }
         end if
     end render
 
-    /** The table drawn with no state of its own: a pure render, and what a mount shows before it runs. */
+    /** The table drawn with no state of its own: a pure render. */
     private def staticBody(using Frame): UI =
         renderWith(ReactiveValue.Const(()), (), navOn = false) { _ =>
             DataTable.Wiring[A](
@@ -2671,11 +2671,10 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         else
             val mount = UI.mounted {
                 for
-                    cmds <- UI.commands
-                    // A caller's own id wins; the mount mints one only when none was given,
+                    // A caller's own id wins; the mount draws one only when none was given,
                     // so the derived part ids (headers, rows, the frozen group) work unasked
                     // but are addressable when the caller cares. Same rule as Menu's base.
-                    minted <- cmds.freshId
+                    minted <- UI.id
                     prefix = accessV.idV.getOrElse(minted)
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
@@ -2695,10 +2694,9 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                     scroll <- Signal.initRef(0.0)
                     // The first range has to be asked for by someone, and no scroll has
                     // happened yet to ask for it.
-                    _ <- ((sourceV, windowOn) match
-                        case (Present(src), true) => src.demand.set(viewport.demand(0.0))
-                        case _                    => ()
-                    ): Unit < Async
+                    _ <- (sourceV, windowOn) match
+                        case (Present(src), true) => UI.whileMounted(src.demand.set(viewport.demand(0.0)))
+                        case _                    => Kyo.unit
                     // Where the frozen rows hold is the header's height, which is measured
                     // rather than declared, since it is whatever the header cells came out
                     // as. Writing it into a ref is what keeps a scroll, which re-measures
@@ -2715,11 +2713,11 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                             prefix,
                             drafts.toMap,
                             err,
-                            id => cmds.focusId(id),
+                            focusById,
                             menus.toMap,
                             // A grab needs every edge: one element gone mid-grab measures nothing.
                             ids =>
-                                cmds.requestMeasureByIds(ids).map { rects =>
+                                UI.commands.map(_.requestMeasureByIds(ids)).map { rects =>
                                     val found = rects.flatMap(_.toChunk)
                                     if found.size == rects.size then found else Chunk.empty
                                 },
@@ -2737,9 +2735,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
                             typed.toMap
                         )
                     )
-                    if !frozenRowsOn then tree
-                    else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
-            }.placeholder(static)
+                    tree
+            }
             // An id is the caller declaring which table this is, so it is also the identity the
             // instance keeps. Without one the mount stays keyless, which is what it always was.
             //
@@ -2766,25 +2763,6 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         end if
     end renderBound
 
-    /** An invisible sibling that starts watching the header once the table is IN the DOM.
-      *
-      * A nested mount's effect runs after the enclosing content is published, which is the
-      * whole reason it exists: the observation measures its element immediately, and an id
-      * requested before the publish resolves to nothing, so a measure started in the outer
-      * mount would simply miss and the rows would sit unheld until something else moved.
-      * The Overlay reposition trigger is the same shape.
-      *
-      * The height goes into a ref the table RENDERS rather than into a style patched onto
-      * the group, because the group is inside the table's own subtree: a sort or a page
-      * turn replaces it, and a patched style would go with it.
-      */
-    private def headProbe(cmds: UI.Commands, id: String, into: SignalRef[Maybe[Int]])(using Frame): UI =
-        UI.mounted {
-            cmds.observeViewportById(id).map(sig =>
-                UI.fork(sig.observe(r => into.set(r.map(_.height.toInt))))
-            ).andThen(UI.empty)
-        }.placeholder(UI.empty)
-
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
       * editing anatomy is only reachable here.
@@ -2799,7 +2777,7 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
         moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
         scroll: Maybe[SignalRef[Double]] = Absent,
-        headTop: Maybe[Signal[Maybe[Int]]] = Absent,
+        headTop: Maybe[SignalRef[Maybe[Int]]] = Absent,
         rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
         filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
         anchor: Maybe[ReactiveValue[Maybe[A]]] = Absent,
@@ -2934,18 +2912,9 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(h))
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(f))
         rootElement(order, navOn)(
-            UI.children((List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot ++ sourceRun))*
+            UI.children((List(cards) ++ loadingMask ++ headerSlot ++ (tablePart :: paginatorPart(order)) ++ footerSlot))*
         )
     end renderWith
-
-    /** A bound source fetches for as long as the table is mounted, through a mount of its own that shows nothing.
-      *
-      * Its own rather than the table's, because a table that owns no state has no mount, and a source is not a reason
-      * to give it one: until this runs, the table renders itself loading from the source's signals, which is what lets
-      * a page bind a source with no mount of its own and no copy of the table as that mount's placeholder.
-      */
-    private def sourceRun(using Frame): List[UI] =
-        sourceV.toList.map(src => UI.mounted(src.run.andThen(UI.empty)).placeholder(UI.empty))
 
     /** The page size as the table pages by it: the bound one's value, else the constant (one where nothing pages). */
     private def pageSizeReading(using Frame): ReactiveValue[Int] =
@@ -2979,6 +2948,8 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
     private def rootElement(order: ReactiveValue[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
         var root = div.cssClass("p-datatable").cssClass("p-component")
         accessV.idV.foreach(v => root = root.id(v))
+        // A bound source fetches for as long as the table is shown. Until it has, the table renders itself loading from the source's signals.
+        sourceV.foreach(src => root = root.whileMountedKeyed(src)(src.run)(using CanEqual.derived))
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
         // rows react to clicks.
         if selectionModeV != SelectionMode.None || onRowClickF.isDefined then
@@ -3245,7 +3216,18 @@ final class DataTable[A] private[uic] (private[uic] val s: DataTable.State[A]) e
         // which is the one thing about this table nothing can be told and nothing can work
         // out on its own.
         var headEl = thead.cssClass("p-datatable-thead")
-        if frozenRowsOn && size.idPrefix.nonEmpty then headEl = headEl.id(headId(size.idPrefix))
+        if frozenRowsOn && size.idPrefix.nonEmpty then
+            val id = headId(size.idPrefix)
+            headEl = headEl.id(id)
+            // Watches the header once it is in the DOM: the observation measures it at once, and an id requested before that resolves to
+            // nothing. The height goes into a ref the table RENDERS rather than into a style patched onto the group, because the group is
+            // inside the table's own subtree: a sort or a page turn replaces it, and a patched style would go with it.
+            w0.scroll.headTop.foreach(into =>
+                headEl = headEl.whileMountedKeyed(id)(
+                    UI.commands.map(_.observeViewportById(id)).map(sig => sig.observe(r => into.set(r.map(_.height.toInt))))
+                )
+            )
+        end if
 
         val tableEl: UI = tbl(
             UI.children((if hasWidths then List(part(_.colgroup)) else Nil) ++ List[UI](headEl(UI.children(headRows ++ filterRowUI)*)) ++

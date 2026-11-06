@@ -307,7 +307,7 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
     private def placedOpenContent(id: String)(using Frame): UI =
         pointerAnchorV match
             case Present(at) =>
-                renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
+                renderOpenAt(anchorV, Present(id), portal = true, whileOpen = Present(pointerReposition(at, id)))
             case Absent =>
                 if portalV then
                     val anchorId = s"$id-anchor"
@@ -315,24 +315,24 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
                         anchorV,
                         Present(id),
                         portal = true,
-                        after = List(anchorProbe(anchorId), portalRepositionTrigger(anchorId, id))
+                        after = List(anchorProbe(anchorId)),
+                        whileOpen = Present(portalReposition(anchorId, id))
                     )
                 else if !autoFlipV then renderOpenAt(anchorV, Absent)
-                else renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(id)))
+                else renderOpenAt(anchorV, Present(id), whileOpen = Present(reposition(id)))
 
     private def mintedOpenContent(using Frame): UI =
         pointerAnchorV match
             case Present(at) =>
                 // A point needs no anchor probe: the placement is the point plus the panel's own size,
-                // so only the panel is measured. Same self-addressing shape as the paths below (mint,
-                // stamp, observe, patch in place) and the same portal-shaped placeholder, so the panel
-                // is position:fixed and invisible from the first frame instead of sitting in flow.
+                // so only the panel is measured. Same self-addressing shape as the paths below (draw an id,
+                // stamp, observe, patch in place): the panel is position:fixed and invisible from the first
+                // frame instead of sitting in flow.
                 UI.mounted {
                     for
-                        cmds <- UI.commands
-                        id   <- cmds.freshId
-                    yield renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
-                }.placeholder(renderOpenAt(anchorV, Absent, portal = true))
+                        id <- UI.id
+                    yield renderOpenAt(anchorV, Present(id), portal = true, whileOpen = Present(pointerReposition(at, id)))
+                }.keyed(siteV)
             case Absent => anchoredOpenContent
 
     /** The anchor-box placements: the portal path, the declared-anchor path, and the measured flip. */
@@ -343,24 +343,19 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
             // them. Instead the anchor box is measured continuously through an inset-0 probe and the
             // panel placed with FIXED viewport coordinates patched in place, the portal analog of the
             // autoFlip reposition below (flip + clamp included). Same self-addressing shape: each open
-            // mints fresh ids, close tears the observers down through the mount's Scope.
+            // draws its ids, close tears the observers down through the mount's Scope.
             UI.mounted {
                 for
-                    cmds     <- UI.commands
-                    panelId  <- cmds.freshId
-                    anchorId <- cmds.freshId
+                    panelId  <- UI.id
+                    anchorId <- UI.id
                 yield renderOpenAt(
                     anchorV,
                     Present(panelId),
                     portal = true,
-                    after = List(anchorProbe(anchorId), portalRepositionTrigger(anchorId, panelId))
+                    after = List(anchorProbe(anchorId)),
+                    whileOpen = Present(portalReposition(anchorId, panelId))
                 )
-                // The placeholder must be portal-shaped too: a non-portal placeholder panel sits IN FLOW
-                // inside the anchor's scroll container for the frames before the effect content re-homes
-                // to document.body: it overflows the container and the focus-auto seed scrolls it, which
-                // flashes the container's scrollbar on every open. Portal-shaped, it is position:fixed and
-                // opacity:0 (the unmeasured-paint gate) from the first frame, so it never touches layout.
-            }.placeholder(renderOpenAt(anchorV, Absent, portal = true))
+            }.keyed(siteV)
         else if !autoFlipV then renderOpenAt(anchorV, Absent)
         else
             // Self-addressing: on open, mint an id + stamp it on the panel,
@@ -370,24 +365,19 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
             // IN PLACE through `geom` + `bindStyleById`, so the panel element is never
             // replaced and its focus seed + open animation survive every scroll tick.
             UI.mounted {
-                for
-                    cmds <- UI.commands
-                    id   <- cmds.freshId
-                yield renderOpenAt(anchorV, Present(id), after = List(repositionTrigger(id)))
-            }.placeholder(renderOpenAt(anchorV, Absent))
+                UI.id.map(id => renderOpenAt(anchorV, Present(id), whileOpen = Present(reposition(id))))
+            }.keyed(siteV)
 
-    /** An invisible sibling that wires the reposition AFTER the panel is in the
-      * DOM: a nested `UI.mounted` whose effect runs once the enclosing content is
-      * published, so `observeViewportById` resolves the freshly inserted panel
-      * (getElementById would miss it if requested before the publish). It observes
-      * the viewport (a `Signal[Maybe[Rect]]` the observer updates on every
-      * scroll/resize, `Absent` until the first measure), maps it to the panel
-      * geometry Style (`Absent` -> `Style.empty`, so the anchor CLASS shows until
-      * measured), and binds THAT onto the panel in place. No intermediate SignalRef
-      * + callback bridge: the measured stream IS the source. Both primitives detach
-      * when the mount's Scope closes on overlay close. Captures `cmds` so the inner
-      * effect does not look the channel up again.
-      */
+    /* The reposition, which runs while the panel is shown (`renderOpenAt` puts it on the panel, keyed by the panel's id), so
+     * `observeViewportById` resolves the freshly inserted panel
+     * (getElementById would miss it if requested before it is on the page). It observes
+     * the viewport (a `Signal[Maybe[Rect]]` the observer updates on every
+     * scroll/resize, `Absent` until the first measure), maps it to the panel
+     * geometry Style (`Absent` -> `Style.empty`, so the anchor CLASS shows until
+     * measured), and binds THAT onto the panel in place. No intermediate SignalRef
+     * + callback bridge: the measured stream IS the source. Both primitives detach
+     * when the effect's Scope closes on overlay close.
+     */
 
     /** An invisible inset-0 child of the anchor element: the overlay cannot address its host anchor
       * (it only renders INTO it), but an absolutely positioned probe filling it shares its box
@@ -397,71 +387,56 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
     private def anchorProbe(id: String)(using Frame): UI =
         div.id(id).cssClass("p-uic-overlay-anchor-probe")
 
-    /** The portal twin of [[repositionTrigger]]: observes BOTH the anchor probe (where to attach)
+    /** The portal twin of [[reposition]]: observes BOTH the anchor probe (where to attach)
       * and the panel (the flip decision needs its size), combines the two measured streams and
       * binds the resolved fixed-position geometry onto the panel in place. `Style.empty` until both
       * have measured: the panel stays hidden (`opacity: 0` from `.p-uic-overlay-portal`) until the
-      * first geometry patch turns it visible, so it never flashes unpositioned at the body. Keyed by
-      * the panel's id, for the reason [[pointerRepositionTrigger]] gives.
+      * first geometry patch turns it visible, so it never flashes unpositioned at the body.
       */
-    private def portalRepositionTrigger(anchorId: String, panelId: String)(using Frame): UI =
-        UI.mounted {
-            for
-                cmds      <- UI.commands
-                anchorSig <- cmds.observeViewportById(anchorId)
-                panelSig  <- cmds.observeViewportById(panelId)
-                _         <- cmds.bindStyleById(
-                    panelId,
-                    anchorSig.combineLatest(panelSig).map {
-                        case (Present(a), Present(p)) => Overlay.portalGeometryFor(anchorV, matchWidthV, a, p)
-                        case _                        => Style.empty
-                    }
-                )
-            yield UI.empty
-        }.keyed(panelId).placeholder(UI.empty)
+    private def portalReposition(anchorId: String, panelId: String)(using Frame): Any < (Abort[Any] & Async & Scope) =
+        for
+            cmds      <- UI.commands
+            anchorSig <- cmds.observeViewportById(anchorId)
+            panelSig  <- cmds.observeViewportById(panelId)
+            _         <- cmds.bindStyleById(
+                panelId,
+                anchorSig.combineLatest(panelSig).map {
+                    case (Present(a), Present(p)) => Overlay.portalGeometryFor(anchorV, matchWidthV, a, p)
+                    case _                        => Style.empty
+                }
+            )
+        yield ()
 
-    /** The pointer-anchored twin of [[repositionTrigger]]: observes the panel (the placement needs
+    /** The pointer-anchored twin of [[reposition]]: observes the panel (the placement needs
       * its size), combines that with the point, and binds the resolved fixed-position geometry onto
       * the panel in place. `Style.empty` until both have landed, which keeps the panel hidden
       * (`.p-uic-overlay-portal` gates the unmeasured paint) rather than showing it unplaced.
-      *
-      * KEYED, and this is load-bearing on the host-gated path: the host re-renders the panel subtree
-      * on every keystroke that moves its highlight, and an unkeyed mount would tear this instance
-      * down and build another each time: a fresh observer, a fresh round trip, and `Style.empty`
-      * in between, which blinks the panel out on every arrow key. The key is the panel's own id,
-      * which the host derives from its element id and is therefore stable across those re-renders
-      * and distinct per open. Nothing is frozen by it: what this mount publishes is empty.
       */
-    private def pointerRepositionTrigger(at: Signal[Maybe[UI.Point]], panelId: String)(using Frame): UI =
-        UI.mounted {
-            for
-                cmds     <- UI.commands
-                panelSig <- cmds.observeViewportById(panelId)
-                _        <- cmds.bindStyleById(
+    private def pointerReposition(at: Signal[Maybe[UI.Point]], panelId: String)(using Frame): Any < (Abort[Any] & Async & Scope) =
+        for
+            cmds     <- UI.commands
+            panelSig <- cmds.observeViewportById(panelId)
+            _        <- cmds.bindStyleById(
+                panelId,
+                panelSig.combineLatest(at).map {
+                    case (Present(panel), Present(at)) => Overlay.pointerGeometryFor(at, panel)
+                    case _                             => Style.empty
+                }
+            )
+        yield ()
+
+    private def reposition(panelId: String)(using Frame): Any < (Abort[Any] & Async & Scope) =
+        UI.commands.map { cmds =>
+            cmds.observeViewportById(panelId).map { rectSig =>
+                cmds.bindStyleById(
                     panelId,
-                    panelSig.combineLatest(at).map {
-                        case (Present(panel), Present(at)) => Overlay.pointerGeometryFor(at, panel)
-                        case _                             => Style.empty
+                    rectSig.map {
+                        case Present(rect) => Overlay.geometryFor(anchorV, rect)
+                        case Absent        => Style.empty
                     }
                 )
-            yield UI.empty
-        }.keyed(panelId).placeholder(UI.empty)
-
-    /** Keyed by the panel's id, for the reason [[pointerRepositionTrigger]] gives. */
-    private def repositionTrigger(panelId: String)(using Frame): UI =
-        UI.mounted {
-            UI.commands.map { cmds =>
-                cmds.observeViewportById(panelId).map { rectSig =>
-                    cmds.bindStyleById(
-                        panelId,
-                        rectSig.map {
-                            case Present(rect) => Overlay.geometryFor(anchorV, rect)
-                            case Absent        => Style.empty
-                        }
-                    )
-                }
-            }.andThen(UI.empty)
-        }.keyed(panelId).placeholder(UI.empty)
+            }
+        }
 
     /** Package-internal: renders backdrop + panel UNCONDITIONALLY, for hosts
       * (Menubar/TieredMenu/MegaMenu) that already subscribe to the open state in an
@@ -499,9 +474,9 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
     private[uic] def renderOpen(using Frame): UI =
         (pointerAnchorV, panelIdV) match
             // The pointer placement survives here because nothing it needs is subscribed to the
-            // host's ref: the id comes from the host, and the measuring mount publishes nothing.
+            // host's ref: the id comes from the host, and the measuring effect paints nothing.
             case (Present(at), Present(id)) =>
-                renderOpenAt(anchorV, Present(id), portal = true, after = List(pointerRepositionTrigger(at, id)))
+                renderOpenAt(anchorV, Present(id), portal = true, whileOpen = Present(pointerReposition(at, id)))
             case _ => renderOpenAt(anchorV, Absent)
 
     /** The backdrop + panel at the DECLARED anchor, optionally id-stamped: the
@@ -511,7 +486,10 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
       * this builder always emits the declared-anchor geometry class, so the panel
       * is rendered exactly once.
       *
-      * `after` holds what only the measured content adds (its probe and observers), placed AFTER
+      * `whileOpen` runs while the panel is shown, keyed by the panel's id: the host re-renders the panel subtree on every keystroke that
+      * moves its highlight, and an effect that started again each time would be a fresh observer, a fresh round trip, and `Style.empty`
+      * in between, which blinks the panel out on every arrow key. The id comes from the host's element id, so it is stable across those
+      * re-renders and distinct per open. `after` holds what only the measured content adds (its probe), placed AFTER
       * the panel in the same fragment. The client addresses a click by the path the element had when
       * the reader clicked, and the session resolves it against the tree it holds when the click
       * arrives, so a click on the placeholder's panel that arrives after the measured content
@@ -522,7 +500,8 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
         anchor: OverlayAnchor,
         panelId: Maybe[String],
         portal: Boolean = false,
-        after: List[UI] = Nil
+        after: List[UI] = Nil,
+        whileOpen: Maybe[Any < (Abort[Any] & Async & Scope)] = Absent
     )(using Frame): UI =
         // Typed branch by branch: a `fold` over `()` and the ref write infers `Any`, and the write would land inert.
         val close: UI.Action = closeV match
@@ -553,7 +532,10 @@ final class Overlay private[uic] (private[uic] val s: Overlay.State) extends Nod
         var panel = div
             .cssClass("p-uic-overlay-panel")
             .cssClass(s"p-uic-overlay-${anchor.token}")
-        panelId.foreach(id => panel = panel.id(id))
+        panelId.foreach { id =>
+            panel = panel.id(id)
+            whileOpen.foreach(effect => panel = panel.whileMountedKeyed(id)(effect))
+        }
         // Portal mode re-homes the panel to document.body (fork portal) and switches to measured
         // fixed positioning: p-uic-overlay-portal pins position:fixed + the opacity gate, and the
         // match-width CLASS must not ride along: its min-width:100% would resolve against the
@@ -620,7 +602,10 @@ object Overlay:
         triggerV: Maybe[UI.Ast.Interactive | PopupTrigger] = Absent,
         kids: List[UI] = Nil,
         closeV: Maybe[UI.Action] = Absent,
-        reportedAsV: String = "Overlay"
+        reportedAsV: String = "Overlay",
+        // Where the overlay was made, which keys the mount that mints its panel's ids: a region around it that runs again keeps the
+        // panel and its effect rather than starting them over.
+        siteV: UI.MountSite = kyo.internal.MountSites.MountSite.none
     )
 
     /** An overlay over the visibility `open`. A `SignalRef` binds two way: writes open and close the panel, and Escape,
@@ -628,20 +613,21 @@ object Overlay:
       * one way: the panel follows it and only reports a dismissal. A constant nobody hears is fixed: an open panel
       * stays, and nothing outside dismisses it. A signal nothing hears is reported in a card.
       */
-    def apply(open: Boolean | Signal[Boolean]): Overlay = new Overlay(State(Slot().bind(open)))
+    def apply(open: Boolean | Signal[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(Slot().bind(open), siteV = site))
 
     /** Package-internal: a panel its host draws only while open and closes with `close`, which Escape and an outside click
       * run. For a submenu whose open state is one path in a set the host keeps, rather than a ref of its own.
       */
-    private[uic] def gated(close: UI.Action): Overlay = new Overlay(State(Slot(), closeV = Present(close)))
+    private[uic] def gated(close: UI.Action)(using site: UI.MountSite): Overlay =
+        new Overlay(State(Slot(), closeV = Present(close), siteV = site))
 
     /** Package-internal: the panel of a host over the host's own open slot, reporting a dismissal to whoever hears it.
       * Quiet, since the host reports its binding itself.
       */
-    private[uic] def hosted(open: Slot[Boolean]): Overlay = new Overlay(State(open.quieted))
+    private[uic] def hosted(open: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(open.quieted, siteV = site))
 
     /** Package-internal: the slot of a host that embeds this overlay, as the host wants it heard. */
-    private[uic] def withOpen(slot: Slot[Boolean]): Overlay = new Overlay(State(slot))
+    private[uic] def withOpen(slot: Slot[Boolean])(using site: UI.MountSite): Overlay = new Overlay(State(slot, siteV = site))
 
     private val openAdvice = Slot.Name("Overlay", "the visibility", "a dismissal", "onOpenChange").advice
 

@@ -186,13 +186,6 @@ class SlotTest extends UicTest:
                 assert(Slot[Int]().bind(ref).bound.exists(_.equals(ref)))
             }
         }
-
-        "standIn draws as a signal that is no mistake: not fixed, and no card" in {
-            val s = Slot[Int]().standIn(1)
-            assert(s.binding.exists(_.dyn.isDefined))
-            assert(!s.fixed)
-            assert(!s.deaf)
-        }
     }
 
     "the entry points" - {
@@ -232,9 +225,9 @@ class SlotTest extends UicTest:
 
         "owning mounts where nothing is bound, not where something is, and not where the switch is constant off" in {
             for
-                own   <- mountsAbove(Slot.owning(Slot[Int](), 0)(body)(UI.div.cssClass(cls)("static")), cls)
-                bound <- mountsAbove(Slot.owning(Slot[Int]().bind(1), 0)(body)(UI.div.cssClass(cls)("static")), cls)
-                off   <- mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Const(false))(body)(UI.div.cssClass(cls)("static")), cls)
+                own   <- mountsAbove(Slot.owning(Slot[Int](), 0)(body), cls)
+                bound <- mountsAbove(Slot.owning(Slot[Int]().bind(1), 0)(body), cls)
+                off   <- mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Const(false))(body), cls)
             yield
                 assert(own == 1)
                 assert(bound == 0)
@@ -242,25 +235,25 @@ class SlotTest extends UicTest:
         }
 
         "owning mounts under a signal switch whatever it holds now, so the state outlives it being off" in {
-            mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body)(UI.div.cssClass(cls)("static")), cls)
+            mountsAbove(Slot.owning(Slot[Int](), 0, ReactiveValue.Dyn(Signal.initConst(false)))(body), cls)
                 .map(n => assert(n == 1))
         }
 
         "owningFrom mints from a constant too" in {
             for
-                first <- shown(Slot.owningFrom(Slot[Int]().bind(5), 0)(body)(UI.div.cssClass(cls)("static")))
-                n     <- mountsAbove(Slot.owningFrom(Slot[Int]().bind(5), 0)(body)(UI.div.cssClass(cls)("static")), cls)
+                first <- shown(Slot.owningFrom(Slot[Int]().bind(5), 0)(body))
+                n     <- mountsAbove(Slot.owningFrom(Slot[Int]().bind(5), 0)(body), cls)
                 off   <- mountsAbove(
-                    Slot.owningFrom(Slot[Int]().bind(5), 0, ReactiveValue.Const(false))(body)(UI.div.cssClass(cls)("static")),
+                    Slot.owningFrom(Slot[Int]().bind(5), 0, ReactiveValue.Const(false))(body),
                     cls
                 )
             yield
-                assert(first == Chunk("static"))
+                assert(first == Chunk("5"))
                 assert(n == 1)
                 assert(off == 0)
         }
 
-        "draw shows the body over a stand-in before the mount runs, with no card" in {
+        "draw shows the body over the state it allocated, with no card" in {
             for
                 page  <- shown(Slot.draw(Slot[Int](), name, 4)(body))
                 cards <- elementsWithClass(Slot.draw(Slot[Int](), name, 4)(body), UicTest.cardClass)
@@ -316,12 +309,11 @@ class SlotTest extends UicTest:
         // A component that mints its state beside its ids holds it in that one mount: a slot of its own around it would be a
         // mount inside a mount for every instance. Each row is such a component, with its slots unbound and its feature on.
         "what mints in a mount it already has adds no mount" - {
-            // A popup's panel sits under the mount its overlay places it from as well, which is the second.
             val inOneMount: Seq[(String, Frame ?=> UI, String, Int)] = Seq(
                 ("SpeedDial", uic.SpeedDial().items(uic.MenuItem("a")).render, "p-speeddial", 1),
                 ("SplitButton", uic.SplitButton("a").items(uic.MenuItem("b")).render, "p-splitbutton", 1),
-                ("Menu", uic.Menu().popup().items(uic.MenuItem("a")).render, "p-menu-list", 2),
-                ("TieredMenu", uic.TieredMenu().popup().items(uic.MenuItem("a")).render, "p-tieredmenu-root-list", 2),
+                ("Menu", uic.Menu().popup().items(uic.MenuItem("a")).render, "p-menu-list", 1),
+                ("TieredMenu", uic.TieredMenu().popup().items(uic.MenuItem("a")).render, "p-tieredmenu-root-list", 1),
                 ("Select", uic.Select[String]().options(Seq("a"))(identity).render, "p-select", 1),
                 ("MultiSelect", uic.MultiSelect[String]().options(Seq("a"))(identity).render, "p-multiselect", 1),
                 (
