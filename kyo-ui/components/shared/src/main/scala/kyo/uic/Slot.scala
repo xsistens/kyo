@@ -85,6 +85,12 @@ final private[uic] case class Slot[A](
     /** What one render reads of the slot, with `unbound` standing in where nothing is bound. */
     def reading(unbound: A): ReactiveValue[A] = binding.getOrElse(ReactiveValue.Const(unbound))
 
+    /** What a draw reads of the slot as a prop: the binding, else where the slot starts, else `unbound`. Inside a
+      * `mountedWith` draw a slot with a start is always bound (the engine binds the instance's own ref where the run binds
+      * nothing), so `unbound` stands in only where no engine runs, as for a host that draws the component in place.
+      */
+    def value(unbound: A): Prop[A] = bound.getOrElse(start.getOrElse(unbound))
+
     /** The value at this moment, with `unbound` standing in where nothing is bound. */
     def current(unbound: A)(using Frame): A < Sync = reading(unbound).current
 

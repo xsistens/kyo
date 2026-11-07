@@ -166,7 +166,7 @@ object ToggleButton:
       * reach that run's `onChange`. A constant nobody hears is drawn read-only, reachable and readable, with nothing to press.
       */
     private def drawn(props: UI.Live[Props])(using Frame): UI =
-        val checked           = props(_.checked.bound.getOrElse(false))
+        val checked           = props(_.checked.value(false))
         val size              = props(_.size)
         val base              = props(Base(_))
         val disabled          = props(_.disabled)
