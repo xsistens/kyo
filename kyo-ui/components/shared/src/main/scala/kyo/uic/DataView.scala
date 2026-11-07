@@ -169,7 +169,8 @@ final class DataView[A] private[uic] (private[uic] val p: DataView.Props[A]) ext
                 .rows(size)
                 .hostClass("p-dataview-paginator-bottom")
             pageSlot.binding.foreach(p => pag = pag.hostPage(p, pageSlot.hearer))
-            pag.render
+            // A data view that binds the page draws the paginator in place; one that does not lets it keep the page itself.
+            if pageSlot.binding.isDefined then pag.renderInPlace else pag.render
         }
 
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(h))

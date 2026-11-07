@@ -3309,7 +3309,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             pag = pageSlot match
                 case Present(page) => pag.hostPage(page, onPageF)
                 case Absent        => pag.currentPage(0)
-            List(pag.render)
+            List(pag.renderInPlace)
         end if
     end paginatorPart
 
