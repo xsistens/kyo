@@ -158,118 +158,293 @@ private[kyo] object ReactiveMacro:
             found
         end containsRead
 
-        // Every read in tree order (the order the replacement below visits them in), refusing the ones that cannot be taken out.
-        val reads = scala.collection.mutable.ArrayBuffer.empty[Term]
-        final class Collector(deferred: Maybe[String]) extends TreeTraverser:
+        // A parameter that takes `T | Signal[T]` (a `Prop[T]`), as its `T`: an argument there may be a signal, so what it reads is
+        // that argument's own channel and not a read of the block.
+        val signalClass                                 = TypeRepr.of[Signal[Any]].typeSymbol
+        def channelOf(param: TypeRepr): Maybe[TypeRepr] = param.dealias match
+            case OrType(a, b) =>
+                def signalOf(s: TypeRepr, other: TypeRepr): Maybe[TypeRepr] = s.dealias match
+                    case AppliedType(c, List(x)) if c.typeSymbol == signalClass && x =:= other => Present(other)
+                    case _                                                                     => Absent
+                signalOf(a, b).orElse(signalOf(b, a))
+            case _ => Absent
+
+        def canEqualOf(t: TypeRepr): Maybe[Term] =
+            Implicits.search(TypeRepr.of[CanEqual].appliedTo(List(t, t))) match
+                case ok: ImplicitSearchSuccess => Present(ok.tree)
+                case _                         => Absent
+
+        def paramTypes(fn: Term): List[TypeRepr] = fn.tpe.widen match
+            case MethodType(_, params, _) => params
+            case _                        => Nil
+
+        // Per argument of a call, the parameter's `T` where the argument may be a channel: the parameter takes a `Prop`, and the
+        // argument's value can be compared (a channel compares each value with the one before).
+        def propArgs(fn: Term, args: List[Term]): List[Maybe[TypeRepr]] =
+            val params = paramTypes(fn)
+            args.zipWithIndex.map { (a, i) =>
+                params.lift(i) match
+                    case Some(p) => channelOf(p).filter(x => a.tpe.widen <:< x && canEqualOf(x).isDefined)
+                    case None    => Absent
+            }
+        end propArgs
+
+        def isDeferred(t: Tree): Boolean = t match
+            case _: DefDef                                    => true
+            case vd: ValDef if vd.symbol.flags.is(Flags.Lazy) => true
+            case _                                            => false
+
+        // ---- Data flow: which of the block's `val`s only reach channels ----
+        //
+        // A `val` of the block that holds what a read gave is a read itself, to whoever uses it. Where every use is inside a
+        // channel argument (directly, or through another such `val`), it is a prop of its own: the block computes it as a value
+        // over its reads and each use reads it as a channel, so naming a read leaves the block's region as it was. One use the
+        // structure needs (a condition, a value the block builds or draws, a lambda) makes it, and every `val` it is built from,
+        // a read of the region, where each run has one value of it.
+
+        // The candidates: `val`s outside channel arguments and deferred code, whose value can be compared and is not a UI.
+        val candidates = scala.collection.mutable.LinkedHashMap.empty[Symbol, ValDef]
+        new TreeTraverser:
             override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                case t @ Read(arg) =>
-                    deferred.foreach(what => deferredError(t.pos, what))
-                    if refersToLocal(arg) then
-                        report.errorAndAbort(
-                            s"""`.read` of a value the `UI.reactive` block defines.
-                               |
-                               |Every read is taken out of the block and runs before it, where nothing the block defines exists
-                               |yet. Read what the value is built from instead:
-                               |$example
-                               |""".stripMargin,
-                            t.pos
-                        )
-                    end if
-                    if containsRead(arg) then
-                        report.errorAndAbort(
-                            s"""`.read` inside what another `.read` reads.
-                               |
-                               |What a read reads is taken out of the block, so a read inside it would leave the block with it.
-                               |Read the inner value into a `val` first, outside the expression the outer read reads.
-                               |""".stripMargin,
-                            t.pos
-                        )
-                    end if
-                    reads += arg
+                case t if isDeferred(t)                                                   => ()
+                case vd: ValDef if !vd.symbol.flags.is(Flags.Mutable) && vd.rhs.isDefined =>
+                    val tpe = vd.tpt.tpe.widen
+                    if !(tpe <:< TypeRepr.of[UI]) && canEqualOf(tpe).isDefined then candidates(vd.symbol) = vd
+                    super.traverseTree(tree)(owner)
                 case Apply(fn, args) =>
                     traverseTree(fn)(owner)
-                    val byName = fn.tpe.widen match
-                        case MethodType(_, params, _) => params.map { case ByNameType(_) => true; case _ => false }
-                        case _                        => Nil
-                    args.zipWithIndex.foreach { (a, i) =>
-                        if byName.lift(i).getOrElse(false) then
-                            Collector(deferred.orElse(Present("a by-name argument"))).traverseTree(a)(owner)
-                        else traverseTree(a)(owner)
-                    }
-                case dd: DefDef =>
-                    val what = if dd.name.startsWith("$anonfun") then "a lambda" else s"the local `def ${dd.name}`"
-                    dd.rhs.foreach(Collector(deferred.orElse(Present(what))).traverseTree(_)(dd.symbol))
-                case vd: ValDef if vd.symbol.flags.is(Flags.Lazy) =>
-                    vd.rhs.foreach(Collector(deferred.orElse(Present(s"the lazy `val ${vd.name}`"))).traverseTree(_)(vd.symbol))
+                    propArgs(fn, args).zip(args).foreach { (x, a) => if x.isEmpty then traverseTree(a)(owner) }
                 case _ => super.traverseTree(tree)(owner)
-        end Collector
-        Collector(Absent).traverseTree(rhs)(lambdaSym)
+        .traverseTree(rhs)(lambdaSym)
 
-        // One slot per stable path, and one per other read.
+        def refsTo(set: collection.Set[Symbol])(t: Tree): Boolean =
+            var found = false
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case id: Ident if set.contains(id.symbol) => found = true
+                    case _                                    => super.traverseTree(tree)(owner)
+            .traverseTree(t)(lambdaSym)
+            found
+        end refsTo
+
+        // Only a `val` that holds what a read gave takes part, directly or through another such `val`.
+        val reading = scala.collection.mutable.Set.empty[Symbol]
+        var grew    = true
+        while grew do
+            grew = false
+            candidates.foreach { (s, vd) =>
+                if !reading.contains(s) && vd.rhs.exists(r => containsRead(r) || refsTo(reading)(r)) then
+                    reading += s
+                    grew = true
+            }
+        end while
+
+        // Each use of a reading `val`: inside a channel argument it needs nothing, inside another reading `val` it needs what that
+        // one needs, anywhere else the region needs it.
+        val structural = scala.collection.mutable.Set.empty[Symbol]
+        val feeds      = scala.collection.mutable.ArrayBuffer.empty[(Symbol, Symbol)] // (used, user)
+        final class Uses(inArg: Boolean, inVal: Maybe[Symbol], deferred: Boolean) extends TreeTraverser:
+            override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                case id: Ident if reading.contains(id.symbol) =>
+                    if deferred then structural += id.symbol
+                    else if inArg then ()
+                    else
+                        inVal match
+                            case Present(user) => feeds += ((id.symbol, user))
+                            case Absent        => structural += id.symbol
+                case vd: ValDef if reading.contains(vd.symbol) =>
+                    vd.rhs.foreach(Uses(inArg, Present(vd.symbol), deferred).traverseTree(_)(owner))
+                case t if isDeferred(t)           => Uses(inArg, inVal, deferred = true).traverseTreeChildren(t)(owner)
+                case Apply(fn, args) if !deferred =>
+                    traverseTree(fn)(owner)
+                    propArgs(fn, args).zip(args).foreach { (x, a) =>
+                        if x.isDefined then Uses(inArg = true, inVal, deferred).traverseTree(a)(owner) else traverseTree(a)(owner)
+                    }
+                case _ => super.traverseTree(tree)(owner)
+        end Uses
+        Uses(inArg = false, Absent, deferred = false).traverseTree(rhs)(lambdaSym)
+        grew = true
+        while grew do
+            grew = false
+            feeds.foreach { (used, user) =>
+                if structural.contains(user) && !structural.contains(used) then
+                    structural += used
+                    grew = true
+            }
+        end while
+        val channelOnly: Set[Symbol] = reading.toSet -- structural
+
+        // A channel argument: it may be a signal and it reads, directly or through a `val` that only reaches channels.
+        def channels(fn: Term, args: List[Term]): List[Maybe[TypeRepr]] =
+            propArgs(fn, args).zip(args).map { (x, a) => x.filter(_ => containsRead(a) || refsTo(channelOnly)(a)) }
+
+        // The prop each channel-only `val` becomes, made where its definition is replaced (always before its uses).
+        val propOf = scala.collection.mutable.Map.empty[Symbol, Symbol]
+
+        // A read the region around already has: its value of the run, from that region's values.
+        final case class Taken(values: Expr[Chunk[Any]], slot: Int)
+
         def stablePath(t: Term): Maybe[List[Symbol]] = strip(t) match
             case id: Ident if isStable(id.symbol)   => Present(List(id.symbol))
             case Select(q, _) if isStable(t.symbol) => stablePath(q).map(_ :+ t.symbol)
             case _                                  => Absent
         def isStable(s: Symbol): Boolean =
             s.flags.is(Flags.Module) || (s.isValDef && !s.flags.is(Flags.Mutable)) || s.isPackageDef
-        val keys    = reads.toList.map(stablePath)
-        val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
-        val kept    = slots.distinct
-        val slotOf  = slots.map(kept.indexOf(_))
-        val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(Symbol.spliceOwner).asExprOf[Any]))
 
-        // The block as a function of the read values.
-        def lambdaOf[R: Type]: Expr[Chunk[Any] => R] =
-            val mt = MethodType(List("reads"))(_ => List(TypeRepr.of[Chunk[Any]]), _ => TypeRepr.of[R])
-            Lambda(
-                Symbol.spliceOwner,
-                mt,
-                (owner, params) =>
-                    val values = Ref(params.head.symbol).asExprOf[Chunk[Any]]
-                    var next   = 0
-                    val out    = new TreeMap:
-                        override def transformTerm(tree: Term)(o: Symbol): Term = tree match
-                            case Read(_) =>
-                                val slot = Expr(slotOf(next))
-                                next += 1
-                                tree.tpe.widen.asType match
-                                    case '[a] => '{ $values($slot).asInstanceOf[a] }.asTerm
-                            case _ => super.transformTerm(tree)(o)
-                    .transformTerm(rhs.changeOwner(owner))(owner)
-                    new TreeTraverser:
-                        override def traverseTree(tree: Tree)(o: Symbol): Unit = tree match
-                            case id: Ident if id.symbol == scopeParam =>
-                                report.errorAndAbort(
-                                    s"""The scope of a `UI.reactive` block is handed on.
-                                       |
-                                       |`.read` is taken out of the block only where the block itself is written, so code that takes
-                                       |the scope as a `using` parameter would read nothing. Read the value in the block and hand it on:
-                                       |$example
-                                       |""".stripMargin,
-                                    id.pos
-                                )
-                            case _ => super.traverseTree(tree)(o)
-                    .traverseTree(out)(owner)
-                    out
-            ).asExprOf[Chunk[Any] => R]
-        end lambdaOf
+        // The block, a channel argument in it, or a channel-only `val`, as one value over its reads: every read in tree order (the
+        // order the replacement visits them in) taken out, refusing the ones that cannot be, and the term as a function of the
+        // values read. A read the region around already has is that region's value of the run. A channel argument or a
+        // channel-only `val` inside is compiled the same way, on its own, and its reads are not the term's.
+        // `from` owns what the term defines, `to` is where its value goes. The term is rewritten as it is and moved to `to` after, so
+        // the symbols the data flow found are the ones it rewrites (moving a tree to a new owner gives its definitions new symbols).
+        def compile(term: Term, from: Symbol, to: Symbol, result: TypeRepr, taken: Map[List[Symbol], Taken]): Term =
+            def isTaken(arg: Term): Boolean = stablePath(arg).exists(taken.contains)
+            // What this term reads: a read's argument, or the prop of a channel-only `val`.
+            val reads = scala.collection.mutable.ArrayBuffer.empty[Term]
+            final class Collector(deferred: Maybe[String]) extends TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case t @ Read(arg) =>
+                        deferred.foreach(what => deferredError(t.pos, what))
+                        if refersToLocal(arg) then
+                            report.errorAndAbort(
+                                s"""`.read` of a value the `UI.reactive` block defines.
+                                   |
+                                   |Every read is taken out of the block and runs before it, where nothing the block defines exists
+                                   |yet. Read what the value is built from instead:
+                                   |$example
+                                   |""".stripMargin,
+                                t.pos
+                            )
+                        end if
+                        if containsRead(arg) then
+                            report.errorAndAbort(
+                                s"""`.read` inside what another `.read` reads.
+                                   |
+                                   |What a read reads is taken out of the block, so a read inside it would leave the block with it.
+                                   |Read the inner value into a `val` first, outside the expression the outer read reads.
+                                   |""".stripMargin,
+                                t.pos
+                            )
+                        end if
+                        if !isTaken(arg) then reads += arg
+                    case id: Ident if channelOnly.contains(id.symbol) =>
+                        reads += Ref(propOf(id.symbol))
+                    case vd: ValDef if channelOnly.contains(vd.symbol) => () // its own value, compiled where it is replaced
+                    case Apply(fn, args)                               =>
+                        traverseTree(fn)(owner)
+                        val byName  = paramTypes(fn).map { case ByNameType(_) => true; case _ => false }
+                        val channel = if deferred.isEmpty then channels(fn, args) else args.map(_ => Absent)
+                        args.zipWithIndex.foreach { (a, i) =>
+                            if channel(i).isDefined then () // its own value, compiled where it is replaced
+                            else if byName.lift(i).getOrElse(false) then
+                                Collector(deferred.orElse(Present("a by-name argument"))).traverseTree(a)(owner)
+                            else traverseTree(a)(owner)
+                        }
+                    case dd: DefDef =>
+                        val what = if dd.name.startsWith("$anonfun") then "a lambda" else s"the local `def ${dd.name}`"
+                        dd.rhs.foreach(Collector(deferred.orElse(Present(what))).traverseTree(_)(dd.symbol))
+                    case vd: ValDef if vd.symbol.flags.is(Flags.Lazy) =>
+                        vd.rhs.foreach(Collector(deferred.orElse(Present(s"the lazy `val ${vd.name}`"))).traverseTree(_)(vd.symbol))
+                    case _ => super.traverseTree(tree)(owner)
+            end Collector
+            Collector(Absent).traverseTree(term)(from)
 
-        if TypeRepr.of[T] <:< TypeRepr.of[UI] then
-            val f = lambdaOf[UI]
-            '{ ReactiveMacro.draw($hoisted)($f)(using $frame) }
-        else
-            val equal = Expr.summon[CanEqual[T, T]].getOrElse(
-                report.errorAndAbort(
-                    s"""A `UI.reactive` block that yields a ${Type.show[T]} needs a `CanEqual[${Type.show[T]}, ${Type.show[T]}]`.
-                       |
-                       |Over a signal the block is mapped, and the mapped signal compares each value with the one before.
-                       |""".stripMargin,
-                    body.asTerm.pos
-                )
-            )
-            val f = lambdaOf[T]
-            '{ ReactiveMacro.value[T]($hoisted)($f)(using $equal, $frame) }
-        end if
+            // One slot per stable path, and one per other read.
+            val keys    = reads.toList.map(stablePath)
+            val slots   = keys.zipWithIndex.map { (k, i) => k.fold(i)(path => keys.indexWhere(_.contains(path))) }
+            val kept    = slots.distinct
+            val slotOf  = slots.map(kept.indexOf(_))
+            val hoisted = Expr.ofSeq(kept.map(i => reads(i).changeOwner(to).asExprOf[Any]))
+
+            // The term as a function of the read values, each channel argument and channel-only `val` in it replaced by its own
+            // value, which takes what this term reads as this term's values of the run.
+            def lambdaOf[R: Type]: Expr[Chunk[Any] => R] =
+                val mt = MethodType(List("reads"))(_ => List(TypeRepr.of[Chunk[Any]]), _ => TypeRepr.of[R])
+                Lambda(
+                    to,
+                    mt,
+                    (lambdaOwner, params) =>
+                        val values = Ref(params.head.symbol).asExprOf[Chunk[Any]]
+                        val inner  = taken ++ keys.zip(slotOf).collect { case (Present(path), slot) => path -> Taken(values, slot) }
+                        def valueOf(t: Taken, tpe: TypeRepr): Term = tpe.widen.asType match
+                            case '[a] => '{ ${ t.values }(${ Expr(t.slot) }).asInstanceOf[a] }.asTerm
+                        var next                           = 0
+                        def slotValue(tpe: TypeRepr): Term =
+                            val t = Taken(values, slotOf(next))
+                            next += 1
+                            valueOf(t, tpe)
+                        end slotValue
+                        new TreeMap:
+                            override def transformStatement(tree: Statement)(o: Symbol): Statement = tree match
+                                case vd: ValDef if channelOnly.contains(vd.symbol) =>
+                                    val tpe     = vd.tpt.tpe.widen
+                                    val propTpe = tpe.asType match
+                                        case '[t] => TypeRepr.of[UI.Prop[t]]
+                                    val sym = Symbol.newVal(o, s"${vd.name}$$prop", propTpe, Flags.EmptyFlags, Symbol.noSymbol)
+                                    propOf(vd.symbol) = sym
+                                    ValDef(sym, Some(compile(vd.rhs.get, vd.symbol, sym, tpe, inner)))
+                                case _ => super.transformStatement(tree)(o)
+                            override def transformTerm(tree: Term)(o: Symbol): Term = tree match
+                                case Read(arg) =>
+                                    val had = stablePath(arg).flatMap(p => Maybe.fromOption(taken.get(p)))
+                                    if had.isDefined then valueOf(had.get, tree.tpe) else slotValue(tree.tpe)
+                                case id: Ident if channelOnly.contains(id.symbol) => slotValue(id.tpe)
+                                case Apply(fn, args)                              =>
+                                    val fn1     = transformTerm(fn)(o)
+                                    val params  = paramTypes(fn)
+                                    val channel = channels(fn, args)
+                                    val args1   = args.zipWithIndex.map { (a, i) =>
+                                        channel(i) match
+                                            case Present(x) =>
+                                                strip(a) match
+                                                    // A bare read, or a bare channel-only `val`, hands on what it reads.
+                                                    case Read(of) if !stablePath(of).exists(inner.contains) && of.tpe.widen <:< params(i) =>
+                                                        of.changeOwner(o)
+                                                    case id: Ident if channelOnly.contains(id.symbol) => Ref(propOf(id.symbol))
+                                                    case _                                            => compile(a, o, o, x, inner)
+                                            case Absent => transformTerm(a)(o)
+                                    }
+                                    Apply.copy(tree)(fn1, args1)
+                                case _ => super.transformTerm(tree)(o)
+                        .transformTerm(term)(from).changeOwner(lambdaOwner)
+                ).asExprOf[Chunk[Any] => R]
+            end lambdaOf
+
+            result.asType match
+                case '[r] if result <:< TypeRepr.of[UI] =>
+                    val f = lambdaOf[UI]
+                    '{ ReactiveMacro.draw($hoisted)($f)(using $frame) }.asTerm.changeOwner(to)
+                case '[r] =>
+                    val equal = canEqualOf(result).getOrElse(
+                        report.errorAndAbort(
+                            s"""A `UI.reactive` block that yields a ${result.show} needs a `CanEqual[${result.show}, ${result.show}]`.
+                               |
+                               |Over a signal the block is mapped, and the mapped signal compares each value with the one before.
+                               |""".stripMargin,
+                            term.pos
+                        )
+                    ).asExprOf[CanEqual[r, r]]
+                    val f = lambdaOf[r]
+                    '{ ReactiveMacro.value[r]($hoisted)($f)(using $equal, $frame) }.asTerm.changeOwner(to)
+            end match
+        end compile
+
+        val out = compile(rhs, lambdaSym, Symbol.spliceOwner, TypeRepr.of[T], Map.empty)
+        new TreeTraverser:
+            override def traverseTree(tree: Tree)(o: Symbol): Unit = tree match
+                case id: Ident if id.symbol == scopeParam =>
+                    report.errorAndAbort(
+                        s"""The scope of a `UI.reactive` block is handed on.
+                           |
+                           |`.read` is taken out of the block only where the block itself is written, so code that takes
+                           |the scope as a `using` parameter would read nothing. Read the value in the block and hand it on:
+                           |$example
+                           |""".stripMargin,
+                        id.pos
+                    )
+                case _ => super.traverseTree(tree)(o)
+        .traverseTree(out)(Symbol.spliceOwner)
+        out.asExpr
     end expand
 
 end ReactiveMacro

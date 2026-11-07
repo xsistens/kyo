@@ -241,6 +241,12 @@ object UI:
       * one is a signal, a block that yields a value is one mapped signal and a block that yields a UI draws in one region, compared
       * by the values read, the way [[Prop.render]] does.
       *
+      * A read in an argument whose parameter takes `T | Signal[T]` (a [[Prop]], as `aria`, `cssClass` or `disabled` do) is that
+      * argument's own channel and not a read of the block: `el.aria("checked", on.read.toString)` patches the attribute in place
+      * and the block draws no region for it. A block `val` is a read to whoever uses it, so naming a read changes nothing: one
+      * that only reaches channel arguments is a channel too, and one the structure also uses (a condition, a value drawn, a
+      * lambda) is the region's, as is any read the region already has wherever it appears, with one value per run.
+      *
       * A read has to be one the block itself would evaluate, once, while it runs. A read of a value the block defines, inside a
       * lambda, a local `def`, a lazy `val` or a by-name argument (which run later, again or not at all), or through the block's
       * scope handed on, is a compile error that says what to write instead: read into a `val` in the block, and read a callback
@@ -1757,12 +1763,14 @@ object UI:
                     whileMountedKey = Present(key),
                     whileMountedSite = summon[UI.MountSite]
                 ))
-            def hidden(v: Boolean): Self = withAttrs(attrs.copy(hidden = Present(v)))
 
-            /** Reactive `hidden`: toggles the attribute IN PLACE on emission, so showing and hiding keeps the
-              * subtree (its focus, caret, scroll position and running transitions) instead of repainting it.
+            /** `hidden`, constant or reactive through one setter: a `Boolean` sets it statically, a `Signal[Boolean]` toggles the
+              * attribute IN PLACE on emission, so showing and hiding keeps the subtree (its focus, caret, scroll position and running
+              * transitions) instead of repainting it. One setter, so a read in a `UI.reactive` block passed here is a channel.
               */
-            def hidden(v: Signal[Boolean]): Self = withReactiveBoolAttr("hidden", v)
+            def hidden(v: Boolean | Signal[Boolean]): Self = v match
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("hidden", s)
+                case b: Boolean                    => withAttrs(attrs.copy(hidden = Present(b)))
 
             // Visual
             def style(v: Style): Self               = withAttrs(attrs.copy(uiStyle = attrs.uiStyle ++ v))
@@ -1791,28 +1799,18 @@ object UI:
             def inlineStyle(v: Signal[Style]): Self = withReactiveStyle(v)
 
             // ARIA attributes
-            /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`). */
-            def aria(name: String, value: String): Self =
-                withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, value)))
+            /** Sets a single `aria-*` attribute (the `name` is the suffix after `aria-`), constant or reactive through one setter: a
+              * `String` is a plain attribute, a `Signal[String]` patches `aria-$name` IN PLACE on emission, with no re-render (for a
+              * locale-driven accessible name or a state that must change without re-mounting). One setter, so a read in a
+              * `UI.reactive` block passed here is a channel and not a read of the block.
+              */
+            def aria(name: String, v: Prop[String]): Self = v match
+                case s: Signal[String] @unchecked => withReactiveAttr(s"aria-$name", s)
+                case t: String                    => withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, t)))
 
             /** Sets several `aria-*` attributes at once from name/value pairs. */
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
-
-            /** REACTIVE `aria-*`: the `aria-$name` attribute tracks `sig`, patched IN PLACE on emission, NOT a
-              * re-render (unlike the `Reactive[Self]`-returning value overloads like `disabled(Signal[Boolean])`).
-              * For a locale-driven accessible name/description that must re-translate without re-mounting.
-              */
-            def aria(name: String, sig: Signal[String]): Self =
-                withReactiveAttr(s"aria-$name", sig)
-
-            /** `aria-*` from a [[kyo.UI.Prop]]: a constant is a plain attribute, as the `String` overload sets it, and a signal
-              * patches the attribute in place, as the `Signal[String]` overload does. For a component whose value may be either and
-              * that writes the attribute once.
-              */
-            def aria(name: String, v: Prop[String]): Self = v match
-                case s: Signal[?] => aria(name, s.asInstanceOf[Signal[String]])
-                case t            => aria(name, t.asInstanceOf[String])
 
             /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
               * emission, with no re-render.
@@ -3472,7 +3470,15 @@ object UI:
             type Self = Anchor
             def withAttrs(a: Attrs): Anchor      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Anchor = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def href(v: Href): Anchor            = copy(href = Present(v))
+
+            /** Where the link points, constant or reactive through one setter: a `Signal[Href]` is patched in place, so the link
+              * keeps its node (and any focus on it).
+              */
+            def href(v: Href | Signal[Href]): Anchor = v match
+                case s: Signal[Href] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("href", s.map(Href.attrValue))
+                case h: Href => copy(href = Present(h))
 
             /** Saves what `href` points at under `filename` instead of navigating to it (the HTML `download` attribute). Browsers
               * honor it for same-origin, `data:` and `blob:` URLs; a cross-origin href navigates instead. An empty `filename` leaves the
@@ -3481,12 +3487,7 @@ object UI:
               * A clicked download anchor keeps the browser's default: neither a kyo click handler nor client-side routing turns it
               * into an in-page action.
               */
-            def download(filename: String): Anchor = copy(download = Present(filename))
-
-            /** Reactive `href`: patched in place, so the link keeps its node (and any focus on it). */
-            def href(v: Signal[Href]): Self =
-                given Frame = frame
-                withReactiveAttr("href", v.map(Href.attrValue))
+            def download(filename: String): Anchor    = copy(download = Present(filename))
             def href(v: Href, target: Target): Anchor = copy(href = Present(v), target = Present(target))
             def target(v: Target): Anchor             = copy(target = Present(v))
         end Anchor
@@ -3498,12 +3499,15 @@ object UI:
         )(using val frame: Frame) extends Inline with Void:
             type Self = Img
             def withAttrs(a: Attrs): Img = copy(attrs = a)
-            def src(v: ImgSrc): Img      = copy(src = Present(v))
 
-            /** Reactive `src`: patched in place, so swapping the image does not replace the element. */
-            def src(v: Signal[ImgSrc]): Self =
-                given Frame = frame
-                withReactiveAttr("src", v.map(ImgSrc.attrValue))
+            /** The image, constant or reactive through one setter: a `Signal[ImgSrc]` is patched in place, so swapping the image
+              * does not replace the element.
+              */
+            def src(v: ImgSrc | Signal[ImgSrc]): Img = v match
+                case s: Signal[ImgSrc] @unchecked =>
+                    given Frame = frame
+                    withReactiveAttr("src", s.map(ImgSrc.attrValue))
+                case i: ImgSrc => copy(src = Present(i))
             def alt(v: String): Img = copy(alt = Present(v))
         end Img
 
@@ -3515,11 +3519,14 @@ object UI:
         )(using val frame: Frame) extends Block with Void:
             type Self = Iframe
             def withAttrs(a: Attrs): Iframe = copy(attrs = a)
-            def src(v: String): Iframe      = copy(src = Present(v))
 
-            /** Reactive `src`: patched in place, since re-rendering an iframe would reload the framed document. */
-            def src(v: Signal[String]): Self = withReactiveAttr("src", v)
-            def title(v: String): Iframe     = copy(frameTitle = Present(v))
+            /** The framed document, constant or reactive through one setter: a `Signal[String]` is patched in place, since
+              * re-rendering an iframe would reload the framed document.
+              */
+            def src(v: String | Signal[String]): Iframe = v match
+                case s: Signal[String] @unchecked => withReactiveAttr("src", s)
+                case t: String                    => copy(src = Present(t))
+            def title(v: String): Iframe = copy(frameTitle = Present(v))
         end Iframe
 
         // ---- Custom dropdown (div-based overlay, NOT native <select>) ----
