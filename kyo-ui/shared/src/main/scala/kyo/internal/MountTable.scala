@@ -474,8 +474,8 @@ final private[kyo] class MountDraw(
     val outcome: Result[Any, UI],
     context: DrawContext,
     node: Drawn,
-    // The props signal of a node built by `UI.mountedWith`, which the instance that takes this draw keeps.
-    val props: Maybe[SignalRef[?]] = Absent,
+    // The props a node built by `UI.mountedWith` reads, which the instance that takes this draw keeps and later runs offer to.
+    val props: Maybe[UI.Live[?]] = Absent,
     // Whether its instance is held by an identity, a key or its place in a drawn instance (see DrawContext.Reach), so a paint keeps it.
     held: Boolean = false
 ):
@@ -526,19 +526,27 @@ end MountDraw
 /** The props of a node built by [[kyo.UI.mountedWith]] and the draw that reads them: the first draw makes the signal, a later run of the
   * node offers its props to the instance that kept that signal.
   */
-final private[kyo] class PropsDraw[P](val value: P, draw: UI.Live[P] => UI < Sync)(using CanEqual[P, P]):
-    /** The draw over this node's props. Where a later run can offer the instance props (`offered`), also the signal they come through,
+final private[kyo] class PropsDraw[P](val value: P, draw: UI.Live[P] => UI < Sync)(using
+    CanEqual[P, P],
+    scala.deriving.Mirror.ProductOf[P]
+):
+    /** The draw over this node's props. Where a later run can offer the instance props (`offered`), also the props that follow them,
       * holding this node's; anywhere else none, and the draw reads the props as they are.
       */
-    def start(offered: Boolean)(using Frame): (Maybe[SignalRef[P]], UI < Sync) < Sync =
-        if offered then Signal.initRef(value).map(ref => (Present(ref), draw(new UI.Live(value, Present(ref)))))
-        else (Absent, draw(new UI.Live(value, Absent)))
+    def start(offered: Boolean)(using Frame): (Maybe[UI.Live[P]], UI < Sync) < Sync =
+        Owning.start(value, summon[scala.deriving.Mirror.ProductOf[P]]).map { owning =>
+            if offered then
+                Signal.initRef(value).map { ref =>
+                    val live = new UI.Live(value, Present(ref), owning)
+                    (Present(live), draw(live))
+                }
+            else (Absent, draw(new UI.Live(value, Absent, owning)))
+        }
 
-    /** Hands this node's props to the instance that holds `to`, unless it holds equal ones. */
-    def offer(to: SignalRef[?])(using Frame): Unit < Sync =
-        // Unsafe cast: `to` is the signal `start` made for this node's site and key, which a draw of another type cannot reach.
-        val ref = to.asInstanceOf[SignalRef[P]]
-        ref.get.map(now => if now == value then Kyo.unit else ref.set(value))
+    /** Hands this node's props to the instance that reads `to`, unless it holds equal ones. */
+    def offer(to: UI.Live[?])(using Frame): Unit < Sync =
+        // Unsafe cast: `to` is the props `start` made for this node's site and key, which a draw of another type cannot reach.
+        to.asInstanceOf[UI.Live[P]].offer(value)
     end offer
 end PropsDraw
 
@@ -566,12 +574,12 @@ private[kyo] object MountDraw:
     def run(node: Drawn, at: ReactiveRegion.RegionIdentity, scope: DrawContext.IdScope, occurrence: Int)(using Frame): MountDraw < Sync =
         Sync.defer(new DrawContext(DrawContext.base(at, node, scope, occurrence))).map { context =>
             // No Abort in a draw's row: a Result of a panic is the only other outcome.
-            def drawing(draw: UI < Sync, props: Maybe[SignalRef[?]]): MountDraw < Sync =
+            def drawing(draw: UI < Sync, props: Maybe[UI.Live[?]]): MountDraw < Sync =
                 DrawContext.current.let(Present(context))(Abort.run[Any](draw)).map(
                     new MountDraw(_, context, node, props, held = node.key.nonEmpty || scope.reach == DrawContext.Reach.Kept)
                 )
             node.props match
-                case Present(props) => props.start(node.key.nonEmpty && scope.runsAgain).map((ref, draw) => drawing(draw, ref))
+                case Present(props) => props.start(node.key.nonEmpty && scope.runsAgain).map((live, draw) => drawing(draw, live))
                 case _              => drawing(node.draw, Absent)
         }
 end MountDraw
@@ -819,8 +827,8 @@ final private[kyo] class MountInstance(
     val fate: MountFate,
     // The walk of the render pass that already put this instance's first content on the page.
     drawnOnPage: Maybe[Seq[ReactiveUI]] = Absent,
-    // The signal a `UI.mountedWith` draw reads its props through: each run of the node that shows this instance offers its props to it.
-    val props: Maybe[SignalRef[?]] = Absent,
+    // The props a `UI.mountedWith` draw reads: each run of the node that shows this instance offers its props to them.
+    val props: Maybe[UI.Live[?]] = Absent,
     // The state the instance starts in, which is what the render pass behind `drawnOnPage` put on the page.
     drawnState: Maybe[MountState] = Absent
 ):
@@ -2521,8 +2529,8 @@ private[kyo] object MountRegions:
     )(using Frame): Unit < (Async & Scope) =
         // A run of the node that shows a kept instance hands it this run's props.
         val offered: Unit < Sync = (spec.node, instance.props) match
-            case (d: Drawn, Present(ref)) => d.props.fold(Kyo.unit)(_.offer(ref))
-            case _                        => Kyo.unit
+            case (d: Drawn, Present(live)) => d.props.fold(Kyo.unit)(_.offer(live))
+            case _                         => Kyo.unit
         // The content is the instance's: a walk that draws in it, and every region fiber it forks, derive their ids from it.
         offered.andThen(DrawContext.scope.let(DrawContext.contentScope(instance.children.idBase, spec.node, rui.contentContext))(
             showContent(rui, spec, instance, exchange, signalChangeTime, dispatch, follow)

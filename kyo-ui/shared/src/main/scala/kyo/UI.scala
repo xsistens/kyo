@@ -193,13 +193,28 @@ object UI:
       * called with it, and a constant stays a constant with no subscription. `call` reads a field when an event comes, so a
       * callback is the latest run's either way and costs nothing until then.
       */
-    final class Live[P] private[kyo] (first: P, val runs: Maybe[Signal[P]]):
+    final class Live[P] private[kyo] (first: P, runsRef: Maybe[SignalRef[P]], owning: kyo.internal.Owning[P]):
+
+        /** Props with no controlled prop resolved: a node drawn in place, which a host binds itself. */
+        private[kyo] def this(first: P, runsRef: Maybe[SignalRef[P]]) = this(first, runsRef, kyo.internal.Owning.none[P])
+
+        // The props of the latest run, where the engine can hand this instance new ones.
+        private val runs: Maybe[Signal[P]] = runsRef
+
+        /** Hands this instance the props of a new run: a controlled prop the run stops binding hands its value to the instance first,
+          * then the new props are what every field follows. Equal props change nothing.
+          */
+        private[kyo] def offer(next: P)(using CanEqual[P, P], Frame): Unit < Sync =
+            runsRef match
+                case Present(ref) => ref.get.map(prev => if prev == next then Kyo.unit else owning.carry(prev, next).andThen(ref.set(next)))
+                case Absent       => Kyo.unit
+        end offer
 
         /** The field `field` picks, following the latest run where one can follow, else as the node was called with it. */
         def apply[A](field: P => Prop[A])(using CanEqual[A, A], Frame): Prop[A] =
             runs match
-                case Present(signal) => signal.switchMap(p => Prop.signal(field(p)))
-                case Absent          => field(first)
+                case Present(signal) => signal.switchMap(p => Prop.signal(field(owning.resolve(p))))
+                case Absent          => field(owning.resolve(first))
 
         /** An optional field as one prop of an option: `Absent` where the run sets none, the field's value where it does, so one
           * read gives `Maybe[A]` (`props(_.label).read` for a `label: Maybe[Prop[String]]`), and a signal inside it is followed
@@ -211,16 +226,34 @@ object UI:
                 case Present(a) => Prop.map(a)(Present(_))
                 case _          => Absent
             runs match
-                case Present(signal) => signal.switchMap(p => Prop.signal(flat(field(p))))
-                case Absent          => flat(field(first))
+                case Present(signal) => signal.switchMap(p => Prop.signal(flat(field(owning.resolve(p)))))
+                case Absent          => flat(field(owning.resolve(first)))
         end apply
 
         /** The field `field` picks, read now: from the latest run where one can follow, else as the node was called with it. */
         def call[A](field: P => A)(using Frame): A < Sync =
             runs match
-                case Present(signal) => signal.current.map(field)
-                case Absent          => field(first)
+                case Present(signal) => signal.current.map(p => field(owning.resolve(p)))
+                case Absent          => field(owning.resolve(first))
     end Live
+
+    /** A prop a component instance holds itself where the caller binds none: a checked state, a value, an open panel.
+      *
+      * A component declares one in its props with where its own value starts, and reads it like any other prop: the engine binds
+      * the instance's own ref wherever a run leaves it unbound, made once per instance, and a run that stops binding it hands the
+      * value it showed to that ref first, so the instance carries on from it. A caller's binding (a ref two way, a signal one way, a
+      * constant) is the prop wherever the caller gives one.
+      */
+    trait Controlled[A]:
+        /** What the caller bound, `Absent` where it bound nothing. */
+        def bound: Maybe[Prop[A]]
+
+        /** Where the instance's own value starts, `Absent` where the component keeps none of its own for this prop. */
+        def start: Maybe[A]
+
+        /** This prop with the instance's own `ref` bound in place of nothing, as the engine hands it to a draw. */
+        def owning(ref: SignalRef[A]): Controlled[A]
+    end Controlled
 
     /** What a [[reactive]] block reads with: `.read` on a prop or a signal, which exists only inside the block.
       *
@@ -550,7 +583,7 @@ object UI:
       * can reach again, one without a key or one in no region that runs again, reads its props as it was called with them, so a constant
       * prop costs it no subscription. Props compare by `==`: equal props reach no one.
       */
-    def mountedWith[P](props: P)(draw: Live[P] => UI < Sync)(using CanEqual[P, P], Frame): Drawn =
+    def mountedWith[P](props: P)(draw: Live[P] => UI < Sync)(using CanEqual[P, P], scala.deriving.Mirror.ProductOf[P], Frame): Drawn =
         Drawn(UI.empty, key = Absent, errorRender = Absent, props = Present(new kyo.internal.PropsDraw(props, draw)))
 
     /** Embeds a component that waits for its UI: loading data, a round trip, anything that suspends.

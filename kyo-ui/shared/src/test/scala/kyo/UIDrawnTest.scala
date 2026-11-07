@@ -814,6 +814,40 @@ class UIDrawnTest extends kyo.test.Test[Any]:
         yield assert(first == Absent, s"$first")
     }
 
+    private case class Held(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own")) extends UI.Controlled[String]:
+        def owning(ref: SignalRef[String]): Held = copy(bound = Present(ref))
+
+    private case class Form(name: Held, size: Int) derives CanEqual
+
+    private def formLive(first: Form, runs: SignalRef[Form])(using Frame): UI.Live[Form] < Sync =
+        kyo.internal.Owning.start(first, summon[scala.deriving.Mirror.ProductOf[Form]]).map(o => new UI.Live(first, Present(runs), o))
+
+    private def nameOf(live: UI.Live[Form])(using Frame): String < Sync =
+        live.call(_.name.bound).flatMap(b => Prop.signal(b.get).current)
+
+    "a controlled prop the run leaves unbound reads the instance's own value, a bound one the binding" in {
+        for
+            app  <- Signal.initRef("app")
+            runs <- Signal.initRef(Form(Held(), 1))
+            live <- formLive(Form(Held(), 1), runs)
+            mine <- nameOf(live)
+            _    <- live.offer(Form(Held(Present(app)), 1))
+            seen <- nameOf(live)
+        yield assert(mine == "own" && seen == "app", s"$mine $seen")
+    }
+
+    "a run that stops binding a controlled prop hands the value it showed to the instance before that run is seen" in {
+        for
+            app  <- Signal.initRef("app")
+            runs <- Signal.initRef(Form(Held(), 1))
+            live <- formLive(Form(Held(Present(app)), 1), runs)
+            _    <- runs.set(Form(Held(Present(app)), 1))
+            _    <- app.set("typed")
+            _    <- live.offer(Form(Held(), 2))
+            held <- nameOf(live)
+        yield assert(held == "typed", s"held $held")
+    }
+
     "an instance no run can reach again reads a constant prop as it is, with no signal" in {
         val read = new AtomicReference(Chunk.empty[Prop[String]])
         val rec  = new RecordingExchange
