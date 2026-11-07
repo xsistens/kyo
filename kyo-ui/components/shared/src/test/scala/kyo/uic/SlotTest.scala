@@ -179,6 +179,15 @@ class SlotTest extends UicTest:
             yield assert((a, b, c, d) == (1, 2, 7, 8))
         }
 
+        "value is the binding, else where the slot starts, else what stands in" in {
+            Signal.initRef(7).map { ref =>
+                assert(Slot[Int]().value(1).equals(1))
+                assert(Slot[Int](start = Present(3)).value(1).equals(3))
+                assert(Slot[Int](start = Present(3)).bind(2).value(1).equals(2))
+                assert(Slot[Int](start = Present(3)).bind(ref).value(1).equals(ref))
+            }
+        }
+
         "bound gives the binding back as the caller gave it" in {
             Signal.initRef(7).map { ref =>
                 assert(Slot[Int]().bound.isEmpty)
