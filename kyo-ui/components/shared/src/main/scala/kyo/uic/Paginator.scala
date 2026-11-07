@@ -270,7 +270,7 @@ object Paginator:
     /** What the parts that follow the page are drawn from: the page clamped into the page count the rows and the total
       * give.
       */
-    final private case class View(page: Int, rows: Int, total: Int):
+    final private case class View(page: Int, rows: Int, total: Int) derives CanEqual:
         val pages: Int = totalPages(total, rows)
         val cur: Int   = View.clamp(page, pages)
 
@@ -280,11 +280,13 @@ object Paginator:
     /** The paginator, drawn once over `props`, which hand it `page` and `rows` bound: to the instance's own refs where a run
       * binds nothing (carrying on from a binding a run drops), unbound where it is drawn in place and its host binds them.
       *
-      * Each part that follows the page (the links, the buttons, the report, the jump field) is a region of its own over the
-      * page, the rows and the total read as ONE value: changing the rows writes the page too, and a nested region would
-      * repaint the page it closed over. The two dropdowns are built outside those regions: a Select is a mount, and a region
-      * around it would start the mount again on every page change, replacing the field under the reader's focus. What
-      * builds the layout is one `reactive` block, drawn again only when a run changes it.
+      * Each part that follows the page (the links, the buttons, the report) is a region of its own over the page, the rows
+      * and the total read as ONE value: changing the rows writes the page too, and a nested region would repaint the page it
+      * closed over. The two dropdowns and the jump field are built outside those regions: a Select is a mount, and a region
+      * around it would start the mount again on every page change, replacing the field under the reader's focus; the jump
+      * field shows the page through a signal, so kyo-ui puts the page back into it after a commit that did not land there
+      * ("abc", a number past the last page), and its commit reads the page when it comes. What builds the layout is one
+      * `reactive` block, drawn again only when a run changes it.
       */
     private def drawn(props: UI.Live[Props])(using Frame): UI =
         val page                              = props(pageOf(_))
@@ -298,6 +300,16 @@ object Paginator:
         val pickRows: Maybe[Int] => UI.Action =
             _.fold[UI.Action](())(n => props.call(identity).map(rowsPicked(_, n)))
         val jump: Maybe[Int] => UI.Action = _.fold[UI.Action](())(go)
+
+        val view: Prop[View]    = UI.reactive(View(page.read, rows.read, total.read))
+        val shown: Prop[String] = UI.reactive((view.read.cur + 1).toString)
+
+        // The page typed, read against the page and the page count as they are when the commit comes.
+        def commitJump(typed: String): UI.Action =
+            for
+                v <- Prop.current(view)
+                _ <- go(View.clamp(typed.trim.toIntOption.map(_ - 1).getOrElse(v.cur), v.pages))
+            yield ()
 
         def following(part: View => List[UI]): List[UI] =
             List(UI.reactive(fragment(part(View(page.read, rows.read, total.read))*)))
@@ -337,17 +349,9 @@ object Paginator:
             span.cssClass("p-paginator-current")(text)
         end report
 
-        def jtpField(v: View, fixed: Boolean): UI =
-            val field = Input().value((v.cur + 1).toString).accessibleName("Jump to page")
-            span.cssClass("p-paginator-jtp-input")(
-                if fixed then field.readonly(true).render
-                else
-                    field.onChange { s =>
-                        val target = s.trim.toIntOption.map(_ - 1).getOrElse(v.cur)
-                        go(View.clamp(target, v.pages))
-                    }.render
-            )
-        end jtpField
+        def jtpField(fixed: Boolean): UI =
+            val field = Input().value(shown).accessibleName("Jump to page")
+            span.cssClass("p-paginator-jtp-input")((if fixed then field.readonly(true) else field.onChange(commitJump)).render)
 
         UI.reactive {
             val b      = base.read
@@ -394,7 +398,7 @@ object Paginator:
                             val v = View(page.read, rows.read, total.read)
                             reportOf.read.fold(UI.empty: UI)(report(v, _))
                         })
-                case PaginatorElement.JumpToPageInput    => following(v => List(jtpField(v, b.pageFixed)))
+                case PaginatorElement.JumpToPageInput    => List(jtpField(b.pageFixed))
                 case PaginatorElement.JumpToPageDropdown => jtpDropdown
 
             // Elements a template names with nothing behind them, and the one switch a template overrules: Prime's string
