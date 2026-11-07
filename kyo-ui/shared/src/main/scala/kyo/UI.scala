@@ -163,6 +163,13 @@ object UI:
             case s: Signal[?] => s.asInstanceOf[Signal[A]].map(f)
             case a            => f(a.asInstanceOf[A])
 
+        /** The prop's value now, for a handler that reads it when its event comes: a constant as it is, with no signal made
+          * for it, a signal its current value.
+          */
+        def current[A](p: Prop[A])(using Frame): A < Sync = p match
+            case s: Signal[?] => s.asInstanceOf[Signal[A]].current
+            case a            => a.asInstanceOf[A]
+
         /** Both props as one: two constants stay a constant, anything else is one combined signal, never one region inside
           * another.
           */

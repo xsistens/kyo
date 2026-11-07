@@ -77,6 +77,23 @@ class PropTest extends UITest:
         }
     }
 
+    "current" - {
+        "a constant reads as itself" in {
+            val n: Prop[Int] = 7
+            Prop.current(n).map(v => assert(v == 7))
+        }
+
+        "a signal reads its value at the moment of the read" in {
+            for
+                ref <- Signal.initRef(1)
+                n: Prop[Int] = ref.map(_ * 10)
+                before <- Prop.current(n)
+                _      <- ref.set(2)
+                after  <- Prop.current(n)
+            yield assert((before, after) == (10, 20))
+        }
+    }
+
     "writable is the ref of a two-way binding and nothing else" in {
         Signal.initRef(1).map { ref =>
             val two: Prop[Int]   = ref
