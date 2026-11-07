@@ -160,8 +160,8 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
 
     type Self = Listbox[K]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Listbox(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Listbox(p.copy(access = v))
 
     /** Chords the HOST claims, tried before the list's own machine sees them.
       *
@@ -314,7 +314,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         // The host reads the selection in its own region; options it hands over are fixed, so this adds no region, and a
         // signal among them is still read rather than dropped.
         validity.follow(OptionItem.reading(optionSources).render(opts =>
-            new Listbox(p.copy(optionsV = opts)).body(sel, query, Slot(), hi, accessV.idV, focused)(validity)
+            new Listbox(p.copy(optionsV = opts)).body(sel, query, Slot(), hi, access.id, focused)(validity)
         ))
     end resolved
 
@@ -342,7 +342,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
                 // The id the highlight is announced through. A caller's own `id` wins, and where
                 // there is none a minted one stands in, so `aria-activedescendant` is not
                 // something a reader has to opt into to be told which option is highlighted.
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 hi   <- Signal.initRef(-1)
                 q    <- if ownsQuery then filterQuerySlot.ownedFrom("") else Kyo.lift(filterQuerySlot)
                 // Unbound, a list that selects keeps what the reader picks itself.
@@ -479,7 +479,7 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         var list = ul.cssClass("p-listbox-list").role("listbox")
         // The id goes on the list, the listbox that holds the one tab stop, so a `Label.forId` and
         // the form's focus-first-invalid reach it; the options derive theirs from the same value.
-        accessV.idV.foreach(v => list = list.id(v))
+        access.id.foreach(v => list = list.id(v))
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
         // A fixed list is read-only, not disabled: it stays the one tab stop, so a reader still reaches what it holds, and
@@ -500,12 +500,8 @@ final class Listbox[K] private[uic] (private[uic] val p: Listbox.Props[K]) exten
         if interactive then
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus).onBlur(leaveList)
             if focused >= 0 then idBase.foreach(base => list = list.aria("activedescendant", optionId(base, focused)))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => list = list.aria("label", v)
-            case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => list = list.aria("labelledby", v))
+        access.name.foreach(v => list = list.aria("label", v))
+        access.nameRef.foreach(v => list = list.aria("labelledby", v))
         val listUI: UI = list(UI.children(rows ++ emptyRow)*)
 
         def header: UI =
@@ -631,7 +627,7 @@ object Listbox:
         fixedFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         emptyContentV: Maybe[EmptyContent] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Set[K] => UI.Action] = Absent,
         onChangeF: Maybe[Set[K] => UI.Action] = Absent,
         hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent

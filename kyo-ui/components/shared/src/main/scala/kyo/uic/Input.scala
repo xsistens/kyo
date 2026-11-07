@@ -46,8 +46,8 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
       */
     private[uic] def filledOn(cls: String, closest: String): Input = new Input(p.copy(filledUpV = Present((cls, closest))))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Input(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Input(p.copy(access = v))
 
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
@@ -205,7 +205,7 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
     )(using Frame): UI =
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
-        accessV.idV.foreach(v => b = b.id(v))
+        access.id.foreach(v => b = b.id(v))
         if focusAutoFlag then b = b.focusAuto(true)
         sizeV match
             case Size.Small  => b = b.cssClass("p-inputtext-sm")
@@ -234,11 +234,10 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
         if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
         b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
         b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
-        b = accessV.nameV match
-            case Present(TextValue.Const(v)) => b.aria("label", v)
-            case Present(TextValue.Dyn(s))   => b.aria("label", s)
-            case Absent                      => b
-        b = accessV.nameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
+        b = access.name match
+            case Present(v) => b.aria("label", v)
+            case _          => b
+        b = access.nameRef.map(v => b.aria("labelledby", v)).getOrElse(b)
         b = accDescV match
             case Present(TextValue.Const(v)) => b.aria("description", v)
             case Present(TextValue.Dyn(s))   => b.aria("description", s)
@@ -279,7 +278,7 @@ object Input:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         accDescV: Maybe[TextValue] = Absent,
         onChangeF: Maybe[String => UI.Action] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,

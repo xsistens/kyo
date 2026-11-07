@@ -40,8 +40,8 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = new InputMask(p.copy(placeholderText = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputMask(p.copy(access = v))
 
     /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
       * (no re-render).
@@ -95,12 +95,8 @@ final class InputMask private[uic] (private[uic] val p: InputMask.Props) extends
             .fluid(fluidFlag)
         in = disabledFlag.foldFlag(in)(in.disabled(_))
         in = readonlyFlag.foldFlag(in)(in.readonly(_))
-        accessV.idV.foreach(v => in = in.id(v))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => in = in.accessibleName(v)
-            case Present(TextValue.Dyn(s))   => in = in.accessibleName(s)
-            case Absent                      => ()
-        end match
+        access.id.foreach(v => in = in.id(v))
+        access.name.foreach(v => in = in.accessibleName(v))
         placeholderText match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
@@ -140,7 +136,7 @@ object InputMask:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[String => UI.Action] = Absent,
         onCompleteF: Maybe[String => UI.Action] = Absent
     )

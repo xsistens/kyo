@@ -30,8 +30,8 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
 
     type Self = Message
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Message(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Message(p.copy(access = v))
 
     /** Semantic accent (`.p-message-<token>`; Prime's message vocabulary is
       * info/success/warn/error/secondary/contrast, so `Danger` maps to `error` and `Primary`/`Help` fall
@@ -97,7 +97,7 @@ final class Message private[uic] (private[uic] val p: Message.Props) extends Nod
             // `p-message-leave-active` keyframe on the leave ghost.
             .enterTransition("p-uic-enter-fade")
             .leaveTransition("p-message-leave-active")
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         // Constant severity joins the class list; a reactive one binds one class per DISTINCT token
         // (Info/Primary/Help all map to "info"), condition = the current severity maps to that token,
         // so many-to-one severities never toggle the same class against each other.
@@ -158,7 +158,7 @@ object Message:
         hideIconFlag: Boolean = false,
         closableFlag: Boolean = false,
         onDismissedEff: Maybe[UI.Action] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

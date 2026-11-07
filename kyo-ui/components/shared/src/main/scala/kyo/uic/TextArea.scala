@@ -22,8 +22,8 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
       */
     private[uic] def extraClass(cls: String): TextArea = new TextArea(p.copy(extraClassesV = extraClassesV :+ cls))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new TextArea(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new TextArea(p.copy(access = v))
 
     /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the textarea. Any other signal
       * binds ONE-WAY: the textarea shows it, and an edit writes nothing and only reports through [[onInput]] and
@@ -94,7 +94,7 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
     private def body(validity: FieldValidity)(using Frame): UI =
         var b = textarea.cssClass("p-textarea").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
-        accessV.idV.foreach(v => b = b.id(v))
+        access.id.foreach(v => b = b.id(v))
         sizeV match
             case Size.Small  => b = b.cssClass("p-textarea-sm")
             case Size.Large  => b = b.cssClass("p-textarea-lg")
@@ -122,11 +122,10 @@ final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends N
         if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
         b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
         b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
-        b = accessV.nameV match
-            case Present(TextValue.Const(v)) => b.aria("label", v)
-            case Present(TextValue.Dyn(s))   => b.aria("label", s)
-            case Absent                      => b
-        b = accessV.nameRefV.map(v => b.aria("labelledby", v)).getOrElse(b)
+        b = access.name match
+            case Present(v) => b.aria("label", v)
+            case _          => b
+        b = access.nameRef.map(v => b.aria("labelledby", v)).getOrElse(b)
         b = valueSlot.hearer.map(f => b.onInput(f)).getOrElse(b)
         b = onChangeF.map(f => b.onChange(f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
@@ -150,7 +149,7 @@ object TextArea:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeF: Maybe[String => UI.Action] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         extraClassesV: List[String] = Nil

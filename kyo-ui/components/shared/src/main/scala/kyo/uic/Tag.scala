@@ -20,8 +20,8 @@ final class Tag private[uic] (private[uic] val p: Tag.Props) extends Node, HasEl
 
     type Self = Tag
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Tag(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tag(p.copy(access = v))
 
     /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
       * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
@@ -52,7 +52,7 @@ final class Tag private[uic] (private[uic] val p: Tag.Props) extends Node, HasEl
 
     private[uic] def render(using Frame): UI =
         var el = span.cssClass("p-tag").cssClass("p-component")
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         severityV match
             case Present(SeverityValue.Const(s)) => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t"))
             case Present(SeverityValue.Dyn(sig)) =>
@@ -95,7 +95,7 @@ object Tag:
         roundedFlag: Boolean = false,
         iconV: Maybe[IconGlyph] = Absent,
         onClickEff: Maybe[UI.Action] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

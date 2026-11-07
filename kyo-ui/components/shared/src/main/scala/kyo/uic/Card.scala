@@ -55,8 +55,8 @@ final class Card private[uic] (private[uic] val p: Card.Props) extends Node, Has
     /** Footer slot rendered as `div.p-card-footer` at the body's end (Prime's footer slot). */
     def footer(v: UI): Card = new Card(p.copy(footerV = Present(v)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Card(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Card(p.copy(access = v))
 
     /** Adds content children (rendered inside `div.p-card-content`). */
     def apply(cs: UI*): Card = new Card(p.copy(kids = kids ++ cs))
@@ -71,13 +71,9 @@ final class Card private[uic] (private[uic] val p: Card.Props) extends Node, Has
             div.cssClass("p-card-body")(UI.children(captionArea ++ (contentUI :: footerUI))*)
 
         var el = div.cssClass("p-card").cssClass("p-component")
-        if accessV.nameV.isDefined || accessV.nameRefV.isDefined then el = el.role("region")
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => el = el.aria("label", n)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
+        if access.name.isDefined || access.nameRef.isDefined then el = el.role("region")
+        access.name.foreach(n => el = el.aria("label", n))
+        access.nameRef.foreach(r => el = el.aria("labelledby", r))
         el(UI.children(headerUI :+ body)*)
     end render
 
@@ -147,7 +143,7 @@ object Card:
         onHeaderClickEff: Maybe[UI.Action] = Absent,
         customHeaderV: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

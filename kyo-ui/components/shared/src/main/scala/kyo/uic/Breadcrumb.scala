@@ -102,8 +102,8 @@ final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) exten
     /** Overrides the separator glyph (default the Prime chevron, [[Icons.chevronRight]]). */
     def separator(v: IconGlyph): Breadcrumb = new Breadcrumb(p.copy(separatorV = Present(v)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Breadcrumb(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Breadcrumb(p.copy(access = v))
 
     /** Fired with the item clicked, in addition to the anchor's native navigation. */
     def onItemClick(f: BreadcrumbItem => UI.Action)(using Frame): Breadcrumb =
@@ -114,10 +114,9 @@ final class Breadcrumb private[uic] (private[uic] val p: Breadcrumb.Props) exten
 
     private[uic] def render(using Frame): UI =
         val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
-        val labelled = accessV.nameV match
-            case Present(TextValue.Const(v)) => navBase.aria("label", v)
-            case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
-            case Absent                      => navBase.aria("label", "Breadcrumb")
+        val labelled = access.name match
+            case Present(v) => navBase.aria("label", v)
+            case _          => navBase.aria("label", "Breadcrumb")
         // Only the list follows a live trail: which crumb is last, and so current, moves with it.
         labelled(entries.render(items => UI.ol.cssClass("p-breadcrumb-list")(UI.children(trail(items))*)))
     end render
@@ -179,7 +178,7 @@ object Breadcrumb:
         homeV: Maybe[BreadcrumbItem] = Absent,
         itemSources: List[BreadcrumbItemLiveEntry] = Nil,
         separatorV: Maybe[IconGlyph] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onItemClickF: Maybe[BreadcrumbItem => UI.Action] = Absent
     )
 

@@ -16,15 +16,15 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
-    private[uic] def accessibility: Accessibility               = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility               = access
+    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(p.copy(access = v))
 end Input
 
 object Input:
     final private[uic] case class Props(
         sizeV: Size = Size.Normal,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     def apply(): Input = new Input(Props())
@@ -45,7 +45,7 @@ no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sw
   without `p.` is the props' and hands back a `Props`, which then fails to type. And the field hides kyo-ui's paragraph `p`
   inside the class, so a paragraph there is `UI.p`.
 - **Two groups are shared, one case class each**, for every component that has those fields: `validityV`
-  (`FieldValidity.Slots`, what `FieldValidity(validityV)` resolves per render) and `accessV` (`Accessibility`, the name, its
+  (`FieldValidity.Slots`, what `FieldValidity(validityV)` resolves per render) and `access` (`Accessibility`, the name, its
   reference and the id). The empty ones are shared values, so a component nobody marks stores nothing for them. Do not group
   anything else without deciding it first.
 - **A name the companion already used stays with its owner.** `ContextMenu.State` is public API and real state (the open menu

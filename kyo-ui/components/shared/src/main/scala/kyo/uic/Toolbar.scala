@@ -24,16 +24,12 @@ final class Toolbar private[uic] (private[uic] val p: Toolbar.Props) extends Nod
     /** Appends content to the trailing section (`.p-toolbar-end`). */
     def end(cs: UI*): Toolbar = new Toolbar(p.copy(endKids = endKids ++ cs))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Toolbar(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Toolbar(p.copy(access = v))
     private[uic] def render(using Frame): UI                   =
         var bar = div.cssClass("p-toolbar").cssClass("p-component").role("toolbar")
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => bar = bar.aria("label", n)
-            case Present(TextValue.Dyn(s))   => bar = bar.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(r => bar = bar.aria("labelledby", r))
+        access.name.foreach(n => bar = bar.aria("label", n))
+        access.nameRef.foreach(r => bar = bar.aria("labelledby", r))
         bar(
             div.cssClass("p-toolbar-start")(UI.children(startKids)*),
             div.cssClass("p-toolbar-center")(UI.children(centerKids)*),
@@ -47,7 +43,7 @@ object Toolbar:
         startKids: List[UI] = Nil,
         centerKids: List[UI] = Nil,
         endKids: List[UI] = Nil,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     def apply(): Toolbar = new Toolbar(Props())

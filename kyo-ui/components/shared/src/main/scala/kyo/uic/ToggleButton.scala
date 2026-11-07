@@ -97,7 +97,7 @@ final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props) e
       * again hands it the run's props instead of starting it over (see [[ToggleButton.drawn]]).
       */
     private[uic] def render(using Frame): UI =
-        UI.mountedWith(p)(live => Signal.initRef(false).map(own => ToggleButton.drawn(live, Present(own))))
+        UI.mountedWith(p)(props => Signal.initRef(false).map(own => ToggleButton.drawn(props, Present(own))))
 
     /** The button with no instance of its own, for a host that binds `checked` itself and draws its buttons in its own region
       * (SelectButton): nothing of it is left to keep across that region's runs, and no run follows, so every prop is read as
@@ -156,7 +156,7 @@ object ToggleButton:
             Base(slot.heard, slot.fixed, q.checked.deaf, q.onBlur.isDefined, q.validity, q.access, q.radio)
     end Base
 
-    /** The button, drawn once over `live`, its own ref `own` standing in where a run binds nothing (`Absent` where the host
+    /** The button, drawn once over `props`, its own ref `own` standing in where a run binds nothing (`Absent` where the host
       * binds every button itself).
       *
       * Each place reads the field it shows: the checked state, the size and the width reach the element through its class and
@@ -165,63 +165,61 @@ object ToggleButton:
       * run changes it. A click and a blur read the run's binding and hearers when they come, so they write that run's ref and
       * reach that run's `onChange`. A constant nobody hears is drawn read-only, reachable and readable, with nothing to press.
       */
-    private def drawn(live: UI.Live[Props], own: Maybe[SignalRef[Boolean]])(using Frame): UI =
+    private def drawn(props: UI.Live[Props], own: Maybe[SignalRef[Boolean]])(using Frame): UI =
         def slot(q: Props): Slot[Boolean] = own.fold(q.checked)(ref => q.checked.ownedBy(ref))
-        val checked                       = live(q => slot(q).bound.getOrElse(false))
-        val size                          = live(_.size)
-        val base                          = live(q => Base(q, slot(q)))
-        val disabled                      = live(_.disabled)
-        val readonly                      = live(_.readonly)
-        val toggle: UI.Action             = live.call(slot).map(s => s.current(false).map(v => s.change(!v)))
+        val checked                       = props(q => slot(q).bound.getOrElse(false))
+        val size                          = props(_.size)
+        val base                          = props(q => Base(q, slot(q)))
+        val disabled                      = props(_.disabled)
+        val readonly                      = props(_.readonly)
+        val toggle: UI.Action             = props.call(slot).map(s => s.current(false).map(v => s.change(!v)))
         // Blur fires even without a toggle: the validation layer's Blur trigger, told the state at blur time.
-        val blur: UI.Action = live.call(identity).map(q => q.onBlur.fold(Kyo.unit: UI.Action)(f => slot(q).current(false).map(f)))
+        val blur: UI.Action = props.call(identity).map(q => q.onBlur.fold(Kyo.unit: UI.Action)(f => slot(q).current(false).map(f)))
         // SelectButton's `itemTemplate` replaces the icon and label; otherwise the current state's, or a non-breaking space
         // where no labels are set (Prime).
 
         UI.reactive {
             lazy val predefinedContent = UI.reactive {
                 val on    = checked.read
-                val shown = if on then live(_.onLabel.present).read else live(_.offLabel.present).read
-                val glyph = if on then live(_.onIcon.present).read else live(_.offIcon.present).read
+                val shown = if on then props(_.onLabel).read else props(_.offLabel).read
+                val glyph = if on then props(_.onIcon).read else props(_.offIcon).read
                 val icon  = glyph.toList.map(g => GlyphSvg(g, "p-togglebutton-icon"))
                 fragment((icon :+ (span.cssClass("p-togglebutton-label")(shown.getOrElse("\u00A0")): UI))*)
             }
-            val content: UI = live(_.content).read.getOrElse(predefinedContent)
+            val content: UI = props(_.content).read.getOrElse(predefinedContent)
 
             val b        = base.read
             val off      = disabled.read
             val ro       = readonly.read
             val inert    = ro || b.fixed
             val validity = FieldValidity(b.validity)
-            var el       = button.cssClass("p-togglebutton").cssClass("p-component")
-            b.access.idV.foreach(v => el = el.id(v))
-            el = validity.mark(el.cssClass("p-togglebutton-checked", checked))
-            el = el.cssClass("p-togglebutton-sm", size.read == Size.Small).cssClass("p-inputfield-sm", size.read == Size.Small)
-            el = el.cssClass("p-togglebutton-lg", size.read == Size.Large).cssClass("p-inputfield-lg", size.read == Size.Large)
-            el = el.cssClass("p-togglebutton-fluid", live(_.fluid)).jsProp("type", "button")
+            val marked   = validity.mark(
+                button.cssClass("p-togglebutton").cssClass("p-component")
+                    .when(b.access.id)(_.id(_))
+                    .cssClass("p-togglebutton-checked", checked)
+            )
+            val shaped = marked
+                .cssClass("p-togglebutton-sm", size.read == Size.Small).cssClass("p-inputfield-sm", size.read == Size.Small)
+                .cssClass("p-togglebutton-lg", size.read == Size.Large).cssClass("p-inputfield-lg", size.read == Size.Large)
+                .cssClass("p-togglebutton-fluid", props(_.fluid)).jsProp("type", "button")
             // One state per role: a radio reports `aria-checked`, a toggle button `aria-pressed`, and
             // a control carrying both tells a screen reader two different stories about itself.
-            b.radio match
+            val roled = b.radio match
                 case Present(r) =>
-                    el = el.role("radio").aria("checked", checked.read.toString).tabIndex(if r.tabbable then 0 else -1)
-                    if !off && !inert then el = el.onKeyDown(r.onKey)
-                case Absent => el = el.aria("pressed", checked.read.toString)
-            end match
-            b.access.nameV match
-                case Present(TextValue.Const(n)) => el = el.aria("label", n)
-                case Present(TextValue.Dyn(n))   => el = el.aria("label", n)
-                case Absent                      => ()
-            end match
-            b.access.nameRefV.foreach(v => el = el.aria("labelledby", v))
-            if off then el = el.disabled(true)
+                    shaped.role("radio").aria("checked", checked.read.toString).tabIndex(if r.tabbable then 0 else -1)
+                        .when(!off && !inert)(_.onKeyDown(r.onKey))
+                case Absent => shaped.aria("pressed", checked.read.toString)
             // readonly keeps the normal look and focusability, but never toggles. It says so as
             // `aria-disabled`, not `aria-readonly`: this is a `role="button"`, and that role has no
             // readonly state to report. Without a click handler the browser's own activation reaches
             // nothing, so there is nothing to decline either.
-            else if inert then el = el.aria("disabled", "true")
-            else if b.editable then el = el.onClick(toggle)
-            end if
-            if b.blurs then el = el.onBlur(blur)
+            val el = roled
+                .aria("label", b.access.name)
+                .aria("labelledby", b.access.nameRef)
+                .when(off)(_.disabled(true))
+                .when(!off && inert)(_.aria("disabled", "true"))
+                .when(!off && !inert && b.editable)(_.onClick(toggle))
+                .when(b.blurs)(_.onBlur(blur))
             val field = validity.follow(el(span.cssClass("p-togglebutton-content")(content)))
             // Only a signal nobody hears is a mistake worth a card: a constant nobody hears is fixed, and drawn so.
             Diagnostics.after(field)("ToggleButton")(Diagnostic(b.unheard && !ro && !off, checkedName.advice))

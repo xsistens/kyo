@@ -89,7 +89,7 @@ final class SpeedDial private[uic] (private[uic] val p: SpeedDial.Props) extends
     def disabled(v: Boolean): SpeedDial = new SpeedDial(p.copy(disabledFlag = v))
 
     /** Accessible name of the toggle button (`aria-label`). */
-    def accessibleName(v: String): SpeedDial = new SpeedDial(p.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
+    def accessibleName(v: String): SpeedDial = new SpeedDial(p.copy(access = access.copy(name = Present(v))))
 
     private[uic] def render(using Frame): UI =
         val shownAt = openSlot.binding.flatMap(_.const).getOrElse(false)
@@ -144,7 +144,7 @@ final class SpeedDial private[uic] (private[uic] val p: SpeedDial.Props) extends
             .rounded(true)
             .extraClass("p-speeddial-button")
             .extraClass("p-speeddial-rotate")
-            .accessibleName(accessV.nameV.map(_.constOrEmpty).getOrElse("Toggle actions"))
+            .accessibleName(access.name.getOrElse("Toggle actions"))
             .ariaRaw("haspopup", "menu")
             .ariaRaw("expanded", isOpen.toString)
             .disabled(disabledFlag)
@@ -254,7 +254,7 @@ object SpeedDial:
         directionV: SpeedDialDirection = SpeedDialDirection.Up,
         openSlot: Slot[Boolean] = Slot(),
         disabledFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     /** An empty speed dial; add actions via [[SpeedDial.items]]. */

@@ -36,8 +36,8 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
 
     type Self = Knob
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Knob(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Knob(p.copy(access = v))
 
     /** The knob's value, in any of the three bindings a value slot holds. A writable `SignalRef[Double]`
       * binds TWO-WAY: drags and keyboard steps write the clamped value back, and ref changes redraw the
@@ -201,12 +201,8 @@ final class Knob private[uic] (private[uic] val p: Knob.Props) extends Node, Num
             .aria("valuemin", InputNumber.format(minV))
             .aria("valuemax", InputNumber.format(maxV))
             .aria("valuenow", InputNumber.format(value))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => dial = dial.aria("label", v)
-            case Present(TextValue.Dyn(s))   => dial = dial.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.idV.foreach(v => dial = dial.id(v))
+        access.name.foreach(v => dial = dial.aria("label", v))
+        access.id.foreach(v => dial = dial.id(v))
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
         // Blur fires even without a turn: the validation layer's Blur trigger. Reads the
@@ -252,7 +248,7 @@ object Knob:
         integerFlag: Boolean = false,
         disabledFlag: Maybe[BoolValue] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Double => UI.Action] = Absent
     )
 

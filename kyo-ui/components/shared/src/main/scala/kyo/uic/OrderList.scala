@@ -63,8 +63,8 @@ final class OrderList[A] private[uic] (private[uic] val p: OrderList.Props[A]) e
       */
     def metaKeySelection(v: Boolean): OrderList[A] = new OrderList(p.copy(metaKeyFlag = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new OrderList(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new OrderList(p.copy(access = v))
     private def keyOf(a: A): String                            =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
@@ -173,11 +173,7 @@ final class OrderList[A] private[uic] (private[uic] val p: OrderList.Props[A]) e
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))
         selectedSlot.binding.foreach(v => lb = lb.selectionBinding(SetBinding.keyed(MultiChoice(v), xs, keyOf, selectedSlot.hearer)))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
-            case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => lb = lb.accessibleName(v))
         templateF.foreach { f =>
             val byKey = xs.map(a => keyOf(a) -> a).toMap
             lb = lb.itemTemplate(li =>
@@ -241,7 +237,7 @@ object OrderList:
         selectedSlot: Slot[Set[A]] = Slot[Set[A]](),
         disabledFlag: Boolean = false,
         metaKeyFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     private val itemsName        = Slot.Name("OrderList", "items", "a move", "onItemsChange")

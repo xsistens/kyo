@@ -39,8 +39,8 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
 
     type Self = Rating
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Rating(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Rating(p.copy(access = v))
 
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
       * constant nobody hears is fixed, drawn read-only; one [[onChange]] hears is reported and the
@@ -189,7 +189,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
             nameV match
                 case Present(n) => hidden = hidden.name(n)
                 case Absent     => if i != tabStop then hidden = hidden.tabIndex(-1)
-            if i == tabStop then accessV.idV.foreach(v => hidden = hidden.id(v))
+            if i == tabStop then access.id.foreach(v => hidden = hidden.id(v))
             // readonly keeps the stars FOCUSABLE and refuses to change: only `disabled` takes them
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
             // state of its own; the group below carries it.
@@ -218,11 +218,7 @@ final class Rating private[uic] (private[uic] val p: Rating.Props) extends Node,
         if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
         el = validity.mark(el)
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => el = el.aria("label", v))
         onBlurDoubleF.foreach { f =>
             el = el.onBlur(valueSlot.writable match
                 case Present(r) => r.use(i => f(i.toDouble))
@@ -246,7 +242,7 @@ object Rating:
         onIconV: Maybe[IconGlyph] = Absent,
         offIconV: Maybe[IconGlyph] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurDoubleF: Maybe[Double => UI.Action] = Absent
     )
 
