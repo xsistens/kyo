@@ -169,8 +169,6 @@ object ToggleButton:
         def slot(q: Props): Slot[Boolean] = own.fold(q.checked)(ref => q.checked.ownedBy(ref))
         val checked                       = live(q => slot(q).bound.getOrElse(false))
         val size                          = live(_.size)
-        val small                         = Prop.map(size)(_ == Size.Small)
-        val large                         = Prop.map(size)(_ == Size.Large)
         val base                          = live(q => Base(q, slot(q)))
         val disabled                      = live(_.disabled)
         val readonly                      = live(_.readonly)
@@ -198,16 +196,16 @@ object ToggleButton:
             var el       = button.cssClass("p-togglebutton").cssClass("p-component")
             b.access.idV.foreach(v => el = el.id(v))
             el = validity.mark(el.cssClass("p-togglebutton-checked", checked))
-            el = el.cssClass("p-togglebutton-sm", small).cssClass("p-inputfield-sm", small)
-            el = el.cssClass("p-togglebutton-lg", large).cssClass("p-inputfield-lg", large)
+            el = el.cssClass("p-togglebutton-sm", size.read == Size.Small).cssClass("p-inputfield-sm", size.read == Size.Small)
+            el = el.cssClass("p-togglebutton-lg", size.read == Size.Large).cssClass("p-inputfield-lg", size.read == Size.Large)
             el = el.cssClass("p-togglebutton-fluid", live(_.fluid)).jsProp("type", "button")
             // One state per role: a radio reports `aria-checked`, a toggle button `aria-pressed`, and
             // a control carrying both tells a screen reader two different stories about itself.
             b.radio match
                 case Present(r) =>
-                    el = el.role("radio").aria("checked", Prop.map(checked)(_.toString)).tabIndex(if r.tabbable then 0 else -1)
+                    el = el.role("radio").aria("checked", checked.read.toString).tabIndex(if r.tabbable then 0 else -1)
                     if !off && !inert then el = el.onKeyDown(r.onKey)
-                case Absent => el = el.aria("pressed", Prop.map(checked)(_.toString))
+                case Absent => el = el.aria("pressed", checked.read.toString)
             end match
             b.access.nameV match
                 case Present(TextValue.Const(n)) => el = el.aria("label", n)
@@ -229,8 +227,6 @@ object ToggleButton:
             Diagnostics.after(field)("ToggleButton")(Diagnostic(b.unheard && !ro && !off, checkedName.advice))
         }
     end drawn
-
-    /** An optional prop as one prop of an option, so a reader sees `Absent` where none is set. */
 
     /** What a single-select [[SelectButton]] option is, beyond a toggle button: whether it holds
       * the group's one tab stop, and the group's key handler for moving within it.
