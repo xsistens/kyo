@@ -28,8 +28,8 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
       */
     private[uic] def tabbable(v: Boolean): CheckBox = new CheckBox(p.copy(tabbableFlag = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new CheckBox(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new CheckBox(p.copy(access = v))
 
     def text(v: String): CheckBox = new CheckBox(p.copy(labelText = Present(v)))
 
@@ -130,18 +130,17 @@ final class CheckBox private[uic] (private[uic] val p: CheckBox.Props) extends N
 
         var box = checkbox.cssClass("p-checkbox-input").checked(native)
         if !tabbableFlag then box = box.tabIndex(-1)
-        box = accessV.idV.map(v => box.id(v)).getOrElse(box)
+        box = access.id.map(v => box.id(v)).getOrElse(box)
         if isMixed then box = box.indeterminate(true).aria("checked", "mixed")
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         box = valueV.map(v => box.jsProp("value", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
-        box = accessV.nameV match
-            case Present(TextValue.Const(v)) => box.aria("label", v)
-            case Present(TextValue.Dyn(s))   => box.aria("label", s)
-            case Absent                      => box
-        box = accessV.nameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = access.name match
+            case Present(v) => box.aria("label", v)
+            case _          => box
+        box = access.nameRef.map(v => box.aria("labelledby", v)).getOrElse(box)
         if blocked then box = box.preventActivation
         box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !blocked then box = onChg.map(box.onChange(_)).getOrElse(box)
@@ -193,7 +192,7 @@ object CheckBox:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent,
         tabbableFlag: Boolean = true
     )

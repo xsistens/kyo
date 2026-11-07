@@ -42,22 +42,22 @@ final class FileUpload private[uic] (private[uic] val p: FileUpload.Props) exten
     /** DOM id of the native file input (the label's `for` target). Give every
       * FileUpload on a page its own id.
       */
-    def inputId(v: String): FileUpload = new FileUpload(p.copy(accessV = accessV.copy(idV = Present(v))))
+    def inputId(v: String): FileUpload = new FileUpload(p.copy(access = access.copy(id = Present(v))))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new FileUpload(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new FileUpload(p.copy(access = v))
 
     /** What the native input's id is: the working default until one is chosen, so that it is addressable unasked. `id` and
       * [[inputId]] are the same slot: `bind` stamps the field's minted id here so focus-first-invalid lands on the native
       * input, and it is the same `for` target the choose label points at.
       */
-    private def inputIdV: String = accessV.idV.getOrElse(FileUpload.defaultInputId)
+    private def inputIdV: String = access.id.getOrElse(FileUpload.defaultInputId)
 
     /** `Absent` while the id is still the untouched default. The family's odd one out: a reader answering `Present` for that
       * default would tell `form.bind` that every FileUpload it ever meets already carries a caller's id. What the reader is FOR
       * is "did someone choose this", and nobody chose the default.
       */
-    override private[uic] def elementId: Maybe[String] = accessV.idV.filter(_ != FileUpload.defaultInputId)
+    override private[uic] def elementId: Maybe[String] = access.id.filter(_ != FileUpload.defaultInputId)
 
     /** Binds the picked files, as [[kyo.UI.FilePayload]] metadata (name, size, MIME type, content). A `SignalRef` binds
       * two way: a pick writes it, then [[onChange]] hears the files, and a write of an empty Seq clears the label back to
@@ -178,7 +178,7 @@ end FileUpload
 
 object FileUpload:
     final private[uic] case class Props(
-        accessV: Accessibility = FileUpload.startingAccess,
+        access: Accessibility = FileUpload.startingAccess,
         chooseLabelV: TextValue = TextValue.Const("Choose"),
         fileLabelV: Maybe[TextValue] = Absent,
         acceptV: List[FileAccept] = Nil,
@@ -196,7 +196,7 @@ object FileUpload:
       */
     private[uic] val defaultInputId = "p-uic-fileupload"
 
-    private val startingAccess = Accessibility(idV = Present(defaultInputId))
+    private val startingAccess = Accessibility(id = Present(defaultInputId))
 
     private val filesName = Slot.Name("FileUpload", "the files", "a pick", "onChange", consequence = "the reader's choice reaches nobody")
 

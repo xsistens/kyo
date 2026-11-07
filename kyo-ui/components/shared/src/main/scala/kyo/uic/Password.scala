@@ -93,8 +93,8 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(p.copy(validityV = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Password(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Password(p.copy(access = v))
 
     def onChange(f: String => UI.Action)(using Frame): Password =
         new Password(p.copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
@@ -207,12 +207,8 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
         if requiredFlag then in = in.required(true)
         nameV.foreach(v => in = in.name(v))
         maxLengthV.foreach(n => in = in.maxLength(n))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => in = in.accessibleName(v)
-            case Present(TextValue.Dyn(s))   => in = in.accessibleName(s)
-            case Absent                      => ()
-        end match
-        accessV.idV.foreach(v => in = in.id(v))
+        access.name.foreach(v => in = in.accessibleName(v))
+        access.id.foreach(v => in = in.id(v))
 
         // === the eye toggle =====================================================
         val toggle: List[UI] = rev.toList.map { (ref, isRevealed) =>
@@ -290,7 +286,7 @@ object Password:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeSF: Maybe[String => UI.Action] = Absent,
         onBlurSF: Maybe[String => UI.Action] = Absent
     ) derives CanEqual

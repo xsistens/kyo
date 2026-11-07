@@ -161,8 +161,8 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree[K] = new Tree(p.copy(emptyContentV = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Tree(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tree(p.copy(access = v))
     // A node id is the identity (see "A choice binds the option" in this module's CLAUDE.md), so its own equality decides.
     private given CanEqual[K, K] = CanEqual.derived
 
@@ -243,11 +243,7 @@ final class Tree[K] private[uic] (private[uic] val p: Tree.Props[K]) extends Nod
                 )
             else Nil
         var list = ul.cssClass("p-tree-root-children").role("tree")
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => list = list.aria("label", v)
-            case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => list = list.aria("label", v))
         if multiSelect then list = list.aria("multiselectable", "true")
         // The tree is ONE tab stop: the reader arrives on the list and moves inside it with
         // the arrows, rather than tabbing once per node through a folder structure.
@@ -518,7 +514,7 @@ object Tree:
         selectionModeV: SelectionMode = SelectionMode.None,
         metaKeyFlag: Boolean = false,
         emptyContentV: Maybe[EmptyContent] = Absent,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     private val expandedName  = Slot.Name("Tree", "expanded", "a toggle", "onExpandedChange")

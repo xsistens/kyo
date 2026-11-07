@@ -197,8 +197,8 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
       */
     def lazyPanels(v: Boolean): Tabs[K] = new Tabs(p.copy(lazyPanelsFlag = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Tabs(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Tabs(p.copy(access = v))
 
     private[uic] def render(using Frame): UI =
         val strip = renderLive
@@ -221,7 +221,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
         UI.mounted {
             // A caller's base wins, and only without one does the mount draw it. Same rule as [[Menu]]'s base: the ARIA
             // and focus wiring works unasked, and a caller who wants to address a header can.
-            val base: String < Sync = accessV.idV match
+            val base: String < Sync = access.id match
                 case Present(b) => b
                 case Absent     => UI.id
             // Unbound, the strip keeps the tab the reader picks itself, starting on the first.
@@ -361,7 +361,7 @@ final class Tabs[K] private[uic] (private[uic] val p: Tabs.Props[K]) extends Nod
         // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
         // because a derived name is a different string (GAPS.md F-34).
         var root = div.cssClass("p-tabs").cssClass("p-component")
-        accessV.idV.foreach(v => root = root.id(v))
+        access.id.foreach(v => root = root.id(v))
         val headers = listed.render { (ts, sel) =>
             new Tabs(p.copy(tabList = ts)).tablistWith(resolveIn(ts, sel), base, focus)
         }
@@ -436,7 +436,7 @@ object Tabs:
         tabSources: List[TabLiveEntry[K]] = Nil,
         // Over `Maybe[K]`, since the strip's own state may start with no tab to name: a live list can be empty at mount.
         selectedSlot: Slot[Maybe[K]] = Slot[Maybe[K]](),
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         lazyPanelsFlag: Boolean = false
     )
 

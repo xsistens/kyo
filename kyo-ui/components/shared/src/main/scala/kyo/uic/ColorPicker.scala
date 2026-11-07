@@ -64,8 +64,8 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
 
     type Self = ColorPicker
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ColorPicker(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new ColorPicker(p.copy(access = v))
 
     /** The color. A `SignalRef` binds TWO-WAY: drags write the recomputed hex back, ref changes move the picker. Any
       * other signal binds ONE-WAY: the picker shows it, and a drag or key writes nothing and only reports the hex it asks
@@ -317,7 +317,7 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
                 seed = panel.isDefined,
                 // Inline, the plane is the picker's first tab stop and so where the caller's id goes;
                 // in the overlay the swatch carries it, since the panel is not on the page until opened.
-                elementId = if panel.isEmpty then accessV.idV else Absent
+                elementId = if panel.isEmpty then access.id else Absent
             )
         }
         val hueAxis: List[UI] = color.toList.filter(_ => interactive).map { r =>
@@ -356,14 +356,10 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
     private def shellRoot(validity: FieldValidity, ownsId: Boolean, extraClasses: String*)(using Frame): Ast.Div =
         var root = div.cssClass("p-colorpicker").cssClass("p-component")
         extraClasses.foreach(c => root = root.cssClass(c))
-        if ownsId then accessV.idV.foreach(v => root = root.id(v))
+        if ownsId then access.id.foreach(v => root = root.id(v))
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
         root = validity.mark(root)
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => root = root.aria("label", n)
-            case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(n => root = root.aria("label", n))
         onBlurF.foreach { f =>
             root = root.onBlur(valueSlot.current(ColorPicker.DefaultHex).map(f))
         }
@@ -386,13 +382,9 @@ final class ColorPicker private[uic] (private[uic] val p: ColorPicker.Props) ext
             .style(_.bg(Style.Color.hex(hex).getOrElse(Style.Color.rgb(0, 0, 0))))
             .onClick(onClickEff)
         // The swatch is the overlay picker's one tab stop, so it carries the caller's id.
-        accessV.idV.foreach(v => preview = preview.id(v))
+        access.id.foreach(v => preview = preview.id(v))
         if disabledFlag.constTrue then preview = preview.disabled(true).cssClass("p-disabled")
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => preview = preview.aria("label", n)
-            case Present(TextValue.Dyn(s))   => preview = preview.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(n => preview = preview.aria("label", n))
         preview
     end previewSwatch
 
@@ -455,7 +447,7 @@ object ColorPicker:
         disabledFlag: Maybe[BoolValue] = Absent,
         anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[String => UI.Action] = Absent
     )
 

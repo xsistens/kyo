@@ -30,8 +30,8 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
 
     def size(px: Int): Icon = new Icon(p.copy(sizePx = px))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Icon(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Icon(p.copy(access = v))
 
     /** Shows the glyph name as a native tooltip (the `title` attribute). */
     def showTooltip(v: Boolean): Icon = new Icon(p.copy(showTooltipFlag = v))
@@ -69,29 +69,26 @@ final class Icon private[uic] (private[uic] val p: Icon.Props) extends Node, Has
         m match
             case IconMode.Image =>
                 val img = el.role("img")
-                accessV.nameV match
-                    case Present(TextValue.Const(n)) => img.aria("label", n)
-                    case Present(TextValue.Dyn(s))   => img.aria("label", s)
-                    case Absent                      => img
+                access.name match
+                    case Present(n) => img.aria("label", n)
+                    case _          => img
                 end match
             case IconMode.Decorative =>
                 el.role("presentation").aria("hidden", "true")
             case IconMode.Interactive =>
                 val btn      = el.role("button").tabIndex(0)
-                val withName = accessV.nameV match
-                    case Present(TextValue.Const(n)) => btn.aria("label", n)
-                    case Present(TextValue.Dyn(s))   => btn.aria("label", s)
-                    case Absent                      => btn
+                val withName = access.name match
+                    case Present(n) => btn.aria("label", n)
+                    case _          => btn
                 onClickEff.map(e => operable(withName, e)).getOrElse(withName)
 
     /** Implicit default behaviour (no explicit `mode`): decorative, image when an
       * `accessibleName` is set, interactive when an `onClick` is set.
       */
     private def implicitMode(el: Ast.SpanElement)(using Frame): Ast.SpanElement =
-        val withA11y = accessV.nameV match
-            case Present(TextValue.Const(n)) => el.role("img").aria("label", n)
-            case Present(TextValue.Dyn(s))   => el.role("img").aria("label", s)
-            case Absent                      => el.aria("hidden", "true")
+        val withA11y = access.name match
+            case Present(n) => el.role("img").aria("label", n)
+            case _          => el.aria("hidden", "true")
         onClickEff match
             case Present(e) => operable(withA11y.role("button").tabIndex(0), e)
             case Absent     => withA11y
@@ -114,7 +111,7 @@ object Icon:
     final private[uic] case class Props(
         glyph: IconGlyph,
         sizePx: Int = 16,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         showTooltipFlag: Boolean = false,
         modeV: Maybe[IconMode] = Absent,
         onClickEff: Maybe[UI.Action] = Absent

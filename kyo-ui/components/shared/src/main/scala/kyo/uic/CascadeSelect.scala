@@ -86,8 +86,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
 
     type Self = CascadeSelect[A]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new CascadeSelect(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new CascadeSelect(p.copy(access = v))
 
     /** Appends typed option-tree roots with the leaf text projection: a collection, or a signal of roots for a tree
       * that changes while the field is shown, read in the field's own region.
@@ -215,7 +215,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
                 open  <- openSlot.owned(false)
                 subs  <- Submenus.init()
                 focus <- Anchored.init(List.empty[Int])
-                base  <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                base  <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the leaf the reader picks itself.
                 own <-
                     if choice.isEmpty then Signal.initRef(Maybe.empty[A]).map(r => Present(r))
@@ -390,7 +390,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
         var el = div.cssClass("p-cascadeselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label text inside it: see
         // [[HasElementId]]. The chain's parts derive from the same value.
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         if held.isDefined then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-cascadeselect-open").cssClass("p-uic-overlay-anchor")
@@ -408,12 +408,8 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label", v))
+        access.nameRef.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         st.idBase.foreach { b =>
             el = el.aria("controls", listId(b))
@@ -562,7 +558,7 @@ object CascadeSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,

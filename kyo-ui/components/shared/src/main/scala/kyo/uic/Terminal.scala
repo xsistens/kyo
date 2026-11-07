@@ -75,8 +75,8 @@ final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends N
       */
     def commandHandler(f: String => String < Async): Terminal = new Terminal(p.copy(handlerF = Present(f)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Terminal(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Terminal(p.copy(access = v))
     private[uic] def render(using Frame): UI                   =
         // Without a handler nothing can be committed, so the terminal only shows its history.
         val static: UI = commandsSlot.reading(Seq.empty).render(h => body(h, Absent, Absent))
@@ -169,11 +169,7 @@ final class Terminal private[uic] (private[uic] val p: Terminal.Props) extends N
         )
 
         var root = div.cssClass("p-terminal").cssClass("p-component")
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => root = root.aria("label", v)
-            case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => root = root.aria("label", v))
         root(UI.children((welcome :+ list :+ promptRow))*)
     end body
 
@@ -205,7 +201,7 @@ object Terminal:
         promptV: String = "$",
         commandsSlot: Slot[Seq[TerminalCommand]] = Slot[Seq[TerminalCommand]](),
         handlerF: Maybe[String => String < Async] = Absent,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     private val commandsName =

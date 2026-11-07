@@ -36,7 +36,7 @@ private[uic] trait HasAccessibleName extends HasAccessibility:
       * kyo-ui's attribute channel (`setAttribute`), with no re-render of the component.
       */
     final def accessibleName(v: String | Signal[String]): Self =
-        withAccessibility(accessibility.copy(nameV = Present(ReactiveValue(v))))
+        withAccessibility(accessibility.copy(name = Present(v)))
 end HasAccessibleName
 
 /** A component whose rendered element carries a chosen DOM `id`.
@@ -48,7 +48,7 @@ end HasAccessibleName
   * `DataTable` and the rest of the display family had none. `Node` carries no `id` either,
   * so there was no escape hatch at the base type.
   *
-  * Storage was already uniform across every implementor ([[Accessibility.idV]]), which is
+  * Storage was already uniform across every implementor ([[Accessibility.id]]), which is
   * the test `Capabilities.scala` applies before lifting anything, and the test `disabled`
   * and `severity` fail. `FileUpload` keeps its `inputId` there too, and overrides [[elementId]]
   * to tell its default apart from a caller's choice.
@@ -74,7 +74,7 @@ end HasAccessibleName
   * `s"$id-<part>"`: `Menu`'s highlighted row is `s"$id-active"`, `Panel`'s collapse button
   * is `s"$id-toggle"`, a `Tabs` header is `s"$id-<tab id>"`. A component that mints a base
   * for itself when none was given (so its ARIA still works unasked) must prefer the
-  * caller's, as `accessV.idV` holds it. Every derived
+  * caller's, as `access.id` holds it. Every derived
   * name is documented on the component that derives it; an undocumented derived id is as
   * unreachable as no id at all.
   */
@@ -86,12 +86,12 @@ private[uic] trait HasElementId extends HasAccessibility:
       * not see whether the caller had already set one, so it overwrote and the caller's id
       * vanished with nothing said. A reader is what lets that be a named error instead.
       */
-    private[uic] def elementId: Maybe[String] = accessibility.idV
+    private[uic] def elementId: Maybe[String] = accessibility.id
 
     /** Chosen DOM `id`. See [[HasElementId]] for which element it lands on and how a
       * component's internal parts derive from it.
       */
-    final def id(v: String): Self = withAccessibility(accessibility.copy(idV = Present(v)))
+    final def id(v: String): Self = withAccessibility(accessibility.copy(id = Present(v)))
 end HasElementId
 
 /** A component that can ALSO be labelled by reference to other elements. Separate from
@@ -104,7 +104,7 @@ private[uic] trait HasAccessibleNameRef extends HasAccessibleName:
     /** ID reference(s) of the element(s) that label this component (`aria-labelledby`). Takes
       * precedence over an `aria-label` for assistive tech, so set one or the other.
       */
-    final def accessibleNameRef(v: String): Self = withAccessibility(accessibility.copy(nameRefV = Present(v)))
+    final def accessibleNameRef(v: String): Self = withAccessibility(accessibility.copy(nameRef = Present(v)))
 end HasAccessibleNameRef
 
 /** A component carrying an `aria-description`, the longer companion to an accessible name.
@@ -214,12 +214,12 @@ private[uic] trait HasLoadingContent extends Node:
 end HasLoadingContent
 
 /** What a component holds of its accessible name, its labelling reference and its element id, as its setters stored them. The one
-  * field `accessV` of a component's state, under one name whichever family the component is from.
+  * field `access` of a component's state, under one name whichever family the component is from.
   */
 final private[uic] case class Accessibility(
-    nameV: Maybe[TextValue] = Absent,
-    nameRefV: Maybe[String] = Absent,
-    idV: Maybe[String] = Absent
+    name: Maybe[Prop[String]] = Absent,
+    nameRef: Maybe[String] = Absent,
+    id: Maybe[String] = Absent
 )
 
 private[uic] object Accessibility:
@@ -230,9 +230,9 @@ private[uic] object Accessibility:
   * [[HasElementId]] read and write, each in its own setter.
   */
 private[uic] trait HasAccessibility extends Node:
-    /** The group as it is. Implemented as `accessV`. */
+    /** The group as it is. Implemented as `access`. */
     private[uic] def accessibility: Accessibility
 
-    /** Stores the group. Implemented as `new Input(s.copy(accessV = v))`. */
+    /** Stores the group. Implemented as `new Input(s.copy(access = v))`. */
     private[uic] def withAccessibility(v: Accessibility): Self
 end HasAccessibility

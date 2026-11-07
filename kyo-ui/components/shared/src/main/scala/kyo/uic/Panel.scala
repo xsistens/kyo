@@ -73,8 +73,8 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
     /** Heading level of the header title (rendered as `aria-level`, default H2). */
     def headerLevel(v: TitleLevel): Panel = new Panel(p.copy(headerLevelV = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Panel(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Panel(p.copy(access = v))
 
     /** ARIA role of the panel (default [[PanelAccessibleRole.Region]]). */
     def accessibleRole(v: PanelAccessibleRole): Panel = new Panel(p.copy(accessibleRoleV = v))
@@ -94,16 +94,12 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
 
     private def body(using Frame): UI =
         var shell = div.cssClass("p-panel").cssClass("p-component").role(accessibleRoleV.roleToken)
-        accessV.idV.foreach(v => shell = shell.id(v))
+        access.id.foreach(v => shell = shell.id(v))
         val on = toggleOn
         on match
             case ReactiveValue.Const(b) => if b then shell = shell.cssClass("p-panel-toggleable")
             case ReactiveValue.Dyn(sig) => shell = shell.cssClass("p-panel-toggleable", sig)
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => shell = shell.aria("label", n)
-            case Present(TextValue.Dyn(s))   => shell = shell.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(n => shell = shell.aria("label", n))
 
         // The header slot content: a custom UI wins over the plain title text.
         // The shell without its child, so a signal title can go in as a text CHILD (kyo-ui's
@@ -143,7 +139,7 @@ final class Panel private[uic] (private[uic] val p: Panel.Props) extends Node, H
             // wrapping the panel: the wrapper is not that button. It takes
             // its id from the panel's, per the derivation HasElementId
             // describes.
-            accessV.idV.foreach(base => b = b.id(s"$base-toggle"))
+            access.id.foreach(base => b = b.id(s"$base-toggle"))
             b(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon"))
         end toggleButton
 
@@ -197,7 +193,7 @@ object Panel:
         collapsedSlot: Slot[Boolean] = Slot(),
         toggleableV: Maybe[BoolValue] = Absent,
         headerLevelV: TitleLevel = TitleLevel.H2,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         accessibleRoleV: PanelAccessibleRole = PanelAccessibleRole.Region,
         footerV: Maybe[UI] = Absent,
         kids: List[UI] = Nil

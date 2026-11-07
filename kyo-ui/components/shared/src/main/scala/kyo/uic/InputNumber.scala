@@ -126,8 +126,8 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new InputNumber(p.copy(validityV = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputNumber(p.copy(access = v))
 
     /** Restricts entry to whole numbers: the client keystroke filter (`inputFilter("int")`)
       * rejects the decimal separator before it reaches the field, so the bound value stays
@@ -225,7 +225,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
             .cssClass("p-inputtext")
             .cssClass("p-component")
             .filledClass("p-inputwrapper-filled", ".p-inputnumber")
-        accessV.idV.foreach(v => in = in.id(v))
+        access.id.foreach(v => in = in.id(v))
         if focusAutoFlag then in = in.focusAuto(true)
         sizeV match
             case Size.Small  => in = in.cssClass("p-inputtext-sm")
@@ -262,11 +262,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
         if disabledFlag.constTrue then in = in.disabled(true)
         if readonlyFlag then in = in.readOnly(true)
         nameV.foreach(v => in = in.jsProp("name", v))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => in = in.aria("label", v)
-            case Present(TextValue.Dyn(s))   => in = in.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => in = in.aria("label", v))
         // Typed commit: the number field delivers a Double, clamped into [min, max]
         // before the write-back (the browser only ENFORCES min/max on form submit). A
         // text-bound field is left out of it: its content is what the reader typed, and
@@ -368,7 +364,7 @@ object InputNumber:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Double => UI.Action] = Absent,
         integerFlag: Boolean = false,
         focusAutoFlag: Boolean = false

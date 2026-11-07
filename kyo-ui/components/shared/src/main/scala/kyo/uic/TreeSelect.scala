@@ -60,8 +60,8 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
     // allocates for itself needs that said.
     private given CanEqual[K, K] = CanEqual.derived
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new TreeSelect(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new TreeSelect(p.copy(access = v))
 
     /** Appends typed root options in the picker family's shape, the values themselves serving as node ids: `label`
       * projects one to its visible text and `children` to its sub-options, so the tree structure arrives as a projection
@@ -205,7 +205,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
         UI.mounted {
             for
                 // A caller's own id is the base the tree's parts derive from; a minted one stands in.
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 exp  <- expandedSlot.owned(Set.empty[K])
@@ -373,7 +373,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
         var el = div.cssClass("p-treeselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label container: see
         // [[HasElementId]]. The tree's row and list ids derive from the same value.
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         if selectedLabels.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
         if isOpen then el = el.cssClass("p-treeselect-open").cssClass("p-uic-overlay-anchor")
@@ -391,12 +391,8 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label", v))
+        access.nameRef.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
         el = el.aria("controls", Tree.rootListId(st.idBase))
         if isOpen && st.hiV >= 0 then el = el.aria("activedescendant", Tree.rowId(st.idBase, st.hiV))
@@ -461,7 +457,7 @@ object TreeSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Set[K] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,
         nodeSources: List[TreeSelect.NodeSource[K]] = Nil
