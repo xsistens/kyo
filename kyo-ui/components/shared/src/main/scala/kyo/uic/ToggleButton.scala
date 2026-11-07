@@ -97,18 +97,18 @@ final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props) e
       * again hands it the run's props instead of starting it over (see [[ToggleButton.drawn]]).
       */
     private[uic] def render(using Frame): UI =
-        UI.mountedWith(p)(props => Signal.initRef(false).map(own => ToggleButton.drawn(props, Present(own))))
+        UI.mountedWith(p)(ToggleButton.drawn)
 
     /** The button with no instance of its own, for a host that binds `checked` itself and draws its buttons in its own region
       * (SelectButton): nothing of it is left to keep across that region's runs, and no run follows, so every prop is read as
       * it is.
       */
-    private[uic] def renderInPlace(using Frame): UI = ToggleButton.drawn(new UI.Live(p, Absent), Absent)
+    private[uic] def renderInPlace(using Frame): UI = ToggleButton.drawn(new UI.Live(p, Absent))
 end ToggleButton
 
 object ToggleButton:
     final private[uic] case class Props(
-        checked: Slot[Boolean] = Slot(),
+        checked: Slot[Boolean] = Slot(start = Present(false)),
         onLabel: Maybe[Prop[String]] = Present("Yes"),
         offLabel: Maybe[Prop[String]] = Present("No"),
         onIcon: Maybe[Prop[IconGlyph]] = Absent,
@@ -151,13 +151,13 @@ object ToggleButton:
     ) derives CanEqual
 
     private object Base:
-        /** The base of `q`, over `slot` as the button reads it (the instance's own ref standing in where nothing is bound). */
-        def apply(q: Props, slot: Slot[Boolean]): Base =
-            Base(slot.heard, slot.fixed, q.checked.deaf, q.onBlur.isDefined, q.validity, q.access, q.radio)
+        /** The base of `q`, as the engine hands it: an unbound `checked` is bound to the instance's own ref. */
+        def apply(q: Props): Base =
+            Base(q.checked.heard, q.checked.fixed, q.checked.deaf, q.onBlur.isDefined, q.validity, q.access, q.radio)
     end Base
 
-    /** The button, drawn once over `props`, its own ref `own` standing in where a run binds nothing (`Absent` where the host
-      * binds every button itself).
+    /** The button, drawn once over `props`, which hand it `checked` bound: to the instance's own ref where a run binds nothing
+      * (carrying on from the binding when a run drops it), unbound where the button is drawn in place and its host binds it.
       *
       * Each place reads the field it shows: the checked state, the size and the width reach the element through its class and
       * `aria-*` channels, the labels and icons through the content's region, so a run that changes one of them patches it
@@ -165,16 +165,15 @@ object ToggleButton:
       * run changes it. A click and a blur read the run's binding and hearers when they come, so they write that run's ref and
       * reach that run's `onChange`. A constant nobody hears is drawn read-only, reachable and readable, with nothing to press.
       */
-    private def drawn(props: UI.Live[Props], own: Maybe[SignalRef[Boolean]])(using Frame): UI =
-        def slot(q: Props): Slot[Boolean] = own.fold(q.checked)(ref => q.checked.ownedBy(ref))
-        val checked                       = props(q => slot(q).bound.getOrElse(false))
-        val size                          = props(_.size)
-        val base                          = props(q => Base(q, slot(q)))
-        val disabled                      = props(_.disabled)
-        val readonly                      = props(_.readonly)
-        val toggle: UI.Action             = props.call(slot).map(s => s.current(false).map(v => s.change(!v)))
+    private def drawn(props: UI.Live[Props])(using Frame): UI =
+        val checked           = props(_.checked.bound.getOrElse(false))
+        val size              = props(_.size)
+        val base              = props(Base(_))
+        val disabled          = props(_.disabled)
+        val readonly          = props(_.readonly)
+        val toggle: UI.Action = props.call(_.checked).map(s => s.current(false).map(v => s.change(!v)))
         // Blur fires even without a toggle: the validation layer's Blur trigger, told the state at blur time.
-        val blur: UI.Action = props.call(identity).map(q => q.onBlur.fold(Kyo.unit: UI.Action)(f => slot(q).current(false).map(f)))
+        val blur: UI.Action = props.call(identity).map(q => q.onBlur.fold(Kyo.unit: UI.Action)(f => q.checked.current(false).map(f)))
         // SelectButton's `itemTemplate` replaces the icon and label; otherwise the current state's, or a non-breaking space
         // where no labels are set (Prime).
 
