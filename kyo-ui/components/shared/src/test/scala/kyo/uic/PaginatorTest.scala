@@ -100,6 +100,40 @@ class PaginatorTest extends ReactiveValueContract:
         yield assert(r == 20 && p == 1, s"rows $r, page $p")
     }
 
+    "the jump field" - {
+        def jumpTo(page: Signal.SignalRef[Int]): UI =
+            uic.Paginator().totalRecords(120).rows(10).page(page).template(PaginatorElement.JumpToPageInput).render
+
+        "is built once: no region sits above it" in {
+            for
+                page    <- Signal.initRef(4)
+                regions <- regionsAbove(jumpTo(page), "p-paginator-jtp-input")
+            yield assert(regions == 0, s"the field sits under $regions region(s), so a page change builds it again")
+        }
+
+        "gets the page it went to back after a number past the last page" in {
+            // 999 on page 11 of 12 goes to the last page; the field has to say 12, not the number typed.
+            for
+                page    <- Signal.initRef(10)
+                patches <- assertsAfter(jumpTo(page))("p-inputtext")(kyo.internal.UIEvent.Change(_, "999"))
+                at      <- page.get
+            yield
+                assert(at == 11, s"page $at")
+                assert(patches.contains(("value", "12")), s"patches: $patches")
+        }
+
+        "gets the page back after a commit that moves nothing" in {
+            // "abc" names no page, so the page stays, and without a run nothing else would put the field right.
+            for
+                page    <- Signal.initRef(4)
+                patches <- assertsAfter(jumpTo(page))("p-inputtext")(kyo.internal.UIEvent.Change(_, "abc"))
+                at      <- page.get
+            yield
+                assert(at == 4, s"page $at")
+                assert(patches == Chunk(("value", "5")), s"patches: $patches")
+        }
+    }
+
     private def pageLink(ui: UI, label: String)(using Frame): UI.Ast.Element < Sync =
         elementsWithClass(ui, "p-paginator-page").map(_.find(textOf(_) == label).getOrElse(
             throw new AssertionError(s"no page link $label")
