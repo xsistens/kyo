@@ -131,8 +131,15 @@ object UI:
       *
       * A text or element child takes a prop directly (`span(label)`), through the conversions on
       * [[kyo.UI.Ast.HtmlChildVal]].
+      *
+      * The signal comes first in the union, and that order is load-bearing. When a parameter typed `Prop[A]` takes an argument, the
+      * compiler solves `A` against the union's branches in order and keeps the first unless a later one constrains less; `Signal` is
+      * invariant, so neither does. Written `A | Signal[A]`, a bare signal, or a union whose alias was lost (a pattern binder), would
+      * make `A` the signal or the whole union, and the function after it would receive that. Signal first, `A` is the element in
+      * every case. `PropTest` ("the element type comes from the argument") holds each case, since this rests on how the compiler
+      * breaks the tie rather than on the language spec.
       */
-    type Prop[A] = A | Signal[A]
+    type Prop[A] = Signal[A] | A
 
     /** The operations of a [[Prop]], as functions over it, not extensions: a prop is any value as well, so an extension on it
       * would apply to every value and hide the extensions a value already has (kyo's own `map` on `A < S` among them).

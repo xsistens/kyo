@@ -112,4 +112,31 @@ class PropTest extends UITest:
             }
         }
     }
+    "the element type comes from the argument, whatever its static type" - {
+        "a union whose alias a pattern lost reads as its element" in {
+            val held: Maybe[Prop[Boolean]] = Present(true)
+            val read: Prop[Maybe[Boolean]] = held match
+                case Present(on) => Prop.map(on)(Present(_))
+                case _           => Absent
+            val union: Boolean | Signal[Boolean] = false
+            val flipped                          = Prop.map(union)(!_)
+            val constants                        = !read.isInstanceOf[Signal[?]] && !flipped.isInstanceOf[Signal[?]]
+            assert(constants, s"$read, $flipped")
+            assert((read.asInstanceOf[Maybe[Boolean]], flipped.asInstanceOf[Boolean]) == (Present(true), true))
+        }
+
+        "a bare signal and a ref read as their element, not as the signal" in {
+            for
+                ref <- Signal.initRef(2)
+                sig     = ref.map(_ + 1)
+                doubled = Prop.map(sig)(_ * 10).asInstanceOf[Signal[Int]]
+                tripled = Prop.map(ref)(_ * 3).asInstanceOf[Signal[Int]]
+                both    = Prop.zip(sig, ref).asInstanceOf[Signal[(Int, Int)]]
+                d <- doubled.current
+                t <- tripled.current
+                b <- both.current
+            yield assert((d, t, b, Prop.writable(ref).isDefined) == (30, 6, (3, 2), true))
+        }
+    }
+
 end PropTest
