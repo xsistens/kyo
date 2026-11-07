@@ -23,23 +23,25 @@ import kyo.UI.*
   *   another event hears a change too, one that does not carry this value (`onNodeToggle`, `onPick`)
   * @param quiet
   *   a host that embeds this component reports the mistake itself, or the binding is a stand-in nobody made: never a card
+  * @param start
+  *   where the instance's own value starts, for a slot the component holds itself where the caller binds nothing (a
+  *   [[kyo.UI.Controlled]] prop the engine binds to the instance's own ref); `Absent` where it holds none
   */
 final private[uic] case class Slot[A](
     bound: Maybe[Prop[A]] = Absent,
     hearer: Maybe[A => UI.Action] = Absent,
     heardElsewhere: Boolean = false,
-    quiet: Boolean = false
-):
+    quiet: Boolean = false,
+    start: Maybe[A] = Absent
+) extends UI.Controlled[A]:
     /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant. */
     def bind(v: Prop[A]): Slot[A] = copy(bound = Present(v))
 
     /** The slot with nothing bound: the component's own. */
     def unbound: Slot[A] = copy(bound = Absent)
 
-    /** The slot as an instance reads it: unbound, it binds the instance's own `ref`, which keeps the reader's value while a
-      * run binds the slot and gives it back when a run stops binding it; anything bound stays.
-      */
-    def ownedBy(ref: SignalRef[A]): Slot[A] = if bound.isDefined then this else copy(bound = Present(ref))
+    /** The slot with the instance's own `ref` bound, as the engine hands it to a draw where the caller bound nothing. */
+    def owning(ref: SignalRef[A]): Slot[A] = copy(bound = Present(ref))
 
     /** What was bound, as the `ReactiveValue` the components the waves have not reached yet read. A bridge: it goes with
       * `ReactiveValue` in the last wave.

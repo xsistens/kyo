@@ -69,6 +69,30 @@ class ToggleButtonTest extends ReactiveValueContract:
         end for
     }
 
+    "a run that stops binding checked carries on from what the button showed" in {
+        def ranOnce(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.exists(l => textOf(l).endsWith(" 1")))
+        for
+            tick <- Signal.initRef(0)
+            held <- Signal.initRef(true)
+            ui = UI.div(tick.render { n =>
+                val b = uic.ToggleButton().onLabel(s"on $n").offLabel(s"off $n")
+                // One placement: a conversion in each branch of an `if` would be two places, so two instances.
+                val button: uic.ToggleButton = if n == 0 then b.checked(held) else b
+                UI.div(button)
+            })
+            (every, _, _) <-
+                paintedAround(ui, t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty), ranOnce)(_ => setSettled(tick, 1))
+            shown  <- pressed(every)
+            labels <- elementsWithClass(every, "p-togglebutton-label").map(_.map(textOf))
+            ref    <- held.get
+        yield assert(
+            shown,
+            s"the run that stopped binding dropped the button to where its own state started, not what it showed: labels $labels, app ref $ref"
+        )
+        end for
+    }
+
     "a click after a host run writes the ref and reaches the onChange of that run" in {
         for
             tick  <- Signal.initRef(0)
