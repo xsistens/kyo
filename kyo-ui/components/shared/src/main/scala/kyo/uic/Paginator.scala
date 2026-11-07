@@ -142,11 +142,11 @@ final class Paginator private[uic] (private[uic] val p: Paginator.Props) extends
       * event the caller set on the paginator itself stays where the host has none.
       */
     private[uic] def hostPage(v: ReactiveValue[Int], report: Maybe[Int => UI.Action]): Paginator =
-        new Paginator(p.copy(pageSlot = Slot(Present(v), report.orElse(pageSlot.hearer))))
+        new Paginator(p.copy(pageSlot = Slot(Present(v.bound), report.orElse(pageSlot.hearer))))
 
     /** Package-internal: a host that owns the page size hands its binding over, with its own event and that event's name. */
     private[uic] def hostRows(v: ReactiveValue[Int], report: Maybe[Int => UI.Action], eventName: String): Paginator =
-        new Paginator(p.copy(rowsSlot = Slot(Present(v), report.orElse(rowsSlot.hearer)), rowsEventName = eventName))
+        new Paginator(p.copy(rowsSlot = Slot(Present(v.bound), report.orElse(rowsSlot.hearer)), rowsEventName = eventName))
 
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 

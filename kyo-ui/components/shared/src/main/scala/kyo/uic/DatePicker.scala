@@ -291,7 +291,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
     private[uic] def wired(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         // The mount mints a view ref when the caller binds none, the way it mints the month one. Without it the month and year
         // buttons rendered disabled and a drill-down had nothing to write.
-        new DatePicker(p.copy(currentViewSlot = currentViewSlot.copy(binding = Present(refs.view)))).wiredWith(refs, base, focus)
+        new DatePicker(p.copy(currentViewSlot = currentViewSlot.copy(bound = Present(refs.view.bound)))).wiredWith(refs, base, focus)
 
     private def wiredWith(refs: DatePicker.Refs, base: String, focus: String => UI.Action)(using Frame): UI =
         val oref                                                     = refs.open
@@ -506,7 +506,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         oref.current.map(isOpen => if isOpen then (): UI.Action else openOver(oref).change(true))
 
     /** The open slot over the EFFECTIVE binding (bound or mount-allocated), with whoever hears it. */
-    private def openOver(oref: ReactiveValue[Boolean]): Slot[Boolean] = openSlot.copy(binding = Present(oref))
+    private def openOver(oref: ReactiveValue[Boolean]): Slot[Boolean] = openSlot.copy(bound = Present(oref.bound))
 
     /** Whether the binding's own event is set: `onChange`, or its set or range form. */
     private def valueHeard: Boolean =

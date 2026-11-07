@@ -90,7 +90,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
     /** Popup mode with the open state kept by the menu itself, starting open, as an overlay nothing inside can open
       * does: the panel shows until the reader closes it. [[onPopupChange]] still hears every close.
       */
-    def popup(): Menu = new Menu(p.copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true))
+    def popup(): Menu = new Menu(p.copy(popupSlot = popupSlot.unbound, popupOwnFlag = true))
 
     /** Fired with the open state the reader asks for (false for a pick, Tab, Escape and an outside click), after a
       * two-way [[popup]] is written.

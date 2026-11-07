@@ -57,7 +57,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
       */
     @targetName("valueNumber")
     def value(v: Double | Signal[Double]): InputNumber =
-        new InputNumber(p.copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.copy(binding = Absent)))
+        new InputNumber(p.copy(numberSlot = numberSlot.bind(v), textSlot = textSlot.unbound))
 
     /** Binds the field's raw TEXT, for a caller that needs what was typed rather than a number. A `SignalRef` binds two
       * way and [[onTextChange]] hears every keystroke; a plain `Signal` binds one way, the field showing it and painted back
@@ -75,7 +75,7 @@ final class InputNumber private[uic] (private[uic] val p: InputNumber.Props) ext
       * and the spin buttons step the text they find.
       */
     def text(v: String | Signal[String]): InputNumber =
-        new InputNumber(p.copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.copy(binding = Absent)))
+        new InputNumber(p.copy(textSlot = textSlot.bind(v), numberSlot = numberSlot.unbound))
 
     /** Fired with the raw text after every keystroke and spin of a [[text]]-bound field, after a two-way text is written. */
     def onTextChange(f: String => UI.Action)(using Frame): InputNumber = new InputNumber(p.copy(textSlot = textSlot.hear(f)))

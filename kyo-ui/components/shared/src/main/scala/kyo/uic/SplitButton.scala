@@ -92,7 +92,7 @@ final class SplitButton private[uic] (private[uic] val p: SplitButton.Props) ext
 
     /** The button over this run's binding, or over the instance's `own` state where the run binds nothing. */
     private def drawnOver(own: SignalRef[Boolean], hi: Anchored[Int], base: String)(using Frame): UI =
-        val open = if openSlot.binding.isDefined then openSlot else openSlot.copy(binding = Present(ReactiveVariable(own)))
+        val open = if openSlot.binding.isDefined then openSlot else openSlot.copy(bound = Present(own))
         // A signal nobody hears: every toggle and pick the reader makes is painted away again.
         Diagnostics.before(new SplitButton(p.copy(openSlot = open)).wiredOver(hi, base))("SplitButton")(
             Diagnostic.unheard(openSlot, SplitButton.openName)

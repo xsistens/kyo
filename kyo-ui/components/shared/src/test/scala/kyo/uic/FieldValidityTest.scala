@@ -213,7 +213,8 @@ class FieldValidityTest extends UicTest:
             row("CheckBox", CheckBox("a"), "p-checkbox", 1, 1),
             row("RadioButton", RadioButton("a"), "p-radiobutton", 1, 1),
             row("ToggleSwitch", ToggleSwitch(), "p-toggleswitch", 1, 1),
-            row("ToggleButton", ToggleButton(), "p-togglebutton", 1, 1),
+            // Built once over its own ref: the checked state rides channels, so no region sits above the button.
+            row("ToggleButton", ToggleButton(), "p-togglebutton", 0, 1),
             row("Knob", Knob(), "p-knob", 0, 1),
             row("Slider", Slider(), "p-slider", 1, 1),
             row("Rating", Rating(), "p-rating", 1, 1),

@@ -14,8 +14,9 @@ class ToggleButtonTest extends ReactiveValueContract:
         for
             el      <- elementWithClass(t, "p-togglebutton")
             checked <- carriesClass(el, "p-togglebutton-checked")
+            aria    <- ariaNow(el, "pressed")
         yield
-            val says = el.attrs.ariaAttrs.get("pressed").contains("true")
+            val says = aria.contains("true")
             if says != checked then throw new AssertionError(s"aria-pressed says $says, the checked class $checked")
             says
 
@@ -30,6 +31,8 @@ class ToggleButtonTest extends ReactiveValueContract:
         next = true,
         control = elementWithClass(_, "p-togglebutton"),
         shows = pressed(_),
+        // The button is built once and its state rides the class and `aria-pressed` channels, so a change is a patch.
+        nextPatch = Present(_ == ("aria-pressed", "true")),
         saysFixed = {
             case b: UI.Ast.Button => b.attrs.ariaAttrs.get("disabled").contains("true") && !b.disabled.contains(true)
             case _                => false
@@ -48,18 +51,21 @@ class ToggleButtonTest extends ReactiveValueContract:
     }
 
     "a host region that runs again keeps what the reader pressed and shows the run's props" in {
-        def drawn(t: UI): Boolean < Sync = elementsWithClass(t, "p-togglebutton").map(_.nonEmpty)
+        def labelled(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-togglebutton-label").map(_.headOption.exists(l => textOf(l) == "on 1"))
         for
             tick <- Signal.initRef(0)
             ui = UI.div(tick.render(n => UI.div(uic.ToggleButton().onLabel(s"on $n"))))
-            after <- publishedAfterReady(ui, _ => true, until = drawn)(
+            (every, since, prior) <- paintedAround(ui, t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty), labelled)(
                 t => elementWithClass(t, "p-togglebutton").map(click),
                 _ => setSettled(tick, 1)
             )
-            shown = after.getOrElse(ui)
-            held  <- pressed(shown)
-            label <- elementWithClass(shown, "p-togglebutton-label")
-        yield assert(held && textOf(label) == "on 1", s"after the host's run: pressed $held, label ${textOf(label)}")
+            held    <- pressed(every)
+            redrawn <- drawnAgain(since, prior, "p-togglebutton")
+        yield assert(
+            held && redrawn.isEmpty,
+            s"after the host's run: pressed $held, the button drawn again at ${redrawn.mkString(", ")} (a new label patches the label alone)"
+        )
         end for
     }
 
@@ -70,13 +76,91 @@ class ToggleButtonTest extends ReactiveValueContract:
             b     <- Signal.initRef(false)
             heard <- AtomicRef.init(Chunk.empty[String])
             ui = UI.div(tick.render(n =>
-                UI.div(uic.ToggleButton().checked(if n == 0 then a else b).onChange(v => heard.getAndUpdate(_.append(s"run $n: $v")).unit))
+                UI.div(uic.ToggleButton().checked(if n == 0 then a else b).offLabel(s"off $n")
+                    .onChange(v => heard.getAndUpdate(_.append(s"run $n: $v")).unit))
             ))
-            _  <- actedOn(ui, _ => true)(_ => setSettled(tick, 1), t => elementWithClass(t, "p-togglebutton").map(click))
+            // The click comes once the button shows the run: the host region settling is not yet the instance having its props.
+            reached = (t: UI) =>
+                elementsWithClass(t, "p-togglebutton-label").map(ls =>
+                    if ls.exists(textOf(_) == "off 1") then elementWithClass(t, "p-togglebutton").map(click)
+                    else throw new AssertionError("the button does not show the run yet")
+                )
+            _  <- actedOn(ui, _ => true)(_ => setSettled(tick, 1), reached)
             va <- a.get
             vb <- b.get
             hs <- heard.get
         yield assert((va, vb, hs) == (false, true, Chunk("run 1: true")), s"a $va, b $vb, heard $hs")
+        end for
+    }
+
+    "a host run that brings only a new onChange draws nothing again, and the click reaches that run" in {
+        for
+            tick  <- Signal.initRef(0)
+            heard <- AtomicRef.init(Chunk.empty[Int])
+            ui = UI.div(tick.render(n => UI.div(uic.ToggleButton().onChange(_ => heard.getAndUpdate(_.append(n)).unit))))
+            // The run reaches the instance when it sends its tree again into the host's new slot.
+            (every, since, prior) <- paintedAround(
+                ui,
+                t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty),
+                _ => true,
+                sent = _.exists(_._1.size > 1)
+            )(_ => setSettled(tick, 1))
+            redrawn <- drawnAgain(since, prior, "p-togglebutton")
+            _       <- elementWithClass(every, "p-togglebutton").map(click)
+            hs      <- heard.get
+        yield assert(redrawn.isEmpty && hs == Chunk(1), s"drawn again at ${redrawn.mkString(", ")}, heard $hs")
+        end for
+    }
+
+    "a size or width from a signal toggles its classes in place" in {
+        for
+            size  <- Signal.initRef[Size](Size.Normal)
+            fluid <- Signal.initRef(false)
+            ui = uic.ToggleButton().size(size).fluid(fluid).render
+            (every, since, prior) <- paintedAround(
+                ui,
+                t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty),
+                t => elementWithClass(t, "p-togglebutton").map(b => carriesClass(b, "p-togglebutton-sm"))
+            )(_ => setSettled(size, Size.Small).andThen(setSettled(fluid, true)))
+            b       <- elementWithClass(every, "p-togglebutton")
+            classes <-
+                Kyo.foreach(Seq("p-togglebutton-sm", "p-inputfield-sm", "p-togglebutton-lg", "p-togglebutton-fluid"))(carriesClass(b, _))
+            redrawn <- drawnAgain(since, prior, "p-togglebutton")
+        yield assert(
+            classes == Seq(true, true, false, true) && redrawn.isEmpty,
+            s"classes $classes, drawn again at ${redrawn.mkString(", ")}"
+        )
+        end for
+    }
+
+    "readonly from a signal: on, the button says so and takes no click; off again, it does" in {
+        def wiredAs(ro: Boolean)(t: UI): Boolean < Sync =
+            Abort.run[AssertionError](Abort.catching[AssertionError](elementWithClass(t, "p-togglebutton"))).map(_.toMaybe.exists(b =>
+                b.attrs.ariaAttrs.get("disabled").contains("true") == ro && b.attrs.onClick.isDefined != ro
+            ))
+        for
+            onRef  <- Signal.initRef(false)
+            offRef <- Signal.initRef(true)
+            on     <- publishedAfterReady(uic.ToggleButton().readonly(onRef).render, wiredAs(false), until = wiredAs(true))(_ =>
+                setSettled(onRef, true)
+            )
+            off <- publishedAfterReady(uic.ToggleButton().readonly(offRef).render, wiredAs(true), until = wiredAs(false))(_ =>
+                setSettled(offRef, false)
+            )
+        yield assert(on.isDefined && off.isDefined)
+        end for
+    }
+
+    "drawn with nothing that can change, the button sits under no region; its own state is one region, the content" in {
+        for
+            fixedRoot    <- regionsAbove(uic.ToggleButton().checked(true).render, "p-togglebutton")
+            fixedLabel   <- regionsAbove(uic.ToggleButton().checked(true).render, "p-togglebutton-label")
+            unboundRoot  <- regionsAbove(uic.ToggleButton().render, "p-togglebutton")
+            unboundLabel <- regionsAbove(uic.ToggleButton().render, "p-togglebutton-label")
+        yield assert(
+            (fixedRoot, fixedLabel, unboundRoot, unboundLabel) == (0, 0, 0, 1),
+            s"regions above (fixed root, fixed label, unbound root, unbound label): ${(fixedRoot, fixedLabel, unboundRoot, unboundLabel)}"
+        )
         end for
     }
 
