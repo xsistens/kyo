@@ -783,6 +783,37 @@ class UIDrawnTest extends kyo.test.Test[Any]:
             span(label)
         }
 
+    private case class Optional(label: Maybe[Prop[String]], size: Prop[Int]) derives CanEqual
+
+    "an optional field reads as one prop of an option, a plain field as its prop" in {
+        val set                        = new UI.Live(Optional(Present("a"), 1), Absent)
+        val unset                      = new UI.Live(Optional(Absent, 1), Absent)
+        val label: Prop[Maybe[String]] = set(_.label)
+        val size: Prop[Int]            = set(_.size)
+        for
+            l <- Prop.signal(label).current
+            n <- Prop.signal(unset(_.label)).current
+            z <- Prop.signal(size).current
+        yield
+            assert(!label.isInstanceOf[Signal[?]] && !size.isInstanceOf[Signal[?]], s"$label $size")
+            assert(l == Present("a") && n == Absent && z == 1, s"$l $n $z")
+        end for
+    }
+
+    "an optional field follows the latest run and a signal inside it" in {
+        for
+            inner <- Signal.initRef("x")
+            runs  <- Signal.initRef(Optional(Absent, 1))
+            live = new UI.Live(Optional(Absent, 1), Present(runs))
+            read = Prop.signal(live(_.label))
+            first <- read.current
+            _     <- runs.set(Optional(Present(inner), 1))
+            _     <- assertEventually(read.current.map(_ == Present("x")))
+            _     <- inner.set("y")
+            _     <- assertEventually(read.current.map(_ == Present("y")))
+        yield assert(first == Absent, s"$first")
+    }
+
     "an instance no run can reach again reads a constant prop as it is, with no signal" in {
         val read = new AtomicReference(Chunk.empty[Prop[String]])
         val rec  = new RecordingExchange

@@ -201,6 +201,20 @@ object UI:
                 case Present(signal) => signal.switchMap(p => Prop.signal(field(p)))
                 case Absent          => field(first)
 
+        /** An optional field as one prop of an option: `Absent` where the run sets none, the field's value where it does, so one
+          * read gives `Maybe[A]` (`props(_.label).read` for a `label: Maybe[Prop[String]]`), and a signal inside it is followed
+          * like a signal anywhere.
+          */
+        @targetName("applyMaybe")
+        def apply[A](field: P => Maybe[Prop[A]])(using CanEqual[A, A], Frame): Prop[Maybe[A]] =
+            def flat(m: Maybe[Prop[A]]): Prop[Maybe[A]] = m match
+                case Present(a) => Prop.map(a)(Present(_))
+                case _          => Absent
+            runs match
+                case Present(signal) => signal.switchMap(p => Prop.signal(flat(field(p))))
+                case Absent          => flat(field(first))
+        end apply
+
         /** The field `field` picks, read now: from the latest run where one can follow, else as the node was called with it. */
         def call[A](field: P => A)(using Frame): A < Sync =
             runs match
@@ -1700,6 +1714,27 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
+            /** The element with `f` applied where `cond` holds, and as it is where not, so a setter that depends on a condition
+              * stays in the chain: `button.when(disabled)(_.disabled(true)).when(blurs)(_.onBlur(blur))`.
+              *
+              * Inside a `UI.reactive` block `f` is a lambda, so a `.read` in it is refused; read into a `val` first, or pass the
+              * prop to the setter, which takes it as a channel.
+              */
+            def when(cond: Boolean)(f: Self => Self): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                val self = this.asInstanceOf[Self]
+                if cond then f(self) else self
+            end when
+
+            /** The element with `f` applied to the value where `v` holds one, and as it is where not, so an optional setting
+              * stays in the chain: `el.when(id)(_.id(_)).when(name)(_.aria("label", _))`.
+              */
+            def when[A](v: Maybe[A])(f: (Self, A) => Self): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                val self = this.asInstanceOf[Self]
+                v.fold(self)(a => f(self, a))
+            end when
+
             /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
               * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses).
               * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
@@ -1807,6 +1842,14 @@ object UI:
             def aria(name: String, v: Prop[String]): Self = v match
                 case s: Signal[String] @unchecked => withReactiveAttr(s"aria-$name", s)
                 case t: String                    => withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs.updated(name, t)))
+
+            /** `aria-*` from an optional prop: `Present` sets it as [[aria]] does, constant or reactive, and `Absent` sets nothing, so
+              * an optional accessible name stays in the chain: `el.aria("label", access.name)`.
+              */
+            @targetName("ariaMaybe")
+            def aria(name: String, v: Maybe[Prop[String]]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                v.fold(this.asInstanceOf[Self])(aria(name, _))
 
             /** Sets several `aria-*` attributes at once from name/value pairs. */
             def aria(pairs: (String, String)*): Self =
