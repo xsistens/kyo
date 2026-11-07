@@ -38,10 +38,21 @@ final private[kyo] class Owning[P] private (mirror: Maybe[Mirror.ProductOf[P]], 
         }
     end carry
 
+    /** A kept instance over these refs, which later runs can hand new props: the first run's props resolved once, here. */
+    def kept(first: P)(using CanEqual[P, P], Frame): UI.Live[P] < Sync =
+        given CanEqual[Owning.Run[P], Owning.Run[P]] = CanEqual.derived
+        Signal.initRef(Owning.Run(first, resolve(first))).map(ref => new UI.Live(first, Present(ref), this))
+    end kept
+
     private def field(props: P, i: Int): Any = props.asInstanceOf[Product].productElement(i)
 end Owning
 
 private[kyo] object Owning:
+
+    /** One run of a kept instance: its props as the run gave them, compared with the next run's, and as the draw reads them, with each
+      * unbound controlled prop bound to the instance's own ref, resolved once when the run is offered.
+      */
+    final case class Run[P](props: P, resolved: P)
 
     /** No controlled props: the props as they are. */
     def none[P]: Owning[P] = new Owning(Absent, Chunk.empty)

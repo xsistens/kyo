@@ -803,11 +803,10 @@ class UIDrawnTest extends kyo.test.Test[Any]:
     "an optional field follows the latest run and a signal inside it" in {
         for
             inner <- Signal.initRef("x")
-            runs  <- Signal.initRef(Optional(Absent, 1))
-            live = new UI.Live(Optional(Absent, 1), Present(runs))
+            live  <- kyo.internal.Owning.none[Optional].kept(Optional(Absent, 1))
             read = Prop.signal(live(_.label))
             first <- read.current
-            _     <- runs.set(Optional(Present(inner), 1))
+            _     <- live.offer(Optional(Present(inner), 1))
             _     <- assertEventually(read.current.map(_ == Present("x")))
             _     <- inner.set("y")
             _     <- assertEventually(read.current.map(_ == Present("y")))
@@ -819,8 +818,8 @@ class UIDrawnTest extends kyo.test.Test[Any]:
 
     private case class Form(name: Held, size: Int) derives CanEqual
 
-    private def formLive(first: Form, runs: SignalRef[Form])(using Frame): UI.Live[Form] < Sync =
-        kyo.internal.Owning.start(first, summon[scala.deriving.Mirror.ProductOf[Form]]).map(o => new UI.Live(first, Present(runs), o))
+    private def formLive(first: Form)(using Frame): UI.Live[Form] < Sync =
+        kyo.internal.Owning.start(first, summon[scala.deriving.Mirror.ProductOf[Form]]).map(_.kept(first))
 
     private def nameOf(live: UI.Live[Form])(using Frame): String < Sync =
         live.call(_.name.bound).flatMap(b => Prop.signal(b.get).current)
@@ -828,8 +827,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
     "a controlled prop the run leaves unbound reads the instance's own value, a bound one the binding" in {
         for
             app  <- Signal.initRef("app")
-            runs <- Signal.initRef(Form(Held(), 1))
-            live <- formLive(Form(Held(), 1), runs)
+            live <- formLive(Form(Held(), 1))
             mine <- nameOf(live)
             _    <- live.offer(Form(Held(Present(app)), 1))
             seen <- nameOf(live)
@@ -839,9 +837,7 @@ class UIDrawnTest extends kyo.test.Test[Any]:
     "a run that stops binding a controlled prop hands the value it showed to the instance before that run is seen" in {
         for
             app  <- Signal.initRef("app")
-            runs <- Signal.initRef(Form(Held(), 1))
-            live <- formLive(Form(Held(Present(app)), 1), runs)
-            _    <- runs.set(Form(Held(Present(app)), 1))
+            live <- formLive(Form(Held(Present(app)), 1))
             _    <- app.set("typed")
             _    <- live.offer(Form(Held(), 2))
             held <- nameOf(live)
@@ -905,6 +901,46 @@ class UIDrawnTest extends kyo.test.Test[Any]:
                 yield (instances.seen.size, read.get.size, value)
             }
         yield assert(held == (1, 1, 5), s"(inner instances, host draws, inner value): $held")
+        end for
+    }
+
+    // How often an instance's props were resolved: each resolve binds the instance's own ref into its unbound controlled field.
+    private val resolves = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    private case class Counted(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own"))
+        extends UI.Controlled[String]:
+        def owning(ref: SignalRef[String]): Counted =
+            discard(resolves.incrementAndGet()); copy(bound = Present(ref))
+    end Counted
+
+    private case class Pair(a: Prop[String], b: Prop[String], held: Counted) derives CanEqual
+
+    "a run that changes one field resolves the props once and leaves a field it did not change alone" in {
+        val rec  = new RecordingExchange
+        val read = new AtomicReference(Chunk.empty[Prop[String]])
+        for
+            tick <- Signal.initRef(0)
+            same <- Signal.initRef("same")
+            host = (n: Int) =>
+                UI.mountedWith(Pair(s"run $n", same, Counted())) { live =>
+                    val a = live(_.a)
+                    discard(read.updateAndGet(_.append(a)))
+                    div(span(a), span("b").aria("label", live(_.b)))
+                }.keyed("host")
+            ui = div(tick.render(host))
+            seen <- painted(ui, rec) { (_, _) =>
+                for
+                    _      <- assertEventually(tick.waiters.map(_ == 1))
+                    before <- rec.ops.map(_.size)
+                    first = resolves.get
+                    _ <- tick.set(1)
+                    _ <- assertEventually(tick.waiters.map(_ == 1))
+                    a = read.get.head.asInstanceOf[Signal[String]]
+                    _   <- assertEventually(a.current.map(_ == "run 1"))
+                    ops <- rec.ops.map(_.drop(before))
+                yield (resolves.get - first, ops.collect { case a @ RecordingExchange.Op.Attr(_, "aria-label", _, _) => a })
+            }
+        yield assert(seen == (1, Chunk.empty), s"(resolves in the run, patches of the unchanged field): $seen")
         end for
     }
 

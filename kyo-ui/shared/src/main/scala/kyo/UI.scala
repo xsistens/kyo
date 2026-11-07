@@ -200,28 +200,41 @@ object UI:
       * called with it, and a constant stays a constant with no subscription. `call` reads a field when an event comes, so a
       * callback is the latest run's either way and costs nothing until then.
       */
-    final class Live[P] private[kyo] (first: P, runsRef: Maybe[SignalRef[P]], owning: kyo.internal.Owning[P]):
+    final class Live[P] private[kyo] (first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]], owning: kyo.internal.Owning[P]):
 
         /** Props with no controlled prop resolved: a node drawn in place, which a host binds itself. */
-        private[kyo] def this(first: P, runsRef: Maybe[SignalRef[P]]) = this(first, runsRef, kyo.internal.Owning.none[P])
+        private[kyo] def this(first: P, runsRef: Maybe[SignalRef[kyo.internal.Owning.Run[P]]]) =
+            this(first, runsRef, kyo.internal.Owning.none[P])
 
-        // The props of the latest run, where the engine can hand this instance new ones.
-        private val runs: Maybe[Signal[P]] = runsRef
+        // The props as the draw reads them where no run can follow the first: resolved once, here.
+        private val shown: P = if runsRef.isEmpty then owning.resolve(first) else first
+
+        // The latest run, where the engine can hand this instance new props: its props as given and as resolved.
+        private val runs: Maybe[Signal[kyo.internal.Owning.Run[P]]] = runsRef
 
         /** Hands this instance the props of a new run: a controlled prop the run stops binding hands its value to the instance first,
-          * then the new props are what every field follows. Equal props change nothing.
+          * then the new props, resolved once here, are what every field follows. Equal props change nothing.
           */
         private[kyo] def offer(next: P)(using CanEqual[P, P], Frame): Unit < Sync =
             runsRef match
-                case Present(ref) => ref.get.map(prev => if prev == next then Kyo.unit else owning.carry(prev, next).andThen(ref.set(next)))
-                case Absent       => Kyo.unit
+                case Present(ref) =>
+                    ref.get.map { run =>
+                        if run.props == next then Kyo.unit
+                        else owning.carry(run.props, next).andThen(ref.set(kyo.internal.Owning.Run(next, owning.resolve(next))))
+                    }
+                case Absent => Kyo.unit
         end offer
 
-        /** The field `field` picks, following the latest run where one can follow, else as the node was called with it. */
+        /** The field `field` picks, following the latest run where one can follow, else as the node was called with it. A run that
+          * leaves the field as it was (the same constant, the same signal) changes nothing for it.
+          */
         def apply[A](field: P => Prop[A])(using CanEqual[A, A], Frame): Prop[A] =
             runs match
-                case Present(signal) => signal.switchMap(p => Prop.signal(field(owning.resolve(p))))
-                case Absent          => field(owning.resolve(first))
+                case Present(signal) =>
+                    // The field's own identity: a constant compares as its value, a signal as the instance it is.
+                    given CanEqual[Prop[A], Prop[A]] = CanEqual.derived
+                    signal.map(run => field(run.resolved)).switchMap(Prop.signal(_))
+                case Absent => field(shown)
 
         /** An optional field as one prop of an option: `Absent` where the run sets none, the field's value where it does, so one
           * read gives `Maybe[A]` (`props(_.label).read` for a `label: Maybe[Prop[String]]`), and a signal inside it is followed
@@ -233,15 +246,19 @@ object UI:
                 case Present(a) => Prop.map(a)(Present(_))
                 case _          => Absent
             runs match
-                case Present(signal) => signal.switchMap(p => Prop.signal(flat(field(owning.resolve(p)))))
-                case Absent          => flat(field(owning.resolve(first)))
+                case Present(signal) =>
+                    // As in `apply`: a field the run leaves as it was changes nothing for it.
+                    given CanEqual[Maybe[Prop[A]], Maybe[Prop[A]]] = CanEqual.derived
+                    signal.map(run => field(run.resolved)).switchMap(m => Prop.signal(flat(m)))
+                case Absent => flat(field(shown))
+            end match
         end apply
 
         /** The field `field` picks, read now: from the latest run where one can follow, else as the node was called with it. */
         def call[A](field: P => A)(using Frame): A < Sync =
             runs match
-                case Present(signal) => signal.current.map(p => field(owning.resolve(p)))
-                case Absent          => field(owning.resolve(first))
+                case Present(signal) => signal.current.map(run => field(run.resolved))
+                case Absent          => field(shown)
     end Live
 
     /** A prop a component instance holds itself where the caller binds none: a checked state, a value, an open panel.

@@ -535,11 +535,7 @@ final private[kyo] class PropsDraw[P](val value: P, draw: UI.Live[P] => UI < Syn
       */
     def start(offered: Boolean)(using Frame): (Maybe[UI.Live[P]], UI < Sync) < Sync =
         Owning.start(value, summon[scala.deriving.Mirror.ProductOf[P]]).map { owning =>
-            if offered then
-                Signal.initRef(value).map { ref =>
-                    val live = new UI.Live(value, Present(ref), owning)
-                    (Present(live), draw(live))
-                }
+            if offered then owning.kept(value).map(live => (Present(live), draw(live)))
             else (Absent, draw(new UI.Live(value, Absent, owning)))
         }
 
