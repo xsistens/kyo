@@ -115,12 +115,23 @@ private[kyo] object ReactiveMacro:
             end traverseTree
         .traverseTree(rhs)(lambdaSym)
 
+        // Whether `t` refers to something the block defines outside `t`: what `t` defines itself (a lambda's parameter, a val in
+        // it) is taken out of the block with it.
         def refersToLocal(t: Term): Boolean =
+            val own = scala.collection.mutable.Set.empty[Symbol]
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                    tree match
+                        case d: Definition => own += d.symbol
+                        case _             => ()
+                    super.traverseTree(tree)(owner)
+                end traverseTree
+            .traverseTree(t)(lambdaSym)
             var found = false
             new TreeTraverser:
                 override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
-                    case id: Ident if local.contains(id.symbol) => found = true
-                    case _                                      => super.traverseTree(tree)(owner)
+                    case id: Ident if local.contains(id.symbol) && !own.contains(id.symbol) => found = true
+                    case _                                                                  => super.traverseTree(tree)(owner)
             .traverseTree(t)(lambdaSym)
             found
         end refersToLocal

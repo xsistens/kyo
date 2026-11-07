@@ -1806,6 +1806,14 @@ object UI:
             def aria(name: String, sig: Signal[String]): Self =
                 withReactiveAttr(s"aria-$name", sig)
 
+            /** `aria-*` from a [[kyo.UI.Prop]]: a constant is a plain attribute, as the `String` overload sets it, and a signal
+              * patches the attribute in place, as the `Signal[String]` overload does. For a component whose value may be either and
+              * that writes the attribute once.
+              */
+            def aria(name: String, v: Prop[String]): Self = v match
+                case s: Signal[?] => aria(name, s.asInstanceOf[Signal[String]])
+                case t            => aria(name, t.asInstanceOf[String])
+
             /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
               * emission, with no re-render.
               */

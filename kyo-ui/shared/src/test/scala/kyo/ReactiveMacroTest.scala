@@ -26,6 +26,16 @@ class ReactiveMacroTest extends UITest:
         yield assert(r.isInstanceOf[Signal[?]], s"$r")
     }
 
+    "a read of a prop built by a function of its own is taken out with that function" in {
+        for
+            ref <- Signal.initRef(1)
+            p: Prop[Int] = ref
+            r            = UI.reactive(Prop.map(p)(x => x * 10).read + Prop.map(p)(x => x + 1).read)
+            _ <- ref.set(2)
+            _ <- assertEventually(Prop.signal(r).current.map(_ == 23))
+        yield assert(r.isInstanceOf[Signal[?]], s"$r")
+    }
+
     "a UI block over constants draws once, with no region" in {
         val on: Prop[Boolean] = true
         val ui                = UI.reactive(if on.read then span("on") else UI.empty)
@@ -39,6 +49,25 @@ class ReactiveMacroTest extends UITest:
         yield UI.reactive(span(s"${a.read}${b.read}")) match
             case r: Reactive[?] => assert(r.source.exists(_.isInstanceOf[Reactive.Source.Projected[?]]), s"${r.source}")
             case other          => fail(s"not one region: $other")
+    }
+
+    "a block inside a block keeps its own reads: the outer region follows its read, the inner one its own" in {
+        for
+            outer <- Signal.initRef(false)
+            inner <- Signal.initRef("a")
+            ui = UI.reactive(if outer.read then span("custom") else UI.reactive(span(inner.read)))
+            first <- ui match
+                case r: Reactive[?] => r.signal.current
+                case other          => Kyo.lift(other)
+            _    <- inner.set("b")
+            _    <- outer.set(true)
+            last <- ui match
+                case r: Reactive[?] => r.signal.current
+                case other          => Kyo.lift(other)
+        yield
+            assert(ui.isInstanceOf[Reactive[?]], s"the outer block is no region: $ui")
+            assert(first.isInstanceOf[Reactive[?]], s"the inner block is no region of its own: $first")
+            assert(last.isInstanceOf[SpanElement], s"$last")
     }
 
     "a signal read twice, by one path or by two, is one read, so the block never sees two of its values" in {

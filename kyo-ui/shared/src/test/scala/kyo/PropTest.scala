@@ -86,6 +86,30 @@ class PropTest extends UITest:
         }
     }
 
+    "an aria attribute" - {
+        "a constant prop is a plain attribute, a signal prop a channel" in {
+            Signal.initRef("live").map { ref =>
+                val c: Prop[String] = "fixed"
+                val s: Prop[String] = ref
+                val a               = span.aria("label", c)
+                val b               = span.aria("label", s)
+                assert(
+                    (a.attrs.ariaAttrs.get("label"), a.attrs.reactiveAttrs.contains("aria-label")) == (Some("fixed"), false) &&
+                        (b.attrs.ariaAttrs.get("label"), b.attrs.reactiveAttrs.contains("aria-label")) == (None, true),
+                    s"${a.attrs} ${b.attrs}"
+                )
+            }
+        }
+
+        "a plain String and Signal[String] still take their own overloads" in {
+            Signal.initRef("live").map { ref =>
+                val a = span.aria("label", "fixed")
+                val b = span.aria("label", ref)
+                assert(a.attrs.ariaAttrs.get("label") == Some("fixed") && b.attrs.reactiveAttrs.contains("aria-label"))
+            }
+        }
+    }
+
     "a child" - {
         "a text prop: a constant is a text node, a signal a region" in {
             Signal.initRef("live").map { ref =>
