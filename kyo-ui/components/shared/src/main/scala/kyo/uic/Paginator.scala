@@ -191,10 +191,10 @@ object Paginator:
     private def totalPages(total: Int, rows: Int): Int = math.max(1, (total + rows - 1) / rows)
 
     /** The rows a run's props stand for: the binding, or where the slot starts. */
-    private def rowsOf(q: Props)(using Frame): Prop[Int] = Prop.map(q.rows.bound.getOrElse(q.rows.start.getOrElse(1)))(math.max(1, _))
+    private def rowsOf(q: Props)(using Frame): Prop[Int] = Prop.map(q.rows.value(1))(math.max(1, _))
 
     /** The page a run's props stand for: the page a host drew, the binding, or where the slot starts. */
-    private def pageOf(q: Props): Prop[Int] = q.currentPage.fold(q.page.bound.getOrElse(q.page.start.getOrElse(0)))(c => c)
+    private def pageOf(q: Props): Prop[Int] = q.currentPage.fold(q.page.value(0))(c => c)
 
     /** A constant page nobody hears is fixed: the links show it and go nowhere. A host drawing the page owns its clicks. */
     private def pageFixed(q: Props): Boolean = q.currentPage.isEmpty && q.page.fixed
