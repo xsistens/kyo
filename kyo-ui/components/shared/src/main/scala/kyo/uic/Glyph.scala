@@ -13,7 +13,7 @@ final case class IconGlyph(
     pathData: String,
     viewBoxWidth: Int,
     viewBoxHeight: Int
-)
+) derives CanEqual
 
 /** Package-internal inline-SVG renderer for a glyph with caller-chosen classes
   * (components attach their own structural classes, e.g. `p-button-icon`).

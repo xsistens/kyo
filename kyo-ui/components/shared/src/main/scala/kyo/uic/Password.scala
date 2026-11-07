@@ -134,7 +134,7 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     private def drawnOver(own: Maybe[SignalRef[String]], reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
         val value = (own, valueSlot.binding) match
             case (Present(ref), Absent | Present(ReactiveValue.Const(_))) if keepsOwnText =>
-                valueSlot.copy(binding = Present(ReactiveVariable(ref)))
+                valueSlot.copy(bound = Present(ref))
             case _ => valueSlot
         val field = new Password(p.copy(valueSlot = value))
         reveal match

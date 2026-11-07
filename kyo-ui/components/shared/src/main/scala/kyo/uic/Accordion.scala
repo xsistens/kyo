@@ -142,7 +142,7 @@ final class Accordion[K] private[uic] (private[uic] val p: Accordion.Props[K]) e
       * hears is reported in a card; [[onToggle]] hears it too.
       */
     def value(v: Maybe[K] | Signal[Maybe[K]]): Accordion[K] =
-        new Accordion(p.copy(singleSlot = singleSlot.bind(v), multiSlot = multiSlot.copy(binding = Absent)))
+        new Accordion(p.copy(singleSlot = singleSlot.bind(v), multiSlot = multiSlot.unbound))
 
     /** The same accordion in MULTIPLE mode (Prime's `multiple`): a [[MultipleAccordion]] over the set of open ids, which
       * header clicks toggle membership of. Bound like the single value. The single value and its event do not carry over.

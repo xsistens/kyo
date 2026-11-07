@@ -138,7 +138,7 @@ final class ConfirmDialog private[uic] (private[uic] val p: ConfirmDialog.Props)
                 val reject = if rejectFixed then rejectShell.ariaDisabled(true) else rejectShell.onClick(choose(onRejectEff))
 
                 var dialog = Dialog()
-                    .withOpen(Slot(openSlot.binding, quiet = true))
+                    .withOpen(Slot(openSlot.bound, quiet = true))
                     .boxClass("p-confirmdialog")
                     .accessibleRole(PopupAccessibleRole.AlertDialog)
                     .footer(fragment(reject, accept))

@@ -42,6 +42,12 @@ abstract class UicTest extends kyo.test.Test[Any]:
         if e.attrs.cssClasses.contains(cls) then Kyo.lift(true)
         else e.attrs.reactiveClasses.get(cls).fold(Kyo.lift(false))(_.current)
 
+    /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place, read at its current value. */
+    private[uic] def ariaNow(e: UI.Ast.Element, name: String)(using Frame): Maybe[String] < Sync =
+        e.attrs.ariaAttrs.get(name) match
+            case Some(v) => Kyo.lift(Present(v))
+            case None    => e.attrs.reactiveAttrs.get(s"aria-$name").fold(Kyo.lift(Absent: Maybe[String]))(_.current.map(Present(_)))
+
     /** Runs a handler's effect. None of the handlers under test is meant to fail, so a failure fails the test. */
     private[uic] def handled(action: UI.Action)(using Frame): Any < Async =
         // A handler runs in a session: a mount draws no static copy without its focus commands any more.
@@ -146,6 +152,45 @@ abstract class UicTest extends kyo.test.Test[Any]:
             yield Present(answer)
         }
 
+    /** Everything `ui` published once `until` holds over all of it after the gestures, newest first, with the trees of it that came
+      * after the last gesture, and the ones before it, each with the path that published it. A component that patches itself in
+      * place draws nothing of itself again after a host run: its state is read in the tree it published first, whose regions and
+      * channels follow, and a tree it sends again after the gesture is one it had sent before at that path. `sent` holds as well
+      * once the trees after the gesture satisfy it, for a run that changes nothing a reader sees.
+      */
+    private[uic] def paintedAround(
+        ui: UI,
+        ready: UI => Boolean < Sync,
+        until: UI => Boolean < Sync,
+        sent: Chunk[(Seq[String], UI)] => Boolean = _ => true
+    )(acts: (UI => Any < Async)*)(using
+        Frame,
+        kyo.test.AssertScope
+    ): (UI, Chunk[(Seq[String], UI)], Chunk[(Seq[String], UI)]) < Async =
+        drive(ui, ready, Nil, acts) { d =>
+            def all: UI < Sync = Sync.defer(UI.fragment(d.published*))
+            for
+                _     <- waitFor(UicTest.walkingLive.let(true)(all.map(until)))
+                _     <- waitFor(Sync.defer(sent(Chunk.from(d.paints.take(d.paints.size - d.publishedBefore)))))
+                every <- all
+                since <- Sync.defer(Chunk.from(d.paints.take(d.paints.size - d.publishedBefore)))
+                prior <- Sync.defer(Chunk.from(d.paints.drop(d.paints.size - d.publishedBefore)))
+            yield (every, since, prior)
+            end for
+        }
+
+    /** The paths, among `since`, that sent a tree holding an element of class `cls` they had not sent before: what was drawn again
+      * after a gesture, as against sent again with a host region's run.
+      */
+    private[uic] def drawnAgain(since: Chunk[(Seq[String], UI)], prior: Chunk[(Seq[String], UI)], cls: String)(using
+        Frame
+    ): Chunk[Seq[String]] < Sync =
+        Kyo.foreach(since)((path, t) =>
+            UicTest.walkingLive.let(true)(elementsWithClass(t, cls)).map(found =>
+                if found.isEmpty || prior.exists((at, before) => at == path && (before eq t)) then Chunk.empty else Chunk(path)
+            )
+        ).map(_.flatten)
+
     /** `act` on `ui`, then `sw` off and on again, each step once the one before shows: `act`'s result, then the off state, then the on
       * state again. Each is read in the newest tree published since its step that holds `root`, the component, so neither a late
       * repaint from before the step nor a region that does not show the component can answer for it. Writing the switch twice without
@@ -247,6 +292,10 @@ abstract class UicTest extends kyo.test.Test[Any]:
     )(using Frame):
         def published: List[UI]             = UicTest.publishedIn(log)
         def patched: List[(String, String)] = UicTest.patchedIn(log)
+
+        /** Every tree published, with the path of the region or mount that published it, newest first. */
+        def paints: List[(Seq[String], UI)] =
+            log.recorded.collect { case op: kyo.internal.RecordingExchange.Op.Paint => (op.path, op.ui) }.toList.reverse
 
         /** Every tree published since the last gesture, newest first. */
         def since: UI < Sync =
