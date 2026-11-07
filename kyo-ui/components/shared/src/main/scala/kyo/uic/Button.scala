@@ -364,7 +364,7 @@ object Button:
     /** A switch the button may have, as one prop: absent stays absent, a constant a constant, a signal a signal of it. */
     private def switch(v: Maybe[Prop[Boolean]])(using Frame): Prop[Maybe[Boolean]] =
         v match
-            case Present(sw) => Prop.map[Boolean, Maybe[Boolean]](sw)(Present(_))
+            case Present(sw) => Prop.map(sw)(Present(_))
             case _           => Absent
 
     /** A switch pinned to a constant, and on. */
