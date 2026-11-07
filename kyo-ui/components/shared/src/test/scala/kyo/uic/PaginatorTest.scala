@@ -174,6 +174,29 @@ class PaginatorTest extends ReactiveValueContract:
         end for
     }
 
+    "a run that stops binding the page and the rows carries both on from what the paginator showed" in {
+        def ranOnce(t: UI): Boolean < Sync =
+            elementsWithClass(t, "p-paginator-current").map(_.headOption.exists(c => textOf(c).startsWith("run 1")))
+        for
+            tick <- Signal.initRef(0)
+            page <- Signal.initRef(3)
+            rows <- Signal.initRef(20)
+            ui = UI.div(tick.render { n =>
+                val base = uic.Paginator().totalRecords(200).rowsPerPageOptions(Seq(10, 20)).currentPageReport(s"run $n {rows}")
+                // One placement: a conversion in each branch of an `if` would be two places, so two instances.
+                val pag: uic.Paginator = if n == 0 then base.page(page).rows(rows) else base
+                UI.div(pag)
+            })
+            (every, _, _) <- paintedAround(ui, t => elementsWithClass(t, "p-paginator").map(_.nonEmpty), ranOnce)(_ => setSettled(tick, 1))
+            shownPage     <- selectedPage(every)
+            report        <- elementsWithClass(every, "p-paginator-current").map(_.map(textOf))
+        yield assert(
+            shownPage.split(",").contains("4") && report.exists(_ == "run 1 20"),
+            s"after the run that dropped both bindings: page $shownPage, report $report"
+        )
+        end for
+    }
+
     // ---- rule A ----
 
     private def next(t: UI)(using Frame): UI.Ast.Element < Sync = elementWithClass(t, "p-paginator-next")
