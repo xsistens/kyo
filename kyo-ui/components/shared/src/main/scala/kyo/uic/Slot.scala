@@ -14,8 +14,9 @@ import kyo.UI.*
   * One hearer, not a list: `.onChange(a).onChange(b)` replaces, as every setter in this module does. An event that carries
   * another value, or fires at another moment, keeps its own field and calls [[heardToo]] at its setter.
   *
-  * @param binding
-  *   what the caller bound, `Absent` where the slot is the component's own
+  * @param bound
+  *   what the caller bound, as a [[kyo.UI.Prop]]: a ref two way, any other signal one way, a constant; `Absent` where the slot
+  *   is the component's own
   * @param hearer
   *   the slot's own event, which hears every change with the new value
   * @param heardElsewhere
@@ -24,13 +25,26 @@ import kyo.UI.*
   *   a host that embeds this component reports the mistake itself, or the binding is a stand-in nobody made: never a card
   */
 final private[uic] case class Slot[A](
-    binding: Maybe[ReactiveValue[A]] = Absent,
+    bound: Maybe[Prop[A]] = Absent,
     hearer: Maybe[A => UI.Action] = Absent,
     heardElsewhere: Boolean = false,
     quiet: Boolean = false
 ):
     /** The slot bound as the caller says: a ref two way, a signal one way, anything else a constant. */
-    def bind(v: A | Signal[A]): Slot[A] = copy(binding = Present(ReactiveValue(v)))
+    def bind(v: Prop[A]): Slot[A] = copy(bound = Present(v))
+
+    /** The slot with nothing bound: the component's own. */
+    def unbound: Slot[A] = copy(bound = Absent)
+
+    /** The slot as an instance reads it: unbound, it binds the instance's own `ref`, which keeps the reader's value while a
+      * run binds the slot and gives it back when a run stops binding it; anything bound stays.
+      */
+    def ownedBy(ref: SignalRef[A]): Slot[A] = if bound.isDefined then this else copy(bound = Present(ref))
+
+    /** What was bound, as the `ReactiveValue` the components the waves have not reached yet read. A bridge: it goes with
+      * `ReactiveValue` in the last wave.
+      */
+    def binding: Maybe[ReactiveValue[A]] = bound.map(ReactiveValue(_))
 
     /** The slot with `f` hearing every change, in place of whoever heard it before. */
     def hear(f: A => UI.Action)(using Frame): Slot[A] = copy(hearer = Present(Callback.of(f)))
@@ -42,7 +56,7 @@ final private[uic] case class Slot[A](
     def quieted: Slot[A] = copy(quiet = true)
 
     /** The ref a reader's change is written into, where the slot binds two way. */
-    def writable: Maybe[SignalRef[A]] = binding.flatMap(_.writable)
+    def writable: Maybe[SignalRef[A]] = bound.flatMap(Prop.writable)
 
     /** Whether a reader's change reaches anybody: a two-way binding, the slot's event, or another event. */
     def heard: Boolean = writable.isDefined || hearer.isDefined || heardElsewhere
@@ -72,9 +86,6 @@ final private[uic] case class Slot[A](
     /** The value at this moment, with `unbound` standing in where nothing is bound. */
     def current(unbound: A)(using Frame): A < Sync = reading(unbound).current
 
-    /** The binding as the caller gave it, for a native setter or a component a host embeds. */
-    def bound: Maybe[A | Signal[A]] = binding.map(_.bound)
-
     /** Inside a mount the component already has: unbound, the slot becomes a ref of its own, starting at `start`; anything
       * bound stays. A second mount around a slot like this would be a mount inside a mount for every instance, and while a
       * mount restarts kyo-ui shows an inert snapshot.
@@ -92,7 +103,7 @@ final private[uic] case class Slot[A](
             case _                               => mintFrom(unbound)
 
     private def mintFrom(a: A)(using CanEqual[A, A], Frame): Slot[A] < Sync =
-        Signal.initRef(a).map(ref => copy(binding = Present(ReactiveVariable(ref))))
+        Signal.initRef(a).map(ref => copy(bound = Present(ref)))
 end Slot
 
 private[uic] object Slot:
@@ -129,13 +140,13 @@ private[uic] object Slot:
       */
     def owning[A](slot: Slot[A], start: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
         if slot.binding.isDefined || on.const.contains(false) then draw(slot)
-        else UI.mounted(Signal.initRef(start).map(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))))
+        else UI.mounted(Signal.initRef(start).map(own => draw(slot.copy(bound = Present(own)))))
 
     /** [[owning]] where a constant is only where the slot starts. */
     def owningFrom[A](slot: Slot[A], unbound: A, on: BoolValue = alwaysOn)(draw: Slot[A] => UI)(using CanEqual[A, A], Frame): UI =
         slot.binding match
             case Present(ReactiveValue.Const(a)) if !on.const.contains(false) =>
-                UI.mounted(Signal.initRef(a).map(own => draw(slot.copy(binding = Present(ReactiveVariable(own))))))
+                UI.mounted(Signal.initRef(a).map(own => draw(slot.copy(bound = Present(own)))))
             case Present(_) => draw(slot)
             case _          => owning(slot, unbound, on)(draw)
 

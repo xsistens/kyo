@@ -6,11 +6,11 @@ import kyo.UI.*
 class SlotTest extends UicTest:
 
     /** The four bindings a slot can hold, with what each answers: writable, a constant, a signal. */
-    private def bindings(using Frame): Seq[(String, Maybe[ReactiveValue[Int]], Boolean, Boolean, Boolean)] =
+    private def bindings(using Frame): Seq[(String, Maybe[Prop[Int]], Boolean, Boolean, Boolean)] =
         Seq(
             ("nothing", Absent, false, false, false),
-            ("a constant", Present(ReactiveValue(1)), false, true, false),
-            ("a signal", Present(ReactiveValue.Dyn(Signal.initConst(1))), false, false, true)
+            ("a constant", Present(1), false, true, false),
+            ("a signal", Present(Signal.initConst(1)), false, false, true)
         )
 
     private val hearerF: Int => UI.Action = _ => ()

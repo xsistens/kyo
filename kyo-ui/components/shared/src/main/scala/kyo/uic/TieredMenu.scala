@@ -56,7 +56,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
     /** Popup mode with the open state kept by the menu itself, starting open, as an overlay nothing inside can open
       * does: the panel shows until the reader closes it. [[onPopupChange]] still hears every close.
       */
-    def popup(): TieredMenu = new TieredMenu(p.copy(popupSlot = popupSlot.copy(binding = Absent), popupOwnFlag = true))
+    def popup(): TieredMenu = new TieredMenu(p.copy(popupSlot = popupSlot.unbound, popupOwnFlag = true))
 
     /** Fired with the open state the reader asks for (false for a pick, Tab, Escape and an outside click), after a
       * two-way [[popup]] is written.
