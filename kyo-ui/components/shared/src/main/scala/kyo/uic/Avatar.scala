@@ -49,7 +49,7 @@ final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node,
     def interactive(v: Boolean): Avatar = new Avatar(p.copy(interactiveFlag = v))
 
     /** Accessible name announced for the avatar (overrides the initials-derived default). */
-    def accessibleName(v: String): Avatar = new Avatar(p.copy(accessV = accessV.copy(nameV = Present(TextValue.Const(v)))))
+    def accessibleName(v: String): Avatar = new Avatar(p.copy(access = access.copy(name = Present(v))))
 
     /** Overlay badge (e.g. a status dot or counter) rendered as `span.p-uic-avatar-badge`. */
     def badge(v: UI): Avatar = new Avatar(p.copy(badgeV = Present(v)))
@@ -59,7 +59,11 @@ final class Avatar private[uic] (private[uic] val p: Avatar.Props) extends Node,
         new Avatar(p.copy(onClickEff = Present(Callback(action)), interactiveFlag = true))
 
     private[uic] def render(using Frame): UI =
-        val accName = accessV.nameV.map(_.constOrEmpty).getOrElse(initialsV.getOrElse("Avatar"))
+        // The setter takes a constant only; a signal (through a shared setter) has no text to give the image its alt.
+        val accName = access.name.fold(initialsV.getOrElse("Avatar")) {
+            case s: String => s
+            case _         => ""
+        }
 
         var el = div.cssClass("p-avatar").cssClass("p-component")
         if shapeV == AvatarShape.Circle then el = el.cssClass("p-avatar-circle")
@@ -113,7 +117,7 @@ object Avatar:
         sizeV: ExtendedSize = Size.Normal,
         disabledFlag: Boolean = false,
         interactiveFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         badgeV: Maybe[UI] = Absent,
         onClickEff: Maybe[UI.Action] = Absent
     )

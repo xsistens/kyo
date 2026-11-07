@@ -34,8 +34,8 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
 
     type Self = Slider
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Slider(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Slider(p.copy(access = v))
 
     /** The slider's value, in any of the three bindings a value slot holds. A constant nobody hears is
       * fixed, drawn read-only; one [[onChange]] hears is reported and the thumb put back where the
@@ -134,12 +134,8 @@ final class Slider private[uic] (private[uic] val p: Slider.Props) extends Node,
             .max(maxV)
             .step(if integerFlag then math.max(1.0, math.rint(stepV)) else stepV)
             .value(native)
-        accessV.idV.foreach(v => in = in.id(v))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => in = in.aria("label", v)
-            case Present(TextValue.Dyn(s))   => in = in.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.id.foreach(v => in = in.id(v))
+        access.name.foreach(v => in = in.aria("label", v))
         if disabledFlag.constTrue then in = in.disabled(true)
         else if readonlyFlag then in = in.aria("readonly", "true").preventActivation
         else
@@ -173,7 +169,7 @@ object Slider:
         disabledFlag: Maybe[BoolValue] = Absent,
         readonlyFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Double => UI.Action] = Absent
     )
 

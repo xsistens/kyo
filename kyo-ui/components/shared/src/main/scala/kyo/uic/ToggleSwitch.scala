@@ -19,8 +19,8 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
 
     type Self = ToggleSwitch
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleSwitch(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new ToggleSwitch(p.copy(access = v))
 
     /** The checked state. A `SignalRef` binds TWO-WAY: a toggle writes it, and its changes update the switch. Any other
       * signal, or a constant, binds ONE-WAY: the switch shows it, and a toggle writes nothing and only reports through
@@ -101,16 +101,15 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
             .role("switch")
             .checked(native)
             .aria("checked", isChecked.toString)
-        box = accessV.idV.map(v => box.id(v)).getOrElse(box)
+        box = access.id.map(v => box.id(v)).getOrElse(box)
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)
         if requiredFlag.getOrElse(false) then box = box.jsProp("required", "true").aria("required", "true")
         box = validity.markAria(box)
         if isReadonly then box = box.aria("readonly", "true")
-        box = accessV.nameV match
-            case Present(TextValue.Const(v)) => box.aria("label", v)
-            case Present(TextValue.Dyn(s))   => box.aria("label", s)
-            case Absent                      => box
-        box = accessV.nameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
+        box = access.name match
+            case Present(v) => box.aria("label", v)
+            case _          => box
+        box = access.nameRef.map(v => box.aria("labelledby", v)).getOrElse(box)
         // readonly keeps the switch FOCUSABLE and refuses to change: the client declines the
         // browser's own toggle (`preventActivation`) and the handler is not wired. Disabling the
         // native input instead took it out of the tab order, which made readonly and disabled the
@@ -157,7 +156,7 @@ object ToggleSwitch:
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         tooltipV: Maybe[TextValue] = Absent,
         handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent
     )
 

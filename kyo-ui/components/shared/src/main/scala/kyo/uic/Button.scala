@@ -104,8 +104,8 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Icon rendered after the label. */
     def endIcon(glyph: IconGlyph): Button = new Button(p.copy(endIconV = Present(glyph)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Button(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Button(p.copy(access = v))
 
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal).
@@ -229,7 +229,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
                 Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
             case _ => ()
         end match
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         el = withExtraArias(el)
         el = el.jsProp("type", buttonTypeV.token.toLowerCase)
         if accessibleRoleV == ButtonAccessibleRole.Link then el = el.role("link")
@@ -237,12 +237,8 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
         tabIndexV.foreach(t => el = el.tabIndex(t))
         if focusSeedV then el = el.focusAuto(true).focusRestore(true)
         onKeyDownF.foreach(f => el = el.onKeyDown(f))
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => el = el.aria("label", n)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
+        access.name.foreach(n => el = el.aria("label", n))
+        access.nameRef.foreach(r => el = el.aria("labelledby", r))
         accessibleDescriptionV match
             case Present(TextValue.Const(d)) => el = el.aria("description", d)
             case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
@@ -279,14 +275,10 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
                 Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
             case _ => ()
         end match
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         el = withExtraArias(el)
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => el = el.aria("label", n)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(r => el = el.aria("labelledby", r))
+        access.name.foreach(n => el = el.aria("label", n))
+        access.nameRef.foreach(r => el = el.aria("labelledby", r))
         accessibleDescriptionV match
             case Present(TextValue.Const(d)) => el = el.aria("description", d)
             case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
@@ -336,7 +328,7 @@ object Button:
         fluidFlag: Boolean = false,
         icon: Maybe[IconGlyph] = Absent,
         endIconV: Maybe[IconGlyph] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         hrefV: Maybe[String] = Absent,
         disabledV: Maybe[Prop[Boolean]] = Absent,
         ariaDisabledV: Maybe[Prop[Boolean]] = Absent,

@@ -23,8 +23,8 @@ final class ProgressSpinner private[uic] (private[uic] val p: ProgressSpinner.Pr
     /** Size preset: `Small` (2rem) / `Normal` (Prime's 100px default) / `Large` (8rem). */
     def size(v: Size): ProgressSpinner = new ProgressSpinner(p.copy(sizeV = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressSpinner(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new ProgressSpinner(p.copy(access = v))
     private[uic] def render(using Frame): UI                   =
         var el = div.cssClass("p-progressspinner").role("progressbar")
         sizeV match
@@ -32,11 +32,7 @@ final class ProgressSpinner private[uic] (private[uic] val p: ProgressSpinner.Pr
             case Size.Large  => el = el.cssClass("p-uic-progressspinner-lg")
             case Size.Normal => ()
         end match
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => el = el.aria("label", n)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(n => el = el.aria("label", n))
         el(
             Svg.svg
                 .cssClass("p-progressspinner-spin")
@@ -57,7 +53,7 @@ end ProgressSpinner
 object ProgressSpinner:
     final private[uic] case class Props(
         sizeV: Size = Size.Normal,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     def apply(): ProgressSpinner = new ProgressSpinner(Props())

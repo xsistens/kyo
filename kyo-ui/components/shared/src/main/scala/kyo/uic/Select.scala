@@ -70,8 +70,8 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
       */
     private[uic] def inputwrapper: Select[A] = new Select(p.copy(inputwrapperFlag = true))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Select(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Select(p.copy(access = v))
 
     /** Package-internal: hosts that already render inside their own subscription
       * supply the resolved selection directly (no nested subscription; writes go
@@ -376,7 +376,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
         val validity = FieldValidity(validityV)
         UI.mounted {
             for
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the select keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -523,7 +523,7 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
         // the combobox (or, with a filter header, the button that opens it), so this is what a
         // `Label.forId`, `Commands.focusId` and the form's focus-first-invalid have to reach. The
         // panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         extraClassesV.foreach(c => el = el.cssClass(c))
         if inputwrapperFlag then
             el = el.cssClass("p-inputwrapper")
@@ -549,12 +549,8 @@ final class Select[A] private[uic] (private[uic] val p: Select.Props[A]) extends
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label", v))
+        access.nameRef.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox is decided by whether there is a filter header, and it is
         // decided once: the combobox is whatever holds focus while the list is open, because
         // `aria-activedescendant` is read off the focused element or off nothing at all. Without a
@@ -850,7 +846,7 @@ object Select:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
         onBlurF: Maybe[Maybe[A] => UI.Action] = Absent,

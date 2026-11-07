@@ -61,8 +61,8 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
 
     type Self = MultiSelect[A]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new MultiSelect(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new MultiSelect(p.copy(access = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a list that changes
       * while the field is shown (read in the field's own region, so the field is not built again around it).
@@ -313,7 +313,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         val validity = FieldValidity(validityV)
         UI.mounted {
             for
-                base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                 // Unbound, the field keeps the panel state itself, starting closed.
                 open <- openSlot.owned(false)
                 hi   <- Signal.initRef(-1)
@@ -502,7 +502,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         var el = div.cssClass("p-multiselect").cssClass("p-component").cssClass("p-inputwrapper")
         // On the root, the combobox that holds the tab stop, not on the label container: see
         // [[HasElementId]]. The panel's parts derive from the same value (`$id-list`, `$id-option-<n>`).
-        accessV.idV.foreach(v => el = el.id(v))
+        access.id.foreach(v => el = el.id(v))
         if displayV == MultiSelectDisplay.Chip then el = el.cssClass("p-multiselect-display-chip")
         if selected.nonEmpty then el = el.cssClass("p-inputwrapper-filled")
         if loading then el = el.aria("busy", "true")
@@ -521,12 +521,8 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label", v))
+        access.nameRef.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox follows the filter header, and follows it for the same
         // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
         // because `aria-activedescendant` is read off the focused element or off nothing at all.
@@ -843,7 +839,7 @@ object MultiSelect:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeF: Maybe[Set[A] => UI.Action] = Absent,
         onBlurF: Maybe[Set[A] => UI.Action] = Absent,
         loadingV: Maybe[BoolValue] = Absent,

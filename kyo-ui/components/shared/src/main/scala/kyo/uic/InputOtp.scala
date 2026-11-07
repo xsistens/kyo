@@ -29,8 +29,8 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
 
     type Self = InputOtp
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputOtp(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputOtp(p.copy(access = v))
 
     /** The whole code. A `SignalRef` binds TWO-WAY: a cell edit writes its character into the right position, and ref
       * changes re-render every cell. Any other signal binds ONE-WAY: the cells show it, and an edit writes nothing and
@@ -152,7 +152,7 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
                 .value(ch)
                 .accessibleName(s"Please enter OTP character ${i + 1}")
             cellIds.foreach(ids => cell = cell.id(ids(i)))
-            cell = if i == 0 then accessV.idV.map(v => cell.id(v)).getOrElse(cell) else cell
+            cell = if i == 0 then access.id.map(v => cell.id(v)).getOrElse(cell) else cell
             if integerOnlyFlag then cell = cell.inputFilter("int")
             if disabledFlag.constTrue then cell = cell.disabled(true)
             if readonlyFlag then cell = cell.readonly(true)
@@ -177,11 +177,7 @@ final class InputOtp private[uic] (private[uic] val p: InputOtp.Props) extends N
         }
 
         var el = div.cssClass("p-inputotp").cssClass("p-component")
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
+        access.name.foreach(v => el = el.aria("label", v))
         el(UI.children(cells)*)
     end body
 end InputOtp
@@ -197,7 +193,7 @@ object InputOtp:
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onBlurF: Maybe[String => UI.Action] = Absent
     )
 

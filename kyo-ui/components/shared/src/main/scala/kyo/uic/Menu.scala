@@ -76,8 +76,8 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
     /** Package-internal: rows a host has already resolved in its own region, drawn as they are. */
     private[uic] def rows(items: List[MenuItem]): Menu = new Menu(p.copy(itemsV = items, entriesV = items))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Menu(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menu(p.copy(access = v))
 
     /** Popup mode: the menu renders as a floating [[Overlay]] panel (Prime's `.p-menu-overlay`) over the open state `v`. A
       * `SignalRef` binds two way: a pick, Tab, Escape and an outside click write false, then [[onPopupChange]] hears
@@ -111,10 +111,9 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
 
     /** Puts the accessible name on `el` as `aria-label`, a signal through the attribute channel. */
     private def named[E <: UI.Ast.Element { type Self = E }](el: E): E =
-        accessV.nameV match
-            case Present(TextValue.Const(n)) => el.aria("label", n)
-            case Present(TextValue.Dyn(s))   => el.aria("label", s)
-            case Absent                      => el
+        access.name match
+            case Present(n) => el.aria("label", n)
+            case _          => el
 
     /** The flat row list: section items are flattened to a heading + their
       * children (Prime's grouped Menu model).
@@ -185,7 +184,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
                     // The links are the stops, so focus goes to the list only to bring the reader
                     // into the panel, and Tab walks on from there.
                     var panelList = named(list.tabIndex(-1).focusAuto(true).focusRestore(true))
-                    accessV.idV.foreach(v => panelList = panelList.id(v))
+                    access.id.foreach(v => panelList = panelList.id(v))
                     popupOverlay
                         .matchWidth(false)
                         .animate(false)
@@ -196,7 +195,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
                         .render
                 case Absent =>
                     var root = named(nav.cssClass("p-menu").cssClass("p-component"))
-                    accessV.idV.foreach(v => root = root.id(v))
+                    access.id.foreach(v => root = root.id(v))
                     root(list)
             end match
         }
@@ -209,9 +208,9 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
       * is the whole of what a screen reader hears about the highlighted row, and a menu that had
       * to be given an id to say it said nothing in most of the pages that use one.
       *
-      * The minted base is passed DOWN rather than written into `accessV.idV`, so the two questions stay
-      * apart: `accessV.idV` is "the id the caller asked for", which lands on the element, and the base is
-      * "what internal parts derive from", which may be machine-made. Writing the mint into `accessV.idV`
+      * The minted base is passed DOWN rather than written into `access.id`, so the two questions stay
+      * apart: `access.id` is "the id the caller asked for", which lands on the element, and the base is
+      * "what internal parts derive from", which may be machine-made. Writing the mint into `access.id`
       * (as this did) makes them one value, and then either the caller's id never reaches the DOM
       * or a machine name does. Same split `AutoComplete` makes at its own mount.
       */
@@ -230,7 +229,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
                 // The highlight follows its row over the roots shown ([[Anchored]], [[Menu.rowRebase]]).
                 MenuRender.readRooted(entriesV).and(hi.reading).and(popup).render { case ((Rooted(roots, items), h), shown) =>
                     val hv = hi.view(h, roots)(using Menu.rowRebase)
-                    new Menu(p.copy(itemsV = items)).body(hv.value, Present(hv), Present(accessV.idV.getOrElse(base)), shown)
+                    new Menu(p.copy(itemsV = items)).body(hv.value, Present(hv), Present(access.id.getOrElse(base)), shown)
                 }
     end wired
 
@@ -239,10 +238,10 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
       * its own. `SplitButton` hosts its menu this way.
       */
     private[uic] def hosted(h: Int, hi: Anchored.View[Int], base: String, shown: Boolean)(using Frame): UI =
-        body(h, Present(hi), Present(accessV.idV.getOrElse(base)), Present(shown))
+        body(h, Present(hi), Present(access.id.getOrElse(base)), Present(shown))
 
     /** @param partBase what internal parts derive from (`s"$partBase-active"`): the caller's id
-      *                 when there is one, else the id the mount minted. Distinct from `accessV.idV`,
+      *                 when there is one, else the id the mount minted. Distinct from `access.id`,
       *                 which is only ever the caller's and is what lands on the element.
       */
     private def body(h: Int, hiRef: Maybe[Anchored.View[Int]], partBase: Maybe[String], popupShown: Maybe[Boolean] = Absent)(using
@@ -318,7 +317,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
         // root is the overlay's panel, which the menu does not own, so it lands on the
         // `ul[role=menu]`, the element that IS the menu to a reader. Either way `#<id>` exists
         // and contains the rows, which is what a page addressing a menu by name is reaching for.
-        if popupSlot.binding.isDefined then accessV.idV.foreach(v => list = list.id(v))
+        if popupSlot.binding.isDefined then access.id.foreach(v => list = list.id(v))
         popupSlot.binding match
             case Present(_) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -372,7 +371,7 @@ final class Menu private[uic] (private[uic] val p: Menu.Props) extends Node, Has
                     list = list.preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
                     hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
                 var root = div.cssClass("p-menu").cssClass("p-component")
-                accessV.idV.foreach(v => root = root.id(v))
+                access.id.foreach(v => root = root.id(v))
                 root(list(UI.children(rowUIs)*))
         end match
     end body
@@ -394,7 +393,7 @@ object Menu:
         entriesV: List[MenuItemLiveEntry] = Nil,
         popupSlot: Slot[Boolean] = Slot(),
         popupOwnFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         roleV: MenuAccessibleRole = MenuAccessibleRole.Menu
     )
 

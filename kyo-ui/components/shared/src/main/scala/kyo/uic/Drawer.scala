@@ -119,8 +119,8 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
       */
     def preventFocusRestore(v: Boolean): Drawer = new Drawer(p.copy(preventFocusRestoreFlag = v))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Drawer(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Drawer(p.copy(access = v))
 
     /** Adds content children. */
     def apply(cs: UI*): Drawer = new Drawer(p.copy(kids = kids ++ cs))
@@ -191,15 +191,15 @@ final class Drawer private[uic] (private[uic] val p: Drawer.Props) extends Node,
                 if !preventInitialFocusFlag then box = box.focusAuto(true)
                 if !preventFocusRestoreFlag then box = box.focusRestore(true)
                 // A text header names the drawer when the caller gave it no name, as in Dialog.
-                val headerName: Maybe[TextValue] =
-                    if accessV.nameRefV.isDefined || headerContent.isDefined then Absent else headerText
-                val name: Maybe[TextValue] = accessV.nameV.orElse(headerName)
-                name match
-                    case Present(TextValue.Const(n)) => box = box.aria("label", n)
-                    case Present(TextValue.Dyn(s))   => box = box.aria("label", s)
-                    case Absent                      => ()
-                end match
-                accessV.nameRefV.foreach(n => box = box.aria("labelledby", n))
+                val headerName: Maybe[Prop[String]] =
+                    if access.nameRef.isDefined || headerContent.isDefined then Absent
+                    else
+                        headerText.map {
+                            case TextValue.Const(t) => t
+                            case TextValue.Dyn(s)   => s
+                        }
+                access.name.orElse(headerName).foreach(n => box = box.aria("label", n))
+                access.nameRef.foreach(n => box = box.aria("labelledby", n))
                 if !fixed then
                     box = box.onKeyDown { e =>
                         e.key match
@@ -241,7 +241,7 @@ object Drawer:
         showCloseIconFlag: Boolean = true,
         preventInitialFocusFlag: Boolean = false,
         preventFocusRestoreFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         kids: List[UI] = Nil
     )
 

@@ -67,8 +67,8 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
     private def closePopup(using Frame): UI.Action =
         if popupSlot.binding.isDefined then popupSlot.change(false) else ()
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new TieredMenu(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new TieredMenu(p.copy(access = v))
 
     private[uic] def render(using Frame): UI =
         // `popup()`: the open state is the menu's own, allocated in the mount beside the highlight.
@@ -108,7 +108,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
                 val sv = subs.view(open, roots)
                 new TieredMenu(p.copy(itemsV =
                     items
-                )).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)), shown)
+                )).body(sv.open, Present(sv), fv.value, Present(fv), Present(access.id.getOrElse(base)), shown)
         }
     end wired
 
@@ -118,7 +118,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `accessV.idV`, which is only ever the caller's; see Menu.wired.
+        // mint. Kept apart from `access.id`, which is only ever the caller's; see Menu.wired.
         partBase: Maybe[String],
         // Whether a popup is open, where the host read it in its own region; `Absent` lets the Overlay gate itself.
         popupShown: Maybe[Boolean] = Absent
@@ -149,7 +149,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
         if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         // In a popup the component's root is the overlay panel, which this does not own, so the
         // caller's id lands on the `ul[role=menu]`; see Menu.body for the same split.
-        if popupSlot.binding.isDefined then accessV.idV.foreach(v => list = list.id(v))
+        if popupSlot.binding.isDefined then access.id.foreach(v => list = list.id(v))
         popupSlot.binding match
             case Present(_) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -182,7 +182,7 @@ final class TieredMenu private[uic] (private[uic] val p: TieredMenu.Props) exten
                 list = list.tabIndex(0)
                 if focusRef.isDefined then list = list.preventScrollKeys.onKeyDown(keyHandler)
                 var root = div.cssClass("p-tieredmenu").cssClass("p-component")
-                accessV.idV.foreach(v => root = root.id(v))
+                access.id.foreach(v => root = root.id(v))
                 root(list(UI.children(rowsUI)*))
         end match
     end body
@@ -195,7 +195,7 @@ object TieredMenu:
         entriesV: List[MenuItemLiveEntry] = Nil,
         popupSlot: Slot[Boolean] = Slot(),
         popupOwnFlag: Boolean = false,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     /** An empty tiered menu; add root items via [[TieredMenu.items]]. */

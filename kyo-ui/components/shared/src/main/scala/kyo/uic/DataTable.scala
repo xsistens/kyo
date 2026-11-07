@@ -589,8 +589,8 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
 
     type Self = DataTable[A]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new DataTable(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new DataTable(p.copy(access = v))
 
     /** The rows. A second call replaces the first.
       *
@@ -2684,7 +2684,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                     // so the derived part ids (headers, rows, the frozen group) work unasked
                     // but are addressable when the caller cares. Same rule as Menu's base.
                     minted <- UI.id
-                    prefix = accessV.idV.getOrElse(minted)
+                    prefix = access.id.getOrElse(minted)
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellKey, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
@@ -2765,7 +2765,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
             // so the column set and the editable/filterable leaves are read at mount time.
             // Anything that must change afterwards belongs in a `Signal`, which is what `rows`,
             // `sort`, `page` and the bound refs already are.
-            accessV.idV match
+            access.id match
                 case Present(id) => mount.keyed(id)
                 case Absent      => mount
             end match
@@ -2956,7 +2956,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
       */
     private def rootElement(order: ReactiveValue[Maybe[List[List[String]]]], navOn: Boolean)(using Frame): Ast.Div =
         var root = div.cssClass("p-datatable").cssClass("p-component")
-        accessV.idV.foreach(v => root = root.id(v))
+        access.id.foreach(v => root = root.id(v))
         // A bound source fetches for as long as the table is shown. Until it has, the table renders itself loading from the source's signals.
         sourceV.foreach(src => root = root.whileMountedKeyed(src)(src.run)(using CanEqual.derived))
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
@@ -3215,12 +3215,8 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 case ReactiveValue.Dyn(sig)  => tbl = tbl.inlineStyle(sig)
             end match
         end if
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
-            case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
+        access.name.foreach(v => tbl = tbl.aria("label", v))
+        access.nameRef.foreach(v => tbl = tbl.aria("labelledby", v))
         // The header carries an id only where a frozen row needs to hold at its height,
         // which is the one thing about this table nothing can be told and nothing can work
         // out on its own.
@@ -6264,7 +6260,7 @@ object DataTable:
         emptyContentV: Maybe[EmptyContent] = Absent,
         loadingContentV: Maybe[LoadingContent] = Absent,
         onRowClickF: Maybe[A => UI.Action] = Absent,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         headerV: Maybe[UI] = Absent,
         footerV: Maybe[UI] = Absent,
         loadingV: Maybe[BoolValue] = Absent,

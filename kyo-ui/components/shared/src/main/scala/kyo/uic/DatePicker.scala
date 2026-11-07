@@ -42,8 +42,8 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
 
     type Self = DatePicker[A]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new DatePicker(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new DatePicker(p.copy(access = v))
 
     /** Binds the held value two-way to `ref`, `Absent` while nothing is picked: a pick, the time picker, the button bar and a
       * typed text write it back.
@@ -255,7 +255,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
                 given CanEqual[A, A] = CanEqual.derived
                 for
                     // A caller's own id is the base the grid and its cells derive from; a minted one stands in.
-                    base <- accessV.idV.map(v => Kyo.lift(v)).getOrElse(UI.id)
+                    base <- access.id.map(v => Kyo.lift(v)).getOrElse(UI.id)
                     held <- bindingV match
                         case Present(b) => Kyo.lift(b)
                         case Absent     =>
@@ -299,7 +299,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         val cursor                                                   = refs.cursor
         val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
-            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, accessV.idV)
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, refs.draft, base, focus, access.id)
         // Whether it is open, the month, the cursor, the seed flag, the view and the selection are read as ONE region (see
         // [[ReactiveValue]]): a pick writes several of them and closes, and a nested region would draw the grid against the values
         // it closed over. The panel's presence is decided here too, so the Overlay is host-gated (`renderShown`).
@@ -385,7 +385,7 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
     )(using Frame): UI =
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
         // The live render stamps `fieldId` below, which is this same id where the caller gave one.
-        i = accessV.idV.map(v => i.id(v)).getOrElse(i)
+        i = access.id.map(v => i.id(v)).getOrElse(i)
         sizeV match
             case Size.Small  => i = i.cssClass("p-inputtext-sm")
             case Size.Large  => i = i.cssClass("p-inputtext-lg")
@@ -402,11 +402,10 @@ final class DatePicker[A] private[uic] (private[uic] val p: DatePicker.Props[A])
         if readonlyFlag || !editable then i = i.readOnly(true)
         if requiredFlag then i = i.aria("required", "true").jsProp("required", "true")
         i = nameV.map(v => i.jsProp("name", v)).getOrElse(i)
-        i = accessV.nameV match
-            case Present(TextValue.Const(v)) => i.aria("label", v)
-            case Present(TextValue.Dyn(s))   => i.aria("label", s)
-            case Absent                      => i
-        i = accessV.nameRefV.map(v => i.aria("labelledby", v)).getOrElse(i)
+        i = access.name match
+            case Present(v) => i.aria("label", v)
+            case _          => i
+        i = access.nameRef.map(v => i.aria("labelledby", v)).getOrElse(i)
         nav.foreach { n =>
             if editable && interactive then i = i.onChange(typed => commitText(typed, n))
             // The blur reports what is held, read from the bound refs, not the text in the field (which a blur could carry):
@@ -1360,7 +1359,7 @@ object DatePicker:
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         openSlot: Slot[Boolean] = Slot(),
         referenceDateV: Maybe[A] = Absent,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,

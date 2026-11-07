@@ -38,15 +38,15 @@ final class InputGroup private[uic] (private[uic] val p: InputGroup.Props) exten
 
     type Self = InputGroup
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new InputGroup(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new InputGroup(p.copy(access = v))
 
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
     def apply(cs: UI*): InputGroup = new InputGroup(p.copy(kids = kids ++ cs))
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-inputgroup").cssClass("p-component")
-        el = accessV.idV.map(v => el.id(v)).getOrElse(el)
+        el = access.id.map(v => el.id(v)).getOrElse(el)
         el(UI.children(kids)*)
     end render
 end InputGroup
@@ -54,7 +54,7 @@ end InputGroup
 object InputGroup:
     final private[uic] case class Props(
         kids: List[UI] = Nil,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     def apply(): InputGroup = new InputGroup(Props())

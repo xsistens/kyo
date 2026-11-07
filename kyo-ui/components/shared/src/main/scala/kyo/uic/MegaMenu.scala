@@ -144,8 +144,8 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
     /** Content after the root list (`div.p-megamenu-end`). */
     def end(ui: UI): MegaMenu = new MegaMenu(p.copy(endV = Present(ui)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new MegaMenu(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new MegaMenu(p.copy(access = v))
 
     private[uic] def render(using Frame): UI =
         UI.mounted {
@@ -179,7 +179,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
                 val sv = subs.view(open, roots)
                 new MegaMenu(p.copy(itemsV =
                     items
-                )).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
+                )).body(sv.open, Present(sv), fv.value, Present(fv), Present(access.id.getOrElse(base)))
         }
     end wired
 
@@ -200,7 +200,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `access.id`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: UI.Action =
@@ -372,7 +372,7 @@ final class MegaMenu private[uic] (private[uic] val p: MegaMenu.Props) extends N
             .cssClass("p-megamenu")
             .cssClass("p-component")
             .cssClass(s"p-megamenu-${orientationV.token}")
-        accessV.idV.foreach(v => root = root.id(v))
+        access.id.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end MegaMenu
@@ -385,7 +385,7 @@ object MegaMenu:
         orientationV: Orientation = Orientation.Horizontal,
         startV: Maybe[UI] = Absent,
         endV: Maybe[UI] = Absent,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     /** An empty mega menu; add root items via [[MegaMenu.items]]. */

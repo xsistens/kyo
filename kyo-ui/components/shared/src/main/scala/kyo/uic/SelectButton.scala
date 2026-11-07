@@ -35,8 +35,8 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
 
     type Self = SelectButton[A]
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new SelectButton(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new SelectButton(p.copy(access = v))
 
     /** Appends typed options with their text projection: a collection, or a signal of options for a group whose choices
       * change while it is shown, read in the group's own region.
@@ -270,12 +270,8 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
                         case Absent     => f(Absent)
                 )
         blurHandler.foreach(h => el = el.onBlur(h))
-        accessV.nameV match
-            case Present(TextValue.Const(v)) => el = el.aria("label", v)
-            case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
-            case Absent                      => ()
-        end match
-        accessV.nameRefV.foreach(v => el = el.aria("labelledby", v))
+        access.name.foreach(v => el = el.aria("label", v))
+        access.nameRef.foreach(v => el = el.aria("labelledby", v))
 
         // The positions an arrow may land on: a disabled option is out of the tab order, so the
         // movement steps over it.
@@ -296,7 +292,7 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
         // id an arrow targets is always the one the option is rendered with.
         val idAt: Int                      = if multipleFlag then navigable.headOption.getOrElse(0) else tabStop
         val optionIds: Maybe[List[String]] = nav.map { (ids, _) =>
-            accessV.idV match
+            access.id match
                 case Present(v) if ids.isDefinedAt(idAt) => ids.updated(idAt, v)
                 case _                                   => ids
         }
@@ -323,8 +319,8 @@ final class SelectButton[A] private[uic] (private[uic] val p: SelectButton.Props
                     // the one tab stop the attached group is, on the option that carries the id.
                     case _ =>
                         tb = tb.asRadioOption(i == tabStop, _ => ())
-                        if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
-            else if i == idAt then accessV.idV.foreach(v => tb = tb.id(v))
+                        if i == idAt then access.id.foreach(v => tb = tb.id(v))
+            else if i == idAt then access.id.foreach(v => tb = tb.id(v))
             end if
             tb.renderInPlace
         }
@@ -400,7 +396,7 @@ object SelectButton:
         sizeV: Size = Size.Normal,
         disabledFlag: Maybe[BoolValue] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        accessV: Accessibility = Accessibility.none,
+        access: Accessibility = Accessibility.none,
         onChangeF: Maybe[Maybe[A] => UI.Action] = Absent,
         onPickF: Maybe[A => UI.Action] = Absent,
         onChangeSetF: Maybe[Set[A] => UI.Action] = Absent,

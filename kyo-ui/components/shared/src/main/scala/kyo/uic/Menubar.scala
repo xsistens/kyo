@@ -55,8 +55,8 @@ final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Nod
       */
     def end(ui: UI): Menubar = new Menubar(p.copy(endV = Present(ui)))
 
-    private[uic] def accessibility: Accessibility              = accessV
-    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(p.copy(accessV = v))
+    private[uic] def accessibility: Accessibility              = access
+    private[uic] def withAccessibility(v: Accessibility): Self = new Menubar(p.copy(access = v))
 
     private[uic] def render(using Frame): UI =
         // The open submenus and the keyboard focus path live in this mount.
@@ -87,7 +87,7 @@ final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Nod
         MenuRender.readRooted(entriesV).and(focus.reading).and(subs.reading).render { case ((Rooted(roots, items), f), open) =>
             val fv = focus.view(f, roots)
             val sv = subs.view(open, roots)
-            new Menubar(p.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(accessV.idV.getOrElse(base)))
+            new Menubar(p.copy(itemsV = items)).body(sv.open, Present(sv), fv.value, Present(fv), Present(access.id.getOrElse(base)))
         }
     end wired
 
@@ -97,7 +97,7 @@ final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Nod
         focus: List[Int],
         focusRef: Maybe[Anchored.View[List[Int]]],
         // What internal parts derive from: the caller's id when there is one, else the mount's
-        // mint. Kept apart from `accessV.idV`, which is only ever the caller's (see Menu.wired).
+        // mint. Kept apart from `access.id`, which is only ever the caller's (see Menu.wired).
         partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => UI.Action = e =>
@@ -130,7 +130,7 @@ final class Menubar private[uic] (private[uic] val p: Menubar.Props) extends Nod
         val listUI: UI = list(UI.children(rowsUI)*)
         // The caller's id on the component's own root, as HasElementId requires of a container.
         var root = div.cssClass("p-menubar").cssClass("p-component")
-        accessV.idV.foreach(v => root = root.id(v))
+        access.id.foreach(v => root = root.id(v))
         root(UI.children((startUI :+ listUI) ++ endUI)*)
     end body
 end Menubar
@@ -142,7 +142,7 @@ object Menubar:
         entriesV: List[MenuItemLiveEntry] = Nil,
         startV: Maybe[UI] = Absent,
         endV: Maybe[UI] = Absent,
-        accessV: Accessibility = Accessibility.none
+        access: Accessibility = Accessibility.none
     )
 
     /** An empty menubar; add root items via [[Menubar.items]]. */
