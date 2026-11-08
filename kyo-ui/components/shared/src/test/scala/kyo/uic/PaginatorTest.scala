@@ -8,6 +8,9 @@ import kyo.UI.*
   */
 class PaginatorTest extends ReactiveValueContract:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     "only the page links are a region; the nav buttons and the report follow the position through channels" in {
         for
             page <- Signal.initRef(1)
