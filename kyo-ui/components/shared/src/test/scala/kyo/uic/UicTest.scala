@@ -659,23 +659,28 @@ abstract class UicTest extends kyo.test.Test[Any]:
         elements(node).map(_.filter(_.attrs.cssClasses.contains(cls)))
 
     /** All the text an element holds, however deeply, which is how a button is found by its label rather than by a class
-      * the sheet does not give it.
+      * the sheet does not give it. A fragment and a keyed child draw their children in place, so their text is the element's;
+      * a region's is not read here (see [[textNow]]).
       */
     private[uic] def textOf(e: UI.Ast.Element)(using Frame): String =
         def walk(u: UI): String = u match
-            case t: UI.Ast.Text     => t.value
-            case el: UI.Ast.Element => el.children.map(walk).mkString
-            case _                  => ""
+            case t: UI.Ast.Text          => t.value
+            case el: UI.Ast.Element      => el.children.map(walk).mkString
+            case f: UI.Ast.Fragment[?]   => f.children.map(walk).mkString
+            case k: UI.Ast.KeyedChild[?] => walk(k.child)
+            case _                       => ""
         e.children.map(walk).mkString
     end textOf
 
     /** The text of `e` as it shows now, a text that follows a signal (a text channel) read at its current value. */
     private[uic] def textNow(e: UI.Ast.Element)(using Frame): String < Sync =
         def walk(u: UI): String < Sync = u match
-            case t: UI.Ast.Text        => t.value
-            case el: UI.Ast.Element    => Kyo.foreach(el.children)(walk).map(_.mkString)
-            case r: UI.Ast.Reactive[?] => r.signal.current(using r.frame).map(walk)
-            case _                     => ""
+            case t: UI.Ast.Text          => t.value
+            case el: UI.Ast.Element      => Kyo.foreach(el.children)(walk).map(_.mkString)
+            case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk)
+            case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk).map(_.mkString)
+            case k: UI.Ast.KeyedChild[?] => walk(k.child)
+            case _                       => ""
         Kyo.foreach(e.children)(walk).map(_.mkString)
     end textNow
 
