@@ -211,13 +211,12 @@ object Paginator:
 
     /** A rows-per-page pick of `n`, read against the page, the rows and the total as they are now. */
     private def rowsPicked(q: Props, n: Int)(using Frame): UI.Action =
-        val now = Prop.zip(pageOf(q), Prop.zip(rowsOf(q), Prop.map(q.total)(math.max(0, _))))
-        Prop.signal(now).current.map { case (pg, (r, t)) => changeRows(q, n, View(pg, r, t)) }
+        Prop.current(UI.reactive(Position(pageOf(q).read, rowsOf(q).read, math.max(0, q.total.read)))).map(changeRows(q, n, _))
 
     /** RPP pick: write the rows ref, then reposition to the page that keeps the
       * first visible record visible (clamped into the new range).
       */
-    private def changeRows(q: Props, newRows: Int, at: View)(using Frame): UI.Action =
+    private def changeRows(q: Props, newRows: Int, at: Position)(using Frame): UI.Action =
         if newRows < 1 then ()
         else
             val newPages = totalPages(at.total, newRows)
@@ -270,57 +269,61 @@ object Paginator:
     /** What the parts that follow the page are drawn from: the page clamped into the page count the rows and the total
       * give.
       */
-    final private case class View(page: Int, rows: Int, total: Int) derives CanEqual:
+    final private case class Position(page: Int, rows: Int, total: Int) derives CanEqual:
         val pages: Int = totalPages(total, rows)
-        val cur: Int   = View.clamp(page, pages)
+        val cur: Int   = Position.clamp(page, pages)
 
-    private object View:
+    private object Position:
         def clamp(page: Int, pages: Int): Int = math.min(math.max(page, 0), pages - 1)
 
     /** The paginator, drawn once over `props`, which hand it `page` and `rows` bound: to the instance's own refs where a run
       * binds nothing (carrying on from a binding a run drops), unbound where it is drawn in place and its host binds them.
       *
-      * Each part that follows the page (the links, the buttons, the report) is a region of its own over the page, the rows
-      * and the total read as ONE value: changing the rows writes the page too, and a nested region would repaint the page it
-      * closed over. The two dropdowns and the jump field are built outside those regions: a Select is a mount, and a region
-      * around it would start the mount again on every page change, replacing the field under the reader's focus; the jump
-      * field shows the page through a signal, so kyo-ui puts the page back into it after a commit that did not land there
-      * ("abc", a number past the last page), and its commit reads the page when it comes. What builds the layout is one
-      * `reactive` block, drawn again only when a run changes it.
+      * The page, the rows and the total are read as ONE value, the position, and every part derives what it shows from it:
+      * changing the rows writes the page too, and two reads would show one before the other. Only the page links are a
+      * region over it, since which links there are moves with the page. The nav buttons follow it through class and
+      * `disabled` channels and read their target when the click comes, and the report is a text channel. The two
+      * dropdowns and the jump field are built outside any region: a Select is a mount, and a region around it would start
+      * the mount again on every page change, replacing the field under the reader's focus; the jump field shows the page
+      * through a signal, so kyo-ui puts the page back into it after a commit that did not land there ("abc", a number past
+      * the last page). What builds the layout is one `reactive` block, drawn again only when a run changes it.
       */
     private def drawn(props: UI.Live[Props])(using Frame): UI =
-        val page                              = props(pageOf(_))
-        val rows                              = props(rowsOf(_))
-        val total                             = props(q => Prop.map(q.total)(math.max(0, _)))
-        val linkSize                          = props(q => Prop.map(q.pageLinkSize)(math.max(1, _)))
-        val reportOf                          = props(_.currentPageReport)
-        val base                              = props(Base(_))
-        val jumpInput                         = props(_.jumpToPageInput)
-        def go(target: Int): UI.Action        = props.call(identity).map(activate(_, target))
-        val pickRows: Maybe[Int] => UI.Action =
-            _.fold[UI.Action](())(n => props.call(identity).map(rowsPicked(_, n)))
-        val jump: Maybe[Int] => UI.Action = _.fold[UI.Action](())(go)
+        val page      = props(pageOf(_))
+        val rows      = props(rowsOf(_))
+        val total     = props(q => Prop.map(q.total)(math.max(0, _)))
+        val linkSize  = props(q => Prop.map(q.pageLinkSize)(math.max(1, _)))
+        val reportOf  = props(_.currentPageReport)
+        val base      = props(Base(_))
+        val jumpInput = props(_.jumpToPageInput)
 
-        val view: Prop[View]    = UI.reactive(View(page.read, rows.read, total.read))
-        val shown: Prop[String] = UI.reactive((view.read.cur + 1).toString)
+        val position: Prop[Position] = UI.reactive(Position(page.read, rows.read, total.read))
+        val atStart: Prop[Boolean]   = UI.reactive(position.read.cur == 0)
+        val atEnd: Prop[Boolean]     = UI.reactive(position.read.cur >= position.read.pages - 1)
+        val shown: Prop[String]      = UI.reactive((position.read.cur + 1).toString)
+        val pageList: Prop[Seq[Int]] = UI.reactive(0 until position.read.pages: Seq[Int])
+        val pageShown: Prop[Int]     = UI.reactive(position.read.cur)
 
-        // The page typed, read against the page and the page count as they are when the commit comes.
+        // A move reads where the paginator stands when it comes; one onto the page shown, or off the pages, is none.
+        def go(target: Position => Int): UI.Action =
+            Prop.current(position).map { at =>
+                val to              = target(at)
+                val move: UI.Action = if to == at.cur || to < 0 || to >= at.pages then () else props.call(identity).map(activate(_, to))
+                move
+            }
+
+        // The page typed, clamped into the pages; text that names no page stays where the paginator stands.
         def commitJump(typed: String): UI.Action =
-            for
-                v <- Prop.current(view)
-                _ <- go(View.clamp(typed.trim.toIntOption.map(_ - 1).getOrElse(v.cur), v.pages))
-            yield ()
+            go(at => Position.clamp(typed.trim.toIntOption.map(_ - 1).getOrElse(at.cur), at.pages))
 
-        def following(part: View => List[UI]): List[UI] =
-            List(UI.reactive(fragment(part(View(page.read, rows.read, total.read))*)))
+        def navButton(cls: String, glyph: IconGlyph, target: Position => Int, off: Prop[Boolean], label: String, fixed: Boolean): UI =
+            val nav = button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label", label)
+                .cssClass("p-disabled", off).disabled(off)
+            // A fixed page goes nowhere from any button, so each says so, disabled or not (Chris, 2026-11-08).
+            (if fixed then nav.aria("disabled", "true") else nav.onClick(go(target))) (GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon"))
+        end navButton
 
-        def navButton(cls: String, glyph: IconGlyph, target: Int, isDisabled: Boolean, label: String, fixed: Boolean): UI =
-            button.cssClass(s"p-paginator-$cls").jsProp("type", "button").aria("label", label)
-                .when(isDisabled)(_.cssClass("p-disabled").disabled(true))
-                .when(!isDisabled && fixed)(_.aria("disabled", "true"))
-                .when(!isDisabled && !fixed)(_.onClick(go(target)))(GlyphSvg(glyph, s"p-paginator-$cls-icon", "p-icon"))
-
-        def pageLinks(v: View, size: Int, fixed: Boolean): UI =
+        def pageLinks(v: Position, size: Int, fixed: Boolean): UI =
             // PrimeVue's calculatePageLinkBoundaries: center the window on the current page, then pull it back inside the
             // boundaries.
             val visible           = math.min(size, v.pages)
@@ -331,23 +334,25 @@ object Paginator:
                 button.cssClass("p-paginator-page").jsProp("type", "button").aria("label", s"Page ${pi + 1}")
                     .when(pi == v.cur)(_.cssClass("p-paginator-page-selected").aria("current", "page"))
                     .when(pi != v.cur && fixed)(_.aria("disabled", "true"))
-                    .when(pi != v.cur && !fixed)(_.onClick(go(pi)))((pi + 1).toString)
+                    .when(pi != v.cur && !fixed)(_.onClick(go(_ => pi)))((pi + 1).toString)
             }
             span.cssClass("p-paginator-pages")(UI.children(buttons)*)
         end pageLinks
 
-        def report(v: View, t: String): UI =
+        // The report's text, filled in from the position and the template: a text channel, patched in place.
+        val reportText: Prop[String] = UI.reactive {
+            val v     = position.read
             val first = if v.total > 0 then v.cur * v.rows + 1 else 0
             val last  = math.min((v.cur + 1) * v.rows, v.total)
-            val text  = t
-                .replace("{currentPage}", (v.cur + 1).toString)
-                .replace("{totalPages}", v.pages.toString)
-                .replace("{first}", first.toString)
-                .replace("{last}", last.toString)
-                .replace("{rows}", v.rows.toString)
-                .replace("{totalRecords}", v.total.toString)
-            span.cssClass("p-paginator-current")(text)
-        end report
+            reportOf.read.fold("")(t =>
+                t.replace("{currentPage}", (v.cur + 1).toString)
+                    .replace("{totalPages}", v.pages.toString)
+                    .replace("{first}", first.toString)
+                    .replace("{last}", last.toString)
+                    .replace("{rows}", v.rows.toString)
+                    .replace("{totalRecords}", v.total.toString)
+            )
+        }
 
         def jtpField(fixed: Boolean): UI =
             val field = Input().value(shown).accessibleName("Jump to page")
@@ -364,40 +369,32 @@ object Paginator:
                     val sel = Select[Int]().options(b.options)(_.toString).extraClass("p-paginator-rpp-dropdown")
                         .selection(rows).accessibleName("Rows per page")
                     // A fixed count is drawn read-only: reachable and readable, with nothing to pick.
-                    List((if b.rowsPickable then sel.onChange(pickRows) else sel.readonly(true)).render)
+                    List((if b.rowsPickable then sel.onPick(n => props.call(identity).map(rowsPicked(_, n)))
+                          else sel.readonly(true)).render)
 
             // Prime's second way to reach a page directly: the same targets as the page links, as a list rather than a row of
-            // buttons, which is what a hundred pages need. Its options are the pages the rows and the total give, read as a
-            // prop, and it shows the page one way, so it is built once.
+            // buttons, which is what a hundred pages need. Its options are the pages the position has, and it shows the page
+            // one way, so it is built once.
             val jtpDropdown: List[UI] =
-                val pages = Prop.map(Prop.zip(rows, total))((r, t) => (0 until totalPages(t, r)).toList: Seq[Int])
-                val shown = Prop.map(Prop.zip(page, Prop.zip(rows, total)))((pg, rt) => View.clamp(pg, totalPages(rt._2, rt._1)))
-                val sel   = Select[Int]().options(pages)(pg => (pg + 1).toString).extraClass("p-paginator-jtp-dropdown")
-                    .selection(shown).accessibleName("Jump to page")
-                List((if b.pageFixed then sel.readonly(true) else sel.onChange(jump)).render)
+                val sel = Select[Int]().options(pageList)(pg => (pg + 1).toString).extraClass("p-paginator-jtp-dropdown")
+                    .selection(pageShown).accessibleName("Jump to page")
+                List((if b.pageFixed then sel.readonly(true) else sel.onPick(pg => go(_ => pg))).render)
             end jtpDropdown
 
             def elementUI(e: PaginatorElement): List[UI] = e match
                 case PaginatorElement.FirstPageLink =>
-                    following(v => List(navButton("first", Icons.angleDoubleLeft, 0, v.cur == 0, "First Page", b.pageFixed)))
+                    List(navButton("first", Icons.angleDoubleLeft, _ => 0, atStart, "First Page", b.pageFixed))
                 case PaginatorElement.PrevPageLink =>
-                    following(v => List(navButton("prev", Icons.angleLeft, v.cur - 1, v.cur == 0, "Previous Page", b.pageFixed)))
+                    List(navButton("prev", Icons.angleLeft, _.cur - 1, atStart, "Previous Page", b.pageFixed))
                 case PaginatorElement.PageLinks =>
-                    List(UI.reactive(pageLinks(View(page.read, rows.read, total.read), linkSize.read, b.pageFixed)))
+                    List(UI.reactive(pageLinks(position.read, linkSize.read, b.pageFixed)))
                 case PaginatorElement.NextPageLink =>
-                    following(v => List(navButton("next", Icons.angleRight, v.cur + 1, v.cur >= v.pages - 1, "Next Page", b.pageFixed)))
+                    List(navButton("next", Icons.angleRight, _.cur + 1, atEnd, "Next Page", b.pageFixed))
                 case PaginatorElement.LastPageLink =>
-                    following(v =>
-                        List(navButton("last", Icons.angleDoubleRight, v.pages - 1, v.cur >= v.pages - 1, "Last Page", b.pageFixed))
-                    )
+                    List(navButton("last", Icons.angleDoubleRight, _.pages - 1, atEnd, "Last Page", b.pageFixed))
                 case PaginatorElement.RowsPerPageDropdown => rpp
                 case PaginatorElement.CurrentPageReport   =>
-                    if !b.report then Nil
-                    else
-                        List(UI.reactive {
-                            val v = View(page.read, rows.read, total.read)
-                            reportOf.read.fold(UI.empty: UI)(report(v, _))
-                        })
+                    if !b.report then Nil else List(span.cssClass("p-paginator-current")(reportText))
                 case PaginatorElement.JumpToPageInput    => List(jtpField(b.pageFixed))
                 case PaginatorElement.JumpToPageDropdown => jtpDropdown
 

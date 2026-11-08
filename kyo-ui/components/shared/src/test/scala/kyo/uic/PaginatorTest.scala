@@ -8,21 +8,35 @@ import kyo.UI.*
   */
 class PaginatorTest extends ReactiveValueContract:
 
-    "what follows the page reads the page and the rows per page in ONE region" in {
+    "only the page links are a region; the nav buttons and the report follow the position through channels" in {
         for
             page <- Signal.initRef(1)
             rows <- Signal.initRef(10)
             ui = uic.Paginator().totalRecords(120).rows(rows).page(page).render
             links  <- regionsAbove(ui, "p-paginator-pages")
-            first  <- regionsAbove(ui, "p-paginator-first")
+            nav    <- Kyo.foreach(Chunk("first", "prev", "next", "last"))(c => regionsAbove(ui, s"p-paginator-$c"))
             report <- regionsAbove(
                 uic.Paginator().totalRecords(120).rows(rows).page(page).currentPageReport("{first}").render,
                 "p-paginator-current"
             )
         yield assert(
-            links == 1 && first == 1 && report == 1,
-            s"changing the rows writes the page too; a nested region repaints the older page: links $links, first $first, report $report"
+            links == 1 && nav == Chunk(0, 0, 0, 0) && report == 0,
+            s"a page change draws only what moves: links $links, first/prev/next/last $nav, report $report"
         )
+    }
+
+    "a page change reaches the nav buttons in place, and a click there reads the page it lands on" in {
+        // Next from the first page: Prev and First stop being disabled, by a patch, with no region drawn for them.
+        for
+            page <- Signal.initRef(0)
+            ui = uic.Paginator().totalRecords(120).rows(10).page(page).render
+            patches <- assertsAfter(ui, settled = _.count(_ == ("disabled", "false")) >= 2)("p-paginator-next")(p =>
+                kyo.internal.UIEvent.Click(p, kyo.internal.MouseEventData(UI.Modifiers.none, Absent))
+            )
+            at <- page.get
+        yield
+            assert(at == 1, s"page $at")
+            assert(patches.count(_ == ("disabled", "false")) == 2, s"patches: $patches")
     }
 
     "a page change or a rows change rebuilds neither dropdown, so neither starts its mount again" in {
@@ -210,7 +224,7 @@ class PaginatorTest extends ReactiveValueContract:
 
     "a run that stops binding the page and the rows carries both on from what the paginator showed" in {
         def ranOnce(t: UI): Boolean < Sync =
-            elementsWithClass(t, "p-paginator-current").map(_.headOption.exists(c => textOf(c).startsWith("run 1")))
+            elementsWithClass(t, "p-paginator-current").map(_.headOption.fold(false: Boolean < Sync)(textNow(_).map(_.startsWith("run 1"))))
         for
             tick <- Signal.initRef(0)
             page <- Signal.initRef(3)
@@ -223,7 +237,7 @@ class PaginatorTest extends ReactiveValueContract:
             })
             (every, _, _) <- paintedAround(ui, t => elementsWithClass(t, "p-paginator").map(_.nonEmpty), ranOnce)(_ => setSettled(tick, 1))
             shownPage     <- selectedPage(every)
-            report        <- elementsWithClass(every, "p-paginator-current").map(_.map(textOf))
+            report        <- elementsWithClass(every, "p-paginator-current").map(Kyo.foreach(_)(textNow))
         yield assert(
             shownPage.split(",").contains("4") && report.exists(_ == "run 1 20"),
             s"after the run that dropped both bindings: page $shownPage, report $report"
@@ -288,6 +302,22 @@ class PaginatorTest extends ReactiveValueContract:
             !d.attrs.cssClasses.contains("p-disabled") && !readOnly(d),
             s"an unbound rows count is the reader's: ${d.attrs.cssClasses}, ${d.attrs.ariaAttrs}"
         )
+    }
+
+    "a fixed page says aria-disabled on every nav button, the disabled ones as well, and none answers a click" in {
+        // On the first page First and Prev are disabled as well; the fixed page says the same of all four.
+        val fixed = uic.Paginator().totalRecords(120).rows(10).page(0).render
+        for
+            html <- renderHtml(fixed)
+            navs <- Kyo.foreach(Chunk("first", "prev", "next", "last"))(c => elementWithClass(fixed, s"p-paginator-$c"))
+        yield
+            val tags = Chunk("first", "prev", "next", "last").map(c =>
+                s"""<button[^>]*p-paginator-$c[^>]*>""".r.findFirstIn(html).getOrElse(throw new AssertionError(s"no $c button"))
+            )
+            assert(tags.forall(_.contains("aria-disabled=\"true\"")), s"tags: $tags")
+            assert(tags.take(2).forall(_.contains(" disabled")) && !tags.drop(2).exists(_.contains(" disabled")), s"tags: $tags")
+            assert(!navs.exists(declaresClick), "a fixed page goes nowhere")
+        end for
     }
 
     "a fixed page draws its jump list read-only: a tab stop that says it goes nowhere, and no card" in {
