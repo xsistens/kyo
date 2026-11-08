@@ -139,3 +139,13 @@ UI.reactive {
   something (`aria-pressed`) is `aria(name, on.toString)`.
 - A setter beside its union with a plain overload (`disabled(Boolean)` once) keeps a `Boolean` off the channel: kyo-ui has one
   setter per flag, and a component adds no plain overload of its own.
+
+## 7. A list of host-added values holds props and is folded with the setter
+
+What a host hands a component in a list (extra aria attributes, extra classes) holds the same type a single setter takes
+(`List[(String, Prop[String])]`), and the render folds it with that setter in the chain:
+`p.extraArias.foldLeft(el)((e, aria) => e.aria(aria._1, aria._2))`. No helper that matches each entry into its constant and
+its signal.
+
+- **Why:** the setter already tells the forms apart (rule 4), so the fold is one line in the chain, and a host can hand over a
+  constant or a signal without the component knowing which.
