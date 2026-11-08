@@ -126,9 +126,9 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
       */
     def preventFocusRestore(v: Boolean): Dialog = new Dialog(p.copy(preventFocusRestoreFlag = v))
 
-    private[uic] def accessibility: Accessibility                           = access
-    private[uic] def withAccessibility(v: Accessibility): Self              = new Dialog(p.copy(access = v))
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Dialog = new Dialog(p.copy(accessibleDescriptionV = v))
+    private[uic] def accessibility: Accessibility                              = access
+    private[uic] def withAccessibility(v: Accessibility): Self                 = new Dialog(p.copy(access = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Dialog = new Dialog(p.copy(accessibleDescriptionV = v))
 
     /** Id(s) of describing element(s), emitted as `aria-describedby`. */
     def accessibleDescriptionRef(v: String): Dialog = new Dialog(p.copy(accessibleDescriptionRefV = Present(v)))
@@ -262,11 +262,7 @@ final class Dialog private[uic] (private[uic] val p: Dialog.Props) extends Node,
                     if !preventFocusRestoreFlag then box = box.focusRestore(true)
                     access.name.orElse(headerName).foreach(n => box = box.aria("label", n))
                     access.nameRef.foreach(n => box = box.aria("labelledby", n))
-                    accessibleDescriptionV match
-                        case Present(TextValue.Const(n)) => box = box.aria("description", n)
-                        case Present(TextValue.Dyn(s))   => box = box.aria("description", s)
-                        case Absent                      => ()
-                    end match
+                    box = box.aria("description", accessibleDescriptionV)
                     accessibleDescriptionRefV.foreach(n => box = box.aria("describedby", n))
                     if !fixed then
                         box = box.onKeyDown { e =>
@@ -379,7 +375,7 @@ object Dialog:
         preventInitialFocusFlag: Boolean = false,
         preventFocusRestoreFlag: Boolean = false,
         access: Accessibility = Accessibility.none,
-        accessibleDescriptionV: Maybe[TextValue] = Absent,
+        accessibleDescriptionV: Maybe[Prop[String]] = Absent,
         accessibleDescriptionRefV: Maybe[String] = Absent,
         accessibleRoleV: PopupAccessibleRole = PopupAccessibleRole.Dialog,
         boxClassesV: List[String] = Nil,

@@ -63,3 +63,25 @@ classed(el, loading)
 ```
 
 - A step that is a match over a value (until rule 4 removes it) is a small local `def step(e: E): E`, applied in the chain.
+
+## 4. A text slot is a `Prop[String]`, written with one call
+
+A text a caller may give as a constant or a signal (a label, a tooltip, an accessible name or description) is stored as
+`Prop[String]` (or `Maybe[Prop[String]]` where it is optional) and written with the kyo-ui setter that takes it:
+`aria(name, prop)`, `aria(name, maybe)`, `title(prop)`, `title(maybe)`, or as a child (`liftPropString`). Never match it into
+its constant and its signal at the render site.
+
+- **Why:** the setter already knows a constant from a signal (a constant as an attribute, a signal as its channel), so a match
+  at each render site is the same five lines in every component, and the slot's type says nothing a reader can use. The shared
+  slots (`HasTooltip`, `HasAccessibleDescription`, `Accessibility.name`) store `Maybe[Prop[String]]` for every component that
+  carries them.
+- **Shape:**
+
+```scala
+.aria("label", p.access.name)
+.aria("description", p.description)
+.title(p.tooltip)
+```
+
+- `TextValue` (`ReactiveValue[String]`) is the form the components not yet converted still store; it goes with
+  `ReactiveValue` in the last wave.

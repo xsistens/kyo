@@ -147,7 +147,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
       */
     def name(v: String): TreeSelect[K] = new TreeSelect(p.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): TreeSelect[K] = new TreeSelect(p.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): TreeSelect[K] = new TreeSelect(p.copy(tooltipV = v))
 
     /** Size: `.p-treeselect-sm` / default / `.p-treeselect-lg`. */
     def size(v: Size): TreeSelect[K] = new TreeSelect(p.copy(sizeV = v))
@@ -386,11 +386,7 @@ final class TreeSelect[K] private[uic] (private[uic] val p: TreeSelect.Props[K])
         end match
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-treeselect-fluid")
-        tooltipV match
-            case Present(TextValue.Const(v)) => el = el.jsProp("title", v)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
-            case Absent                      => ()
-        end match
+        el = el.title(tooltipV)
         access.name.foreach(v => el = el.aria("label", v))
         access.nameRef.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
@@ -452,7 +448,7 @@ object TreeSelect:
         emptyContentV: Maybe[EmptyContent] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
-        tooltipV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[Prop[String]] = Absent,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,

@@ -210,7 +210,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       */
     def name(v: String): MultiSelect[A] = new MultiSelect(p.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(p.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): MultiSelect[A] = new MultiSelect(p.copy(tooltipV = v))
 
     /** Size: `.p-multiselect-sm` / default / `.p-multiselect-lg`. */
     def size(v: Size): MultiSelect[A] = new MultiSelect(p.copy(sizeV = v))
@@ -516,11 +516,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
         end match
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-multiselect-fluid")
-        tooltipV match
-            case Present(TextValue.Const(v)) => el = el.jsProp("title", v)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
-            case Absent                      => ()
-        end match
+        el = el.title(tooltipV)
         access.name.foreach(v => el = el.aria("label", v))
         access.nameRef.foreach(v => el = el.aria("labelledby", v))
         // WHICH element is the combobox follows the filter header, and follows it for the same
@@ -834,7 +830,7 @@ object MultiSelect:
         emptyContentV: Maybe[EmptyContent] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
-        tooltipV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[Prop[String]] = Absent,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,

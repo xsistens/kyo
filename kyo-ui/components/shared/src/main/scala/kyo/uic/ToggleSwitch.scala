@@ -47,9 +47,9 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
     /** Native `name` for HTML form participation. */
     def name(v: String): ToggleSwitch = new ToggleSwitch(p.copy(nameV = Present(v)))
 
-    private[uic] def validitySlots: FieldValidity.Slots             = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self     = new ToggleSwitch(p.copy(validityV = v))
-    private[uic] def withTooltip(v: Maybe[TextValue]): ToggleSwitch = new ToggleSwitch(p.copy(tooltipV = v))
+    private[uic] def validitySlots: FieldValidity.Slots                = validityV
+    private[uic] def withValidity(v: FieldValidity.Slots): Self        = new ToggleSwitch(p.copy(validityV = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): ToggleSwitch = new ToggleSwitch(p.copy(tooltipV = v))
 
     /** Prime's handle slot: a glyph rendered inside the sliding
       * `.p-toggleswitch-handle`, `checked` while on, `unchecked` while off.
@@ -137,10 +137,7 @@ final class ToggleSwitch private[uic] (private[uic] val p: ToggleSwitch.Props) e
         if isChecked then root = root.cssClass("p-toggleswitch-checked")
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
         root = validity.markClass(root)
-        root = tooltipV match
-            case Present(TextValue.Const(v)) => root.jsProp("title", v)
-            case Present(TextValue.Dyn(s))   => root.title(s)
-            case Absent                      => root
+        root = root.title(tooltipV)
 
         root(UI.children(List[UI](box, slider))*)
     end body
@@ -154,7 +151,7 @@ object ToggleSwitch:
         requiredFlag: Maybe[Boolean] = Absent,
         nameV: Maybe[String] = Absent,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        tooltipV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[Prop[String]] = Absent,
         handleIconsV: Maybe[(IconGlyph, IconGlyph)] = Absent,
         access: Accessibility = Accessibility.none,
         onBlurF: Maybe[Boolean => UI.Action] = Absent

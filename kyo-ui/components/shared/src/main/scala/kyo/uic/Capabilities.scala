@@ -113,13 +113,12 @@ end HasAccessibleNameRef
   */
 private[uic] trait HasAccessibleDescription extends Node:
     /** Stores the resolved description slot. Implemented as `new Input(s.copy(accDescV = v))`. */
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Self
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Self
 
     /** Additional accessible description → `aria-description`. A `Signal[String]` patches the
       * attribute IN PLACE via kyo-ui's attribute channel (`setAttribute`, no re-render).
       */
-    final def accessibleDescription(v: String | Signal[String]): Self =
-        withAccessibleDescription(Present(ReactiveValue(v)))
+    final def accessibleDescription(v: Prop[String]): Self = withAccessibleDescription(Present(v))
 end HasAccessibleDescription
 
 /** The placeholder slot of a field-shaped control: the text shown while the bound value is
@@ -143,13 +142,13 @@ end HasPlaceholder
   * traits exist.
   */
 private[uic] trait HasTooltip extends Node:
-    /** Stores the resolved tooltip slot. Implemented as `new Button(s.copy(tooltipV = v))`. */
-    private[uic] def withTooltip(v: Maybe[TextValue]): Self
+    /** Stores the resolved tooltip slot. Implemented as `new Button(p.copy(tooltip = v))`. */
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): Self
 
     /** Native tooltip (the `title` attribute). A `Signal[String]` patches `title` IN PLACE via
       * kyo-ui's attribute channel (`setAttribute`, no re-render).
       */
-    final def tooltip(v: String | Signal[String]): Self = withTooltip(Present(ReactiveValue(v)))
+    final def tooltip(v: Prop[String]): Self = withTooltip(Present(v))
 end HasTooltip
 
 /** What a row-bearing component shows in place of its rows when it has none. See

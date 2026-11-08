@@ -144,7 +144,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** ARIA role override: `Link` renders `role="link"` on the native button. */
     def accessibleRole(v: ButtonAccessibleRole): Button = new Button(p.copy(accessibleRole = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = new Button(p.copy(description = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Button = new Button(p.copy(description = v))
 
     /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's
       * SPA `Href.Path`) that keeps the full button skin (Prime's Button link mode).
@@ -153,7 +153,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       */
     def href(v: String): Button = new Button(p.copy(href = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Button = new Button(p.copy(tooltip = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): Button = new Button(p.copy(tooltip = v))
 
     /** ID of the `<form>` to associate with. kyo-ui 1.0.0-RC5 exposes no `form`
       * attribute setter and the DOM `form` property is read-only, so this is
@@ -215,21 +215,15 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
       */
     private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        def described(e: E): E = p.description match
-            case Present(TextValue.Const(d)) => e.aria("description", d)
-            case Present(TextValue.Dyn(s))   => e.aria("description", s)
-            case Absent                      => e
-        def titled(e: E): E = p.tooltip match
-            case Present(TextValue.Const(t)) => e.jsProp("title", t)
-            case Present(TextValue.Dyn(s))   => e.title(s)
-            case Absent                      => e
-        val named = withExtraArias(classed(el, loading).when(p.access.id)(_.id(_)))
+        withExtraArias(classed(el, loading).when(p.access.id)(_.id(_)))
             .when(p.role)(_.role(_))
             .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
             .when(p.onKeyDown)(_.onKeyDown(_))
             .aria("label", p.access.name)
             .aria("labelledby", p.access.nameRef)
-        titled(described(named)).when(loading)(_.aria("busy", "true"))
+            .aria("description", p.description)
+            .title(p.tooltip)
+            .when(loading)(_.aria("busy", "true"))
     end shared
 
     private def renderButton(loading: Boolean)(using Frame): UI =
@@ -311,8 +305,8 @@ object Button:
         loading: Maybe[Prop[Boolean]] = Absent,
         buttonType: ButtonType = ButtonType.Button,
         accessibleRole: ButtonAccessibleRole = ButtonAccessibleRole.Button,
-        description: Maybe[TextValue] = Absent,
-        tooltip: Maybe[TextValue] = Absent,
+        description: Maybe[Prop[String]] = Absent,
+        tooltip: Maybe[Prop[String]] = Absent,
         form: Maybe[String] = Absent,
         onClick: Maybe[UI.Action] = Absent,
         onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
