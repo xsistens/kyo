@@ -211,30 +211,39 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
             .cssClass("p-button-icon-only", iconOnly(loading))
     end classed
 
-    private def renderButton(loading: Boolean)(using Frame): UI =
-        var el = classed(button, loading)
-        p.access.id.foreach(v => el = el.id(v))
-        el = withExtraArias(el)
-        el = el.jsProp("type", p.buttonType.token.toLowerCase)
-        if p.accessibleRole == ButtonAccessibleRole.Link then el = el.role("link")
-        p.role.foreach(r => el = el.role(r))
-        p.tabIndex.foreach(t => el = el.tabIndex(t))
-        if p.focusSeed then el = el.focusAuto(true).focusRestore(true)
-        p.onKeyDown.foreach(f => el = el.onKeyDown(f))
-        p.access.name.foreach(n => el = el.aria("label", n))
-        p.access.nameRef.foreach(r => el = el.aria("labelledby", r))
+    /** What the button and the link share, on either element: the class chain, the id, the host's aria, the accessible name and
+      * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
+      */
+    private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
+        var e = classed(el, loading)
+        p.access.id.foreach(v => e = e.id(v))
+        e = withExtraArias(e)
+        p.role.foreach(r => e = e.role(r))
+        if p.focusSeed then e = e.focusAuto(true).focusRestore(true)
+        p.onKeyDown.foreach(f => e = e.onKeyDown(f))
+        p.access.name.foreach(n => e = e.aria("label", n))
+        p.access.nameRef.foreach(r => e = e.aria("labelledby", r))
         p.description match
-            case Present(TextValue.Const(d)) => el = el.aria("description", d)
-            case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
+            case Present(TextValue.Const(d)) => e = e.aria("description", d)
+            case Present(TextValue.Dyn(s))   => e = e.aria("description", s)
             case Absent                      => ()
         end match
         p.tooltip match
-            case Present(TextValue.Const(t)) => el = el.jsProp("title", t)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
+            case Present(TextValue.Const(t)) => e = e.jsProp("title", t)
+            case Present(TextValue.Dyn(s))   => e = e.title(s)
             case Absent                      => ()
         end match
+        if loading then e = e.aria("busy", "true")
+        e
+    end shared
+
+    private def renderButton(loading: Boolean)(using Frame): UI =
+        // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
+        var el = button.jsProp("type", p.buttonType.token.toLowerCase)
+        if p.accessibleRole == ButtonAccessibleRole.Link then el = el.role("link")
+        el = shared(el, loading)
+        p.tabIndex.foreach(t => el = el.tabIndex(t))
         p.form.foreach(f => el = el.data("uic-form", f))
-        if loading then el = el.aria("busy", "true")
         // While loading the button is non-clickable, exactly like disabled. A constant `disabled` decides it here; a signal reaches
         // the element through its channel, and the click reads it when it comes, so a click landing before the patch reaches nothing.
         val effDisabled = loading || p.disabled.exists { case on: Boolean => on; case _ => false }
@@ -270,29 +279,10 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * `tabIndex(-1)` (the same treatment as [[Link]]).
       */
     private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using Frame): UI =
-        var el = classed(a, loading)
-        p.access.id.foreach(v => el = el.id(v))
-        el = withExtraArias(el)
-        p.access.name.foreach(n => el = el.aria("label", n))
-        p.access.nameRef.foreach(r => el = el.aria("labelledby", r))
-        p.description match
-            case Present(TextValue.Const(d)) => el = el.aria("description", d)
-            case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
-            case Absent                      => ()
-        end match
-        p.tooltip match
-            case Present(TextValue.Const(t)) => el = el.jsProp("title", t)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
-            case Absent                      => ()
-        end match
-        if loading then el = el.aria("busy", "true")
-        p.role.foreach(r => el = el.role(r))
-        if p.focusSeed then el = el.focusAuto(true).focusRestore(true)
-        p.onKeyDown.foreach(f => el = el.onKeyDown(f))
-        val effDisabled = loading || disabled
+        var el = shared(a, loading)
         // A disabled link leaves the tab order outright, so the host's roving tabindex has
         // nothing left to say about it.
-        if effDisabled then el = el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
+        if loading || disabled then el = el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
         else
             p.tabIndex.foreach(t => el = el.tabIndex(t))
             el = el.href(Href.Path(h))
