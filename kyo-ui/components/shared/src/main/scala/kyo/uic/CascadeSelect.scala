@@ -150,7 +150,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
       */
     def name(v: String): CascadeSelect[A] = new CascadeSelect(p.copy(nameV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): CascadeSelect[A] = new CascadeSelect(p.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): CascadeSelect[A] = new CascadeSelect(p.copy(tooltipV = v))
 
     /** Size: `.p-cascadeselect-sm` / default / `.p-cascadeselect-lg`. */
     def size(v: Size): CascadeSelect[A] = new CascadeSelect(p.copy(sizeV = v))
@@ -403,11 +403,7 @@ final class CascadeSelect[A] private[uic] (private[uic] val p: CascadeSelect.Pro
         end match
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-cascadeselect-fluid")
-        tooltipV match
-            case Present(TextValue.Const(v)) => el = el.jsProp("title", v)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
-            case Absent                      => ()
-        end match
+        el = el.title(tooltipV)
         access.name.foreach(v => el = el.aria("label", v))
         access.nameRef.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
@@ -553,7 +549,7 @@ object CascadeSelect:
         placeholderV: Maybe[TextValue] = Absent,
         disabledFlag: Boolean = false,
         nameV: Maybe[String] = Absent,
-        tooltipV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[Prop[String]] = Absent,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,

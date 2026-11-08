@@ -43,14 +43,14 @@ final class Link private[uic] (private[uic] val p: Link.Props) extends Node, Has
       */
     def target(v: String): Link = new Link(p.copy(targetV = Present(v)))
 
-    private[uic] def withTooltip(v: Maybe[TextValue]): Link = new Link(p.copy(tooltipV = v))
+    private[uic] def withTooltip(v: Maybe[Prop[String]]): Link = new Link(p.copy(tooltipV = v))
 
     /** ARIA role override: `Button` renders `role="button"` on the anchor. */
     def accessibleRole(v: LinkAccessibleRole): Link = new Link(p.copy(accessibleRoleV = v))
 
-    private[uic] def accessibility: Accessibility                         = access
-    private[uic] def withAccessibility(v: Accessibility): Self            = new Link(p.copy(access = v))
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = new Link(p.copy(accessibleDescriptionV = v))
+    private[uic] def accessibility: Accessibility                            = access
+    private[uic] def withAccessibility(v: Accessibility): Self               = new Link(p.copy(access = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Link = new Link(p.copy(accessibleDescriptionV = v))
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
     def onClick(action: => UI.Action)(using Frame): Link =
@@ -75,16 +75,7 @@ final class Link private[uic] (private[uic] val p: Link.Props) extends Node, Has
         if wrapFlag then el = el.cssClass("p-uic-link-wrap")
         access.name.foreach(n => el = el.aria("label", n))
         access.nameRef.foreach(r => el = el.aria("labelledby", r))
-        accessibleDescriptionV match
-            case Present(TextValue.Const(d)) => el = el.aria("description", d)
-            case Present(TextValue.Dyn(s))   => el = el.aria("description", s)
-            case Absent                      => ()
-        end match
-        tooltipV match
-            case Present(TextValue.Const(t)) => el = el.jsProp("title", t)
-            case Present(TextValue.Dyn(s))   => el = el.title(s)
-            case Absent                      => ()
-        end match
+        el = el.aria("description", accessibleDescriptionV).title(tooltipV)
         if accessibleRoleV == LinkAccessibleRole.Button then el = el.role("button")
         if disabledFlag then
             val disabledRole = if accessibleRoleV == LinkAccessibleRole.Button then "button" else "link"
@@ -126,10 +117,10 @@ object Link:
         iconV: Maybe[IconGlyph] = Absent,
         endIconV: Maybe[IconGlyph] = Absent,
         targetV: Maybe[String] = Absent,
-        tooltipV: Maybe[TextValue] = Absent,
+        tooltipV: Maybe[Prop[String]] = Absent,
         accessibleRoleV: LinkAccessibleRole = LinkAccessibleRole.Link,
         access: Accessibility = Accessibility.none,
-        accessibleDescriptionV: Maybe[TextValue] = Absent,
+        accessibleDescriptionV: Maybe[Prop[String]] = Absent,
         onClickEff: Maybe[UI.Action] = Absent,
         kids: List[UI] = Nil
     )
