@@ -60,12 +60,19 @@ abstract class UicTest extends kyo.test.Test[Any]:
             }
         }
 
-    /** Whether `e` carries `cls` now: as a class of its own, or through a class channel whose signal holds true, which is
-      * how a mounted component shows state it patches in place.
+    /** Whether `e` carries `cls` now: as a class of its own, through a class channel whose signal holds true, or through a
+      * class-name channel that holds `cls`, which is how a component shows state it patches in place.
       */
     private[uic] def carriesClass(e: UI.Ast.Element, cls: String)(using Frame): Boolean < Sync =
+        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
         if e.attrs.cssClasses.contains(cls) then Kyo.lift(true)
-        else e.attrs.reactiveClasses.get(cls).fold(Kyo.lift(false))(_.current)
+        else
+            e.attrs.reactiveClasses.get(cls).fold(Kyo.lift(false))(_.current).map(on =>
+                if on then Kyo.lift(true)
+                else Kyo.foreach(e.attrs.reactiveClassNames)(_.current).map(_.contains(Present(cls)))
+            )
+        end if
+    end carriesClass
 
     /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place, read at its current value. */
     private[uic] def ariaNow(e: UI.Ast.Element, name: String)(using Frame): Maybe[String] < Sync =

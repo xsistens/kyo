@@ -85,3 +85,26 @@ its constant and its signal at the render site.
 
 - `TextValue` (`ReactiveValue[String]`) is the form the components not yet converted still store; it goes with
   `ReactiveValue` in the last wave.
+
+## 5. A class per case of a closed set goes through `classFor`
+
+A prop over a closed set of cases that picks one class (a severity, a variant, a size, a position) is written with the shared
+`el.classFor(prop)(case => Maybe[class])` (`Classes.scala`), never with a helper of the component's own, and never with
+`s"p-x-${v.token}"` on a value read out of a prop.
+
+- **Why:** a constant then adds its one class, and a signal becomes one class-name channel (kyo-ui's
+  `cssClass(Signal[Maybe[String]])`), so a change takes the old class off and puts the new one on in place and nothing is
+  drawn again; the component writes only its mapping from case to class, and no list of cases. Inside a `UI.reactive` block the
+  same fold would not stay a channel: a read a lambda uses makes the block a region.
+- **Shape:**
+
+```scala
+.classFor(p.size) {
+    case Size.Small  => Present("p-button-sm")
+    case Size.Large  => Present("p-button-lg")
+    case Size.Normal => Absent
+}
+```
+
+- Never one `cssClass(name, sig.map(_ == case))` per case (Tag, Badge and Message still do, until their wave): that is N
+  channels for one value, and a case left out of the list never gets its class.
