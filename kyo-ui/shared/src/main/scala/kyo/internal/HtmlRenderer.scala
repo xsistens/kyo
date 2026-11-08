@@ -1063,9 +1063,6 @@ private[kyo] object HtmlRenderer:
         end if
     end inlineCss
 
-    /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
-      * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
-      */
     /** The `filledClass` a text field carries on itself as first rendered: present while its starting text, as the field
       * shows it (masked), is not empty. The client keeps it right from there (`FilledClass`).
       */
@@ -1086,9 +1083,17 @@ private[kyo] object HtmlRenderer:
                     case None => Seq.empty
             case _ => Seq.empty
 
+    /** The reactive classes on now, for folding into the SSR class list: each toggled class whose signal is true (by name), then the
+      * name each class-name channel holds (in the order they were set). The client patches them in place afterwards
+      * (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
+      */
     private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Seq[String] =
-        if attrs.reactiveClasses.isEmpty then Seq.empty
-        else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
+        val toggled =
+            if attrs.reactiveClasses.isEmpty then Seq.empty
+            else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
+        if attrs.reactiveClassNames.isEmpty then toggled
+        else toggled ++ attrs.reactiveClassNames.flatMap(SignalNow(_).toChunk)
+    end reactiveTrueClasses
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
         // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole

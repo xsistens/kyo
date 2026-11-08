@@ -13,9 +13,10 @@ final private[kyo] case class Channels(
     attrs: Map[String, Signal[String]],
     bools: Map[String, Signal[Boolean]],
     classes: Map[String, Signal[Boolean]],
+    classNames: Chunk[Signal[Maybe[String]]],
     style: Maybe[Signal[Style]]
 ):
-    def isEmpty: Boolean  = attrs.isEmpty && bools.isEmpty && classes.isEmpty && style.isEmpty
+    def isEmpty: Boolean  = attrs.isEmpty && bools.isEmpty && classes.isEmpty && classNames.isEmpty && style.isEmpty
     def nonEmpty: Boolean = !isEmpty
 
     /** The values the channels hold now, which the enclosing paint is about to put into the DOM. */
@@ -24,12 +25,13 @@ final private[kyo] case class Channels(
             Channels.currentValues(attrs),
             Channels.currentValues(bools),
             Channels.currentValues(classes),
+            classNames.map(SignalNow(_)),
             style.map(s => CssStyleRenderer.declarations(SignalNow(s)))
         )
 end Channels
 
 private[kyo] object Channels:
-    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Absent)
+    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)
 
     /** The channels `el` carries, a `Bound.Follow` among them: its `value` as an attribute channel, masked and formatted the way a render
       * writes it, its `checked` as a boolean one.
@@ -38,7 +40,7 @@ private[kyo] object Channels:
         val attrs = el.attrs
         val text  = followedValue(el).fold(attrs.reactiveAttrs)(v => attrs.reactiveAttrs.updated("value", v))
         val bools = followedChecked(el).fold(attrs.reactiveBoolAttrs)(c => attrs.reactiveBoolAttrs.updated("checked", c))
-        Channels(text, bools, attrs.reactiveClasses, attrs.reactiveStyle)
+        Channels(text, bools, attrs.reactiveClasses, attrs.reactiveClassNames, attrs.reactiveStyle)
     end of
 
     /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what
@@ -125,8 +127,10 @@ final private[kyo] case class RenderedChannels(
     attrs: Map[String, String],
     bools: Map[String, Boolean],
     classes: Map[String, Boolean],
+    // The name each class-name channel held, by position in Channels.classNames.
+    classNames: Chunk[Maybe[String]],
     style: Maybe[Seq[(String, String)]]
 )
 
 private[kyo] object RenderedChannels:
-    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Absent)
+    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)

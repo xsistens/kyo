@@ -62,8 +62,36 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
             Channel("class", UI.div(UI.span("x").cssClass("hot", ref: Signal[Boolean])), ref.set(true).unit, ref.waiters)
         )
 
+    /** A class whose name the signal holds; moving from no class to one is one patch, as for the others. */
+    private def classNameChannel(using Frame): Channel < Sync =
+        Signal.initRef[Maybe[String]](Absent).map(ref =>
+            Channel("class-name", UI.div(UI.span("x").cssClass(ref: Signal[Maybe[String]])), ref.set(Present("hot")).unit, ref.waiters)
+        )
+
     private def channels(using Frame): Seq[Channel] < Sync =
-        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel))(identity).map(_.toSeq)
+        Kyo.foreach(Chunk(attrChannel, boolChannel, classChannel, classNameChannel))(identity).map(_.toSeq)
+
+    "a class-name channel takes the class it held off and puts the one it holds on, in place" in {
+        Scope.run {
+            Kyo.foreachDiscard(Chunk(true, false)) { fast =>
+                val exchange = new RecordingExchange(synchronous = fast)
+                def classes  = exchange.recorded.collect { case op: Op.Class => (op.name, op.on) }
+                for
+                    size <- Signal.initRef[Maybe[String]](Present("p-sm"))
+                    root <- ReactiveUI.normalize(UI.div(UI.span("x").cssClass(size: Signal[Maybe[String]])), Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, exchange)
+                    _    <- size.set(Present("p-lg"))
+                    _    <- assertEventually(Sync.defer(classes.size == 2))
+                    _    <- size.set(Absent)
+                    _    <- assertEventually(Sync.defer(classes.size == 3))
+                yield assert(
+                    classes == Seq("p-sm" -> false, "p-lg" -> true, "p-lg" -> false),
+                    s"fast=$fast: $classes"
+                )
+                end for
+            }
+        }
+    }
 
     "every channel patches inside the writer's set, with no scheduler hop" in {
         Scope.run {

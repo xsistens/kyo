@@ -333,4 +333,18 @@ class AttrsTest extends UITest:
         end for
     }
 
+    // ---- class name channel ----
+
+    "cssClass of a signal over a class name writes the class it holds, after the fixed ones, and none for Absent" in {
+        for
+            size  <- Signal.initRef[Maybe[String]](Present("p-sm"))
+            none  <- Signal.initRef[Maybe[String]](Absent)
+            held  <- kyo.internal.HtmlRenderer.render(UI.div(UI.span.cssClass("p-x").cssClass(size: Signal[Maybe[String]])), Seq.empty)
+            empty <- kyo.internal.HtmlRenderer.render(UI.div(UI.span.cssClass("p-x").cssClass(none: Signal[Maybe[String]])), Seq.empty)
+        yield
+            assert(held.contains("""class="p-x p-sm""""), held)
+            assert(empty.contains("""class="p-x"""") && !empty.contains("p-sm"), empty)
+        end for
+    }
+
 end AttrsTest

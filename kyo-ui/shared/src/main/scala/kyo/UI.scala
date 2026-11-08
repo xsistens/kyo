@@ -1849,7 +1849,7 @@ object UI:
             end when
 
             /** Shared bodies of the declarative reactive-channel setters (aria/title/placeholder/href/src →
-              * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses).
+              * reactiveAttrs; disabled/readOnly/hidden → reactiveBoolAttrs; cssClass → reactiveClasses, or reactiveClassNames for a name).
               * `inline` so each compiles to the bare `withAttrs(attrs.copy(...))`, adding no dispatch of its own.
               *
               * WHICH SETTER GETS A CHANNEL. A `Signal`-typed setter is a channel (patching in place, returning
@@ -1878,6 +1878,8 @@ object UI:
                 withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated(name, sig)))
             private[kyo] inline def withReactiveClass(name: String, on: Signal[Boolean]): Self =
                 withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+            private[kyo] inline def withReactiveClassName(name: Signal[Maybe[String]]): Self =
+                withAttrs(attrs.copy(reactiveClassNames = attrs.reactiveClassNames.append(name)))
             private[kyo] inline def withReactiveStyle(sig: Signal[Style]): Self =
                 withAttrs(attrs.copy(reactiveStyle = Present(sig)))
 
@@ -2053,6 +2055,14 @@ object UI:
             def cssClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
                 case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
                 case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
+
+            /** A class whose NAME a signal holds: the class it holds now, or none for `Absent`. A change takes the class it
+              * held off and puts the one it holds on, in place (two `classList.toggle`s, so CSS transitions fire), with no
+              * re-render. For a prop over a closed set of cases (a size, a severity) this is one channel instead of one
+              * `cssClass(name, on)` per case. The channel owns the names it writes: a fixed class of the same name is taken off
+              * with it.
+              */
+            def cssClass(name: Signal[Maybe[String]]): Self = withReactiveClassName(name)
 
             /** Declarative portal (client-local): after a patch inserts this element, the client physically moves it to
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
@@ -2738,13 +2748,16 @@ object UI:
             reactiveAttrs: Map[String, Signal[String]] = Map.empty,
             reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
             reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+            // Classes whose name a signal holds (cssClass(sig)), written after the toggled ones, in the order they were set.
+            reactiveClassNames: Chunk[Signal[Maybe[String]]] = Chunk.empty,
             // The inline-style channel (inlineStyle(sig)): its declarations are written inline at render and patched with
             // HtmlOp.SetStyleByPath on emission.
             reactiveStyle: Maybe[Signal[Style]] = Absent
         ):
             /** Whether any reactive channel is bound here. Every element of a render asks, so it allocates nothing; [[kyo.internal.Channels.of]] is the channels themselves. */
             def hasChannels: Boolean =
-                reactiveAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty || reactiveStyle.nonEmpty
+                reactiveAttrs.nonEmpty || reactiveBoolAttrs.nonEmpty || reactiveClasses.nonEmpty || reactiveClassNames.nonEmpty ||
+                    reactiveStyle.nonEmpty
         end Attrs
 
         // ---- Non-element AST cases ----
