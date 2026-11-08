@@ -6,6 +6,9 @@ import kyo.UI.render
 /** A button reads its three switches as one region, whichever of them follow a signal, and with none it draws no region at all. */
 class ButtonTest extends UicTest:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     private def button(using Frame) = uic.Button("Save")
 
     private def regions(b: uic.Button)(using Frame): Int < Sync = regionsAbove(b.render, "p-button")
@@ -31,13 +34,72 @@ class ButtonTest extends UicTest:
         yield assert(n == 1, s"$n regions")
     }
 
-    "one signal is one region" in {
+    "a signal in disabled or aria-disabled patches the button in place; one in loading, which shapes it, is its one region" in {
         for
             on <- Signal.initRef(false)
             d  <- regions(button.disabled(on))
             ad <- regions(button.ariaDisabled(on))
             l  <- regions(button.loading(on))
-        yield assert(d == 1 && ad == 1 && l == 1, s"disabled $d, ariaDisabled $ad, loading $l")
+        yield assert((d, ad, l) == (0, 0, 1), s"disabled $d, ariaDisabled $ad, loading $l")
+    }
+
+    "a variant, size or shape from a signal toggles its classes in place" in {
+        for
+            variant <- Signal.initRef[ButtonVariant](ButtonVariant.Filled)
+            size    <- Signal.initRef[Size](Size.Normal)
+            round   <- Signal.initRef(false)
+            // No region above the button (asserted below), so nothing draws it again: the element built once carries channels,
+            // and each reads its signal's value now.
+            b       <- elementWithClass(button.variant(variant).size(size).rounded(round).raised(round).fluid(round).render, "p-button")
+            _       <- variant.set(ButtonVariant.Outlined).andThen(size.set(Size.Small)).andThen(round.set(true))
+            classes <- Kyo.foreach(Seq(
+                "p-button-outlined",
+                "p-button-text",
+                "p-button-sm",
+                "p-button-lg",
+                "p-button-rounded",
+                "p-button-raised",
+                "p-button-fluid"
+            ))(carriesClass(b, _))
+            n <- regions(button.variant(variant).size(size).rounded(round).raised(round).fluid(round))
+        yield assert(
+            classes == Seq(true, false, true, false, true, true, true) && n == 0,
+            s"classes $classes, $n regions"
+        )
+        end for
+    }
+
+    "a click while a disabled signal says on reaches nothing, and once it says off it reaches the handler" in {
+        for
+            off   <- Signal.initRef(true)
+            heard <- AtomicInt.init(0)
+            ui = button.disabled(off).onClick(heard.incrementAndGet.unit).render
+            _      <- elementWithClass(ui, "p-button").map(click)
+            before <- heard.get
+            _      <- off.set(false)
+            _      <- elementWithClass(ui, "p-button").map(click)
+            after  <- heard.get
+        yield assert((before, after) == (0, 1), s"heard while disabled $before, after $after")
+    }
+
+    "aria-disabled from a signal says so in place, and not while the button is natively disabled" in {
+        for
+            ad  <- Signal.initRef(false)
+            off <- Signal.initRef(false)
+            el  <- elementWithClass(button.ariaDisabled(ad).disabled(off).render, "p-button")
+            a0  <- ariaNow(el, "disabled")
+            _   <- ad.set(true)
+            a1  <- ariaNow(el, "disabled")
+            c1  <- carriesClass(el, "p-uic-aria-disabled")
+            _   <- off.set(true)
+            a2  <- ariaNow(el, "disabled")
+            c2  <- carriesClass(el, "p-uic-aria-disabled")
+            n   <- regions(button.ariaDisabled(ad).disabled(off))
+        yield assert(
+            !a0.contains("true") && a1.contains("true") && c1 && !a2.contains("true") && !c2 && n == 0,
+            s"aria-disabled off $a0, on $a1 (class $c1), natively disabled $a2 (class $c2), $n regions"
+        )
+        end for
     }
 
     "constants draw no region" in {
@@ -59,7 +121,9 @@ class ButtonTest extends UicTest:
     }
 
     /** Runs a button with `disabled` and `loading` over refs, hands `drive` the refs once it reads them, and says whether the page
-      * ended on both set: its observers parked again, so what it read is what the region left, and the last paint shows both.
+      * ended on both set: the region's observer of `loading` parked again, so what it read is what the region left, and the last
+      * paint shows both. Only `loading` is the region's read: `disabled` is a channel, and a loading button draws itself disabled
+      * and reads it no more, so nothing waits on it then.
       */
     private def endsOnBoth(log: kyo.internal.RecordingExchange)(drive: (SignalRef[Boolean], SignalRef[Boolean]) => Any < Async)(using
         Frame
@@ -77,11 +141,10 @@ class ButtonTest extends UicTest:
                 waitFor(busy.waiters.map(_ > 0)).andThen(drive(disabled, busy)).andThen(
                     waitFor(
                         for
-                            parked <- disabled.waiters.map(_ > 0)
-                            also   <- busy.waiters.map(_ > 0)
+                            parked <- busy.waiters.map(_ > 0)
                             drawn  <- Sync.defer(UicTest.publishedIn(log).headOption)
                             both   <- drawn.fold(Kyo.lift(false))(held)
-                        yield parked && also && both
+                        yield parked && both
                     ).andThen(true)
                 )
             }
