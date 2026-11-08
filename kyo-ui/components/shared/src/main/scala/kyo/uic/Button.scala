@@ -84,20 +84,20 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       */
     def severity(v: Severity | Signal[Severity]): Button = new Button(p.copy(severityV = v))
 
-    /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. */
-    def variant(v: ButtonVariant): Button = new Button(p.copy(variantV = v))
+    /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. A signal swaps the variant's class in place. */
+    def variant(v: Prop[ButtonVariant]): Button = new Button(p.copy(variantV = v))
 
-    /** Size: `Small` / `Normal` (default) / `Large`. */
-    def size(v: Size): Button = new Button(p.copy(sizeV = v))
+    /** Size: `Small` / `Normal` (default) / `Large`. A signal swaps the size's class in place. */
+    def size(v: Prop[Size]): Button = new Button(p.copy(sizeV = v))
 
-    /** Fully rounded corners (`.p-button-rounded`). */
-    def rounded(v: Boolean): Button = new Button(p.copy(roundedFlag = v))
+    /** Fully rounded corners (`.p-button-rounded`), a signal toggling the class in place. */
+    def rounded(v: Prop[Boolean]): Button = new Button(p.copy(roundedFlag = v))
 
-    /** Adds a shadow to indicate elevation (`.p-button-raised`). */
-    def raised(v: Boolean): Button = new Button(p.copy(raisedFlag = v))
+    /** Adds a shadow to indicate elevation (`.p-button-raised`), a signal toggling the class in place. */
+    def raised(v: Prop[Boolean]): Button = new Button(p.copy(raisedFlag = v))
 
-    /** Spans the full width of its container (`.p-button-fluid`). */
-    def fluid(v: Boolean): Button = new Button(p.copy(fluidFlag = v))
+    /** Spans the full width of its container (`.p-button-fluid`), a signal toggling the class in place. */
+    def fluid(v: Prop[Boolean]): Button = new Button(p.copy(fluidFlag = v))
 
     def icon(glyph: IconGlyph): Button = new Button(p.copy(icon = Present(glyph)))
 
@@ -108,7 +108,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     private[uic] def withAccessibility(v: Accessibility): Self = new Button(p.copy(access = v))
 
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
-      * mutation-in-flight signal).
+      * mutation-in-flight signal), and a click reads it when it comes.
       */
     def disabled(v: Boolean | Signal[Boolean]): Button = new Button(p.copy(disabledV = Present(v)))
 
@@ -132,8 +132,8 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     def ariaDisabled(gate: SubmitGate): Button = ariaDisabled(gate.signal)
 
     /** Busy state: shows a spinning glyph and blocks clicks (like disabled). Bind a `Signal[Boolean]`
-      * to an in-flight request; the button re-renders its own boundary on emission, because loading is
-      * fused with the spinner, aria-busy, icon-only layout and the effective disabled state rather than
+      * to an in-flight request; the button is drawn again on emission, its one region, because loading
+      * shapes the spinner, aria-busy, icon-only layout and the effective disabled state rather than
       * patching a single attribute.
       */
     def loading(v: Boolean | Signal[Boolean]): Button = new Button(p.copy(loadingV = Present(v)))
@@ -174,61 +174,47 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = new Button(p.copy(extraChildren = extraChildren ++ cs))
 
-    // A stateless component draws no instance: a host repaint has nothing of it to lose. The three switches are read as ONE
-    // region, pinned back into the props as constants so the element reads plain values. With none of them a signal the button
-    // draws no region and pays for no reading.
+    // A stateless component draws no instance: a host repaint has nothing of it to lose. Each place reads the field it shows:
+    // `disabled`, `aria-disabled`, the severity, the variant, the size and the shapes reach the element through its channels, and
+    // a click reads `disabled` when it comes. Only `loading` shapes the button (spinner, icon-only, effective disabled), so it is
+    // the one read of the button's region; a link reads `disabled` there too, since a disabled link is a different element. With
+    // neither a signal the block draws no region and pays for no reading.
     private[uic] def render(using Frame): UI =
-        Prop.render(Prop.zip(Prop.zip(Button.switch(disabledV), Button.switch(ariaDisabledV)), Button.switch(loadingV))) {
-            case ((d, ad), l) => new Button(p.copy(disabledV = d, ariaDisabledV = ad, loadingV = l)).renderResolved
-        }
-
-    /** The resolved busy state, read after the switches are pinned to their current constants. */
-    private def loadingNow: Boolean = Button.on(loadingV)
-
-    private def renderResolved(using Frame): UI =
+        val loading: Prop[Boolean] = loadingV.getOrElse(false)
         hrefV match
-            case Present(h) => renderAnchor(h)
-            case Absent     => renderButton
-
-    private def iconOnly: Boolean =
-        label.isEmpty && extraChildren.isEmpty && (p.icon.isDefined || loadingNow)
-
-    /** The `.p-button` class chain, shared verbatim by the button and anchor renderings. */
-    private def buttonClasses: List[String] =
-        val bs = List.newBuilder[String]
-        bs += "p-button"
-        bs += "p-component"
-        extraClassesV.foreach(bs += _)
-        // A constant non-primary severity joins the static class list; a reactive one is bound on the
-        // element in the render sites (reactive class channel) so it swaps in place without a re-render.
-        severityV match
-            case s: Severity => if s != Severity.Primary then bs += s"p-button-${s.token}"
-            case _           => ()
-        variantV match
-            case ButtonVariant.Filled   => ()
-            case ButtonVariant.Outlined => bs += "p-button-outlined"
-            case ButtonVariant.Text     => bs += "p-button-text"
-            case ButtonVariant.Link     => bs += "p-button-link"
+            case Present(h) =>
+                val off: Prop[Boolean] = disabledV.getOrElse(false)
+                UI.reactive(renderAnchor(h, loading.read, off.read))
+            case Absent => UI.reactive(renderButton(loading.read))
         end match
-        sizeV match
-            case Size.Small  => bs += "p-button-sm"
-            case Size.Large  => bs += "p-button-lg"
-            case Size.Normal => ()
-        end match
-        if roundedFlag then bs += "p-button-rounded"
-        if raisedFlag then bs += "p-button-raised"
-        if fluidFlag then bs += "p-button-fluid"
-        if iconOnly then bs += "p-button-icon-only"
-        bs.result()
-    end buttonClasses
+    end render
 
-    private def renderButton(using Frame): UI =
-        var el = buttonClasses.foldLeft(button)((e, c) => e.cssClass(c))
-        severityV match
-            case sig: Signal[Severity] @unchecked =>
-                Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
-            case _ => ()
-        end match
+    private def iconOnly(loading: Boolean): Boolean =
+        label.isEmpty && extraChildren.isEmpty && (p.icon.isDefined || loading)
+
+    /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */
+    private def classed[E <: UI.Ast.Element { type Self = E }](el: E, loading: Boolean)(using Frame): E =
+        val base = extraClassesV.foldLeft(el.cssClass("p-button").cssClass("p-component"))((e, c) => e.cssClass(c))
+        val sev  = Button.chosen(base, severityV, Severity.values.toSeq)(s =>
+            if s == Severity.Primary then Absent else Present(s"p-button-${s.token}")
+        )
+        val vari = Button.chosen(sev, variantV, ButtonVariant.values.toSeq) {
+            case ButtonVariant.Filled   => Absent
+            case ButtonVariant.Outlined => Present("p-button-outlined")
+            case ButtonVariant.Text     => Present("p-button-text")
+            case ButtonVariant.Link     => Present("p-button-link")
+        }
+        val sized = Button.chosen(vari, sizeV, Seq[Size](Size.Small, Size.Normal, Size.Large)) {
+            case Size.Small  => Present("p-button-sm")
+            case Size.Large  => Present("p-button-lg")
+            case Size.Normal => Absent
+        }
+        sized.cssClass("p-button-rounded", roundedFlag).cssClass("p-button-raised", raisedFlag).cssClass("p-button-fluid", fluidFlag)
+            .cssClass("p-button-icon-only", iconOnly(loading))
+    end classed
+
+    private def renderButton(loading: Boolean)(using Frame): UI =
+        var el = classed(button, loading)
         access.id.foreach(v => el = el.id(v))
         el = withExtraArias(el)
         el = el.jsProp("type", buttonTypeV.token.toLowerCase)
@@ -250,17 +236,34 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
             case Absent                      => ()
         end match
         formV.foreach(f => el = el.data("uic-form", f))
-        if loadingNow then el = el.aria("busy", "true")
-        // While loading the button is non-clickable, exactly like disabled.
-        val effDisabled = loadingNow || Button.on(disabledV)
+        if loading then el = el.aria("busy", "true")
+        // While loading the button is non-clickable, exactly like disabled. A constant `disabled` decides it here; a signal reaches
+        // the element through its channel, and the click reads it when it comes, so a click landing before the patch reaches nothing.
+        val effDisabled = loading || disabledV.exists { case on: Boolean => on; case _ => false }
         if effDisabled then el = el.disabled(true)
-        else Button.constant(disabledV).foreach(d => el = el.disabled(d))
-        if !effDisabled then onClickEff.foreach(e => el = el.onClick(e))
-        // aria-disabled keeps the button focusable + clickable (the click routes through the
-        // handler, e.g. form.submit → focus-first-invalid); only apply when not natively disabled.
+        else disabledV.foreach(d => el = el.disabled(d))
         if !effDisabled then
-            Button.constant(ariaDisabledV).foreach(ad => if ad then el = el.aria("disabled", "true").cssClass("p-uic-aria-disabled"))
-        el(UI.children(contentChildren)*)
+            onClickEff.foreach { e =>
+                el = disabledV match
+                    case Present(off: Signal[Boolean] @unchecked) => el.onClick(off.current.map(d => if d then Kyo.unit else e))
+                    case _                                        => el.onClick(e)
+            }
+        end if
+        // aria-disabled keeps the button focusable + clickable (the click routes through the handler, e.g. form.submit →
+        // focus-first-invalid); it says so only while the button is not natively disabled, a signal on either side following both.
+        if !effDisabled then
+            ariaDisabledV.foreach { ad =>
+                val says: Prop[Boolean] = disabledV match
+                    case Present(off: Signal[Boolean] @unchecked) => Prop.map(Prop.zip(ad, off))((a, d) => a && !d)
+                    case _                                        => ad
+                says match
+                    case on: Signal[Boolean] @unchecked =>
+                        el = el.aria("disabled", Prop.map(on)(_.toString)).cssClass("p-uic-aria-disabled", on)
+                    case on: Boolean => if on then el = el.aria("disabled", "true").cssClass("p-uic-aria-disabled")
+                end match
+            }
+        end if
+        el(UI.children(contentChildren(loading))*)
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its
@@ -268,13 +271,8 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * so a disabled link drops href/click and gets `.p-disabled` + `aria-disabled` +
       * `tabIndex(-1)` (the same treatment as [[Link]]).
       */
-    private def renderAnchor(h: String)(using Frame): UI =
-        var el = buttonClasses.foldLeft(a)((e, c) => e.cssClass(c))
-        severityV match
-            case sig: Signal[Severity] @unchecked =>
-                Severity.values.foreach(s => if s != Severity.Primary then el = el.cssClass(s"p-button-${s.token}", sig.map(_ == s)))
-            case _ => ()
-        end match
+    private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using Frame): UI =
+        var el = classed(a, loading)
         access.id.foreach(v => el = el.id(v))
         el = withExtraArias(el)
         access.name.foreach(n => el = el.aria("label", n))
@@ -289,11 +287,11 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
             case Present(TextValue.Dyn(s))   => el = el.title(s)
             case Absent                      => ()
         end match
-        if loadingNow then el = el.aria("busy", "true")
+        if loading then el = el.aria("busy", "true")
         roleRawV.foreach(r => el = el.role(r))
         if focusSeedV then el = el.focusAuto(true).focusRestore(true)
         onKeyDownF.foreach(f => el = el.onKeyDown(f))
-        val effDisabled = loadingNow || Button.on(disabledV)
+        val effDisabled = loading || disabled
         // A disabled link leaves the tab order outright, so the host's roving tabindex has
         // nothing left to say about it.
         if effDisabled then el = el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
@@ -302,12 +300,12 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
             el = el.href(Href.Path(h))
             onClickEff.foreach(e => el = el.onClick(e))
         end if
-        el(UI.children(contentChildren)*)
+        el(UI.children(contentChildren(loading))*)
     end renderAnchor
 
-    private def contentChildren(using Frame): List[UI] =
+    private def contentChildren(loading: Boolean)(using Frame): List[UI] =
         val leading: List[UI] =
-            if loadingNow then
+            if loading then
                 List(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
             else p.icon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-left"))
         val textChild: List[UI]    = label.toList.map(l => span.cssClass("p-button-label")(l))
@@ -321,11 +319,11 @@ object Button:
     final private[uic] case class Props(
         label: Maybe[Prop[String]] = Absent,
         severityV: Prop[Severity] = Severity.Primary,
-        variantV: ButtonVariant = ButtonVariant.Filled,
-        sizeV: Size = Size.Normal,
-        roundedFlag: Boolean = false,
-        raisedFlag: Boolean = false,
-        fluidFlag: Boolean = false,
+        variantV: Prop[ButtonVariant] = ButtonVariant.Filled,
+        sizeV: Prop[Size] = Size.Normal,
+        roundedFlag: Prop[Boolean] = false,
+        raisedFlag: Prop[Boolean] = false,
+        fluidFlag: Prop[Boolean] = false,
         icon: Maybe[IconGlyph] = Absent,
         endIconV: Maybe[IconGlyph] = Absent,
         access: Accessibility = Accessibility.none,
@@ -353,20 +351,16 @@ object Button:
       */
     def apply(label: String | Signal[String]): Button = new Button(Props(label = Present(label)))
 
-    /** A switch the button may have, as one prop: absent stays absent, a constant a constant, a signal a signal of it. */
-    private def switch(v: Maybe[Prop[Boolean]])(using Frame): Prop[Maybe[Boolean]] =
-        v match
-            case Present(sw) => Prop.map(sw)(Present(_))
-            case _           => Absent
-
-    /** A switch pinned to a constant, and on. */
-    private def on(v: Maybe[Prop[Boolean]]): Boolean = constant(v).getOrElse(false)
-
-    /** A switch pinned to a constant, as that constant. */
-    private def constant(v: Maybe[Prop[Boolean]]): Maybe[Boolean] =
-        v match
-            case Present(b: Boolean) => Present(b)
-            case _                   => Absent
+    /** The class of the case `choice` names: a constant adds its one class (none for a case that has none), a signal gives each
+      * case's class a channel that is on while the signal names that case, so a change swaps the class in place.
+      */
+    private def chosen[E <: UI.Ast.Element { type Self = E }, A](el: E, choice: Prop[A], cases: Seq[A])(cls: A => Maybe[String])(using
+        CanEqual[A, A],
+        Frame
+    ): E =
+        choice match
+            case sig: Signal[A] @unchecked => cases.foldLeft(el)((e, a) => cls(a).fold(e)(c => e.cssClass(c, sig.map(_ == a))))
+            case a                         => cls(a.asInstanceOf[A]).fold(el)(el.cssClass(_))
 
     /** An empty button; add an icon and/or children via the setters. */
     def apply(): Button = new Button(Props())
