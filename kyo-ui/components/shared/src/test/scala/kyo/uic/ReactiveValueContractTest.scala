@@ -528,14 +528,20 @@ abstract class ReactiveValueContract extends UicTest:
                     case _                       => false
                 // The instance sends its tree into that place after it, from a path below the host's; until it has, the place is
                 // all a reader of the published trees has, and reading it draws the component anew from its start.
-                // The instance's tree as the page shows it after the host's run: the newest tree, from the path nearest below the
-                // host's, that came after the host's tree of run 1.
-                def refill(since: Chunk[(Seq[String], UI)]): Maybe[UI] =
+                // The instance's tree as the page shows it after the host's run: the newest tree that came after the host's tree of
+                // run 1 from the instance's own path, the one nearest below the host's that published before the gesture. A region
+                // inside the instance (Password's meter) publishes from deeper down, in either order with the instance, and is not it.
+                def refill(since: Chunk[(Seq[String], UI)], prior: Chunk[(Seq[String], UI)]): Maybe[UI] =
                     val host = since.indexWhere((_, t) => marks(t))
                     if host <= 0 then Absent
                     else
-                        val below = since.take(host).filter((path, _) => path.size > since(host)._1.size)
-                        if below.isEmpty then Absent else Present(below.minBy(_._1.size)._2)
+                        val hostAt                                 = since(host)._1
+                        def below(trees: Chunk[(Seq[String], UI)]) =
+                            trees.filter((path, _) => path.size > hostAt.size)
+                        val after = below(since.take(host))
+                        below(prior).map(_._1).sortBy(_.size).headOption match
+                            case Some(at) => Maybe.fromOption(after.collectFirst { case (path, t) if path == at => t })
+                            case None     => if after.isEmpty then Absent else Present(after.minBy(_._1.size)._2)
                     end if
                 end refill
                 def paths(trees: Chunk[(Seq[String], UI)]): String = trees.map(_._1.mkString(".")).mkString(" ")
@@ -555,8 +561,8 @@ abstract class ReactiveValueContract extends UicTest:
                                 )
                             )
                         case Absent =>
-                            paintedAround(ui, t => s.wired(t), ran, refill(_).isDefined)(steps*).map { (_, since, prior) =>
-                                s.shows(refill(since).get).map(shown =>
+                            paintedAround(ui, t => s.wired(t), ran, refill(_, _).isDefined)(steps*).map { (_, since, prior) =>
+                                s.shows(refill(since, prior).get).map(shown =>
                                     assert(
                                         shown == s.next,
                                         s"after the host's run the component shows $shown, the reader had made it ${s.next}; " +

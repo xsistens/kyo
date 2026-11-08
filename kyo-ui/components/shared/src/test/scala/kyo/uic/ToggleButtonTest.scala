@@ -132,7 +132,7 @@ class ToggleButtonTest extends ReactiveValueContract:
                 ui,
                 t => elementsWithClass(t, "p-togglebutton").map(_.nonEmpty),
                 _ => true,
-                sent = _.exists(_._1.size > 1)
+                sent = (since, _) => since.exists(_._1.size > 1)
             )(_ => setSettled(tick, 1))
             redrawn <- drawnAgain(since, prior, "p-togglebutton")
             _       <- elementWithClass(every, "p-togglebutton").map(click)
