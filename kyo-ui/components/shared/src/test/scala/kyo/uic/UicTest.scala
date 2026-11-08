@@ -15,6 +15,10 @@ import kyo.*
   */
 abstract class UicTest extends kyo.test.Test[Any]:
 
+    // Every leaf runs under the loss counter, so each region a suite runs again reports what it takes from the reader.
+    override def aroundLeaf[A](body: A < (Async & Abort[Any] & Scope))(using Frame): A < (Async & Abort[Any] & Scope) =
+        UI.devtools(UicTest.countLoss(getClass.getName))(super.aroundLeaf(body))
+
     /** A session's command channel for a page with no layout: every measure is answered as for an element not on the
       * page (`Absent`), and every other command goes nowhere. A component that measures before it publishes (an overlay
       * placing itself) then publishes, rather than waiting for a reply no page will send. Under [[UicTest.layout]] a
@@ -865,5 +869,22 @@ object UicTest:
 
     /** The class a card carries. */
     private[uic] val cardClass = "p-uic-diagnostic"
+
+    // The lines `countLoss` has written, so each suite names each place once.
+    private val lossesSeen = new java.util.concurrent.atomic.AtomicReference(Set.empty[String])
+
+    /** A devtools sink that writes every [[kyo.UI.Loss]] a suite's regions report, once per suite and place, as a `UIC-LOSS` line:
+      * the count of the places in uic that lose the reader's state when the region around them runs again (T13, before the check
+      * fails a test).
+      */
+    private[uic] def countLoss(suite: String): UI.RenderEvent => Unit = event =>
+        event.kind match
+            case UI.RenderKind.Lost(loss) =>
+                val what = loss match
+                    case UI.Loss.StatedValue(element, attribute, frame) => s"stated $attribute | $element | ${frame.position.show}"
+                    case UI.Loss.UnkeyedMount(frame)                    => s"unkeyed mount | | ${frame.position.show}"
+                val line = s"UIC-LOSS $suite | $what | region ${event.frame.position.show}"
+                if !lossesSeen.getAndUpdate(_ + line).contains(line) then java.lang.System.out.println(line)
+            case _ => ()
 
 end UicTest
