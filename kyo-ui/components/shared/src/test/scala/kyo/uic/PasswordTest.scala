@@ -10,6 +10,9 @@ import kyo.UI.render
   */
 class PasswordTest extends ReactiveValueContract:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     private val valueSlot = nativeText[uic.Password](
         name = "value",
         bare = Present(uic.Password()),
@@ -39,8 +42,9 @@ class PasswordTest extends ReactiveValueContract:
     /** What a field with the strength meter shows: its text, which the meter must judge. */
     private def judged(t: UI)(using Frame): String < Sync =
         for
-            text  <- textField(t, "p-password-input").map(textIn)
-            label <- elementWithClass(t, "p-password-meter-text").map(textOf)
+            text <- textField(t, "p-password-input").map(textIn)
+            // The label is a text channel of the instance's latest run: read at the value it shows now.
+            label <- elementWithClass(t, "p-password-meter-text").flatMap(textNow)
         yield
             val expected = Password.strength(text) match
                 case 0 => "Enter a password"
@@ -70,8 +74,17 @@ class PasswordTest extends ReactiveValueContract:
             case t: UI.Ast.TextInput => t.readOnly.contains(true)
             case _                   => false
         },
-        // The page as first rendered draws a text the field keeps itself with nothing wired, the mount wires the typing.
-        ready = Present(t => textField(t, "p-password-input").map { case f: UI.Ast.TextInput => f.onInput.isDefined; case _ => false }),
+        // The typing is wired once the field writes a ref (the instance's own text, or the caller's) or tells a hearer.
+        ready = Present(t =>
+            textField(t, "p-password-input").map {
+                case f: UI.Ast.TextInput =>
+                    f.onInput.isDefined ||
+                    (f.value match
+                        case Present(UI.Bound.Ref(_)) => true
+                        case _                        => false)
+                case _ => false
+            }
+        ),
         startText = Present("abc")
     )
 
@@ -208,6 +221,46 @@ class PasswordTest extends ReactiveValueContract:
             _     <- held.set("")
             empty <- filled(t)
         yield assert((first, empty) == (true, false), s"filled over abc, then empty: ${(first, empty)}")
+    }
+
+    "the field sits under no region, with the eye, the meter or both, so a reveal or a keystroke draws it nowhere again" in {
+        for
+            eye   <- regionsAbove(uic.Password().toggleMask(true).render, "p-password-input")
+            meter <- regionsAbove(uic.Password().feedback(true).render, "p-password-input")
+            both  <- regionsAbove(uic.Password().toggleMask(true).feedback(true).render, "p-password-input")
+            held  <- Signal.initRef("abc")
+            bound <- regionsAbove(uic.Password().toggleMask(true).feedback(true).value(held).render, "p-password-input")
+        yield assert(
+            (eye, meter, both, bound) == (0, 0, 0, 0),
+            s"regions above the field (eye, meter, both, bound): ${(eye, meter, both, bound)}"
+        )
+    }
+
+    /** The field's `type` now: the channel's value where one owns it, else the type its element class writes. */
+    private def typeNow(e: UI.Ast.Element)(using Frame): String < Sync =
+        e.attrs.reactiveAttrs.get("type") match
+            case Some(sig) => sig.current
+            case None      =>
+                e match
+                    case _: UI.Ast.PasswordInput => Kyo.lift("password")
+                    case _                       => Kyo.lift("text")
+
+    "the eye switches the field's type in place, on the field built once, and says so on itself" in {
+        // One traversal: the field and the eye of one instance, so the click writes the reveal this field follows.
+        for
+            es <- elements(uic.Password().toggleMask(true).render)
+            el  = es.collectFirst { case t: UI.Ast.Element if t.attrs.cssClasses.contains("p-password-input") => t }.get
+            eye = es.collectFirst { case t: UI.Ast.Element if t.attrs.cssClasses.contains("p-password-toggle-mask-icon") => t }.get
+            before <- typeNow(el)
+            _      <- click(eye)
+            after  <- typeNow(el)
+            masks  <- carriesClass(eye, "p-password-mask-icon")
+            label  <- ariaNow(eye, "label")
+        yield assert(
+            (before, after, masks, label) == ("password", "text", true, Present("Hide password")),
+            s"type before $before, after $after; the eye offers to mask $masks, says $label"
+        )
+        end for
     }
 
     "a host region that runs again keeps the text the reader typed" in {
