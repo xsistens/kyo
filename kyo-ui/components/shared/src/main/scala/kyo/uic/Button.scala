@@ -41,26 +41,19 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * `aria-expanded`) not part of Button's own public surface. A signal is a channel,
       * patched in place.
       */
-    private[uic] def ariaRaw(name: String, value: String | Signal[String]): Button =
+    private[uic] def ariaRaw(name: String, value: Prop[String]): Button =
         new Button(p.copy(extraArias = p.extraArias :+ (name -> value)))
 
     // A button is a native control: its keys are its click, so `activate` has nothing left to answer.
     private[uic] def asPopupTrigger(
         popup: String,
-        expanded: String | Signal[String],
+        expanded: Prop[String],
         fixed: Boolean,
         activate: Maybe[UI.Action]
     )(using Frame): UI =
         val trigger = ariaRaw("haspopup", popup).ariaRaw("expanded", expanded)
         (if fixed then trigger.ariaDisabled(true) else trigger).render
     end asPopupTrigger
-
-    /** The host-added aria attributes, a constant set as it stands and a signal as a channel. */
-    private def withExtraArias[E <: UI.Ast.Element { type Self = E }](el: E): E =
-        p.extraArias.foldLeft(el) {
-            case (e, (n, v: String))                    => e.aria(n, v)
-            case (e, (n, v: Signal[String] @unchecked)) => e.aria(n, v)
-        }
 
     /** Package-internal composite-widget hooks: the attributes a button needs when it is a CHILD
       * of a composite widget rather than a control of its own. A standalone button decides none
@@ -225,7 +218,8 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
       */
     private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        withExtraArias(classed(el, loading).when(p.access.id)(_.id(_)))
+        p.extraArias.foldLeft(classed(el, loading))((e, aria) => e.aria(aria._1, aria._2))
+            .when(p.access.id)(_.id(_))
             .when(p.role)(_.role(_))
             .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
             .when(p.onKeyDown)(_.onKeyDown(_))
@@ -296,7 +290,7 @@ object Button:
         onKeyDown: Maybe[KeyboardEvent => UI.Action] = Absent,
         extraChildren: List[UI] = Nil,
         extraClasses: List[String] = Nil,
-        extraArias: List[(String, String | Signal[String])] = Nil,
+        extraArias: List[(String, Prop[String])] = Nil,
         role: Maybe[String] = Absent,
         tabIndex: Maybe[Int] = Absent,
         focusSeed: Boolean = false
