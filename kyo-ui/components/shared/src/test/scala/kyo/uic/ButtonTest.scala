@@ -128,10 +128,15 @@ class ButtonTest extends UicTest:
     private def endsOnBoth(log: kyo.internal.RecordingExchange)(drive: (SignalRef[Boolean], SignalRef[Boolean]) => Any < Async)(using
         Frame
     ): Boolean < Async =
+        // Disabled as the page shows it: the attribute, or its channel holding true (`disabled` follows a signal through it).
         def held(t: UI): Boolean < Sync =
             elementWithClass(t, "p-button").map {
-                case b: UI.Ast.Button => b.disabled.contains(true) && b.attrs.ariaAttrs.get("busy").contains("true")
-                case _                => false
+                case b: UI.Ast.Button =>
+                    val off = b.disabled.contains(true) match
+                        case true  => Kyo.lift(true)
+                        case false => b.attrs.reactiveBoolAttrs.get("disabled").fold(Kyo.lift(false))(_.current)
+                    off.map(_ && b.attrs.ariaAttrs.get("busy").contains("true"))
+                case _ => Kyo.lift(false)
             }
         for
             disabled <- Signal.initRef(false)

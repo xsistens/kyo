@@ -178,12 +178,24 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     // the one read of the button's region; a link reads `disabled` there too, since a disabled link is a different element. With
     // neither a signal the block draws no region and pays for no reading.
     private[uic] def render(using Frame): UI =
-        val loading: Prop[Boolean] = p.loading.getOrElse(false)
+        val loading: Prop[Boolean]  = p.loading.getOrElse(false)
+        val disabled: Prop[Boolean] = p.disabled.getOrElse(false)
         p.href match
-            case Present(h) =>
-                val off: Prop[Boolean] = p.disabled.getOrElse(false)
-                UI.reactive(renderAnchor(h, loading.read, off.read))
-            case Absent => UI.reactive(renderButton(loading.read))
+            case Present(h) => UI.reactive(renderAnchor(h, loading.read, disabled.read))
+            case Absent     =>
+                val ariaDisabled: Prop[Boolean] = p.ariaDisabled.getOrElse(false)
+                UI.reactive {
+                    val busy = loading.read
+                    // While loading the button is non-clickable, exactly like disabled.
+                    val off = busy || disabled.read
+                    // aria-disabled keeps the button focusable and clickable (the click routes through the handler, e.g.
+                    // form.submit to focus-first-invalid); it says so only while the button is not natively disabled.
+                    val says = ariaDisabled.read && !off
+                    renderButton(busy).disabled(off)
+                        .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
+                        .ariaFlag("disabled", says)
+                        .cssClass("p-uic-aria-disabled", says)(UI.children(contentChildren(busy))*)
+                }
         end match
     end render
 
@@ -224,38 +236,12 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
             .when(loading)(_.aria("busy", "true"))
     end shared
 
-    private def renderButton(loading: Boolean)(using Frame): UI =
+    /** The `<button>` with what only it carries besides its flags: the form type, its own role, the tab stop and the form. */
+    private def renderButton(loading: Boolean)(using Frame): UI.Ast.Button =
         // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
         val typed = button.jsProp("type", p.buttonType.token.toLowerCase)
             .when(p.accessibleRole == ButtonAccessibleRole.Link)(_.role("link"))
-        var el = shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.data("uic-form", _))
-        // While loading the button is non-clickable, exactly like disabled. A constant `disabled` decides it here; a signal reaches
-        // the element through its channel, and the click reads it when it comes, so a click landing before the patch reaches nothing.
-        val effDisabled = loading || p.disabled.exists { case on: Boolean => on; case _ => false }
-        if effDisabled then el = el.disabled(true)
-        else p.disabled.foreach(d => el = el.disabled(d))
-        if !effDisabled then
-            p.onClick.foreach { e =>
-                el = p.disabled match
-                    case Present(off: Signal[Boolean] @unchecked) => el.onClick(off.current.map(d => if d then Kyo.unit else e))
-                    case _                                        => el.onClick(e)
-            }
-        end if
-        // aria-disabled keeps the button focusable + clickable (the click routes through the handler, e.g. form.submit →
-        // focus-first-invalid); it says so only while the button is not natively disabled, a signal on either side following both.
-        if !effDisabled then
-            p.ariaDisabled.foreach { ad =>
-                val says: Prop[Boolean] = p.disabled match
-                    case Present(off: Signal[Boolean] @unchecked) => Prop.map(Prop.zip(ad, off))((a, d) => a && !d)
-                    case _                                        => ad
-                says match
-                    case on: Signal[Boolean] @unchecked =>
-                        el = el.aria("disabled", Prop.map(on)(_.toString)).cssClass("p-uic-aria-disabled", on)
-                    case on: Boolean => if on then el = el.aria("disabled", "true").cssClass("p-uic-aria-disabled")
-                end match
-            }
-        end if
-        el(UI.children(contentChildren(loading))*)
+        shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.data("uic-form", _))
     end renderButton
 
     /** Button skin on a client-routed anchor (SPA `Href.Path`). The anchor keeps its

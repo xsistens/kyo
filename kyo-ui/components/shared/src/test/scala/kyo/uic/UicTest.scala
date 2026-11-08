@@ -74,11 +74,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
         end if
     end carriesClass
 
-    /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place, read at its current value. */
+    /** The value of `aria-$name` on `e` now: a plain attribute, or one a channel patches in place (an `ariaFlag` among them, which
+      * holds no attribute while off), read at its current value.
+      */
     private[uic] def ariaNow(e: UI.Ast.Element, name: String)(using Frame): Maybe[String] < Sync =
         e.attrs.ariaAttrs.get(name) match
             case Some(v) => Kyo.lift(Present(v))
-            case None    => e.attrs.reactiveAttrs.get(s"aria-$name").fold(Kyo.lift(Absent: Maybe[String]))(_.current.map(Present(_)))
+            case None    =>
+                e.attrs.reactiveAttrs.get(s"aria-$name") match
+                    case Some(sig) => sig.current.map(Present(_))
+                    case None      => e.attrs.reactiveMaybeAttrs.get(s"aria-$name").fold(Kyo.lift(Absent: Maybe[String]))(_.current)
 
     /** Runs a handler's effect. None of the handlers under test is meant to fail, so a failure fails the test. */
     private[uic] def handled(action: UI.Action)(using Frame): Any < Async =

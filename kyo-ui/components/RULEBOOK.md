@@ -108,3 +108,34 @@ A prop over a closed set of cases that picks one class (a severity, a variant, a
 
 - Never one `cssClass(name, sig.map(_ == case))` per case (Tag, Badge and Message still do, until their wave): that is N
   channels for one value, and a case left out of the list never gets its class.
+
+## 6. Flags are read in one `UI.reactive` block, never matched by their form
+
+Flags that may be a constant or a signal (`disabled`, `aria-disabled`, `loading`) are read with `.read` inside one
+`UI.reactive` block and used as plain values: combined with `&&` and `||`, handed to the setters that take a `Prop`
+(`disabled`, `cssClass(name, on)`, `ariaFlag`), and used in a handler as they are. Never a match on `Boolean` against
+`Signal` at the place a flag is used, never a `var` set in its arms, never `Prop.zip`/`Prop.map` by hand for what the block
+can say.
+
+- **Why:** the code says what the button does and not which props are signals. The macro sorts it out: a value that only
+  reaches channels and handlers stays a channel (no region), a handler reads it when its event comes, and only a read the
+  structure needs (`busy`: the spinner and the icon-only class) makes the block a region. With every flag a constant the block
+  is a plain element.
+- **Shape:**
+
+```scala
+UI.reactive {
+    val busy = loading.read
+    val off  = busy || disabled.read
+    val says = ariaDisabled.read && !off
+    renderButton(busy).disabled(off)
+        .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
+        .ariaFlag("disabled", says)
+        .cssClass("p-uic-aria-disabled", says)(...)
+}
+```
+
+- An attribute that a constant writes only while true (`aria-disabled`, `aria-busy`) is `ariaFlag`; one where `"false"` says
+  something (`aria-pressed`) is `aria(name, on.toString)`.
+- A setter beside its union with a plain overload (`disabled(Boolean)` once) keeps a `Boolean` off the channel: kyo-ui has one
+  setter per flag, and a component adds no plain overload of its own.
