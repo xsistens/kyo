@@ -188,13 +188,13 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * after the last gesture, and the ones before it, each with the path that published it. A component that patches itself in
       * place draws nothing of itself again after a host run: its state is read in the tree it published first, whose regions and
       * channels follow, and a tree it sends again after the gesture is one it had sent before at that path. `sent` holds as well
-      * once the trees after the gesture satisfy it, for a run that changes nothing a reader sees.
+      * once the trees after the gesture satisfy it (handed the trees before it too), for a run that changes nothing a reader sees.
       */
     private[uic] def paintedAround(
         ui: UI,
         ready: UI => Boolean < Sync,
         until: UI => Boolean < Sync,
-        sent: Chunk[(Seq[String], UI)] => Boolean = _ => true
+        sent: (Chunk[(Seq[String], UI)], Chunk[(Seq[String], UI)]) => Boolean = (_, _) => true
     )(acts: (UI => Any < Async)*)(using
         Frame,
         kyo.test.AssertScope
@@ -202,8 +202,11 @@ abstract class UicTest extends kyo.test.Test[Any]:
         drive(ui, ready, Nil, acts) { d =>
             def all: UI < Sync = Sync.defer(UI.fragment(d.published*))
             for
-                _     <- waitFor(UicTest.walkingLive.let(true)(all.map(until)))
-                _     <- waitFor(Sync.defer(sent(Chunk.from(d.paints.take(d.paints.size - d.publishedBefore)))))
+                _ <- waitFor(UicTest.walkingLive.let(true)(all.map(until)))
+                _ <- waitFor(Sync.defer(sent(
+                    Chunk.from(d.paints.take(d.paints.size - d.publishedBefore)),
+                    Chunk.from(d.paints.drop(d.paints.size - d.publishedBefore))
+                )))
                 every <- all
                 since <- Sync.defer(Chunk.from(d.paints.take(d.paints.size - d.publishedBefore)))
                 prior <- Sync.defer(Chunk.from(d.paints.drop(d.paints.size - d.publishedBefore)))
