@@ -333,6 +333,23 @@ class AttrsTest extends UITest:
         end for
     }
 
+    // ---- aria flag ----
+
+    "ariaFlag writes aria-<name>=\"true\" while on and no attribute while off, from a constant or a signal" in {
+        def html(ui: UI)(using Frame) = kyo.internal.HtmlRenderer.render(UI.div(ui), Seq.empty)
+        for
+            on     <- Signal.initRef(true)
+            off    <- Signal.initRef(false)
+            yes    <- html(UI.span.ariaFlag("disabled", true))
+            no     <- html(UI.span.ariaFlag("disabled", false))
+            sigYes <- html(UI.span.ariaFlag("disabled", on: Signal[Boolean]))
+            sigNo  <- html(UI.span.ariaFlag("disabled", off: Signal[Boolean]))
+        yield
+            assert(yes.contains("""aria-disabled="true"""") && sigYes.contains("""aria-disabled="true""""), s"$yes / $sigYes")
+            assert(!no.contains("aria-disabled") && !sigNo.contains("aria-disabled"), s"$no / $sigNo")
+        end for
+    }
+
     // ---- class name channel ----
 
     "cssClass of a signal over a class name writes the class it holds, after the fixed ones, and none for Absent" in {

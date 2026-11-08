@@ -11,18 +11,20 @@ import kyo.UI.Ast.*
   */
 final private[kyo] case class Channels(
     attrs: Map[String, Signal[String]],
+    maybeAttrs: Map[String, Signal[Maybe[String]]],
     bools: Map[String, Signal[Boolean]],
     classes: Map[String, Signal[Boolean]],
     classNames: Chunk[Signal[Maybe[String]]],
     style: Maybe[Signal[Style]]
 ):
-    def isEmpty: Boolean  = attrs.isEmpty && bools.isEmpty && classes.isEmpty && classNames.isEmpty && style.isEmpty
+    def isEmpty: Boolean  = attrs.isEmpty && maybeAttrs.isEmpty && bools.isEmpty && classes.isEmpty && classNames.isEmpty && style.isEmpty
     def nonEmpty: Boolean = !isEmpty
 
     /** The values the channels hold now, which the enclosing paint is about to put into the DOM. */
     def rendered(using AllowUnsafe, Frame, SignalNow.Locals): RenderedChannels =
         RenderedChannels(
             Channels.currentValues(attrs),
+            Channels.currentValues(maybeAttrs),
             Channels.currentValues(bools),
             Channels.currentValues(classes),
             classNames.map(SignalNow(_)),
@@ -31,7 +33,7 @@ final private[kyo] case class Channels(
 end Channels
 
 private[kyo] object Channels:
-    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)
+    val empty: Channels = Channels(Map.empty, Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)
 
     /** The channels `el` carries, a `Bound.Follow` among them: its `value` as an attribute channel, masked and formatted the way a render
       * writes it, its `checked` as a boolean one.
@@ -40,7 +42,7 @@ private[kyo] object Channels:
         val attrs = el.attrs
         val text  = followedValue(el).fold(attrs.reactiveAttrs)(v => attrs.reactiveAttrs.updated("value", v))
         val bools = followedChecked(el).fold(attrs.reactiveBoolAttrs)(c => attrs.reactiveBoolAttrs.updated("checked", c))
-        Channels(text, bools, attrs.reactiveClasses, attrs.reactiveClassNames, attrs.reactiveStyle)
+        Channels(text, attrs.reactiveMaybeAttrs, bools, attrs.reactiveClasses, attrs.reactiveClassNames, attrs.reactiveStyle)
     end of
 
     /** What puts `el` back after the edit `event`, for an element that follows a signal: compares, once the event has finished bubbling, what
@@ -125,6 +127,7 @@ end Channels
   */
 final private[kyo] case class RenderedChannels(
     attrs: Map[String, String],
+    maybeAttrs: Map[String, Maybe[String]],
     bools: Map[String, Boolean],
     classes: Map[String, Boolean],
     // The name each class-name channel held, by position in Channels.classNames.
@@ -133,4 +136,4 @@ final private[kyo] case class RenderedChannels(
 )
 
 private[kyo] object RenderedChannels:
-    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)
+    val empty: RenderedChannels = RenderedChannels(Map.empty, Map.empty, Map.empty, Map.empty, Chunk.empty, Absent)

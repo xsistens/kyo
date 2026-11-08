@@ -1160,6 +1160,21 @@ private[kyo] object ReactiveUI:
                 end bindClassName
 
                 bindAll(channels.attrs, rendered.attrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen {
+                        // An attribute a signal may leave out: set while it holds a value, taken away (the boolean op, off) while not.
+                        given CanEqual[Maybe[String], Maybe[String]] = CanEqual.derived
+                        val patcher                                  =
+                            for
+                                set <- exchange.attrPatcherNow
+                                off <- exchange.boolAttrPatcherNow
+                            yield (p: Seq[String], name: String, v: Maybe[String]) => v.fold(off(p, name, false))(set(p, name, _))
+                        bindAll[Maybe[String]](
+                            channels.maybeAttrs,
+                            rendered.maybeAttrs,
+                            patcher,
+                            (name, v) => v.fold(exchange.onBoolAttrPatch(path, name, false))(exchange.onAttrPatch(path, name, _))
+                        )
+                    }
                     .andThen(bindAll(channels.bools, rendered.bools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
                     .andThen(bindAll(channels.classes, rendered.classes, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
                     .andThen(Kyo.foreachDiscard(channels.classNames.zipWithIndex)((sig, i) =>

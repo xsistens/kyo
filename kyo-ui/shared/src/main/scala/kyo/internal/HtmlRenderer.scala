@@ -1023,14 +1023,22 @@ private[kyo] object HtmlRenderer:
         ci.inputMask.foreach(m => w(sb, s""" data-kyo-mask="${esc(m)}""""))
     end renderInputConstraints
 
-    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
-      * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
+    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it, and each attribute a signal may
+      * leave out while it holds one; the client then patches it in place (HtmlOp.SetAttrByPath, and SetBoolAttrByPath off for one
+      * left out). Sorted by name, the two kinds together, for deterministic output.
       */
     private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame, SignalNow.Locals): Unit =
-        if attrs.reactiveAttrs.nonEmpty then
-            attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
-                w(sb, s""" $name="${esc(SignalNow(sig))}"""")
-            }
+        if attrs.reactiveMaybeAttrs.isEmpty then
+            if attrs.reactiveAttrs.nonEmpty then
+                attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
+                    w(sb, s""" $name="${esc(SignalNow(sig))}"""")
+                }
+        else
+            val held = attrs.reactiveAttrs.toSeq.map((n, s) => n -> Maybe(SignalNow(s))) ++
+                attrs.reactiveMaybeAttrs.toSeq.map((n, s) => n -> SignalNow(s))
+            held.sortBy(_._1).foreach((name, v) => v.foreach(value => w(sb, s""" $name="${esc(value)}"""")))
+        end if
+    end renderReactiveAttrs
 
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
@@ -1104,7 +1112,7 @@ private[kyo] object HtmlRenderer:
         // meaning something different from `.disabled(sig).disabled(true)`.
         def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
             if !elem.attrs.reactiveBoolAttrs.contains(name) then HtmlRenderer.boolAttr(sb, name, value)
-        def owned(name: String): Boolean = elem.attrs.reactiveAttrs.contains(name)
+        def owned(name: String): Boolean = elem.attrs.reactiveAttrs.contains(name) || elem.attrs.reactiveMaybeAttrs.contains(name)
         elem match
             case ci: ConstrainedInput => renderInputConstraints(sb, ci)
             case _                    => ()

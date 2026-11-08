@@ -213,6 +213,42 @@ class ReactiveMacroTest extends UITest:
         }
     }
 
+    "a read in an event handler is the prop's value when its event comes" - {
+        def run(action: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Throwable]) =
+            Abort.run[Any](action.getOrElse(Kyo.unit)).map(_ => ())
+
+        "a read in a handler reads when the handler runs, and draws no region" in {
+            for
+                on  <- Signal.initRef(false)
+                hit <- Signal.initRef(0)
+                ui = UI.reactive(button("go").onClick(if on.read then hit.set(1) else hit.set(2)))
+                el <- ui match
+                    case b: Button => Kyo.lift(b)
+                    case other     => Kyo.lift(fail(s"a read in a handler drew a region: $other"))
+                _ <- on.set(true)
+                _ <- run(el.attrs.onClick)
+                v <- hit.get
+            yield assert(v == 1, s"the handler saw the value of the draw: $v")
+        }
+
+        "a val a channel and a handler use is a channel, and the handler reads it when its event comes" in {
+            for
+                on  <- Signal.initRef(false)
+                hit <- Signal.initRef(0)
+                ui = UI.reactive {
+                    val off = on.read
+                    button("go").disabled(off).onClick(if off then hit.set(1) else hit.set(2))
+                }
+                el <- ui match
+                    case b: Button => Kyo.lift(b)
+                    case other     => Kyo.lift(fail(s"the val drew a region: $other"))
+                _ <- on.set(true)
+                _ <- run(el.attrs.onClick)
+                v <- hit.get
+            yield assert(el.attrs.reactiveBoolAttrs.contains("disabled") && v == 1, s"${el.attrs.reactiveBoolAttrs} / $v")
+        }
+    }
+
     "a read the block would not evaluate once while it runs is a compile error that says what to write" - {
         "a read outside a block does not exist" in {
             typeCheckFailure("""
