@@ -90,8 +90,12 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
     /** Native `maxlength`: caps the number of characters. */
     def maxLength(n: Int): Input = new Input(p.copy(maxLengthV = Present(math.max(0, n))))
 
-    /** Selects the native input type; defaults to [[InputType.Text]]. */
-    def inputType(t: InputType): Input = new Input(p.copy(typeV = t))
+    /** The native input type; defaults to [[InputType.Text]]. A [[kyo.UI.TextType]] signal switches the type on the field the page
+      * has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus stay: a password field that
+      * reveals its text is one. The two forms take different types on purpose: a signal names only a free-text type, since
+      * `number` reads its value differently and the field could not switch to or from it without changing what it holds.
+      */
+    def inputType(t: InputType | Signal[UI.TextType]): Input = new Input(p.copy(typeV = t))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
     def size(v: Size): Input = new Input(p.copy(sizeV = v))
@@ -141,48 +145,58 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
     private[uic] def render(using Frame): UI =
         val validity  = FieldValidity(validityV)
         val built: UI = typeV match
-            case InputType.Text =>
+            case sig: Signal[UI.TextType] @unchecked =>
                 buildField(
-                    withConstraints(input),
+                    withConstraints(input).textType(sig),
                     _.placeholder(_),
                     _.onInput(_),
                     _.onChange(_),
                     validity
                 )
-            case InputType.Email =>
-                buildField(
-                    withConstraints(emailInput),
-                    _.placeholder(_),
-                    _.onInput(_),
-                    _.onChange(_),
-                    validity
-                )
-            case InputType.Number =>
-                buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
-            case InputType.Password =>
-                buildField(
-                    withConstraints(passwordInput),
-                    _.placeholder(_),
-                    _.onInput(_),
-                    _.onChange(_),
-                    validity
-                )
-            case InputType.Tel =>
-                buildField(
-                    withConstraints(telInput),
-                    _.placeholder(_),
-                    _.onInput(_),
-                    _.onChange(_),
-                    validity
-                )
-            case InputType.URL =>
-                buildField(
-                    withConstraints(urlInput),
-                    _.placeholder(_),
-                    _.onInput(_),
-                    _.onChange(_),
-                    validity
-                )
+            case t: InputType =>
+                t match
+                    case InputType.Text =>
+                        buildField(
+                            withConstraints(input),
+                            _.placeholder(_),
+                            _.onInput(_),
+                            _.onChange(_),
+                            validity
+                        )
+                    case InputType.Email =>
+                        buildField(
+                            withConstraints(emailInput),
+                            _.placeholder(_),
+                            _.onInput(_),
+                            _.onChange(_),
+                            validity
+                        )
+                    case InputType.Number =>
+                        buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), validity)
+                    case InputType.Password =>
+                        buildField(
+                            withConstraints(passwordInput),
+                            _.placeholder(_),
+                            _.onInput(_),
+                            _.onChange(_),
+                            validity
+                        )
+                    case InputType.Tel =>
+                        buildField(
+                            withConstraints(telInput),
+                            _.placeholder(_),
+                            _.onInput(_),
+                            _.onChange(_),
+                            validity
+                        )
+                    case InputType.URL =>
+                        buildField(
+                            withConstraints(urlInput),
+                            _.placeholder(_),
+                            _.onInput(_),
+                            _.onChange(_),
+                            validity
+                        )
         Diagnostics.after(validity.follow(built))(unheardAsV.component)(
             Diagnostic.unheard(valueSlot, unheardAsV, on = !readonlyFlag.constTrue && !disabledFlag.constTrue)
         )
@@ -273,7 +287,7 @@ object Input:
         requiredFlag: Maybe[Boolean] = Absent,
         nameV: Maybe[String] = Absent,
         maxLengthV: Maybe[Int] = Absent,
-        typeV: InputType = InputType.Text,
+        typeV: InputType | Signal[UI.TextType] = InputType.Text,
         sizeV: Size = Size.Normal,
         variantV: FieldVariant = FieldVariant.Outlined,
         fluidFlag: Boolean = false,
