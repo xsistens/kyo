@@ -1636,6 +1636,28 @@ object UI:
         case Allowed(chars: String) // "chars:" ++ chars, explicit escape for an arbitrary set
     end InputFilter
 
+    /** The `type` a free-text field shows, for the field whose type follows a signal ([[kyo.UI.ConstrainedInput.textType]]).
+      *
+      * A field with one fixed type is built by its own factory (`UI.input`, `UI.passwordInput`, `UI.emailInput`, ...), which
+      * writes that type. This enum is for a field that changes type while it stays on the page, the way a password field
+      * that reveals its text does: the client switches the attribute on the element it has, so what the reader typed, the
+      * caret and focus stay.
+      *
+      * Only the free-text types are here. A `number` field reads its value differently, so switching to or from it would
+      * change what the field holds; it keeps its own factory.
+      *
+      * @see
+      *   `kyo.UI.ConstrainedInput.textType` for the setter
+      */
+    enum TextType(val attr: String) derives CanEqual:
+        case Text     extends TextType("text")
+        case Password extends TextType("password")
+        case Email    extends TextType("email")
+        case Tel      extends TextType("tel")
+        case Url      extends TextType("url")
+        case Search   extends TextType("search")
+    end TextType
+
     /** The ctrl/alt/shift/meta chord held down when a mouse or keyboard event fired.
       *
       * Carried by [[kyo.UI.MouseEvent]] and [[kyo.UI.KeyboardEvent]] so handlers can branch on modified clicks/keystrokes (for example
@@ -2596,6 +2618,18 @@ object UI:
               * value the mask cannot hold is truncated at its capacity.
               */
             def inputMask(v: String): Self
+
+            /** The field's `type` follows `sig`, patched IN PLACE on emission: the client switches the attribute on the element
+              * it has, with no re-render, so the text the reader typed, the caret and focus stay. The type the factory wrote
+              * gives way to it, in the static render as in the client, so the field carries one `type`, at the value `sig`
+              * holds.
+              *
+              * For a field that changes type on the page, such as a password field that reveals its text. A field with one
+              * type needs no signal: its factory writes it.
+              */
+            def textType(sig: Signal[TextType]): Self =
+                given Frame = frame
+                withReactiveAttr("type", sig.map(_.attr))
         end ConstrainedInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */

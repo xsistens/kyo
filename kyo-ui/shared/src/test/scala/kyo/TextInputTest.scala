@@ -173,6 +173,35 @@ class TextInputTest extends UITest:
         }
     }
 
+    "a type from a signal switches the field in place, so the text typed into it and its focus stay" in {
+        val app: UI < Async =
+            for shown <- Signal.initRef(UI.TextType.Password)
+            yield UI.div(
+                UI.passwordInput.id("p").textType(shown).onKeyDown(ev =>
+                    if ev.key == UI.Keyboard.Escape then shown.set(UI.TextType.Text) else Kyo.unit
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("p"), "secret")
+                _ <- Browser.assertAttribute(Selector.id("p"), "type", "password")
+                _ <- Browser.press(Selector.id("p"), Key.Escape)
+                _ <- Browser.assertAttribute(Selector.id("p"), "type", "text")
+                _ <- Browser.assertFocused(Selector.id("p"))
+                v <- Browser.value(Selector.id("p"))
+            yield assert(v == "secret", s"the field's text after the switch: $v")
+        }
+    }
+
+    "a type from a signal is the field's one type attribute, written at the value the signal holds" in {
+        for
+            shown <- Signal.initRef(UI.TextType.Text)
+            html  <- kyo.internal.HtmlRenderer.render(UI.div(UI.passwordInput.textType(shown), UI.input.textType(shown)), Seq.empty)
+        yield
+            val types = """ type="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList
+            assert(types == List("text", "text"), html)
+    }
+
     "two different types independent" in {
         val app: UI < Async =
             for
