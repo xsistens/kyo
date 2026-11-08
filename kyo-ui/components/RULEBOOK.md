@@ -42,3 +42,24 @@ private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using F
 
 - The order of calls on a field that keeps one value matters where both paths set it: the later call wins (Button's host role
   over its `accessibleRole`), so the shared part runs after what it overrides.
+
+## 3. An element is built as one chain, never as a `var` reassigned
+
+Optional and conditional settings stay in the chain: `when(maybe)(_.x(_))` for a `Maybe`, `when(cond)(_.x)` for a condition,
+and the setters that take a `Maybe` themselves (`aria("label", access.name)`, `aria("labelledby", access.nameRef)`). A branch
+that builds two different chains is a `val` of an `if`, not a `var` set in each arm.
+
+- **Why:** `var el = ...; x.foreach(v => el = el.x(v))` spends a line and a reassignment on every optional attribute, and
+  hides the order of the chain in statements; the chain reads top to bottom as the element's attributes. uic had 789 such
+  reassignments when `when` was added (2026-11-05), all from this one missing shape.
+- **Shape:**
+
+```scala
+classed(el, loading)
+    .when(p.access.id)(_.id(_))
+    .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
+    .when(p.onKeyDown)(_.onKeyDown(_))
+    .aria("label", p.access.name)
+```
+
+- A step that is a match over a value (until rule 4 removes it) is a small local `def step(e: E): E`, applied in the chain.
