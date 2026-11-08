@@ -86,6 +86,10 @@ abstract class ReactiveValueContract extends UicTest:
       *   for a component that draws itself again when `disabled` changes: the component with its `disabled` following the
       *   signal. What the reader did has to outlast that, wherever the state is kept, so the mount that keeps it sits above the
       *   region. Absent, the component has no such region: a channel-only field has nothing that could fail.
+      * @param placed
+      *   for a component that is an instance kept across its host's runs (it draws through `UI.mountedWith`): the component as
+      *   an app places it, which keys the instance on that place. A host region around it that runs again with new props must
+      *   leave what the reader did on screen. Absent, the component is not held to it yet (its wave has not reached it).
       */
     final class SlotCase[C, A](
         val name: String,
@@ -111,7 +115,8 @@ abstract class ReactiveValueContract extends UicTest:
         val after: Seq[UI => Frame ?=> Any < Async] = Nil,
         val mountDraws: Boolean = false,
         val layout: Map[String, UI.Rect] = Map.empty,
-        val disable: Maybe[(C, Signal[Boolean]) => Frame ?=> C] = Absent
+        val disable: Maybe[(C, Signal[Boolean]) => Frame ?=> C] = Absent,
+        val placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent
     )(using val equal: CanEqual[A, A]):
 
         /** `v` run on a page laid out as [[layout]] says. */
@@ -312,6 +317,8 @@ abstract class ReactiveValueContract extends UicTest:
       *   whether the slot's event hears the commit (`onChange`) rather than every keystroke (`onInput`)
       * @param ready
       *   as [[SlotCase]]'s, for a field whose handlers its mount wires
+      * @param placed
+      *   as [[SlotCase]]'s, for a field that is an instance kept across its host's runs
       */
     def nativeText[C](
         name: String,
@@ -324,7 +331,8 @@ abstract class ReactiveValueContract extends UicTest:
         next: String = "typed",
         startText: String = "start",
         commit: Boolean = false,
-        ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent
+        ready: Maybe[UI => Frame ?=> Boolean < Sync] = Absent,
+        placed: Maybe[C => (Frame, UI.MountSite) ?=> UI] = Absent
     ): SlotCase[C, String] =
         new SlotCase[C, String](
             name = name,
@@ -344,6 +352,7 @@ abstract class ReactiveValueContract extends UicTest:
                 case _                   => false
             },
             ready = ready,
+            placed = placed,
             startText = Present(startText),
             keptNatively = Present(t =>
                 textField(t, field).map {
@@ -494,8 +503,71 @@ abstract class ReactiveValueContract extends UicTest:
         end match
 
         holdsThroughDisabled(s)
+        holdsThroughHostRuns(s)
         heardBy(s)
     end holds
+
+    /** Registers the case for a component that is an instance kept across its host's runs ([[SlotCase.placed]]): unbound, what the
+      * reader did is still shown after a host region around it runs again and hands it new props. Each run gives it a hearer of its
+      * own, so the props of the run differ from the ones before whatever else the component takes.
+      */
+    private def holdsThroughHostRuns[C, A](s: SlotCase[C, A]): Unit =
+        for
+            place <- s.placed
+            bare  <- s.bare
+        do
+            s"${s.name}: unbound, a host region that runs again with new props keeps what the reader did" in s.laidOut {
+                import s.equal
+                def ran(t: UI): Boolean < Sync = elementsWithClass(t, UicTest.hostRunClass).map(_.exists(e => textOf(e) == "run 1"))
+                // The host's tree of run 1, which holds the kept instance only as its place.
+                def marks(u: UI): Boolean = u match
+                    case e: UI.Ast.Element =>
+                        (e.attrs.cssClasses.contains(UicTest.hostRunClass) && textOf(e) == "run 1") || e.children.exists(marks)
+                    case f: UI.Ast.Fragment[?]   => f.children.exists(marks)
+                    case k: UI.Ast.KeyedChild[?] => marks(k.child)
+                    case _                       => false
+                // The instance sends its tree into that place after it, from a path below the host's; until it has, the place is
+                // all a reader of the published trees has, and reading it draws the component anew from its start.
+                // The instance's tree as the page shows it after the host's run: the newest tree, from the path nearest below the
+                // host's, that came after the host's tree of run 1.
+                def refill(since: Chunk[(Seq[String], UI)]): Maybe[UI] =
+                    val host = since.indexWhere((_, t) => marks(t))
+                    if host <= 0 then Absent
+                    else
+                        val below = since.take(host).filter((path, _) => path.size > since(host)._1.size)
+                        if below.isEmpty then Absent else Present(below.minBy(_._1.size)._2)
+                    end if
+                end refill
+                def paths(trees: Chunk[(Seq[String], UI)]): String = trees.map(_._1.mkString(".")).mkString(" ")
+                for
+                    run <- Signal.initRef(0)
+                    ui = UI.div(run.map(n =>
+                        UI.div(UI.span.cssClass(UicTest.hostRunClass)(s"run $n"), place(s.hear(bare, _ => Kyo.unit)))
+                    ))
+                    steps = s.steps :+ ((_: UI) => setSettled(run, 1): Any < Async)
+                    _ <- s.keptNatively match
+                        // The text is the browser's, and a run keeps the field it is in (the morph keeps the element): what the
+                        // instance must not do after the run is draw a value of its own over it.
+                        case Present(kept) =>
+                            paintedAround(ui, t => s.wired(t), ran)(steps*).map((every, _, _) =>
+                                kept(every).map(k =>
+                                    assert(k, "after the host's run the field draws a value of its own over the browser's text")
+                                )
+                            )
+                        case Absent =>
+                            paintedAround(ui, t => s.wired(t), ran, refill(_).isDefined)(steps*).map { (_, since, prior) =>
+                                s.shows(refill(since).get).map(shown =>
+                                    assert(
+                                        shown == s.next,
+                                        s"after the host's run the component shows $shown, the reader had made it ${s.next}; " +
+                                            s"published after the gesture at ${paths(since)}, before it at ${paths(prior)}"
+                                    )
+                                )
+                            }
+                yield ()
+                end for
+            }
+    end holdsThroughHostRuns
 
     /** Registers the cases for the blur of a text slot: whatever binds the field, focus leaving it reports the text the
       * reader left in it, which the transport reads off the field and carries with the blur ([[blurOut]]). The reader

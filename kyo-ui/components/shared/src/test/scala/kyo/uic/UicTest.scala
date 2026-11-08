@@ -870,6 +870,9 @@ object UicTest:
     /** The class a card carries. */
     private[uic] val cardClass = "p-uic-diagnostic"
 
+    /** The class of the marker a contract's host region draws beside the component, saying which run it is. */
+    private[uic] val hostRunClass = "p-uic-test-host-run"
+
     // The lines `countLoss` has written, so each suite names each place once.
     private val lossesSeen = new java.util.concurrent.atomic.AtomicReference(Set.empty[String])
 

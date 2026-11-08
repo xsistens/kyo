@@ -36,7 +36,9 @@ class ToggleButtonTest extends ReactiveValueContract:
         saysFixed = {
             case b: UI.Ast.Button => b.attrs.ariaAttrs.get("disabled").contains("true") && !b.disabled.contains(true)
             case _                => false
-        }
+        },
+        // As an app places it, which keys the instance on the place.
+        placed = Present(b => b.toUI)
     ))
 
     "a signal nobody hears says nothing where it reaches somebody or nobody can toggle it: a ref, readonly, disabled" in {
