@@ -109,7 +109,7 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
 
-    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = new Input(p.copy(accDescV = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Input = new Input(p.copy(accDescV = v))
 
     def onInput(f: String => UI.Action)(using Frame): Input  = new Input(p.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): Input =
@@ -252,10 +252,7 @@ final class Input private[uic] (private[uic] val p: Input.Props) extends Node, T
             case Present(v) => b.aria("label", v)
             case _          => b
         b = access.nameRef.map(v => b.aria("labelledby", v)).getOrElse(b)
-        b = accDescV match
-            case Present(TextValue.Const(v)) => b.aria("description", v)
-            case Present(TextValue.Dyn(s))   => b.aria("description", s)
-            case Absent                      => b
+        b = b.aria("description", accDescV)
         b = valueSlot.hearer.map(f => setOnInput(b, f)).getOrElse(b)
         b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
         // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
@@ -293,7 +290,7 @@ object Input:
         fluidFlag: Boolean = false,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         access: Accessibility = Accessibility.none,
-        accDescV: Maybe[TextValue] = Absent,
+        accDescV: Maybe[Prop[String]] = Absent,
         onChangeF: Maybe[String => UI.Action] = Absent,
         onBlurF: Maybe[String => UI.Action] = Absent,
         inputFilterV: Maybe[String] = Absent,
