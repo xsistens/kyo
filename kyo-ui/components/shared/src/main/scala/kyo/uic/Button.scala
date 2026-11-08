@@ -215,35 +215,28 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * description, the tooltip, the host's role, focus seeding and key handler, and `aria-busy` while loading.
       */
     private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        var e = classed(el, loading)
-        p.access.id.foreach(v => e = e.id(v))
-        e = withExtraArias(e)
-        p.role.foreach(r => e = e.role(r))
-        if p.focusSeed then e = e.focusAuto(true).focusRestore(true)
-        p.onKeyDown.foreach(f => e = e.onKeyDown(f))
-        p.access.name.foreach(n => e = e.aria("label", n))
-        p.access.nameRef.foreach(r => e = e.aria("labelledby", r))
-        p.description match
-            case Present(TextValue.Const(d)) => e = e.aria("description", d)
-            case Present(TextValue.Dyn(s))   => e = e.aria("description", s)
-            case Absent                      => ()
-        end match
-        p.tooltip match
-            case Present(TextValue.Const(t)) => e = e.jsProp("title", t)
-            case Present(TextValue.Dyn(s))   => e = e.title(s)
-            case Absent                      => ()
-        end match
-        if loading then e = e.aria("busy", "true")
-        e
+        def described(e: E): E = p.description match
+            case Present(TextValue.Const(d)) => e.aria("description", d)
+            case Present(TextValue.Dyn(s))   => e.aria("description", s)
+            case Absent                      => e
+        def titled(e: E): E = p.tooltip match
+            case Present(TextValue.Const(t)) => e.jsProp("title", t)
+            case Present(TextValue.Dyn(s))   => e.title(s)
+            case Absent                      => e
+        val named = withExtraArias(classed(el, loading).when(p.access.id)(_.id(_)))
+            .when(p.role)(_.role(_))
+            .when(p.focusSeed)(_.focusAuto(true).focusRestore(true))
+            .when(p.onKeyDown)(_.onKeyDown(_))
+            .aria("label", p.access.name)
+            .aria("labelledby", p.access.nameRef)
+        titled(described(named)).when(loading)(_.aria("busy", "true"))
     end shared
 
     private def renderButton(loading: Boolean)(using Frame): UI =
         // The form type and the button's own role come first, so the host's role (in `shared`) wins over `accessibleRole`.
-        var el = button.jsProp("type", p.buttonType.token.toLowerCase)
-        if p.accessibleRole == ButtonAccessibleRole.Link then el = el.role("link")
-        el = shared(el, loading)
-        p.tabIndex.foreach(t => el = el.tabIndex(t))
-        p.form.foreach(f => el = el.data("uic-form", f))
+        val typed = button.jsProp("type", p.buttonType.token.toLowerCase)
+            .when(p.accessibleRole == ButtonAccessibleRole.Link)(_.role("link"))
+        var el = shared(typed, loading).when(p.tabIndex)(_.tabIndex(_)).when(p.form)(_.data("uic-form", _))
         // While loading the button is non-clickable, exactly like disabled. A constant `disabled` decides it here; a signal reaches
         // the element through its channel, and the click reads it when it comes, so a click landing before the patch reaches nothing.
         val effDisabled = loading || p.disabled.exists { case on: Boolean => on; case _ => false }
@@ -279,16 +272,13 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * `tabIndex(-1)` (the same treatment as [[Link]]).
       */
     private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using Frame): UI =
-        var el = shared(a, loading)
+        val el = shared(a, loading)
         // A disabled link leaves the tab order outright, so the host's roving tabindex has
         // nothing left to say about it.
-        if loading || disabled then el = el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
-        else
-            p.tabIndex.foreach(t => el = el.tabIndex(t))
-            el = el.href(Href.Path(h))
-            p.onClick.foreach(e => el = el.onClick(e))
-        end if
-        el(UI.children(contentChildren(loading))*)
+        val linked =
+            if loading || disabled then el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
+            else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h)).when(p.onClick)(_.onClick(_))
+        linked(UI.children(contentChildren(loading))*)
     end renderAnchor
 
     private def contentChildren(loading: Boolean)(using Frame): List[UI] =
