@@ -130,6 +130,8 @@ final class DevtoolsStore(
                 // to optimize the thing that needs it least.
                 case _: UI.RenderKind.Channel => channelWrites += 1
                 case UI.RenderKind.Text       => textWrites += 1
+                // A loss is no update of its own: it rides beside the repaint that caused it, which is counted above.
+                case _: UI.RenderKind.Lost => ()
             end match
         }
 
