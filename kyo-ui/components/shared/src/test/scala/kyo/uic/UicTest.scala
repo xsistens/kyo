@@ -15,9 +15,30 @@ import kyo.*
   */
 abstract class UicTest extends kyo.test.Test[Any]:
 
-    // Every leaf runs under the loss counter, so each region a suite runs again reports what it takes from the reader.
+    /** Whether a [[kyo.UI.Loss]] a region of this suite reports fails the leaf that ran it: set by the suite of a component its wave
+      * has freed of every loss (T19), so a change that brings one back is red where it is made. A suite that is not armed counts.
+      */
+    private[uic] def armed: Boolean = false
+
+    // Every leaf runs under the loss counter, so each region a suite runs again reports what it takes from the reader; in an armed
+    // suite a leaf that saw one fails, naming each loss.
     override def aroundLeaf[A](body: A < (Async & Abort[Any] & Scope))(using Frame): A < (Async & Abort[Any] & Scope) =
-        UI.devtools(UicTest.countLoss(getClass.getName))(super.aroundLeaf(body))
+        Sync.defer(new java.util.concurrent.atomic.AtomicReference(Chunk.empty[String])).map { lost =>
+            val count = UicTest.countLoss(getClass.getName)
+            UI.devtools { event =>
+                count(event)
+                event.kind match
+                    case UI.RenderKind.Lost(loss) =>
+                        discard(lost.getAndUpdate(_.append(s"${UicTest.described(loss)} | region ${event.frame.position.show}")))
+                    case _ => ()
+                end match
+            }(super.aroundLeaf(body)).map { a =>
+                val seen = lost.get()
+                if armed && seen.nonEmpty then
+                    throw new AssertionError(s"a region of this armed suite took the reader's state (T13): ${seen.mkString("; ")}")
+                else a
+            }
+        }
 
     /** A session's command channel for a page with no layout: every measure is answered as for an element not on the
       * page (`Absent`), and every other command goes nowhere. A component that measures before it publishes (an overlay
@@ -873,6 +894,11 @@ object UicTest:
     /** The class of the marker a contract's host region draws beside the component, saying which run it is. */
     private[uic] val hostRunClass = "p-uic-test-host-run"
 
+    /** A loss as one line: what it takes, from which element, and where that element was built. */
+    private[uic] def described(loss: UI.Loss): String = loss match
+        case UI.Loss.StatedValue(element, attribute, frame) => s"stated $attribute | $element | ${frame.position.show}"
+        case UI.Loss.UnkeyedMount(frame)                    => s"unkeyed mount | | ${frame.position.show}"
+
     // The lines `countLoss` has written, so each suite names each place once.
     private val lossesSeen = new java.util.concurrent.atomic.AtomicReference(Set.empty[String])
 
@@ -883,10 +909,7 @@ object UicTest:
     private[uic] def countLoss(suite: String): UI.RenderEvent => Unit = event =>
         event.kind match
             case UI.RenderKind.Lost(loss) =>
-                val what = loss match
-                    case UI.Loss.StatedValue(element, attribute, frame) => s"stated $attribute | $element | ${frame.position.show}"
-                    case UI.Loss.UnkeyedMount(frame)                    => s"unkeyed mount | | ${frame.position.show}"
-                val line = s"UIC-LOSS $suite | $what | region ${event.frame.position.show}"
+                val line = s"UIC-LOSS $suite | ${described(loss)} | region ${event.frame.position.show}"
                 if !lossesSeen.getAndUpdate(_ + line).contains(line) then java.lang.System.out.println(line)
             case _ => ()
 

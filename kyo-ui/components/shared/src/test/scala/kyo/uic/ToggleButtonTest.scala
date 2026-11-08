@@ -9,6 +9,9 @@ import kyo.UI.render
   */
 class ToggleButtonTest extends ReactiveValueContract:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     /** What the button shows: `aria-pressed`, which the checked class must agree with. */
     private def pressed(t: UI)(using Frame): Boolean < Sync =
         for
