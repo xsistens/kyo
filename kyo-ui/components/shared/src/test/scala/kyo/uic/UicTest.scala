@@ -76,24 +76,31 @@ abstract class UicTest extends kyo.test.Test[Any]:
       * published. That one edit reaching the kernel is what a field with native state relies on to put back what its owner did not take; a
       * handler called directly goes past it.
       */
-    private[uic] def assertsAfter(ui: UI, mounted: Boolean = false)(at: String)(event: Seq[String] => kyo.internal.UIEvent)(using
+    private[uic] def assertsAfter(
+        ui: UI,
+        mounted: Boolean = false,
+        settled: Chunk[(String, String)] => Boolean = _ => true
+    )(at: String)(event: Seq[String] => kyo.internal.UIEvent)(using
         Frame
     ): Chunk[(String, String)] < Async =
         import kyo.internal.RecordingExchange.Op
-        val log = new kyo.internal.RecordingExchange
+        val log                                      = new kyo.internal.RecordingExchange
+        def asserted: Chunk[(String, String)] < Sync = log.ops.map(_.collect {
+            case op: Op.Attr     => (op.name, op.value)
+            case op: Op.BoolAttr => (op.name, op.value.toString)
+        })
         for
             html <- renderHtml(ui)
             path = pathHolding(html, at)
             cmds    <- headlessCommands
             patches <- kyo.internal.ReactiveUI.subscribed(ui, log, commands = Present(cmds)) { sub =>
+                // A patch a channel sends after the event's own write comes later than the handler: `settled` says what to wait for.
                 (if mounted then log.awaitOp(_.isInstanceOf[Op.Paint]) else Kyo.unit)
                     .andThen(sub.handle(path, event(path)))
-                    .andThen(log.ops)
+                    .andThen(waitFor(asserted.map(settled)))
+                    .andThen(asserted)
             }
-        yield patches.collect {
-            case op: Op.Attr     => (op.name, op.value)
-            case op: Op.BoolAttr => (op.name, op.value.toString)
-        }
+        yield patches
         end for
     end assertsAfter
 
@@ -661,6 +668,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case _                  => ""
         e.children.map(walk).mkString
     end textOf
+
+    /** The text of `e` as it shows now, a text that follows a signal (a text channel) read at its current value. */
+    private[uic] def textNow(e: UI.Ast.Element)(using Frame): String < Sync =
+        def walk(u: UI): String < Sync = u match
+            case t: UI.Ast.Text        => t.value
+            case el: UI.Ast.Element    => Kyo.foreach(el.children)(walk).map(_.mkString)
+            case r: UI.Ast.Reactive[?] => r.signal.current(using r.frame).map(walk)
+            case _                     => ""
+        Kyo.foreach(e.children)(walk).map(_.mkString)
+    end textNow
 
     /** Sends one key pressed on `el` itself to its own handlers, as the dispatcher would: the self-only one first. */
     private[uic] def press(el: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
