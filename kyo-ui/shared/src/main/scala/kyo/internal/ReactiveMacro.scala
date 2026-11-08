@@ -429,6 +429,105 @@ private[kyo] object ReactiveMacro:
             end match
         end compile
 
+        // ---- What each run of a region takes from the reader (UI.Loss) ----
+        //
+        // A run draws the block's content again over the page, and the engine keeps every element it can. What the content itself
+        // says to start over it cannot keep: a native field's value stated as a constant is put back by every run, and a mount with
+        // no key starts a new instance. Both are refused where the block writes them; what the block cannot see (a component, a
+        // helper, a prop whose runtime class decides) is the runtime check's, `UI.RenderKind.Lost`.
+        if TypeRepr.of[T] <:< TypeRepr.of[UI] then
+            // The block draws a region when the structure reads: a read, or a `val` that holds one, outside every channel argument.
+            var drawsRegion = false
+            new TreeTraverser:
+                override def traverseTree(tree: Tree)(owner: Symbol): Unit = tree match
+                    case Read(_)                                       => drawsRegion = true
+                    case id: Ident if channelOnly.contains(id.symbol)  => drawsRegion = true
+                    case vd: ValDef if channelOnly.contains(vd.symbol) => ()
+                    case Apply(fn, args)                               =>
+                        traverseTree(fn)(owner)
+                        channels(fn, args).zip(args).foreach { (c, a) => if c.isEmpty then traverseTree(a)(owner) }
+                    case _ => super.traverseTree(tree)(owner)
+            .traverseTree(rhs)(lambdaSym)
+
+            if drawsRegion then
+                val natives = List(
+                    TypeRepr.of[UI.Ast.TextInput],
+                    TypeRepr.of[UI.Ast.PickerInput],
+                    TypeRepr.of[UI.Ast.BooleanInput],
+                    TypeRepr.of[UI.Ast.RangeInput],
+                    TypeRepr.of[UI.Ast.Opt]
+                )
+                // Whether `.name` on a `t` sets what the reader changes: an option's `value` is the value it stands for, its
+                // `selected` the reader's choice; every other native field's `value` or `checked` is the reader's.
+                def states(t: TypeRepr, name: String): Boolean =
+                    if t.widen <:< TypeRepr.of[UI.Ast.Opt] then name == "selected"
+                    else (name == "value" || name == "checked") && natives.exists(t.widen <:< _)
+                def mayBeSignal(t: TypeRepr): Boolean = t.widen.dealias match
+                    case OrType(a, b) => mayBeSignal(a) || mayBeSignal(b)
+                    case other        => other.baseClasses.contains(signalClass)
+                val uiModule                     = TypeRepr.of[UI.type].typeSymbol
+                def isMount(s: Symbol): Boolean  = (s.name == "mounted" || s.name == "mountedWith") && s.owner == uiModule
+                def isKeying(s: Symbol): Boolean = s.name == "keyed" || s.name == "keyedOnSite"
+
+                // The call of `UI.mounted` itself, below its `using` clauses.
+                def innermost(t: Term): Term = t match
+                    case Apply(f: Apply, _) if f.symbol == t.symbol => innermost(f)
+                    case _                                          => t
+                // The mount a `.keyed` gives a key to: the receiver of the innermost application.
+                // Whether `t` applies something to arguments (a value or a type list), as against naming the method.
+                def applies(t: Term): Boolean = t match
+                    case _: Apply | _: TypeApply => true
+                    case _                       => false
+                def receiver(t: Term): Maybe[Term] = t match
+                    case Apply(f, List(r)) if !applies(f) => Present(r)
+                    case Apply(f, _)                      => receiver(f)
+                    case TypeApply(f, _)                  => receiver(f)
+                    case _                                => Absent
+                val keyed = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Tree, java.lang.Boolean])
+                new TreeTraverser:
+                    override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                        tree match
+                            case t: Apply if isKeying(t.symbol) => receiver(t).foreach(r => discard(keyed.add(innermost(strip(r)))))
+                            case _                              => ()
+                        super.traverseTree(tree)(owner)
+                    end traverseTree
+                .traverseTree(rhs)(lambdaSym)
+
+                new TreeTraverser:
+                    override def traverseTree(tree: Tree)(owner: Symbol): Unit =
+                        tree match
+                            case t @ Apply(Select(q, name), List(arg))
+                                if states(q.tpe, name) && channels(t.fun, List(arg)).head.isEmpty && !mayBeSignal(arg.tpe) =>
+                                report.errorAndAbort(
+                                    s"""`.$name` states a native field's $name as a constant in a `UI.reactive` block that draws a region,
+                                       |and every run of the block puts it back over what the reader typed or ticked, as soon as
+                                       |anything else the block reads changes.
+                                       |
+                                       |Hand the field its $name as an argument that reads (`.$name(prop.read)`), which follows the
+                                       |prop in place, or as a signal built outside the block, so the field is never drawn again:
+                                       |$example
+                                       |""".stripMargin,
+                                    t.pos
+                                )
+                            case t: Apply if isMount(t.symbol) && !applies(t.fun) && !keyed.contains(t) =>
+                                report.errorAndAbort(
+                                    s"""A mount with no key in a `UI.reactive` block that draws a region:
+                                       |every run of the block starts it over, a new instance that draws again and allocates its
+                                       |state anew.
+                                       |
+                                       |Give it a key (`.keyed(k)`), which keeps its instance across the runs, or draw it outside
+                                       |the block.
+                                       |""".stripMargin,
+                                    t.pos
+                                )
+                            case _ => ()
+                        end match
+                        super.traverseTree(tree)(owner)
+                    end traverseTree
+                .traverseTree(rhs)(lambdaSym)
+            end if
+        end if
+
         val out = compile(rhs, lambdaSym, Symbol.spliceOwner, TypeRepr.of[T], Map.empty)
         new TreeTraverser:
             override def traverseTree(tree: Tree)(o: Symbol): Unit = tree match

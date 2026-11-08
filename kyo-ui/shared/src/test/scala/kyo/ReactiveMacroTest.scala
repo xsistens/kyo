@@ -272,4 +272,58 @@ class ReactiveMacroTest extends UITest:
         }
     }
 
+    "a UI block that draws a region refuses what each of its runs takes from the reader (UI.Loss)" - {
+        "a native field's value stated as a constant" in {
+            typeCheckFailure("""
+                import kyo.*
+                val n: UI.Prop[Int] = 1
+                UI.reactive(UI.div(UI.span(n.read.toString), UI.input.value("start")))
+            """)("every run of the block puts it back")
+        }
+
+        "a checkbox's tick stated as a constant" in {
+            typeCheckFailure("""
+                import kyo.*
+                val n: UI.Prop[Int] = 1
+                UI.reactive(UI.div(UI.span(n.read.toString), UI.checkbox.checked(false)))
+            """)("every run of the block puts it back")
+        }
+
+        "an option's selection from a read" in {
+            typeCheckFailure("""
+                import kyo.*
+                val n: UI.Prop[Int] = 1
+                UI.reactive { val k = n.read; UI.select(UI.option.value("1").selected(k == 1)("one")) }
+            """)("every run of the block puts it back")
+        }
+
+        "a mount with no key" in {
+            typeCheckFailure("""
+                import kyo.*
+                val n: UI.Prop[Int] = 1
+                UI.reactive(UI.div(UI.span(n.read.toString), UI.mounted(Sync.defer(UI.span("own")))))
+            """)("every run of the block starts it over")
+        }
+
+        "and allows what a run keeps: a value that reads, a signal, a keyed mount, and a block with no region" in {
+            for
+                n    <- Signal.initRef(1)
+                text <- Signal.initRef("text")
+                // The value reads, so it is a channel of its own and the field follows it.
+                follows = UI.reactive(UI.div(UI.span(n.read.toString), UI.input.value(n.read.toString)))
+                // A signal is followed, and a keyed mount keeps its instance.
+                kept = UI.reactive(UI.div(
+                    UI.span(n.read.toString),
+                    UI.input.value(text.readOnly),
+                    UI.mounted(Sync.defer(UI.span("own"))).keyed("k")
+                ))
+                // Every read reaches a channel, so the block draws once and nothing in it runs again.
+                once = UI.reactive(UI.div(UI.span.cssClass("on", n.read > 0), UI.input.value("start")))
+            yield
+                assert(follows.isInstanceOf[Reactive[?]] && kept.isInstanceOf[Reactive[?]], s"$follows $kept")
+                assert(!once.isInstanceOf[Reactive[?]], s"no region: $once")
+            end for
+        }
+    }
+
 end ReactiveMacroTest
