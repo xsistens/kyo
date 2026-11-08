@@ -67,17 +67,35 @@ region that runs again must not start a component over and take the reader's sta
   (`Node.placed`), so a region around it that runs again keeps the instance and hands it the run's props through its `Live`.
 - **A stateless component (Button) has no instance.** It reads its `Prop`s directly: a constant is a plain value, a signal a
   channel or one region (`Prop.render`, `Prop.zip`). A host repaint has nothing of it to lose.
-- **The recipe** (`ToggleButton.render`, `Password.render`, `SplitButton.render`): mint the state once in the draw, then draw the
-  run's props as one value, `Prop.render(live[X.Props](identity))(q => new X(q).drawnOver(own, ...))`. Every run then draws from
-  that run's binding and hearer, so a click writes the ref the latest run bound and reaches its `onChange`, and a `SignalRef`
-  stays two way. Where the run binds nothing, `drawnOver` binds the instance's own ref, which keeps the reader's value while a
-  run binds the slot and gives it back when a run stops binding it. Anything that follows the binding's shape (the unheard card,
-  a fixed constant drawn read-only) is inside the per-run draw. `Props` derives `CanEqual`.
+- **The template is `ToggleButton` (and `Paginator`)**: `render = UI.mountedWith(p)(X.drawn)`, and `drawn(props: UI.Live[Props])`
+  runs once per instance. Each place reads the field it shows where it shows it: `props(_.size)` into a class channel,
+  `props(_.checked.value(false))` into `cssClass` and `aria`, a label into the content's own region. A run that changes one field
+  patches that place alone and draws nothing else again. A state slot is a `Slot` with a `start` (a `UI.Controlled` prop): where a
+  run binds nothing the engine binds the instance's own ref in its place, minted once, so `props(_.checked.value(...))` always reads
+  a bound slot, keeps the reader's value across runs, and carries on from what was shown when a run stops binding it.
+- **What builds the element and has no channel is one `UI.reactive` block** over a small value of the structural fields (ToggleButton's
+  `Base`: editable, fixed, unheard, validity, access, radio, never a hearer), so a run that only brings new hearers leaves it equal and
+  draws nothing again. Inside the block a value that only reaches channels stays a channel (the macro's data flow), and blocks nest.
+- **A handler reads the run when its event comes**: `props.call(_.checked).map(s => ...)`, so a click writes the ref the latest run
+  bound and reaches that run's `onChange`, and a `SignalRef` stays two way. Never close over a value read while drawing.
 - **A host that binds the slot itself and draws the component in its own region** (SelectButton's options) calls a mount-free
-  `renderInPlace`: nothing of it is left to keep across that region's runs, and a mount per option would be a mount inside a mount.
-- **Every converted component has a repaint test**: the reader's state survives a host run that brings new props, the new props
-  are shown, and, where it binds, a click after the run writes that run's ref (`ToggleButtonTest`, `PasswordTest`,
-  `SplitButtonTest`, `ButtonTest` for the stateless case).
+  `renderInPlace = drawn(new UI.Live(p, Absent))`: a `Live` no run follows reads every prop as it is, so a constant costs no
+  subscription, and a mount per option would be a mount inside a mount.
+- **Password and SplitButton are still on the pilot's form** (`Prop.render(live(identity))(q => new X(q).drawnOver(...))`): they keep
+  their state across runs, since the own refs are minted once, but draw themselves again with every run. Their wave moves them to the
+  template.
+- **Nothing under a region that runs again may state what the reader changes** (T13, `UI.Loss`). A run keeps every element in place
+  (focus, caret, typed text and ticks survive it), but a native field's `value`, `checked` or `selected` stated as a constant is put
+  back by every run, and a mount with no key starts over. Hand a field its value as a channel (an argument that reads, or a signal)
+  and give a mount a key. `UI.reactive` refuses both where it can see them; kyo-ui reports the rest to a devtools sink
+  (`UI.RenderKind.Lost`), and every uic suite counts them (`UicTest.countLoss`, a `UIC-LOSS` line per place). A component a wave
+  frees goes on the list for which a loss fails the test (T19).
+- **Every converted component enrols in the contract's host-run case** with `placed = Present(_.toUI)` on its `SlotCase` (or
+  `nativeText`): the reader's change, then a host region around it that runs again with a new hearer, and what it shows must be
+  unchanged. The case reads the tree the instance refills its place with (a host's tree holds a kept instance only as its place, and
+  reading that place draws the component anew, at its start), and a text the browser keeps is judged by the field drawing no value
+  of its own over it. A component-specific repaint test adds what the case cannot say (`ToggleButtonTest`: nothing is drawn again for
+  a new label or a new hearer; `ButtonTest` for the stateless case).
 - **During the waves** a converted component's own fields are `Prop`s; the shared traits (validity, accessibility, tooltip,
   description) and `Slot` stay on `ReactiveValue` until the last wave removes it. `Prop.map` needs its type parameters spelled
   out on a value whose static type is already `Prop[A]` (ISA finding, task T8).
