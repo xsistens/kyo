@@ -2,6 +2,7 @@
 
 Rules that bite repeatedly when building or extending components in
 `kyo-ui/components/shared/src/main/scala/kyo/uic/`. Read before touching a component.
+How a component's code is written (names, the one draw, chains, channels) is `RULEBOOK.md`; read it too.
 The component catalog, the composition story and the parity notes are in this
 module's `README.md`.
 
