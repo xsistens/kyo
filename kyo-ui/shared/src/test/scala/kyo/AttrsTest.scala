@@ -316,4 +316,21 @@ class AttrsTest extends UITest:
         }
     }
 
+    // ---- title ----
+
+    "title from a constant is the title attribute, from a signal a channel, from Absent nothing" in {
+        val constant: Prop[String]    = "Save the draft"
+        val none: Maybe[Prop[String]] = Absent
+        val el                        = UI.span
+        for
+            ref  <- Signal.initRef("Saved")
+            html <- kyo.internal.HtmlRenderer.render(UI.div(UI.span.title(constant)), Seq.empty)
+            live = UI.span.title(Present(ref): Maybe[Prop[String]])
+        yield
+            assert(html.contains("""title="Save the draft""""), html)
+            assert(live.attrs.reactiveAttrs.get("title").exists(_ eq ref), s"${live.attrs}")
+            assert(el.title(none) eq el)
+        end for
+    }
+
 end AttrsTest

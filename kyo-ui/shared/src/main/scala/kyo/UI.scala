@@ -1968,11 +1968,20 @@ object UI:
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
 
-            /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
-              * emission, with no re-render.
+            /** The native `title` (tooltip), constant or reactive through one setter: a constant is the element's `title`, and a
+              * signal is the `title` attribute's channel, patched in place on emission with no re-render.
               */
-            def title(sig: Signal[String]): Self =
-                withReactiveAttr("title", sig)
+            def title(v: Prop[String]): Self = v match
+                case s: Signal[String] @unchecked => withReactiveAttr("title", s)
+                case t: String                    => jsProp("title", t)
+
+            /** `title` from an optional prop: `Present` sets it as [[title]] does, constant or reactive, and `Absent` sets nothing,
+              * so an optional tooltip stays in the chain: `el.title(tooltip)`.
+              */
+            @targetName("titleMaybe")
+            def title(v: Maybe[Prop[String]]): Self =
+                // Unsafe: every element is its own `Self` (each case class fixes `type Self` to itself).
+                v.fold(this.asInstanceOf[Self])(title(_))
 
             /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute). */
             def role(v: String): Self =
