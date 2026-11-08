@@ -6,6 +6,9 @@ import kyo.UI.render
 /** [[SplitButton]]: its rows, and whether its menu is open, held to rule A ([[ReactiveValueContract]]). */
 class SplitButtonTest extends ReactiveValueContract:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     "the rows follow a signal of items, so a page whose list changes keeps its split button" in {
         for
             rows <- Signal.initRef(Seq(MenuItem("Projects"), MenuItem("Viewer")))
@@ -125,8 +128,9 @@ class SplitButtonTest extends ReactiveValueContract:
     }
 
     "a host region that runs again keeps the menu the reader opened and shows the run's label" in {
+        // `aria-expanded` and the label are channels of the segments built once: read at the value they show now.
         def expanded(t: UI): Boolean < Sync =
-            elementWithClass(t, "p-splitbutton-dropdown").map(_.attrs.ariaAttrs.get("expanded").contains("true"))
+            elementWithClass(t, "p-splitbutton-dropdown").map(ariaNow(_, "expanded")).map(_.contains("true"))
         for
             tick <- Signal.initRef(0)
             ui = UI.div(tick.render(n => UI.div(SplitButton(s"Release $n").items(MenuItem("Draft").onSelect(())))))
@@ -136,9 +140,19 @@ class SplitButtonTest extends ReactiveValueContract:
             )
             shown = after.getOrElse(ui)
             open  <- expanded(shown)
-            label <- elementWithClass(shown, "p-button-label")
-        yield assert(open && textOf(label) == "Release 1", s"after the host's run: open $open, label ${textOf(label)}")
+            label <- elementWithClass(shown, "p-button-label").map(textNow)
+        yield assert(open && label == "Release 1", s"after the host's run: open $open, label $label")
         end for
+    }
+
+    "the two segments sit under no region, unbound or bound, so only the menu panel is drawn again when the menu changes" in {
+        for
+            held    <- Signal.initRef(false)
+            label   <- Signal.initRef("Release")
+            primary <- regionsAbove(SplitButton(label).items(MenuItem("Draft").onSelect(())).render, "p-splitbutton-button")
+            drop    <- regionsAbove(SplitButton("Release").items(MenuItem("Draft").onSelect(())).render, "p-splitbutton-dropdown")
+            bound <- regionsAbove(SplitButton("Release").open(held).items(MenuItem("Draft").onSelect(())).render, "p-splitbutton-dropdown")
+        yield assert((primary, drop, bound) == (0, 0, 0), s"regions above (primary, dropdown, dropdown bound): ${(primary, drop, bound)}")
     }
 
 end SplitButtonTest
