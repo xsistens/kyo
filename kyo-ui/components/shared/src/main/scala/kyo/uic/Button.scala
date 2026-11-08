@@ -192,22 +192,20 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
 
     /** The `.p-button` class chain, shared by the button and anchor renderings: a constant is a class, a signal a class channel. */
     private def classed[E <: UI.Ast.Element { type Self = E }](el: E, loading: Boolean)(using Frame): E =
-        val base = p.extraClasses.foldLeft(el.cssClass("p-button").cssClass("p-component"))((e, c) => e.cssClass(c))
-        val sev  = Button.chosen(base, p.severity, Severity.values.toSeq)(s =>
-            if s == Severity.Primary then Absent else Present(s"p-button-${s.token}")
-        )
-        val vari = Button.chosen(sev, p.variant, ButtonVariant.values.toSeq) {
-            case ButtonVariant.Filled   => Absent
-            case ButtonVariant.Outlined => Present("p-button-outlined")
-            case ButtonVariant.Text     => Present("p-button-text")
-            case ButtonVariant.Link     => Present("p-button-link")
-        }
-        val sized = Button.chosen(vari, p.size, Seq[Size](Size.Small, Size.Normal, Size.Large)) {
-            case Size.Small  => Present("p-button-sm")
-            case Size.Large  => Present("p-button-lg")
-            case Size.Normal => Absent
-        }
-        sized.cssClass("p-button-rounded", p.rounded).cssClass("p-button-raised", p.raised).cssClass("p-button-fluid", p.fluid)
+        p.extraClasses.foldLeft(el.cssClass("p-button").cssClass("p-component"))(_.cssClass(_))
+            .classFor(p.severity)(s => if s == Severity.Primary then Absent else Present(s"p-button-${s.token}"))
+            .classFor(p.variant) {
+                case ButtonVariant.Filled   => Absent
+                case ButtonVariant.Outlined => Present("p-button-outlined")
+                case ButtonVariant.Text     => Present("p-button-text")
+                case ButtonVariant.Link     => Present("p-button-link")
+            }
+            .classFor(p.size) {
+                case Size.Small  => Present("p-button-sm")
+                case Size.Large  => Present("p-button-lg")
+                case Size.Normal => Absent
+            }
+            .cssClass("p-button-rounded", p.rounded).cssClass("p-button-raised", p.raised).cssClass("p-button-fluid", p.fluid)
             .cssClass("p-button-icon-only", iconOnly(loading))
     end classed
 
@@ -322,17 +320,6 @@ object Button:
       * locale-driven `I18n.t` leaf).
       */
     def apply(label: String | Signal[String]): Button = new Button(Props(label = Present(label)))
-
-    /** The class of the case `choice` names: a constant adds its one class (none for a case that has none), a signal gives each
-      * case's class a channel that is on while the signal names that case, so a change swaps the class in place.
-      */
-    private def chosen[E <: UI.Ast.Element { type Self = E }, A](el: E, choice: Prop[A], cases: Seq[A])(cls: A => Maybe[String])(using
-        CanEqual[A, A],
-        Frame
-    ): E =
-        choice match
-            case sig: Signal[A] @unchecked => cases.foldLeft(el)((e, a) => cls(a).fold(e)(c => e.cssClass(c, sig.map(_ == a))))
-            case a                         => cls(a.asInstanceOf[A]).fold(el)(el.cssClass(_))
 
     /** An empty button; add an icon and/or children via the setters. */
     def apply(): Button = new Button(Props())
