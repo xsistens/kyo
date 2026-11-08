@@ -81,9 +81,10 @@ region that runs again must not start a component over and take the reader's sta
 - **A host that binds the slot itself and draws the component in its own region** (SelectButton's options) calls a mount-free
   `renderInPlace = drawn(new UI.Live(p, Absent))`: a `Live` no run follows reads every prop as it is, so a constant costs no
   subscription, and a mount per option would be a mount inside a mount.
-- **Password and SplitButton are still on the pilot's form** (`Prop.render(live(identity))(q => new X(q).drawnOver(...))`): they keep
-  their state across runs, since the own refs are minted once, but draw themselves again with every run. Their wave moves them to the
-  template.
+- **A native field whose chrome follows its own state switches in place, never draws itself again** (Password): its text is always a
+  channel (the instance's own ref, or the caller's binding, never a stated constant), its `type` follows the reveal through kyo-ui's
+  `textType` channel (`Input.inputType(Signal[UI.TextType])`), and only what is drawn from the text (the meter) is a region, a sibling of
+  the field. SplitButton builds both segments once and draws only its menu panel as a region.
 - **Nothing under a region that runs again may state what the reader changes** (T13, `UI.Loss`). A run keeps every element in place
   (focus, caret, typed text and ticks survive it), but a native field's `value`, `checked` or `selected` stated as a constant is put
   back by every run, and a mount with no key starts over. Hand a field its value as a channel (an argument that reads, or a signal)
