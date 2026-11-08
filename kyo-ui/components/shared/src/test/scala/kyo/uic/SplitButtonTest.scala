@@ -104,6 +104,7 @@ class SplitButtonTest extends ReactiveValueContract:
         hear = (b, f) => b.onOpenChange(f),
         event = "onOpenChange",
         render = _.render,
+        placed = Present(_.toUI),
         start = false,
         next = true,
         control = elementWithClass(_, "p-splitbutton-dropdown"),

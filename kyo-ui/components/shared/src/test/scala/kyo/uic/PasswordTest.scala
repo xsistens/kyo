@@ -17,6 +17,7 @@ class PasswordTest extends ReactiveValueContract:
         hear = (c, f) => c.onInput(f),
         event = "onInput or onChange",
         render = _.render,
+        placed = Present(_.toUI),
         field = "p-password-input"
     )
 
@@ -30,6 +31,7 @@ class PasswordTest extends ReactiveValueContract:
         hear = (c, f) => c.onChange(f),
         event = "onInput or onChange",
         render = _.render,
+        placed = Present(_.toUI),
         field = "p-password-input",
         commit = true
     ))
@@ -57,6 +59,7 @@ class PasswordTest extends ReactiveValueContract:
         hear = (c, f) => c.onInput(f),
         event = "onInput or onChange",
         render = _.render,
+        placed = Present(_.toUI),
         start = "",
         next = "abcDEF12",
         control = textField(_, "p-password-input"),
@@ -84,6 +87,7 @@ class PasswordTest extends ReactiveValueContract:
         hear = (c, f) => c.onInput(f),
         event = "onInput or onChange",
         render = _.render,
+        placed = Present(_.toUI),
         field = "p-password-input",
         ready = Present(elementsWithClass(_, "p-password-toggle-mask-icon").map(_.nonEmpty))
     )
