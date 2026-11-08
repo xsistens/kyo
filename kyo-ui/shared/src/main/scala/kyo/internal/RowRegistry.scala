@@ -472,6 +472,15 @@ private[kyo] object RowRegions:
                                             plan.listRows
                                         )
                                 }
+                                // A row the list had before and draws again is a run of that row: what it states is put back over
+                                // what the reader left in it. A whole-list paint draws every row again, a patch only the rebuilt ones.
+                                _ <- reportLosses(
+                                    rui,
+                                    Chunk.from(if kept then plan.rebuilt.toSeq else 0 until plan.size)
+                                        .filter(i => prevByKey.contains(plan.keys(i)))
+                                        .map(i => if plan.built(i) != null then plan.built(i).rowUI else renderFn(i, plan.items(i))),
+                                    UI.RenderCause.Signal
+                                )
                                 // A repaint of the kept rows replaced what their subscriptions had painted into them, a
                                 // mount's content among it: subscribe them again, as a whole-list repaint always did.
                                 // Every row is subscribed again, so a pass covers the regions of all of them.

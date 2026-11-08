@@ -1258,6 +1258,8 @@ private[kyo] object ReactiveUI:
                 _ <- deliverMeasured(rui, cause, through)(
                     _.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, painted)
                 )
+                // A run after the first draws over what the reader left in the last one.
+                _ <- if previous.isEmpty then Kyo.unit else reportLosses(rui, Chunk(current), cause)
                 _ <- release()
                 _ <- subscribeWalked(rui.path, current, newKids, pass, regionMounts, through, signalChangeTime, dispatch)
             yield ()
@@ -1339,6 +1341,20 @@ private[kyo] object ReactiveUI:
     /** Reports content the enclosing render already painted. Zero duration and zero bytes are not a rounding-off: the cost sits
       * in the enclosing region's own event, and charging it twice would make every parent look cheap and every child expensive.
       */
+    /** What `drawnAgain`, content `rui` draws over what it drew before, takes from the reader, one [[kyo.UI.RenderKind.Lost]] per
+      * place. The walk runs only with a sink installed, so the off path reads one `Local` and walks nothing.
+      */
+    private[internal] def reportLosses(rui: ReactiveUI, drawnAgain: Chunk[UI], cause: UI.RenderCause)(using Frame): Unit < Sync =
+        Devtools.sink.use { local =>
+            if local.isEmpty || drawnAgain.isEmpty then Kyo.unit
+            else
+                Kyo.foreach(drawnAgain)(RerunLosses.of).map(found =>
+                    Kyo.foreachDiscard(found.flattenChunk)(loss =>
+                        report(rui, UI.RenderKind.Lost(loss), cause, Absent, Duration.Zero, alsoWasted = false)
+                    )
+                )
+        }
+
     private[internal] def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
         report(rui, kind, UI.RenderCause.Created, Absent, Duration.Zero, alsoWasted = false)
 

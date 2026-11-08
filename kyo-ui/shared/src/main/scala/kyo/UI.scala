@@ -788,7 +788,41 @@ object UI:
 
         /** A `Signal[String]` bound straight to a text node, bypassing the region fiber entirely. */
         case Text
+
+        /** A region that ran again drew something whose state the reader loses with every run, see [[kyo.UI.Loss]]. Reported once per
+          * place and run, beside the repaint itself, and never for a region's first draw.
+          */
+        case Lost(loss: Loss)
     end RenderKind
+
+    /** What a region that runs again takes from the reader, at the place where its content says so.
+      *
+      * A run draws its content again over what is on the page, and the engine keeps every element it can: focus, a caret, the text
+      * typed into a field with no `value` and the tick of a box with no `checked` all survive it. Two things do not, because the
+      * content itself says to start them over, and the engine reports each to a [[kyo.UI.devtools]] sink as a
+      * [[kyo.UI.RenderKind.Lost]]:
+      *
+      *   - a native field whose `value`, `checked` or `selected` the content states as a constant: every run puts it back, so what the
+      *     reader typed or ticked is gone the moment anything else in the region changes, and kept as long as nothing does. A field
+      *     that follows a `Signal`, or binds a `SignalRef`, is compared after each edit instead, and is never reported;
+      *   - a mount with no key: every run starts a new instance, which draws again and allocates its state anew. A keyed mount keeps
+      *     its instance.
+      *
+      * The fix is the same for both: what the region does not have to draw again goes outside it, a field's value through a signal
+      * and a mount with a key.
+      *
+      * @param frame
+      *   where the field or the mount was written
+      */
+    enum Loss derives CanEqual:
+        /** A native field (`input`, `textarea`, `select`, `checkbox`, `radio`, an `option`'s `selected`) states `attribute` as a
+          * constant. `element` names it as a selector would: its tag, then its id or its classes.
+          */
+        case StatedValue(element: String, attribute: String, frame: Frame)
+
+        /** A mount with no key. */
+        case UnkeyedMount(frame: Frame)
+    end Loss
 
     /** Why a region rendered. */
     enum RenderCause derives CanEqual:
