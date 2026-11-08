@@ -22,3 +22,23 @@ p.size
 ```
 
 - A draw over a `UI.Live` reads `props(_.size)`, which needs no prefix at all.
+
+## 2. One draw path; only what differs by element is written twice
+
+A component that renders on more than one element (Button's `<button>` and its `<a>`), or for more than one caller
+(ToggleButton's own instance and SelectButton's in-place option), writes what they share once, in one function over the
+element type, and keeps apart only what truly differs.
+
+- **Why:** two paths that repeat the same dozen attribute lines drift: a fix lands on one and not the other, and a reader has to
+  diff them to learn which lines matter.
+- **Shape:** the shared part takes any element of the kind both share (`[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }]`, since focus and keys live on `Interactive`), so the button and the link both run
+  through it.
+
+```scala
+private def shared[E <: (UI.Ast.Element & UI.Ast.Interactive) { type Self = E }](el: E, loading: Boolean)(using Frame): E = ... // classes, id, aria, title, role
+private def renderButton(loading: Boolean)(using Frame): UI = shared(button.jsProp("type", ...), loading) ... // type, disabled, click
+private def renderAnchor(h: String, loading: Boolean, disabled: Boolean)(using Frame): UI = shared(a, loading) ... // href, p-disabled
+```
+
+- The order of calls on a field that keeps one value matters where both paths set it: the later call wins (Button's host role
+  over its `accessibleRole`), so the shared part runs after what it overrides.
