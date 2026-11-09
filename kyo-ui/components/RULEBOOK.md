@@ -176,5 +176,7 @@ itself, so the caller hands the prop over: `p.icon.map(GlyphSvg(_, "p-button-ico
 
 - **Why:** the question constant or signal is answered once, where the value is drawn, as kyo-ui's text leaf takes a
   `Signal[String]`. A constant still draws with no region, so callers that hand a plain value see no difference.
-- A list of optional children is one list of `Maybe`s, flattened (`List(leading, label, end).flatMap(_.toList)`): kyo-ui takes
-  no `Maybe[UI]` as a child, since a child is one value.
+- A helper that draws part of an element's content returns `UI.Children` and builds it with one
+  `UI.children(leading, label, endIcon, extraChildren)`: a part is a child, a `Maybe` of one, a list or other `Children`, an absent
+  part adds nothing, and the element splats it (`el(content*)`). Never `List[UI]` with `flatMap(_.toList)` and a second
+  `UI.children` at the element.

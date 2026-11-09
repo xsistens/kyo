@@ -186,7 +186,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
                     renderButton(busy).disabled(off)
                         .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
                         .ariaFlag("disabled", says)
-                        .cssClass("p-uic-aria-disabled", says)(UI.children(contentChildren(busy))*)
+                        .cssClass("p-uic-aria-disabled", says)(contentChildren(busy)*)
                 }
         end match
     end render
@@ -235,18 +235,19 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
         val linked =
             if loading || disabled then el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
             else el.when(p.tabIndex)(_.tabIndex(_)).href(Href.Path(h)).when(p.onClick)(_.onClick(_))
-        linked(UI.children(contentChildren(loading))*)
+        linked(contentChildren(loading)*)
     end renderAnchor
 
-    private def contentChildren(loading: Boolean)(using Frame): List[UI] =
+    private def contentChildren(loading: Boolean)(using Frame): UI.Children =
         val leading: Maybe[UI] =
             if loading then Present(GlyphSvg(Icons.spinner, "p-button-icon", "p-button-icon-left", "p-button-loading-icon", "p-icon-spin"))
             else p.icon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-left"))
-        List(
+        UI.children(
             leading,
             p.label.map(l => span.cssClass("p-button-label")(l)),
-            p.endIcon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-right"))
-        ).flatMap(_.toList) ++ p.extraChildren
+            p.endIcon.map(GlyphSvg(_, "p-button-icon", "p-button-icon-right")),
+            p.extraChildren
+        )
     end contentChildren
 end Button
 
