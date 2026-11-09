@@ -158,3 +158,14 @@ Every setter and every field that takes either form is typed `Prop[A]` (`disable
 - **Why:** one name for one idea, so a reader sees at a glance which setters follow a signal, and a field and its setter say the
   same type. A slot that was constant only because nobody needed more (Button's icons) becomes a `Prop` too, drawn with
   `Prop.render`: a constant draws once with no region, a signal in a region of its own, below the component.
+
+## 9. A field is a `Maybe` only where unset is not a value; the draw has its scaladoc
+
+A prop whose unset form behaves as one value is that value as its default (`disabled: Prop[Boolean] = false`), and its setter is
+`p.copy(x = v)`. A `Maybe` is for a slot whose absence draws something different from every value it can hold: no label span, an
+icon-only button, no link, no attribute, no handler. Before keeping one, check its readers: if each turns `Absent` into the same
+value at once (`getOrElse(false)`), it is a default.
+
+- **Why:** a `Maybe` that every reader unwraps to one value is a second spelling of that value, and each reader has to repeat it.
+- **Order:** the class holds its setters, then the draw with a scaladoc saying what it reads where (no `//` block above it), then
+  the private helpers. The companion holds `Props` (a case class that `derives CanEqual`), then the constructors.
