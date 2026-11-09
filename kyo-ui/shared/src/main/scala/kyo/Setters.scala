@@ -7,7 +7,7 @@ import scala.quoted.*
 /** A props field no setter is made for: a host, a shared trait or a hand-written setter of another name writes it. */
 final class noSetter extends scala.annotation.StaticAnnotation
 
-/** The setters of a component `Self` over its props `P`, worked out at compile time by [[Setters.derive]]: `Fields` names each one
+/** The setters of a component `Self` over its props `P`, worked out at compile time by [[Setters.apply]]: `Fields` names each one
   * with its type, `set` copies one field by its name, `make` builds the component from new props.
   */
 abstract class Setters[P, Self]:
@@ -20,9 +20,9 @@ object Setters:
     /** Every field of `P` is a setter of its name, but a field `Self` declares a member of that name for (its own setter, written by
       * hand with its scaladoc) and a field marked `@noSetter`.
       */
-    transparent inline def derive[P, Self]: Setters[P, Self] = ${ deriveImpl[P, Self] }
+    transparent inline def apply[P, Self]: Setters[P, Self] = ${ applyImpl[P, Self] }
 
-    private[kyo] def deriveImpl[P: Type, Self: Type](using Quotes): Expr[Setters[P, Self]] =
+    private[kyo] def applyImpl[P: Type, Self: Type](using Quotes): Expr[Setters[P, Self]] =
         import quotes.reflect.*
         val props                               = TypeRepr.of[P].typeSymbol
         val declared                            = TypeRepr.of[Self].typeSymbol.declarations.map(_.name).toSet
@@ -53,5 +53,5 @@ object Setters:
                         def make(p: P): Self = ${ build('p) }
                 }
         end match
-    end deriveImpl
+    end applyImpl
 end Setters

@@ -1,6 +1,6 @@
 package kyo
 
-/** The setters `Setters.derive` works out for a class over its props: every field but those the class writes itself and those
+/** The setters `Setters[P, Self]` works out for a class over its props: every field but those the class writes itself and those
   * marked `@noSetter`.
   */
 class SettersTest extends kyo.test.Test[Any]:
@@ -34,6 +34,6 @@ object SettersTest:
     end Thing
 
     object Thing:
-        val setters        = Setters.derive[Props, Thing]
+        val setters        = Setters[Props, Thing]
         def apply(): Thing = new Thing(Props())
 end SettersTest
