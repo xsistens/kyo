@@ -102,7 +102,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal), and a click reads it when it comes.
       */
-    def disabled(v: Prop[Boolean]): Button = new Button(p.copy(disabled = Present(v)))
+    def disabled(v: Prop[Boolean]): Button = new Button(p.copy(disabled = v))
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
@@ -113,7 +113,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * Tab keypress, so focus jumps PAST the button to the next control. With `aria-disabled` the
       * button never leaves the tab order, so the race disappears.
       */
-    def ariaDisabled(v: Prop[Boolean]): Button = new Button(p.copy(ariaDisabled = Present(v)))
+    def ariaDisabled(v: Prop[Boolean]): Button = new Button(p.copy(ariaDisabled = v))
 
     /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
       * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
@@ -128,7 +128,7 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
       * shapes the spinner, aria-busy, icon-only layout and the effective disabled state rather than
       * patching a single attribute.
       */
-    def loading(v: Prop[Boolean]): Button = new Button(p.copy(loading = Present(v)))
+    def loading(v: Prop[Boolean]): Button = new Button(p.copy(loading = v))
 
     /** Form behaviour (native `type` attribute): `Button` (default, non-submitting),
       * `Submit`, or `Reset`.
@@ -166,25 +166,23 @@ final class Button private[uic] (private[uic] val p: Button.Props) extends Node,
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = new Button(p.copy(extraChildren = p.extraChildren ++ cs))
 
-    // A stateless component draws no instance: a host repaint has nothing of it to lose. Each place reads the field it shows:
-    // `disabled`, `aria-disabled`, the severity, the variant, the size and the shapes reach the element through its channels, and
-    // a click reads `disabled` when it comes. Only `loading` shapes the button (spinner, icon-only, effective disabled), so it is
-    // the one read of the button's region; a link reads `disabled` there too, since a disabled link is a different element. With
-    // neither a signal the block draws no region and pays for no reading.
+    /** Draws the button, or the link when `href` is set. A stateless component has no instance: a host repaint has nothing of it
+      * to lose. Each place reads the field it shows: `disabled`, `aria-disabled`, the severity, the variant, the size and the
+      * shapes reach the element through its channels, and a click reads `disabled` when it comes. Only `loading` shapes the
+      * button (spinner, icon-only, effective disabled), so it is the one read of the button's region; a link reads `disabled`
+      * there too, since a disabled link is a different element. With neither a signal the block draws no region.
+      */
     private[uic] def render(using Frame): UI =
-        val loading: Prop[Boolean]  = p.loading.getOrElse(false)
-        val disabled: Prop[Boolean] = p.disabled.getOrElse(false)
         p.href match
-            case Present(h) => UI.reactive(renderAnchor(h, loading.read, disabled.read))
+            case Present(h) => UI.reactive(renderAnchor(h, p.loading.read, p.disabled.read))
             case Absent     =>
-                val ariaDisabled: Prop[Boolean] = p.ariaDisabled.getOrElse(false)
                 UI.reactive {
-                    val busy = loading.read
+                    val busy = p.loading.read
                     // While loading the button is non-clickable, exactly like disabled.
-                    val off = busy || disabled.read
+                    val off = busy || p.disabled.read
                     // aria-disabled keeps the button focusable and clickable (the click routes through the handler, e.g.
                     // form.submit to focus-first-invalid); it says so only while the button is not natively disabled.
-                    val says = ariaDisabled.read && !off
+                    val says = p.ariaDisabled.read && !off
                     renderButton(busy).disabled(off)
                         .when(p.onClick)((e, click) => e.onClick(if off then Kyo.unit else click))
                         .ariaFlag("disabled", says)
@@ -279,9 +277,9 @@ object Button:
         endIcon: Maybe[Prop[IconGlyph]] = Absent,
         access: Accessibility = Accessibility.none,
         href: Maybe[String] = Absent,
-        disabled: Maybe[Prop[Boolean]] = Absent,
-        ariaDisabled: Maybe[Prop[Boolean]] = Absent,
-        loading: Maybe[Prop[Boolean]] = Absent,
+        disabled: Prop[Boolean] = false,
+        ariaDisabled: Prop[Boolean] = false,
+        loading: Prop[Boolean] = false,
         buttonType: ButtonType = ButtonType.Button,
         accessibleRole: ButtonAccessibleRole = ButtonAccessibleRole.Button,
         description: Maybe[Prop[String]] = Absent,
@@ -295,7 +293,7 @@ object Button:
         role: Maybe[String] = Absent,
         tabIndex: Maybe[Int] = Absent,
         focusSeed: Boolean = false
-    )
+    ) derives CanEqual
 
     /** A button labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
