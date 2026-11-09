@@ -232,7 +232,7 @@ object Password:
         b.access.id.foreach(v => in = in.id(v))
 
         // === the eye toggle, its state classes and label channels over the reveal ==
-        val toggle: List[UI] = eye.toList.map { r =>
+        val toggle: Maybe[UI] = eye.map { r =>
             var t = span
                 .cssClass("p-password-toggle-mask-icon")
                 .cssClass("p-password-mask-icon", r)
@@ -248,7 +248,7 @@ object Password:
                         case _                               => ()
                 }
             end if
-            t(r.render(on => GlyphSvg(if on then Icons.eyeSlash else Icons.eye, "p-icon")))
+            t(GlyphSvg(r.map(on => if on then Icons.eyeSlash else Icons.eye), "p-icon"))
         }
 
         // === wrapper root =======================================================
@@ -258,7 +258,7 @@ object Password:
             .cssClass("p-inputwrapper")
             .cssClass("p-inputwrapper-filled", UI.reactive(shown.read.nonEmpty))
         if b.fluid then el = el.cssClass("p-password-fluid")
-        val root = el(UI.children((in: UI) :: toggle)*)
+        val root = el(UI.children(in: UI, toggle)*)
 
         // === inline strength meter (see the class doc for the deviation), the one region, over the text ==
         val body = if b.feedback then fragment(root, UI.reactive(meter(live, shown.read))) else root
