@@ -147,9 +147,9 @@ object Password:
 
     private object Base:
         def of(q: Props, own: Maybe[SignalRef[String]]): Base =
-            val text = (own, q.value.bound) match
-                case (Present(ref), bound) if keepsOwnText(q) && bound.forall(constant) => Present(ref)
-                case (_, bound)                                                         => bound
+            // The instance's own text where the text is the field's to keep and the caller bound nothing or only where it starts.
+            val text: Maybe[Prop[String]] =
+                own.filter(_ => keepsOwnText(q) && q.value.binding.forall(_.const.isDefined)).orElse(q.value.bound)
             Base(
                 q.toggleMask,
                 q.feedback,
@@ -175,25 +175,14 @@ object Password:
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the reader can
       * change.
       */
-    private def keepsText(q: Props): Boolean = (q.feedback || q.toggleMask) && !q.disabled &&
-        !(q.readonly match
-            case on: Boolean => on
-            case _           => false
-        )
+    private def keepsText(q: Props): Boolean =
+        (q.feedback || q.toggleMask) && !q.disabled && !ReactiveValue[Boolean](q.readonly).const.contains(true)
 
     /** Whether the text the reader types is the field's to keep: with the meter even unbound, and from a constant. */
     private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedback || q.value.bound.isDefined)
 
-    /** Whether a bound text is a constant, which is only where the field's own text starts. */
-    private def constant(v: Prop[String]): Boolean = v match
-        case _: Signal[?] => false
-        case _            => true
-
     /** Where the field's own text starts: a constant the caller gave, else empty. */
-    private def startText(q: Props): String =
-        q.value.bound match
-            case Present(a: String) => a
-            case _                  => ""
+    private def startText(q: Props): String = q.value.binding.flatMap(_.const).getOrElse("")
 
     /** The instance's state, minted once: its own text and its reveal (the one handed in, for the golden seam). */
     private def instance(live: UI.Live[Props], revealed: Maybe[SignalRef[Boolean]])(using Frame): UI < Sync =
@@ -206,7 +195,8 @@ object Password:
         yield drawn(live, Present(own), Present(reveal))
 
     private def drawn(live: UI.Live[Props], own: Maybe[SignalRef[String]], reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
-        Prop.render(live(Base.of(_, own)))(built(live, _, reveal))
+        val base = live(Base.of(_, own))
+        UI.reactive(built(live, base.read, reveal))
 
     private def built(live: UI.Live[Props], b: Base, reveal: Maybe[SignalRef[Boolean]])(using Frame): UI =
         val validity            = FieldValidity(b.validity)
@@ -266,12 +256,12 @@ object Password:
             .cssClass("p-password")
             .cssClass("p-component")
             .cssClass("p-inputwrapper")
-            .cssClass("p-inputwrapper-filled", Prop.map[String, Boolean](shown)(_.nonEmpty))
+            .cssClass("p-inputwrapper-filled", UI.reactive(shown.read.nonEmpty))
         if b.fluid then el = el.cssClass("p-password-fluid")
         val root = el(UI.children((in: UI) :: toggle)*)
 
         // === inline strength meter (see the class doc for the deviation), the one region, over the text ==
-        val body = if b.feedback then fragment(root, Prop.render(shown)(meter(live, _))) else root
+        val body = if b.feedback then fragment(root, UI.reactive(meter(live, shown.read))) else root
         validity.follow(body)
     end built
 
