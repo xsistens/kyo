@@ -1,4 +1,6 @@
-package kyo
+package kyo.uic
+
+import kyo.*
 
 /** A `Component` over its props: its setters come from `Setters`, an `Opt` field takes the value itself, two components of one class
   * compare by their props, and `HasSetter` finds a generated setter by its name and what it takes.
@@ -25,8 +27,8 @@ class ComponentTest extends kyo.test.Test[Any]:
     }
 
     "no setter of that name, or of another type, is no HasSetter" in {
-        typeCheckFailure("""summon[kyo.HasSetter[kyo.ComponentTest.Thing, "nope", Int]]""")
-        typeCheckFailure("""summon[kyo.HasSetter[kyo.ComponentTest.Thing, "size", String]]""")
+        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ComponentTest.Thing, "nope", Int]]""")
+        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ComponentTest.Thing, "size", String]]""")
     }
 
 end ComponentTest
@@ -35,7 +37,7 @@ object ComponentTest:
     final case class Props(size: Int = 1, label: Opt[String] = Opt.unset, onPick: Maybe[Int => UI.Action] = Absent)
         derives CanEqual
 
-    final class Thing(private[kyo] val p: Props) extends Component(Setters[Props, Thing])
+    final class Thing(private[uic] val p: Props) extends Component(Setters[Props, Thing])
 
     object Thing:
         def apply(): Thing = new Thing(Props())
