@@ -1,5 +1,6 @@
-package kyo
+package kyo.uic
 
+import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.*
 

@@ -1,4 +1,6 @@
-package kyo
+package kyo.uic
+
+import kyo.*
 
 /** What a [[reactive]] block reads with: `.read` on a prop or a signal, which exists only inside the block.
   *
@@ -10,14 +12,14 @@ final class ReactiveScope private[kyo] ():
 
     /** The prop's value, read once where the block starts. */
     extension [A](inline self: UI.Prop[A])
-        inline def read: A = ${ kyo.internal.ReactiveMacro.strayImpl[A]('self) }
+        inline def read: A = ${ kyo.uic.internal.ReactiveMacro.strayImpl[A]('self) }
 
     /** The signal's value, read once where the block starts. A receiver of its own, since a bare signal against [[UI.Prop]] would
       * read as the signal itself.
       */
     extension [A](inline self: Signal[A])
         @scala.annotation.targetName("readSignal")
-        inline def read: A = ${ kyo.internal.ReactiveMacro.strayImpl[A]('self) }
+        inline def read: A = ${ kyo.uic.internal.ReactiveMacro.strayImpl[A]('self) }
 end ReactiveScope
 
 /** A block over props and signals, written as if each were a plain value and read with `.read`, called as `UI.reactive`:
@@ -48,4 +50,4 @@ end ReactiveScope
   */
 extension (self: UI.type)
     transparent inline def reactive[T](inline body: ReactiveScope ?=> T)(using frame: Frame): Any =
-        ${ kyo.internal.ReactiveMacro.expand[T]('body, 'frame) }
+        ${ kyo.uic.internal.ReactiveMacro.expand[T]('body, 'frame) }

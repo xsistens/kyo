@@ -1,4 +1,6 @@
-package kyo
+package kyo.uic
+
+import kyo.*
 
 /** The setters `Setters[P, Self]` works out for a class over its props: every field but those the class writes itself and those
   * marked `@noSetter`, an ownable field as a binding setter and its event, and a callback field taking the function itself.
@@ -15,11 +17,11 @@ class SettersTest extends kyo.test.Test[Any]:
     }
 
     "a field marked noSetter is no setter" in {
-        typeCheckFailure("""kyo.SettersTest.Thing().hidden(1)""")
+        typeCheckFailure("""kyo.uic.SettersTest.Thing().hidden(1)""")
     }
 
     "a setter takes only its field's type" in {
-        typeCheckFailure("""kyo.SettersTest.Thing().size("two")""")
+        typeCheckFailure("""kyo.uic.SettersTest.Thing().size("two")""")
     }
 
     "an ownable field is a setter that binds it, a constant or a signal" in {
@@ -41,7 +43,7 @@ class SettersTest extends kyo.test.Test[Any]:
 
     "eventName names an ownable field's event in place of on<Field>Change" in {
         val t = SettersTest.Thing().onFlip(_ => Kyo.unit)
-        typeCheckFailure("""kyo.SettersTest.Thing().onFlippedChange(_ => kyo.Kyo.unit)""")
+        typeCheckFailure("""kyo.uic.SettersTest.Thing().onFlippedChange(_ => kyo.Kyo.unit)""")
         assert(t.p.flipped.hearer.isDefined)
     }
 
@@ -65,7 +67,7 @@ class SettersTest extends kyo.test.Test[Any]:
     }
 
     "an event setter takes only a function of its field's value" in {
-        typeCheckFailure("""kyo.SettersTest.Thing().onCountChange((s: String) => kyo.Kyo.unit)""")
+        typeCheckFailure("""kyo.uic.SettersTest.Thing().onCountChange((s: String) => kyo.Kyo.unit)""")
     }
 
 end SettersTest

@@ -1,6 +1,7 @@
-package kyo.internal
+package kyo.uic.internal
 
 import kyo.*
+import kyo.uic.ReactiveScope
 import scala.quoted.*
 
 /** The expansion of `UI.reactive` (`Reactive.scala`), and what it expands to.

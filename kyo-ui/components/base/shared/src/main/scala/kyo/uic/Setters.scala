@@ -1,5 +1,6 @@
-package kyo
+package kyo.uic
 
+import kyo.*
 import scala.NamedTuple
 import scala.deriving.Mirror
 import scala.quoted.*

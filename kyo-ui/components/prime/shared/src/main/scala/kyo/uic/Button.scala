@@ -27,7 +27,7 @@ end ButtonAccessibleRole
   * action); `variant` switches Filled/Outlined/Text/Link; while `loading` the
   * button shows a spinning glyph and is non-clickable like a disabled button.
   */
-final class Button private[uic] (private[kyo] val p: Button.Props) extends Component(Setters[Button.Props, Button]), Node,
+final class Button private[uic] (private[uic] val p: Button.Props) extends Component(Setters[Button.Props, Button]), Node,
       HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription, PopupTrigger:
     type Self = Button
 
