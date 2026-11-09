@@ -12,11 +12,7 @@ extension [E <: UI.Ast.Element { type Self = E }](el: E)
       * draws nothing again; a static render writes the class of the case the signal holds.
       *
       * {{{
-      * el.classFor(p.size) {
-      *     case Size.Small  => Present("p-button-sm")
-      *     case Size.Large  => Present("p-button-lg")
-      *     case Size.Normal => Absent
-      * }
+      * el.classFor(p.size)(_.cls("p-button"))
       * }}}
       */
     private[uic] def classFor[A](choice: Prop[A])(cls: A => Maybe[String])(using Frame): E =
