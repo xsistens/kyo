@@ -74,16 +74,18 @@ class PasswordTest extends ReactiveValueContract:
             case t: UI.Ast.TextInput => t.readOnly.contains(true)
             case _                   => false
         },
-        // The typing is wired once the field writes a ref (the instance's own text, or the caller's) or tells a hearer.
+        // The typing is wired once the field writes a ref (the instance's own text, or the caller's) or tells a hearer. Until the
+        // instance has published its field (a host's tree holds it only as its place, and the meter's region may publish first)
+        // there is no field yet, which is not ready rather than a failure.
         ready = Present(t =>
-            textField(t, "p-password-input").map {
+            elementsWithClass(t, "p-password-input").map(_.exists {
                 case f: UI.Ast.TextInput =>
                     f.onInput.isDefined ||
                     (f.value match
                         case Present(UI.Bound.Ref(_)) => true
                         case _                        => false)
                 case _ => false
-            }
+            })
         ),
         startText = Present("abc")
     )
