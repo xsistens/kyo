@@ -62,13 +62,29 @@ trait FormControl extends Node, HasElementId:
     // trait's contract, and the reason the slot started here.
 end FormControl
 
-/** A `String`-valued text field: the value binding plus a focus-loss trigger. The binding is the union every value slot in
-  * the module takes: a constant, a writable `SignalRef[String]` (two-way, which is what `bind` passes), or any other
-  * `Signal[String]` (one-way).
+/** A control whose value is a `String`, whoever writes its `value` and `onBlur` setters: [[Setters]] (Password) or the class
+  * by hand ([[TextFormControl]]). It is what a text field's `bind` takes as its receiver, so a `bind` of a field of another
+  * value type is told the field does not fit a `String` one, rather than that no `bind` applies.
   */
-trait TextFormControl extends FormControl:
+trait TextValued extends FormControl
+
+/** A `String`-valued text field written by hand: the value binding plus a focus-loss trigger. The binding is the union every
+  * value slot in the module takes: a constant, a writable `SignalRef[String]` (two-way, which is what `bind` passes), or any
+  * other `Signal[String]` (one-way).
+  */
+trait TextFormControl extends TextValued:
     def value(v: String | Signal[String]): Self
     def onBlur(f: String => UI.Action)(using Frame): Self
+
+object TextFormControl:
+    /** A component written by hand has `value` as its member, so generic code reaches it the way it reaches a generated one. */
+    given value[C <: TextFormControl { type Self <: C }]: HasSetter[C, "value", UI.Prop[String]] with
+        def apply(c: C, v: UI.Prop[String])(using Frame): C = c.value(v)
+
+    /** [[value]] for `onBlur`. */
+    given onBlur[C <: TextFormControl { type Self <: C }]: HasSetter[C, "onBlur", String => UI.Action] with
+        def apply(c: C, f: String => UI.Action)(using Frame): C = c.onBlur(f)
+end TextFormControl
 
 /** A choice of one among typed options ([[Select]], [[CascadeSelect]], a single [[SelectButton]]): the option itself, over
   * `A` where the field always holds one or over `Maybe[A]` where it may stay empty, plus a focus-loss trigger that reports

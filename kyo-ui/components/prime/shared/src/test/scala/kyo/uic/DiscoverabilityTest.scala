@@ -268,6 +268,10 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + bindable + """def x(f: FormField[Boolean])(using Frame): uic.ToggleButton = uic.ToggleButton().bind(f)""")
         // TextFormControl: ColorPicker's hex.
         typeCheck(preamble + bindable + """def x(f: FormField[String])(using Frame): uic.ColorPicker = uic.ColorPicker().bind(f)""")
+        // A text field whose value and onBlur Setters generates (Password) binds through them.
+        typeCheck(preamble + bindable + """def x(f: FormField[String])(using Frame): uic.Password = uic.Password().bind(f)""")
+        typeCheck(preamble + bindable + """def x(f: FormField[String])(using Frame): uic.Password = uic.Password().bindControlOnly(f)""")
+        typeCheckFailure(preamble + bindable + """def x(f: FormField[Boolean])(using Frame) = uic.Password().bind(f)""")
         // ChoiceFormControl: the field's value type is the option type, over A or over Maybe[A].
         typeCheck(
             preamble + bindable + """def x(f: FormField[Maybe[(String, String)]])(using Frame): uic.Select[(String, String)] = uic.Select[(String, String)]().options(Seq("a" -> "A"))(_._2).bind(f)"""

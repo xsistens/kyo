@@ -8,7 +8,7 @@ import kyo.uic.HasSetter
 import kyo.uic.MultiChoiceFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.OptionalFormControl
-import kyo.uic.TextFormControl
+import kyo.uic.TextValued
 import scala.annotation.targetName
 
 /** A form handle that yields a validated value at submit: a [[FormField]] or a [[NumberField]]. What
@@ -794,21 +794,24 @@ private def stampId[C <: FormControl { type Self <: C }](control: C, field: Form
   * a `Boolean` field to a checkbox or switch) because only the value binding is
   * value-typed. The blur trigger ignores the value the control hands it and judges what
   * the field holds ([[FormField.blurred]]); everything gated stays shared on [[FormField]].
+  *
+  * A `String` field binds to any [[TextValued]] control through its `value` and `onBlur` setters, generated or written by hand
+  * ([[HasSetter]]).
   */
-extension [C <: TextFormControl { type Self <: C }](control: C)
-    def bind(field: FormField[String])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalidMessage(field.message)
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bind
+extension [C <: TextValued { type Self <: C }](control: C)
+    def bind(field: FormField[String])(using
+        value: HasSetter[C, "value", UI.Prop[String]],
+        blur: HasSetter[C, "onBlur", String => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(value(control, field.valueRef), field).invalidMessage(field.message), _ => field.blurred)
 
-    def bindControlOnly(field: FormField[String])(using Frame): C =
-        var b: C = stampId(control.value(field.valueRef), field)
-        b = b.invalid(field.visibleError.map(_.isDefined))
-        b = b.onBlur(_ => field.blurred)
-        b
-    end bindControlOnly
+    def bindControlOnly(field: FormField[String])(using
+        value: HasSetter[C, "value", UI.Prop[String]],
+        blur: HasSetter[C, "onBlur", String => UI.Action],
+        frame: Frame
+    ): C =
+        blur(stampId(value(control, field.valueRef), field).invalid(field.visibleError.map(_.isDefined)), _ => field.blurred)
 end extension
 
 /** A `Boolean` field binds to any control with a `checked` and an `onBlur` setter, generated or written by hand ([[HasSetter]]). */

@@ -24,64 +24,15 @@ import kyo.UI.*
   * digit] and at least 6 chars; strong = all three and at least 8 chars;
   * anything else weak; empty shows `promptLabel`.
   */
-final class Password private[uic] (private[uic] val p: Password.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
-      HasProps:
+final class Password private[uic] (private[uic] val p: Password.Props) extends Component(Setters[Password.Props, Password]), Node,
+      TextValued, HasPlaceholder, HasAccessibleName:
 
     type Self = Password
 
-    /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter
-      * when `feedback(true)`). Any other signal binds ONE-WAY: the field and the meter show it, and an edit writes
-      * nothing and only reports through [[onInput]] and [[onChange]]; with neither, a card says the reader cannot change
-      * it. A constant is the starting text. With the meter or the mask toggle on, the field keeps the text itself, from a
-      * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
-      * `ref.readOnly` opts a ref out.
-      */
-    def value(v: String | Signal[String]): Password = new Password(p.copy(value = p.value.bind(v)))
-
-    /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
-    def toggleMask(v: Boolean): Password = new Password(p.copy(toggleMask = v))
-
-    /** Shows the strength meter below the field (inline; see the class doc). */
-    def feedback(v: Boolean): Password = new Password(p.copy(feedback = v))
-
-    /** Meter label while the value is empty (Prime default "Enter a password"). A `Signal[String]` changes it in place. */
-    def promptLabel(v: Prop[String]): Password = new Password(p.copy(promptLabel = v))
-
-    /** Meter label for weak values (Prime default "Weak"). A `Signal[String]` changes it in place. */
-    def weakLabel(v: Prop[String]): Password = new Password(p.copy(weakLabel = v))
-
-    /** Meter label for medium values (Prime default "Medium"). A `Signal[String]` changes it in place. */
-    def mediumLabel(v: Prop[String]): Password = new Password(p.copy(mediumLabel = v))
-
-    /** Meter label for strong values (Prime default "Strong"). A `Signal[String]` changes it in place. */
-    def strongLabel(v: Prop[String]): Password = new Password(p.copy(strongLabel = v))
-
     private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = new Password(p.copy(placeholder = v))
 
-    def disabled(v: Boolean): Password = new Password(p.copy(disabled = v))
-
-    /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
-      * PLACE via kyo-ui's boolean attribute channel (no re-render).
-      */
-    def readonly(v: Prop[Boolean]): Password = new Password(p.copy(readonly = v))
-
-    /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Password = new Password(p.copy(required = v))
-
-    /** Native `name` for HTML form participation. */
-    def name(v: String): Password = new Password(p.copy(name = Present(v)))
-
-    /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Password = new Password(p.copy(maxLength = Present(math.max(0, n))))
-
-    /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
-    def size(v: Size): Password = new Password(p.copy(size = v))
-
-    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
-    def variant(v: FieldVariant): Password = new Password(p.copy(variant = v))
-
-    /** Spans the full container width (`.p-password-fluid`). */
-    def fluid(v: Boolean): Password = new Password(p.copy(fluid = v))
+    /** Native `maxlength`: caps the number of characters; a negative cap is 0. */
+    def maxLength(n: Int): Password = new Password(p.copy(maxLength = math.max(0, n)))
 
     private[uic] def validitySlots: FieldValidity.Slots         = p.validity
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(p.copy(validity = v))
@@ -89,16 +40,11 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     private[uic] def accessibility: Accessibility              = p.access
     private[uic] def withAccessibility(v: Accessibility): Self = new Password(p.copy(access = v))
 
+    /** Fires on a commit (native `change`) with the field's text. It hears the value too, so a signal bound one way and heard
+      * here is no mistake.
+      */
     def onChange(f: String => UI.Action)(using Frame): Password =
         new Password(p.copy(onChange = Present(Callback.of(f)), value = p.value.heardToo))
-    def onInput(f: String => UI.Action)(using Frame): Password = new Password(p.copy(value = p.value.hear(f)))
-
-    /** Fires on focus loss (native `blur`) with the text the field holds as focus
-      * leaves it: what the reader typed, also unbound or from a constant, with the
-      * meter and the reveal on or off. Unlike `onChange` it fires even when the value
-      * was not edited. The form-validation layer wires its `Blur` trigger here.
-      */
-    def onBlur(f: String => UI.Action)(using Frame): Password = new Password(p.copy(onBlur = Present(Callback.of(f))))
 
     /** The meter is drawn from the text and the eye keeps a reveal, so with either on the field is an instance, one per place,
       * drawn once: it holds the text (from a constant, and with the meter unbound too) and the reveal, and a host region that runs
@@ -119,26 +65,57 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
 end Password
 
 object Password:
+    /** What a password field holds. Each field is a setter of its name (`uic.Password().size(Size.Small)`), which takes the
+      * field's own type, the value itself where it is an `Opt` and the function itself for a callback; `value` binds and `onInput`
+      * (`@eventName`) hears it; `maxLength` and `onChange` are written by hand, and the fields marked `@noSetter` by the shared
+      * traits.
+      */
     final private[uic] case class Props(
-        value: Controlled[String] = Controlled(),
+        /** The value. A `SignalRef` binds TWO-WAY: edits write back, ref changes update the field (and the strength meter when
+          * `feedback(true)`). Any other signal binds ONE-WAY: the field and the meter show it, and an edit writes nothing and only
+          * reports through `onInput` and `onChange`; with neither, a card says the reader cannot change it. A constant is the
+          * starting text. With the meter or the mask toggle on, the field keeps the text itself, from a constant and, with the
+          * meter, unbound too: the meter judges what the reader typed, and a reveal keeps it. `ref.readOnly` opts a ref out. Its
+          * event `onInput` fires with the text on every keystroke.
+          */
+        @eventName("onInput") value: Controlled[String] = Controlled(),
+        /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
         toggleMask: Boolean = false,
+        /** Shows the strength meter below the field (inline; see the class doc). */
         feedback: Boolean = false,
+        /** Meter label while the value is empty (Prime default "Enter a password"). A signal changes it in place. */
         promptLabel: Prop[String] = "Enter a password",
+        /** Meter label for weak values (Prime default "Weak"). A signal changes it in place. */
         weakLabel: Prop[String] = "Weak",
+        /** Meter label for medium values (Prime default "Medium"). A signal changes it in place. */
         mediumLabel: Prop[String] = "Medium",
+        /** Meter label for strong values (Prime default "Strong"). A signal changes it in place. */
         strongLabel: Prop[String] = "Strong",
-        placeholder: Maybe[TextValue] = Absent,
+        @noSetter placeholder: Maybe[TextValue] = Absent,
+        /** Native `disabled` on the field, which then takes no focus and no input; the eye answers no press. */
         disabled: Boolean = false,
+        /** Native `readonly`, so the field is focusable but not editable. A signal toggles it in place through kyo-ui's boolean
+          * attribute channel (no re-render).
+          */
         readonly: Prop[Boolean] = false,
+        /** Marks the field required (native constraint + `aria-required`). */
         required: Boolean = false,
-        name: Maybe[String] = Absent,
-        maxLength: Maybe[Int] = Absent,
+        /** Native `name` for HTML form participation. */
+        name: Opt[String] = Opt.unset,
+        maxLength: Opt[Int] = Opt.unset,
+        /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
         size: Size = Size.Normal,
+        /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
         variant: FieldVariant = FieldVariant.Outlined,
+        /** Spans the full container width (`.p-password-fluid`). */
         fluid: Boolean = false,
-        validity: FieldValidity.Slots = FieldValidity.Slots.empty,
-        access: Accessibility = Accessibility.none,
+        @noSetter validity: FieldValidity.Slots = FieldValidity.Slots.empty,
+        @noSetter access: Accessibility = Accessibility.none,
         onChange: Maybe[String => UI.Action] = Absent,
+        /** Fires on focus loss (native `blur`) with the text the field holds as focus leaves it: what the reader typed, also
+          * unbound or from a constant, with the meter and the reveal on or off. Unlike `onChange` it fires even when the value was
+          * not edited. The form-validation layer wires its `Blur` trigger here.
+          */
         onBlur: Maybe[String => UI.Action] = Absent
     ) derives CanEqual
 

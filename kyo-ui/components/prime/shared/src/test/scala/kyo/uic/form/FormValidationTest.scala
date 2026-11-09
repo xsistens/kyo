@@ -368,6 +368,28 @@ class FormValidationTest extends UicTest:
         end for
     }
 
+    "a text field whose setters are generated (Password) binds like a hand-written one: id, value, focus-first-invalid" in {
+        import kyo.uic
+        for
+            sink <- Signal.initRef(Chunk.empty[String])
+            form <- mkFocusForm(sink)
+            f    <- form.field("abc").rules(Validator.minLength(5)).domId("pw").declare
+            el   <- elementWithClass(uic.Password().bind(f).render, "p-password-input")
+            _    <- form.submit(Kyo.unit)
+            went <- sink.get
+        yield
+            val bound = el match
+                case t: UI.Ast.TextInput =>
+                    t.value match
+                        case Present(UI.Bound.Ref(r)) => r eq f.valueRef
+                        case _                        => false
+                case _ => false
+            assert(el.attrs.identifier.contains("pw"), s"bind stamps the field's id on the input: ${el.attrs.identifier}")
+            assert(bound, "the input writes the field's own ref")
+            assert(went.headMaybe.contains("pw"), s"submit reaches the invalid field: $went")
+        end for
+    }
+
     "touched and validating are the same kind of member on FormField and NumberField" in {
         // A def is not a stable path, so its singleton type does not exist; a val's does. Both fields answer the same way,
         // which is what a tool reading the two classes side by side sees.

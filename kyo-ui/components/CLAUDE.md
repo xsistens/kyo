@@ -8,7 +8,7 @@ module's `README.md`.
 
 ## A component is a class over its props
 
-A component the rulebook has reached (`Button`, `ToggleButton`) also `extends Component(Setters[X.Props, X])` and has its setters
+A component the rulebook has reached (`Button`, `ToggleButton`, `Password`) also `extends Component(Setters[X.Props, X])` and has its setters
 generated from its props (`RULEBOOK.md` rule 11). The rest still write each setter as below, until their wave reaches them.
 
 ```scala
