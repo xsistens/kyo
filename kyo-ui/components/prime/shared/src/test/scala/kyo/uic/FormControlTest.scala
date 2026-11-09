@@ -2,10 +2,10 @@ package kyo.uic
 
 import kyo.*
 
-/** A `HasSetter` is found for a setter `Setters` generated, from the component's `Fields`, and for a member a trait declares, from
-  * that trait's companion; generic code (a form's `bind`) writes through it without knowing which.
+/** The form layer finds a component's `checked` and `onBlur` through `HasSetter`, whether `Setters` generated them (ToggleButton) or the
+  * class wrote them as members `BooleanFormControl` asks for (CheckBox, through the trait's companion).
   */
-class ComponentTest extends UicTest:
+class FormControlTest extends UicTest:
 
     "a generated setter is a HasSetter, which writes through it" in {
         val set = summon[HasSetter[ToggleButton, "checked", UI.Prop[Boolean]]]
@@ -23,8 +23,8 @@ class ComponentTest extends UicTest:
     }
 
     "no setter of that name, or of another type, is no HasSetter" in {
-        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ToggleButton, "nope", kyo.UI.Prop[Boolean]]]""")
-        typeCheckFailure("""summon[kyo.uic.HasSetter[kyo.uic.ToggleButton, "checked", kyo.UI.Prop[String]]]""")
+        typeCheckFailure("""summon[kyo.HasSetter[kyo.uic.ToggleButton, "nope", kyo.UI.Prop[Boolean]]]""")
+        typeCheckFailure("""summon[kyo.HasSetter[kyo.uic.ToggleButton, "checked", kyo.UI.Prop[String]]]""")
     }
 
-end ComponentTest
+end FormControlTest
