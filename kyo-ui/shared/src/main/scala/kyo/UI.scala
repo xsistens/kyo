@@ -275,8 +275,13 @@ object UI:
         /** Where the instance's own value starts, `Absent` where the component keeps none of its own for this prop. */
         def start: Maybe[A]
 
-        /** This prop with the instance's own `ref` bound in place of nothing, as the engine hands it to a draw. */
-        def owning(ref: SignalRef[A]): Ownable[A]
+        /** This prop bound as the caller says: a ref two way, any other signal one way, a constant. The engine binds the instance's
+          * own ref with it in place of nothing, as it hands the props to a draw.
+          */
+        def bind(v: Prop[A]): Ownable[A]
+
+        /** This prop with `f` hearing every change the reader makes, in place of whoever heard it before. `f` runs as given. */
+        def withHearer(f: A => Action): Ownable[A]
     end Ownable
 
     /** What a [[reactive]] block reads with: `.read` on a prop or a signal, which exists only inside the block.

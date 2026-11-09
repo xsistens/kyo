@@ -14,12 +14,12 @@ import kyo.UI.*
   * "Yes"/"No"; when BOTH are cleared the label span renders a non-breaking
   * space so the content box keeps its height (Prime renders `\u00A0`).
   * `checked` binds exactly like CheckBox: a `SignalRef` two-way (a click writes the
-  * toggled value back before firing `onChange`), anything else one way. It is a
-  * [[BooleanFormControl]] for the same reason, so `uic.ToggleButton().bind(field)`
+  * toggled value back before firing `onChange`), anything else one way. It binds a
+  * `Boolean` form field like CheckBox through its generated `checked` and `onBlur`, so `uic.ToggleButton().bind(field)`
   * wires value, validity, message and the blur trigger in one call.
   */
 final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props)
-    extends Component(Setters[ToggleButton.Props, ToggleButton]), Node, BooleanFormControl, HasAccessibleNameRef:
+    extends Component(Setters[ToggleButton.Props, ToggleButton]), Node, FormControl, HasAccessibleNameRef:
 
     type Self = ToggleButton
 
@@ -43,26 +43,11 @@ final class ToggleButton private[uic] (private[uic] val p: ToggleButton.Props)
       */
     private[uic] def content(ui: UI): ToggleButton = new ToggleButton(p.copy(content = Present(ui)))
 
-    /** The checked state. A `SignalRef` binds TWO-WAY: a click writes the toggled value, and its changes re-render.
-      * Any other signal, or a constant, binds ONE-WAY: the button shows it, and a click writes nothing and only
-      * reports through [[onChange]], so the app writes its own state and the button follows. `ref.readOnly` opts a
-      * ref out. With no [[onChange]], a card says the reader cannot change it.
-      */
-    def checked(v: Prop[Boolean]): ToggleButton = new ToggleButton(p.copy(checked = p.checked.bind(v)))
-
     /** Drops both labels: the label span renders a non-breaking space (icon-only look). */
     def noLabels: ToggleButton = new ToggleButton(p.copy(onLabel = Opt.unset, offLabel = Opt.unset))
 
     private[uic] def validitySlots: FieldValidity.Slots         = p.validity
     private[uic] def withValidity(v: FieldValidity.Slots): Self = new ToggleButton(p.copy(validity = v))
-
-    /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
-    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(p.copy(checked = p.checked.hear(f)))
-
-    /** Fires on focus loss with the button's current checked state; unlike onChange it
-      * fires even when the value was not toggled. The validation layer's Blur trigger.
-      */
-    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = new ToggleButton(p.copy(onBlur = Present(Callback.of(f))))
 
     /** One instance per place, drawn once: it holds the state the reader gives an unbound button, and a host region that runs
       * again hands it the run's props instead of starting it over (see [[ToggleButton.drawn]]).
@@ -79,11 +64,18 @@ end ToggleButton
 
 object ToggleButton:
     /** What a toggle button holds. Each field is a setter of its name (`uic.ToggleButton().size(Size.Small)`), which takes a
-      * constant or a signal where the field is a `Prop` and the value itself where it is an `Opt`; `checked`, `onChange`,
-      * `onBlur` and `content` are written by hand, and the fields marked `@noSetter` by hosts and the shared traits.
+      * constant or a signal where the field is a `Prop`, the value itself where it is an `Opt` and the function itself for a callback;
+      * `checked` binds and `onChange` (`@eventName`) hears it; `content` is written by hand, and the fields marked `@noSetter` by
+      * hosts and the shared traits.
       */
     final private[uic] case class Props(
-        checked: Controlled[Boolean] = Controlled(start = Present(false)),
+        /** The checked state. A `SignalRef` binds TWO-WAY: a click writes the toggled value, and its changes re-render. Any other
+          * signal, or a constant, binds ONE-WAY: the button shows it, and a click writes nothing and only reports through `onChange`,
+          * so the app writes its own state and the button follows. `ref.readOnly` opts a ref out. With no `onChange`, a card says the
+          * reader cannot change it. Its event `onChange` fires with the NEW checked value after a toggle (and after the ref
+          * write-back).
+          */
+        @eventName("onChange") checked: Controlled[Boolean] = Controlled(start = Present(false)),
         /** Label while checked (Prime default "Yes"). A signal patches the label in place. */
         onLabel: Opt[Prop[String]] = "Yes",
         /** Label while unchecked (Prime default "No"). A signal patches the label in place. */
@@ -106,6 +98,9 @@ object ToggleButton:
         readonly: Prop[Boolean] = false,
         @noSetter validity: FieldValidity.Slots = FieldValidity.Slots.empty,
         @noSetter access: Accessibility = Accessibility.none,
+        /** Fires on focus loss with the button's current checked state; unlike `onChange` it fires even when the value was not
+          * toggled. The validation layer's Blur trigger.
+          */
         onBlur: Maybe[Boolean => UI.Action] = Absent,
         content: Maybe[UI] = Absent,
         @noSetter radio: Maybe[ToggleButton.RadioOption] = Absent

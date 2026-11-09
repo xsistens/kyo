@@ -814,7 +814,8 @@ class UIDrawnTest extends kyo.test.Test[Any]:
     }
 
     private case class Held(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own")) extends UI.Ownable[String]:
-        def owning(ref: SignalRef[String]): Held = copy(bound = Present(ref))
+        def bind(v: Prop[String]): Held              = copy(bound = Present(v))
+        def withHearer(f: String => UI.Action): Held = this
 
     private case class Form(name: Held, size: Int) derives CanEqual
 
@@ -909,8 +910,9 @@ class UIDrawnTest extends kyo.test.Test[Any]:
 
     private case class Counted(bound: Maybe[Prop[String]] = Absent, start: Maybe[String] = Present("own"))
         extends UI.Ownable[String]:
-        def owning(ref: SignalRef[String]): Counted =
-            discard(resolves.incrementAndGet()); copy(bound = Present(ref))
+        def withHearer(f: String => UI.Action): Counted = this
+        def bind(v: Prop[String]): Counted              =
+            discard(resolves.incrementAndGet()); copy(bound = Present(v))
     end Counted
 
     private case class Pair(a: Prop[String], b: Prop[String], held: Counted) derives CanEqual

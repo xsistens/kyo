@@ -20,7 +20,7 @@ final private[kyo] class Owning[P] private (mirror: Maybe[Mirror.ProductOf[P]], 
                 val fields = props.asInstanceOf[Product].productIterator.toArray
                 refs.foreach { (i, ref) =>
                     fields(i) match
-                        case c: UI.Ownable[?] if c.bound.isEmpty => fields(i) = c.asInstanceOf[UI.Ownable[Any]].owning(ref)
+                        case c: UI.Ownable[?] if c.bound.isEmpty => fields(i) = c.asInstanceOf[UI.Ownable[Any]].bind(ref)
                         case _                                   => ()
                 }
                 m.fromProduct(Tuple.fromArray(fields))

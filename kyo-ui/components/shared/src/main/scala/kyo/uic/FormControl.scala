@@ -123,6 +123,16 @@ trait BooleanFormControl extends FormControl:
     def checked(v: Boolean | Signal[Boolean]): Self
     def onBlur(f: Boolean => UI.Action)(using Frame): Self
 
+object BooleanFormControl:
+    /** A component written by hand has `checked` as its member, so generic code reaches it the way it reaches a generated one. */
+    given checked[C <: BooleanFormControl { type Self <: C }]: HasSetter[C, "checked", UI.Prop[Boolean]] with
+        def apply(c: C, v: UI.Prop[Boolean])(using Frame): C = c.checked(v)
+
+    /** [[checked]] for `onBlur`. */
+    given onBlur[C <: BooleanFormControl { type Self <: C }]: HasSetter[C, "onBlur", Boolean => UI.Action] with
+        def apply(c: C, f: Boolean => UI.Action)(using Frame): C = c.onBlur(f)
+end BooleanFormControl
+
 /** A `Double`-valued numeric control (InputNumber, Slider, Knob, Rating): two-way value
   * binding, a focus-loss trigger reporting the current number, and a whole-number
   * constraint that the form layer flips on for whole-valued (`Int`/`Long`) number
