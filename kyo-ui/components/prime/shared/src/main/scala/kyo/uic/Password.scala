@@ -26,7 +26,6 @@ import kyo.UI.*
   */
 final class Password private[uic] (private[uic] val p: Password.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName,
       HasProps:
-    import p.*
 
     type Self = Password
 
@@ -37,69 +36,69 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
       * constant and, with the meter, unbound too: the meter judges what the reader typed, and a reveal keeps it.
       * `ref.readOnly` opts a ref out.
       */
-    def value(v: String | Signal[String]): Password = new Password(p.copy(valueSlot = valueSlot.bind(v)))
+    def value(v: String | Signal[String]): Password = new Password(p.copy(value = p.value.bind(v)))
 
     /** Adds the eye toggle that reveals/masks the typed value (Prime's `toggleMask`). */
-    def toggleMask(v: Boolean): Password = new Password(p.copy(toggleMaskFlag = v))
+    def toggleMask(v: Boolean): Password = new Password(p.copy(toggleMask = v))
 
     /** Shows the strength meter below the field (inline; see the class doc). */
-    def feedback(v: Boolean): Password = new Password(p.copy(feedbackFlag = v))
+    def feedback(v: Boolean): Password = new Password(p.copy(feedback = v))
 
     /** Meter label while the value is empty (Prime default "Enter a password"). A `Signal[String]` changes it in place. */
-    def promptLabel(v: Prop[String]): Password = new Password(p.copy(promptLabelV = v))
+    def promptLabel(v: Prop[String]): Password = new Password(p.copy(promptLabel = v))
 
     /** Meter label for weak values (Prime default "Weak"). A `Signal[String]` changes it in place. */
-    def weakLabel(v: Prop[String]): Password = new Password(p.copy(weakLabelV = v))
+    def weakLabel(v: Prop[String]): Password = new Password(p.copy(weakLabel = v))
 
     /** Meter label for medium values (Prime default "Medium"). A `Signal[String]` changes it in place. */
-    def mediumLabel(v: Prop[String]): Password = new Password(p.copy(mediumLabelV = v))
+    def mediumLabel(v: Prop[String]): Password = new Password(p.copy(mediumLabel = v))
 
     /** Meter label for strong values (Prime default "Strong"). A `Signal[String]` changes it in place. */
-    def strongLabel(v: Prop[String]): Password = new Password(p.copy(strongLabelV = v))
+    def strongLabel(v: Prop[String]): Password = new Password(p.copy(strongLabel = v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = new Password(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = new Password(p.copy(placeholder = v))
 
-    def disabled(v: Boolean): Password = new Password(p.copy(disabledFlag = v))
+    def disabled(v: Boolean): Password = new Password(p.copy(disabled = v))
 
     /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
       * PLACE via kyo-ui's boolean attribute channel (no re-render).
       */
-    def readonly(v: Prop[Boolean]): Password = new Password(p.copy(readonlyFlag = v))
+    def readonly(v: Prop[Boolean]): Password = new Password(p.copy(readonly = v))
 
     /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Password = new Password(p.copy(requiredFlag = v))
+    def required(v: Boolean): Password = new Password(p.copy(required = v))
 
     /** Native `name` for HTML form participation. */
-    def name(v: String): Password = new Password(p.copy(nameV = Present(v)))
+    def name(v: String): Password = new Password(p.copy(name = Present(v)))
 
     /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Password = new Password(p.copy(maxLengthV = Present(math.max(0, n))))
+    def maxLength(n: Int): Password = new Password(p.copy(maxLength = Present(math.max(0, n))))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg` on the field. */
-    def size(v: Size): Password = new Password(p.copy(sizeV = v))
+    def size(v: Size): Password = new Password(p.copy(size = v))
 
     /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is default. */
-    def variant(v: FieldVariant): Password = new Password(p.copy(variantV = v))
+    def variant(v: FieldVariant): Password = new Password(p.copy(variant = v))
 
     /** Spans the full container width (`.p-password-fluid`). */
-    def fluid(v: Boolean): Password = new Password(p.copy(fluidFlag = v))
+    def fluid(v: Boolean): Password = new Password(p.copy(fluid = v))
 
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(p.copy(validityV = v))
+    private[uic] def validitySlots: FieldValidity.Slots         = p.validity
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Password(p.copy(validity = v))
 
-    private[uic] def accessibility: Accessibility              = access
+    private[uic] def accessibility: Accessibility              = p.access
     private[uic] def withAccessibility(v: Accessibility): Self = new Password(p.copy(access = v))
 
     def onChange(f: String => UI.Action)(using Frame): Password =
-        new Password(p.copy(onChangeSF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
-    def onInput(f: String => UI.Action)(using Frame): Password = new Password(p.copy(valueSlot = valueSlot.hear(f)))
+        new Password(p.copy(onChange = Present(Callback.of(f)), value = p.value.heardToo))
+    def onInput(f: String => UI.Action)(using Frame): Password = new Password(p.copy(value = p.value.hear(f)))
 
     /** Fires on focus loss (native `blur`) with the text the field holds as focus
       * leaves it: what the reader typed, also unbound or from a constant, with the
       * meter and the reveal on or off. Unlike `onChange` it fires even when the value
       * was not edited. The form-validation layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => UI.Action)(using Frame): Password = new Password(p.copy(onBlurSF = Present(Callback.of(f))))
+    def onBlur(f: String => UI.Action)(using Frame): Password = new Password(p.copy(onBlur = Present(Callback.of(f))))
 
     /** The meter is drawn from the text and the eye keeps a reveal, so with either on the field is an instance, one per place,
       * drawn once: it holds the text (from a constant, and with the meter unbound too) and the reveal, and a host region that runs
@@ -109,7 +108,7 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
       * nothing, draws no value and leaves the text to the browser, so it has no instance.
       */
     private[uic] def render(using Frame): UI =
-        if !Password.keepsOwnText(p) && !toggleMaskFlag then Password.drawn(new UI.Live(p, Absent), Absent, Absent)
+        if !Password.keepsOwnText(p) && !p.toggleMask then Password.drawn(new UI.Live(p, Absent), Absent, Absent)
         else UI.mountedWith(p)(Password.instance(_, Absent))
 
     /** The instance with its reveal handed in (golden-test seam): the internal reveal state driving the password/text type
@@ -121,26 +120,26 @@ end Password
 
 object Password:
     final private[uic] case class Props(
-        valueSlot: Controlled[String] = Controlled(),
-        toggleMaskFlag: Boolean = false,
-        feedbackFlag: Boolean = false,
-        promptLabelV: Prop[String] = "Enter a password",
-        weakLabelV: Prop[String] = "Weak",
-        mediumLabelV: Prop[String] = "Medium",
-        strongLabelV: Prop[String] = "Strong",
-        placeholderText: Maybe[TextValue] = Absent,
-        disabledFlag: Boolean = false,
-        readonlyFlag: Prop[Boolean] = false,
-        requiredFlag: Boolean = false,
-        nameV: Maybe[String] = Absent,
-        maxLengthV: Maybe[Int] = Absent,
-        sizeV: Size = Size.Normal,
-        variantV: FieldVariant = FieldVariant.Outlined,
-        fluidFlag: Boolean = false,
-        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
+        value: Controlled[String] = Controlled(),
+        toggleMask: Boolean = false,
+        feedback: Boolean = false,
+        promptLabel: Prop[String] = "Enter a password",
+        weakLabel: Prop[String] = "Weak",
+        mediumLabel: Prop[String] = "Medium",
+        strongLabel: Prop[String] = "Strong",
+        placeholder: Maybe[TextValue] = Absent,
+        disabled: Boolean = false,
+        readonly: Prop[Boolean] = false,
+        required: Boolean = false,
+        name: Maybe[String] = Absent,
+        maxLength: Maybe[Int] = Absent,
+        size: Size = Size.Normal,
+        variant: FieldVariant = FieldVariant.Outlined,
+        fluid: Boolean = false,
+        validity: FieldValidity.Slots = FieldValidity.Slots.empty,
         access: Accessibility = Accessibility.none,
-        onChangeSF: Maybe[String => UI.Action] = Absent,
-        onBlurSF: Maybe[String => UI.Action] = Absent
+        onChange: Maybe[String => UI.Action] = Absent,
+        onBlur: Maybe[String => UI.Action] = Absent
     ) derives CanEqual
 
     def apply(): Password = new Password(Props())
@@ -171,27 +170,27 @@ object Password:
 
     private object Base:
         def of(q: Props, own: Maybe[SignalRef[String]]): Base =
-            val text = (own, q.valueSlot.bound) match
+            val text = (own, q.value.bound) match
                 case (Present(ref), bound) if keepsOwnText(q) && bound.forall(constant) => Present(ref)
                 case (_, bound)                                                         => bound
             Base(
-                q.toggleMaskFlag,
-                q.feedbackFlag,
-                q.disabledFlag,
-                q.readonlyFlag,
-                q.requiredFlag,
-                q.nameV,
-                q.maxLengthV,
-                q.sizeV,
-                q.variantV,
-                q.fluidFlag,
-                q.validityV,
+                q.toggleMask,
+                q.feedback,
+                q.disabled,
+                q.readonly,
+                q.required,
+                q.name,
+                q.maxLength,
+                q.size,
+                q.variant,
+                q.fluid,
+                q.validity,
                 q.access,
-                q.placeholderText,
+                q.placeholder,
                 text,
-                q.valueSlot.hearer.isDefined,
-                q.onChangeSF.isDefined,
-                q.onBlurSF.isDefined
+                q.value.hearer.isDefined,
+                q.onChange.isDefined,
+                q.onBlur.isDefined
             )
         end of
     end Base
@@ -199,14 +198,14 @@ object Password:
     /** Whether the field draws something from its text after the page is shown (the meter, or the reveal) that the reader can
       * change.
       */
-    private def keepsText(q: Props): Boolean = (q.feedbackFlag || q.toggleMaskFlag) && !q.disabledFlag &&
-        !(q.readonlyFlag match
+    private def keepsText(q: Props): Boolean = (q.feedback || q.toggleMask) && !q.disabled &&
+        !(q.readonly match
             case on: Boolean => on
             case _           => false
         )
 
     /** Whether the text the reader types is the field's to keep: with the meter even unbound, and from a constant. */
-    private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedbackFlag || q.valueSlot.bound.isDefined)
+    private def keepsOwnText(q: Props): Boolean = keepsText(q) && (q.feedback || q.value.bound.isDefined)
 
     /** Whether a bound text is a constant, which is only where the field's own text starts. */
     private def constant(v: Prop[String]): Boolean = v match
@@ -215,7 +214,7 @@ object Password:
 
     /** Where the field's own text starts: a constant the caller gave, else empty. */
     private def startText(q: Props): String =
-        q.valueSlot.bound match
+        q.value.bound match
             case Present(a: String) => a
             case _                  => ""
 
@@ -253,9 +252,9 @@ object Password:
             case Absent     => in.inputType(InputType.Password)
         b.text.foreach(t => in = in.value(t))
         // Each hearer is read when its event comes, so it is the latest run's.
-        if b.hearsInput then in = in.onInput(s => live.call(_.valueSlot.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsChange then in = in.onChange(s => live.call(_.onChangeSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlurSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
+        if b.hearsInput then in = in.onInput(s => live.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
+        if b.hearsChange then in = in.onChange(s => live.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))))
+        if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s))))
         b.placeholder match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
@@ -306,10 +305,10 @@ object Password:
     /** The meter over the text `v`: the bar and the label of its strength, the label a prop of the latest run. */
     private def meter(live: UI.Live[Props], v: String)(using Frame): UI =
         val (cls, width, label) = strength(v) match
-            case 0 => ("p-password-meter-weak", 0.0, live(_.promptLabelV))
-            case 1 => ("p-password-meter-weak", 100.0 / 3, live(_.weakLabelV))
-            case 2 => ("p-password-meter-medium", 200.0 / 3, live(_.mediumLabelV))
-            case _ => ("p-password-meter-strong", 100.0, live(_.strongLabelV))
+            case 0 => ("p-password-meter-weak", 0.0, live(_.promptLabel))
+            case 1 => ("p-password-meter-weak", 100.0 / 3, live(_.weakLabel))
+            case 2 => ("p-password-meter-medium", 200.0 / 3, live(_.mediumLabel))
+            case _ => ("p-password-meter-strong", 100.0, live(_.strongLabel))
         div.cssClass("p-password-content").cssClass("p-uic-password-feedback")(
             div.cssClass("p-password-meter")(
                 div.cssClass("p-password-meter-label").cssClass(cls).style(_.width(width.pct))
