@@ -3,7 +3,7 @@ package kyo.internal
 import kyo.*
 import scala.quoted.*
 
-/** The expansion of [[kyo.UI.reactive]], and what it expands to.
+/** The expansion of `UI.reactive` (`Reactive.scala`), and what it expands to.
   *
   * A block reads props and signals with `.read`. The expansion is applicative: every read is taken out of the block and evaluated
   * once, before it, the reads are combined into one value (a chunk while every read is a constant, else one signal over the
@@ -82,7 +82,7 @@ private[kyo] object ReactiveMacro:
         )
     end strayImpl
 
-    def expand[T: Type](body: Expr[UI.ReactiveScope ?=> T], frame: Expr[Frame])(using Quotes): Expr[Any] =
+    def expand[T: Type](body: Expr[ReactiveScope ?=> T], frame: Expr[Frame])(using Quotes): Expr[Any] =
         import quotes.reflect.*
         given CanEqual[Symbol, Symbol] = CanEqual.derived
 
@@ -98,7 +98,7 @@ private[kyo] object ReactiveMacro:
             case other =>
                 report.errorAndAbort("`UI.reactive` takes its block written in place, not a function value.", other.pos)
 
-        val scopeClass = TypeRepr.of[UI.ReactiveScope].typeSymbol
+        val scopeClass = TypeRepr.of[ReactiveScope].typeSymbol
 
         // A read through the block's own scope: `scope.read[A](arg)`, as the compiler writes a given member's extension.
         object Read:

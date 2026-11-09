@@ -6,7 +6,7 @@ import kyo.UI.Ast.*
 /** `UI.reactive`: one read per value, a constant from constants, one signal or one region otherwise, and a compile error for every
   * read the block would not have evaluated once while it runs.
   */
-class ReactiveMacroTest extends UITest:
+class ReactiveMacroTest extends kyo.test.Test[Any]:
 
     "a block over constants runs once and is the plain value it yields" in {
         val a: Prop[Int] = 1
@@ -302,7 +302,7 @@ class ReactiveMacroTest extends UITest:
             typeCheckFailure("""
                 import kyo.*
                 val p: UI.Prop[Int]                    = 1
-                def helper(using UI.ReactiveScope): Int = p.read
+                def helper(using ReactiveScope): Int = p.read
                 UI.reactive(helper)
             """)("only where the block itself is written")
         }
