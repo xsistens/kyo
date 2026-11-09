@@ -136,7 +136,7 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
     /** A panel held open by a constant nobody hears: nothing the reader does may close it. */
     private def openFixedOpen: Boolean = openSlot.fixedAt(true)
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = new MultiSelect(p.copy(placeholderV = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): MultiSelect[A] = new MultiSelect(p.copy(placeholderV = v))
 
     /** Trigger selection rendering: comma-joined text (default) or removable
       * chips (`.p-multiselect-display-chip`).
@@ -361,8 +361,9 @@ final class MultiSelect[A] private[uic] (private[uic] val p: MultiSelect.Props[A
       */
     private def shown(using Frame): ReactiveValue[(Set[A], Boolean, Maybe[String])] =
         val held: ReactiveValue[Set[A]] = choice.fold(ReactiveValue.Const(Set.empty[A]))(_.reading)
-        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV)).map { case ((h, ld), ph) =>
-            (h, ld.getOrElse(false), ph)
+        held.and(ReactiveValue.optional(loadingV)).and(ReactiveValue.optional(placeholderV.map(ReactiveValue[String](_)))).map {
+            case ((h, ld), ph) =>
+                (h, ld.getOrElse(false), ph)
         }
     end shown
 
@@ -817,7 +818,7 @@ object MultiSelect:
         optionDisabledF: Maybe[A => Boolean] = Absent,
         choice: Maybe[MultiChoice[A]] = Absent,
         openSlot: Controlled[Boolean] = Controlled(),
-        placeholderV: Maybe[TextValue] = Absent,
+        placeholderV: Maybe[Prop[String]] = Absent,
         displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
         maxSelectedLabelsV: Maybe[Int] = Absent,
         selectedItemsLabelV: Maybe[TextValue] = Absent,

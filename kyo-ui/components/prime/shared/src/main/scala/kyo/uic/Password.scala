@@ -57,7 +57,7 @@ final class Password private[uic] (private[uic] val p: Password.Props) extends N
     /** Meter label for strong values (Prime default "Strong"). A `Signal[String]` changes it in place. */
     def strongLabel(v: Prop[String]): Password = new Password(p.copy(strongLabelV = v))
 
-    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = new Password(p.copy(placeholderText = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Password = new Password(p.copy(placeholderText = v))
 
     def disabled(v: Boolean): Password = new Password(p.copy(disabledFlag = v))
 
@@ -128,7 +128,7 @@ object Password:
         weakLabelV: Prop[String] = "Weak",
         mediumLabelV: Prop[String] = "Medium",
         strongLabelV: Prop[String] = "Strong",
-        placeholderText: Maybe[TextValue] = Absent,
+        placeholderText: Maybe[Prop[String]] = Absent,
         disabledFlag: Boolean = false,
         readonlyFlag: Maybe[Prop[Boolean]] = Absent,
         requiredFlag: Boolean = false,
@@ -162,7 +162,7 @@ object Password:
         fluid: Boolean,
         validity: FieldValidity.Slots,
         access: Accessibility,
-        placeholder: Maybe[TextValue],
+        placeholder: Maybe[Prop[String]],
         text: Maybe[Prop[String]],
         hearsInput: Boolean,
         hearsChange: Boolean,
@@ -255,11 +255,7 @@ object Password:
         if b.hearsInput then in = in.onInput(s => live.call(_.valueSlot.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))))
         if b.hearsChange then in = in.onChange(s => live.call(_.onChangeSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
         if b.hearsBlur then in = in.onBlur(s => live.call(_.onBlurSF).map(_.fold(Kyo.unit: UI.Action)(_(s))))
-        b.placeholder match
-            case Present(TextValue.Const(v)) => in = in.placeholder(v)
-            case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
-            case Absent                      => ()
-        end match
+        in = in.withPlaceholder(b.placeholder)
         if b.disabled then in = in.disabled(true)
         b.readonly.foreach(r => in = in.readonly(r))
         if b.required then in = in.required(true)
