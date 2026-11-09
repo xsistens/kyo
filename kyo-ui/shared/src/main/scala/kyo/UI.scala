@@ -2539,6 +2539,8 @@ object UI:
             def placeholder: Maybe[String]
             def readOnly: Maybe[Boolean]
             private[kyo] def withReadOnly(v: Boolean): Self
+            def required: Maybe[Boolean]
+            private[kyo] def withRequired(v: Boolean): Self
             def onInput: Maybe[String => Action]
             def onChange: Maybe[String => Action]
 
@@ -2623,6 +2625,15 @@ object UI:
             def readOnly(v: Boolean | Signal[Boolean]): Self = v match
                 case b: Boolean                    => withReadOnly(b)
                 case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("readonly", s)
+
+            /** Native `required` (the field takes part in the form's constraint validation), constant or reactive through one union
+              * setter: a `Boolean` writes the attribute statically; a `Signal[Boolean]` sets and removes `required` IN PLACE on
+              * emission via the boolean-attribute channel, with no re-render, so caret and focus survive. It says nothing to
+              * assistive technology beyond what the browser derives from it; a component that wants `aria-required` writes it.
+              */
+            def required(v: Boolean | Signal[Boolean]): Self = v match
+                case b: Boolean                    => withRequired(b)
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("required", s)
         end TextInput
 
         /** Capability trait for text inputs that accept declarative client-local typing constraints.
@@ -3236,6 +3247,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3246,6 +3258,7 @@ object UI:
             def value(v: String | Signal[String]): Textarea         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): Textarea   = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): Textarea     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): Textarea     = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): Textarea     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): Textarea              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): Textarea             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3394,6 +3407,7 @@ object UI:
             value: Maybe[Bound[String]] = Absent,
             placeholder: Maybe[String] = Absent,
             readOnly: Maybe[Boolean] = Absent,
+            required: Maybe[Boolean] = Absent,
             disabled: Maybe[Boolean] = Absent,
             onInput: Maybe[String => Action] = Absent,
             onChange: Maybe[String => Action] = Absent,
@@ -3412,6 +3426,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3422,6 +3437,7 @@ object UI:
             def value(v: String | Signal[String]): Input         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): Input   = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): Input     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): Input     = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): Input     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): Input              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): Input             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3440,6 +3456,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3451,6 +3468,7 @@ object UI:
             private[kyo] def withPlaceholder(v: String): PasswordInput =
                 copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): PasswordInput     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): PasswordInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): PasswordInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3470,6 +3488,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3480,6 +3499,7 @@ object UI:
             def value(v: String | Signal[String]): EmailInput       = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): EmailInput = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): EmailInput   = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): EmailInput   = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): EmailInput   = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): EmailInput            = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): EmailInput           = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3498,6 +3518,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3508,6 +3529,7 @@ object UI:
             def value(v: String | Signal[String]): TelInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): TelInput   = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): TelInput     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): TelInput     = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): TelInput     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): TelInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): TelInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3526,6 +3548,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3536,6 +3559,7 @@ object UI:
             def value(v: String | Signal[String]): UrlInput         = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): UrlInput   = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): UrlInput     = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): UrlInput     = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): UrlInput     = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): UrlInput              = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): UrlInput             = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3554,6 +3578,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3564,6 +3589,7 @@ object UI:
             def value(v: String | Signal[String]): SearchInput       = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): SearchInput = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): SearchInput   = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): SearchInput   = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): SearchInput   = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): SearchInput           = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
@@ -3586,6 +3612,7 @@ object UI:
             def value: Maybe[Bound[String]]                       = textInputAttrs.value
             def placeholder: Maybe[String]                        = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]                          = textInputAttrs.readOnly
+            def required: Maybe[Boolean]                          = textInputAttrs.required
             def disabled: Maybe[Boolean]                          = textInputAttrs.disabled
             def onInput: Maybe[String => Action]                  = textInputAttrs.onInput
             def onChange: Maybe[String => Action]                 = textInputAttrs.onChange
@@ -3594,6 +3621,7 @@ object UI:
             def value(v: String | Signal[String]): NumberInput       = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound(v))))
             private[kyo] def withPlaceholder(v: String): NumberInput = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             private[kyo] def withReadOnly(v: Boolean): NumberInput   = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
+            private[kyo] def withRequired(v: Boolean): NumberInput   = copy(textInputAttrs = textInputAttrs.copy(required = Present(v)))
             private[kyo] def withDisabled(v: Boolean): NumberInput   = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
             def onInput(f: String => Action): NumberInput            = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
             def onChange(f: String => Action): NumberInput           = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))

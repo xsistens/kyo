@@ -341,6 +341,45 @@ class TextInputTest extends UITest:
                 assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("first"), html)
         }
 
+        "every text field takes required through the trait" in {
+            def req[T <: UI.Ast.TextInput { type Self <: T }](t: T): T = t.required(true)
+            val all: List[UI.Ast.TextInput]                            = List(
+                req(UI.input),
+                req(UI.passwordInput),
+                req(UI.emailInput),
+                req(UI.telInput),
+                req(UI.urlInput),
+                req(UI.searchInput),
+                req(UI.numberInput),
+                req(UI.textarea)
+            )
+            all.foreach(f => assert(f.required == Present(true), s"required of $f"))
+            succeed
+        }
+
+        "a constant required is the boolean attribute, and false writes none" in {
+            for
+                on  <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.required(true), UI.textarea.required(true)), Seq.empty)
+                off <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.required(false), UI.input), Seq.empty)
+            yield
+                assert(""" required(?=[ >/])""".r.findAllMatchIn(on).size == 2, on)
+                assert(""" required(?=[ >/])""".r.findFirstIn(off).isEmpty, off)
+        }
+
+        "a required from a signal is the attribute's channel, written at the value it holds" in {
+            for
+                req <- Signal.initRef(true)
+                f = UI.input.required(req)
+                on  <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+                _   <- req.set(false)
+                off <- kyo.internal.HtmlRenderer.render(UI.div(f), Seq.empty)
+            yield
+                assert(f.required.isEmpty, "a signal fills no static field")
+                assert(f.attrs.reactiveBoolAttrs.get("required").exists(_ eq req), "the signal is the attribute's channel")
+                assert(""" required(?=[ >/])""".r.findAllMatchIn(on).size == 1, on)
+                assert(""" required(?=[ >/])""".r.findFirstIn(off).isEmpty, off)
+        }
+
         "a constant placeholder is the attribute" in {
             for html <- kyo.internal.HtmlRenderer.render(UI.div(UI.input.placeholder("hint"), UI.textarea.placeholder("hint")), Seq.empty)
             yield assert(""" placeholder="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).toList == List("hint", "hint"), html)
