@@ -116,7 +116,7 @@ object FloatLabel:
             // The field marks itself `p-filled` for kyo-ui's client from the text it holds (`filledClass`), so the label
             // needs no region of its own around it: one drew the whole field again on every keystroke into a ref, and could
             // not know the text of a field nothing binds or the reader's edit of a starting one.
-            case Host.In(input)    => labelled(input.render)
+            case Host.In(input)    => labelled(Node.placed(input))
             case Host.Ta(textArea) => labelled(textArea.render)
 
             case Host.Ac(auto) =>

@@ -356,7 +356,7 @@ object Paginator:
 
         def jtpField(fixed: Boolean): UI =
             val field = Input().value(shown).accessibleName("Jump to page")
-            span.cssClass("p-paginator-jtp-input")((if fixed then field.readonly(true) else field.onChange(commitJump)).render)
+            span.cssClass("p-paginator-jtp-input")((if fixed then field.readonly(true) else field.onChange(commitJump)).renderInPlace)
 
         UI.reactive {
             val b      = base.read

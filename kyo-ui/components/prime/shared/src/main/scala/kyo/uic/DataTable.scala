@@ -4563,7 +4563,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                         )
                         typedRef.foreach(ref => input = input.onBlur(_ => ref.set(Absent)))
                     end if
-                    val element = div.cssClass("p-datatable-filter-element-container")(input)
+                    val element = div.cssClass("p-datatable-filter-element-container")(input.renderInPlace)
                     div.cssClass("p-datatable-inline-filter")(UI.children(element :: modeMenu(path, c, cf, cur, filter, isOpen))*)
                 })
         end match
@@ -4754,7 +4754,7 @@ final class DataTable[A] private[uic] (private[uic] val p: DataTable.Props[A]) e
                 .accessibleName(s"Filter ${c.p.headerV} by condition ${i + 1}")
             val input =
                 div.cssClass("p-datatable-filter-element-container")(
-                    (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).render
+                    (if fixed then field.readonly(true) else field.onInput(t => draft.set(setRule(d, i, _.copy(query = t))))).renderInPlace
                 )
             val remove: List[UI] =
                 if fixed || d.rules.sizeIs < 2 then Nil
