@@ -10,13 +10,14 @@ them.
 A field is named for what it holds (`size`, `disabled`, `onClick`), with no `V`, `Flag`, `Eff` or `F` suffix, and the class
 body reads it as `p.size`, never through `import p.*`.
 
-- **Why:** the setter and the field then share one name, so a reader sees at once which field a setter writes, and the demo's
-  `ApiMacro` reads the same name in both places. The import is what made the suffixes necessary: with it, a field named like
+- **Why:** the setter and the field then share one name, so a reader sees at once which field a setter writes, and `Setters`
+  generates the setter from the field (rule 11). The import is what made the suffixes necessary: with it, a field named like
   its setter is shadowed by the setter inside the class, and a read silently picks the method.
 - **Shape:**
 
 ```scala
-def size(v: Prop[Size]): Button = new Button(p.copy(size = v))
+// in Props: the setter `size(v: Prop[Size])` is generated from it
+size: Prop[Size] = Size.Normal,
 // in the body
 p.size
 ```
@@ -185,3 +186,28 @@ itself, so the caller hands the prop over: `p.icon.map(GlyphSvg(_, "p-button-ico
   `UI.children(leading, label, endIcon, extraChildren)`: a part is a child, a `Maybe` of one, a list or other `Children`, an absent
   part adds nothing, and the element splats it (`el(content*)`). Never `List[UI]` with `flatMap(_.toList)` and a second
   `UI.children` at the element.
+
+## 11. A setter is generated from its field; the class writes only a setter that does more
+
+A component is `final class X private[uic] (private[uic] val p: X.Props) extends Component(Setters[X.Props, X])`, and every field
+of `Props` is a setter of its name, made by `Setters` at compile time and completed by the IDE from `Fields`. What a field's type
+says decides the setter:
+
+- **A plain field** takes its own type: `size: Prop[Size]` is `size(v: Prop[Size])`, `href: Opt[String]` takes the string.
+- **A `UI.Ownable` field** (`Controlled[A]`) binds: `checked(v: Prop[Boolean])`, a ref two way and anything else one way, and it
+  has an event setter that hears every change, `onCheckedChange`, or the name `@eventName("onChange")` gives.
+- **A callback field** (`Maybe[A => UI.Action]`, `Maybe[(A, B) => UI.Action]`) takes the function itself: `onBlur(f)`.
+- A function handed to an event or a callback runs under `UI.attempt`, so its failure reaches the `onFailure` rules where it ran
+  and the component's own work after it still happens. A hand-written callback setter does the same.
+
+The class writes a setter by hand only where it does more than store what it is given (Button's `onClick` and `ariaDisabled`),
+under the field's name, and that member takes the generated one's place. A field a host, a shared trait or a setter of another
+name writes is `@noSetter` (`access`, `validity`, `radio`). Generic code that has to call a setter it cannot name (a form's
+`bind`) asks for a `HasSetter[X, "checked", Prop[Boolean]]`: one is found in `Fields`, and a trait whose members are written by hand
+gives its own in its companion (`BooleanFormControl`), so both kinds of component serve it.
+
+- **Why:** a setter that only copies its value into its field is the field said twice, and the two drift (a renamed field, a
+  setter that forgot `UI.attempt`). Generated, the field's type and its scaladoc are the setter's, and a reader finds what a
+  component holds and what it can be told in one place, `Props`.
+- **Shape:** `ToggleButton`: its `Props` carries `@eventName("onChange") checked: Controlled[Boolean]`, `onLabel`, `size`,
+  `onBlur` and the rest, and the class writes only `noLabels` and its package-internal hooks.
