@@ -19,7 +19,7 @@ import scala.annotation.targetName
   * differently from its neighbour.
   *
   * A control supplies the one-line reader and writer below instead of the setters: its state
-  * holds the slots as one `validityV` ([[FieldValidity.Slots]]), and `type Self = Input` fixes
+  * holds the slots as one `validityV` ([[FieldValidity.Slots]]), and `type Self = TextArea` fixes
   * the return type, so a control opts in by adding the trait to its `extends` clause plus those
   * two lines.
   *
@@ -32,7 +32,7 @@ trait FormControl extends Node, HasElementId:
     /** The slots as they are. Implemented as `validityV`. */
     private[uic] def validitySlots: FieldValidity.Slots
 
-    /** Stores the slots. Implemented as `new Input(s.copy(validityV = v))`. */
+    /** Stores the slots. Implemented as `new TextArea(p.copy(validityV = v))`. */
     private[uic] def withValidity(v: FieldValidity.Slots): Self
 
     /** Marks the control invalid (`.p-invalid` + `aria-invalid`). A `Signal[Boolean]` toggles the

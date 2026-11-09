@@ -3,298 +3,297 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Input type variants: selects which concrete kyo text-input factory backs the
-  * field, so the native `type` attribute is real (email keyboards on mobile,
-  * password masking, numeric spinners, ...). Hand-authored: it belongs to the
-  * hand-written [[Input]] control.
+/** Input type variants: selects which concrete kyo text-input factory backs the field, so the native `type` attribute is real
+  * (email keyboards on mobile, password masking, numeric spinners, ...).
   */
 enum InputType derives CanEqual:
     case Text, Email, Number, Password, Tel, URL
-
-    private[uic] def token: String = this.toString
 end InputType
 
-/** Text input: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
-  * InputText: the component IS the bare `<input class="p-inputtext">`, no
-  * wrapper element). Composes the kyo `<input>` element, so two-way binding
-  * (`value(SignalRef)` → `Bound.Ref`), `onInput`/`onChange`, and the
-  * caret-preserving morph path are all inherited from kyo-ui, not rebuilt. Any
-  * other `Signal[String]` binds one way: the field shows it, and an edit only
-  * reports through `onInput`/`onChange`.
-  * Validation is Prime's `.p-invalid` model: `invalid(Boolean)` plus the
-  * optional `invalidMessage(String)` row below the field.
+/** Text input: native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's InputText: the component IS the bare
+  * `<input class="p-inputtext">`, no wrapper element). Composes the kyo `<input>` element, so two-way binding
+  * (`value(SignalRef)` to `Bound.Ref`), `onInput`/`onChange`, and the caret-preserving morph path are all inherited from kyo-ui,
+  * not rebuilt.
+  *
+  * The text is the reader's: unbound, the browser keeps what was typed, and a constant is where it starts, which the instance
+  * holds from there, so a host region that runs again keeps the reader's text. Any other `Signal[String]` binds one way: the
+  * field shows it, and an edit only reports through `onInput`/`onChange`. Validation is Prime's `.p-invalid` model: `invalid`
+  * plus the optional `invalidMessage` row below the field.
   */
-final class Input private[uic] (private[uic] val p: Input.Props) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef,
-      HasAccessibleDescription, HasProps:
-    import p.*
+final class Input private[uic] (private[uic] val p: Input.Props) extends Component(Setters[Input.Props, Input]), Node, FormControl,
+      HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
 
     type Self = Input
 
-    /** Package-internal class hook: wrappers (FloatLabel/IftaLabel) stamp Prime's
-      * state classes (`p-filled`) onto the field they wrap.
+    /** Package-internal class hook: wrappers (FloatLabel/IftaLabel) stamp Prime's state classes (`p-filled`) onto the field they
+      * wrap.
       */
-    private[uic] def extraClass(cls: String): Input = new Input(p.copy(extraClassesV = extraClassesV :+ cls))
+    private[uic] def extraClass(cls: String): Input = new Input(p.copy(extraClasses = p.extraClasses :+ cls))
 
-    /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose
-      * own events are what hear it ([[InputMask]]).
+    /** Package-internal: the component and the events the unheard card names, for a host whose field this is and whose own events
+      * are what hear it ([[InputMask]]).
       */
     private[uic] def unheardAs(component: String, events: String): Input =
-        new Input(p.copy(unheardAsV = Input.valueName(component, events)))
+        new Input(p.copy(unheardAs = Input.valueName(component, events)))
 
-    /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the
-      * wrapper (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
+    /** Package-internal: the class a host's wrapper takes while this field holds text, and the selector that finds the wrapper
+      * (kyo-ui's `filledClass(name, closest)`), for a host whose stylesheet marks its wrapper ([[Password]]).
       */
-    private[uic] def filledOn(cls: String, closest: String): Input = new Input(p.copy(filledUpV = Present((cls, closest))))
+    private[uic] def filledOn(cls: String, closest: String): Input = new Input(p.copy(filledUp = Present((cls, closest))))
 
-    private[uic] def accessibility: Accessibility              = access
-    private[uic] def withAccessibility(v: Accessibility): Self = new Input(p.copy(access = v))
+    private[uic] def accessibility: Accessibility                             = p.access
+    private[uic] def withAccessibility(v: Accessibility): Self                = new Input(p.copy(access = v))
+    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Input           = new Input(p.copy(placeholder = v))
+    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Input = new Input(p.copy(description = v))
+    private[uic] def validitySlots: FieldValidity.Slots                       = p.validity
+    private[uic] def withValidity(v: FieldValidity.Slots): Self               = new Input(p.copy(validity = v))
 
-    /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
-      * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
-      * that swaps its text for an editor being the case this exists for, is focusable but
-      * not focused: the element is new, so nothing carried focus into it, and a handler
-      * that fired before the insert cannot reach it either. The flag is declarative for
-      * that reason, and it is why an imperative `focusId` is the wrong tool here.
-      *
-      * At most one focus-auto element is seeded per patch, so several fields appearing
-      * together (a row of editors) hand focus to the first.
+    /** Fires with the text the field holds when the reader commits it (focus leaving after an edit, or Enter). It hears the value
+      * too, so a one-way binding with only an `onChange` says nothing.
       */
-    def focusAuto(v: Boolean): Input = new Input(p.copy(focusAutoFlag = v))
-
-    /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal
-      * binds ONE-WAY: the field shows it, and an edit writes nothing and only reports through [[onInput]] and
-      * [[onChange]], so the app writes its own state and the field follows; with neither, a card says the reader cannot
-      * change it. A constant is the starting text, which the reader edits freely. `ref.readOnly` opts a ref out.
-      */
-    def value(v: String | Signal[String]): Input = new Input(p.copy(valueSlot = valueSlot.bind(v)))
-
-    private[uic] def withPlaceholder(v: Maybe[Prop[String]]): Input = new Input(p.copy(placeholderText = v))
-
-    /** Disabled, constant or reactive: a `Signal[Boolean]` toggles the native `disabled` attribute IN
-      * PLACE via kyo-ui's boolean-attribute channel (no re-render, so caret/focus survive), e.g. disable
-      * until another field is valid; a plain `Boolean` sets it statically.
-      */
-    def disabled(v: Boolean | Signal[Boolean]): Input = new Input(p.copy(disabledFlag = Present(ReactiveValue(v))))
-
-    /** Native `readonly` (focusable but not editable), constant or reactive: a `Signal[Boolean]` toggles
-      * it IN PLACE via the boolean-attribute channel (no re-render, so caret/focus survive).
-      */
-    def readonly(v: Boolean | Signal[Boolean]): Input = new Input(p.copy(readonlyFlag = Present(ReactiveValue(v))))
-
-    /** Marks the field required (native constraint + `aria-required`). */
-    def required(v: Boolean): Input = new Input(p.copy(requiredFlag = Present(v)))
-
-    /** Native `name` for HTML form participation. */
-    def name(v: String): Input = new Input(p.copy(nameV = Present(v)))
-
-    /** Native `maxlength`: caps the number of characters. */
-    def maxLength(n: Int): Input = new Input(p.copy(maxLengthV = Present(math.max(0, n))))
-
-    /** The native input type; defaults to [[InputType.Text]]. A [[kyo.UI.TextType]] signal switches the type on the field the page
-      * has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus stay: a password field that
-      * reveals its text is one. The two forms take different types on purpose: a signal names only a free-text type, since
-      * `number` reads its value differently and the field could not switch to or from it without changing what it holds.
-      */
-    def inputType(t: InputType | Signal[UI.TextType]): Input = new Input(p.copy(typeV = t))
-
-    /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
-    def size(v: Size): Input = new Input(p.copy(sizeV = v))
-
-    /** Fill variant: `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
-    def variant(v: FieldVariant): Input = new Input(p.copy(variantV = v))
-
-    /** Spans the full width of its container (`.p-inputtext-fluid`). */
-    def fluid(v: Boolean): Input = new Input(p.copy(fluidFlag = v))
-
-    private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
-
-    private[uic] def withAccessibleDescription(v: Maybe[Prop[String]]): Input = new Input(p.copy(accDescV = v))
-
-    def onInput(f: String => UI.Action)(using Frame): Input  = new Input(p.copy(valueSlot = valueSlot.hear(f)))
     def onChange(f: String => UI.Action)(using Frame): Input =
-        new Input(p.copy(onChangeF = Present(Callback.of(f)), valueSlot = valueSlot.heardToo))
+        new Input(p.copy(onChange = Present(Callback.of(f)), value = p.value.heardToo))
 
-    /** Fires on focus loss (native `blur`) with the text the field holds as focus
-      * leaves it, which kyo-ui's blur carries (its two-parameter `onBlur`): what the reader typed,
-      * also when nothing binds the field or it started from a constant. Unlike
-      * `onChange` it fires even when the value was not edited. The form-validation
-      * layer wires its `Blur` trigger here.
+    /** One instance per place where a constant gives the text its start: it holds the reader's text from there, and a host region
+      * that runs again hands it the run's props instead of starting it over. Unbound or bound to a signal the field keeps nothing
+      * of its own (the browser keeps an unbound text), so it is drawn directly (see [[Input.drawn]]).
       */
-    def onBlur(f: String => UI.Action)(using Frame): Input = new Input(p.copy(onBlurF = Present(Callback.of(f))))
-
-    /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also
-      * allows one separator, any other string is a whitelist charset. The client
-      * rejects disallowed `beforeinput` keystrokes BEFORE they reach the field, so
-      * (unlike a server-side `takeRight` reject) an invalid character never becomes
-      * visible. The already-filtered value is what reaches `onInput`/the ref.
-      *
-      * The string stays this library's surface; kyo takes a typed
-      * [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto.
-      */
-    def inputFilter(pattern: String): Input = new Input(p.copy(inputFilterV = Present(pattern)))
-
-    /** Client-local input mask (the fork's `inputMask`), e.g. `"(999) 999-9999"`:
-      * `9` = digit, `a` = letter, `*` = alphanumeric; every other character is a
-      * literal placeholder. The client formats the field as the user types and
-      * the MASKED value is what reaches `onInput`/`onChange`/the ref. Prefer the
-      * dedicated [[InputMask]] component for phone/date/ssn fields.
-      */
-    def inputMask(mask: String): Input = new Input(p.copy(inputMaskV = Present(mask)))
-
     private[uic] def render(using Frame): UI =
-        val validity  = FieldValidity(validityV)
-        val built: UI = typeV match
-            case sig: Signal[UI.TextType] @unchecked =>
-                buildField(
-                    withConstraints(input).textType(sig),
-                    _.onInput(_),
-                    _.onChange(_),
-                    validity
-                )
-            case t: InputType =>
-                t match
-                    case InputType.Text =>
-                        buildField(
-                            withConstraints(input),
-                            _.onInput(_),
-                            _.onChange(_),
-                            validity
-                        )
-                    case InputType.Email =>
-                        buildField(
-                            withConstraints(emailInput),
-                            _.onInput(_),
-                            _.onChange(_),
-                            validity
-                        )
-                    case InputType.Number =>
-                        buildField(numberInput, _.onInput(_), _.onChange(_), validity)
-                    case InputType.Password =>
-                        buildField(
-                            withConstraints(passwordInput),
-                            _.onInput(_),
-                            _.onChange(_),
-                            validity
-                        )
-                    case InputType.Tel =>
-                        buildField(
-                            withConstraints(telInput),
-                            _.onInput(_),
-                            _.onChange(_),
-                            validity
-                        )
-                    case InputType.URL =>
-                        buildField(
-                            withConstraints(urlInput),
-                            _.onInput(_),
-                            _.onChange(_),
-                            validity
-                        )
-        Diagnostics.after(validity.follow(built))(unheardAsV.component)(
-            Diagnostic.unheard(valueSlot, unheardAsV, on = !readonlyFlag.constTrue && !disabledFlag.constTrue)
-        )
-    end render
+        if p.value.start.isDefined then UI.mountedWith(p)(Input.drawn) else renderInPlace
 
-    /** Applies the shared attribute chain to a concrete kyo text-input factory. The
-      * F-bounded refinement (`Self <: T`) keeps every `Self`-returning setter
-      * chainable across the six concrete input types selected by [[InputType]]; the
-      * three setters kyo declares only on the concrete classes (not on the
-      * `TextInput` trait) arrive as lambdas. The bound intersects `Interactive` because
-      * focus seeding lives there and not on `TextInput`, while every concrete input class
-      * is both.
+    /** The field with no instance of its own, for a host that states its text itself and draws it in its own region (InputOtp's
+      * cells, Paginator's jump field, DataTable's filter fields): every prop is read as it is, a constant as the text to show.
       */
-    private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
-        base: T,
-        setOnInput: (T, String => UI.Action) => T,
-        setOnChange: (T, String => UI.Action) => T,
-        validity: FieldValidity
-    )(using Frame): UI =
-        var b: T = base.cssClass("p-inputtext").cssClass("p-component")
-        extraClassesV.foreach(c => b = b.cssClass(c))
-        access.id.foreach(v => b = b.id(v))
-        if focusAutoFlag then b = b.focusAuto(true)
-        sizeV match
-            case Size.Small  => b = b.cssClass("p-inputtext-sm")
-            case Size.Large  => b = b.cssClass("p-inputtext-lg")
-            case Size.Normal => ()
-        end match
-        if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
-        b = validity.mark(b)
-        if fluidFlag then b = b.cssClass("p-inputtext-fluid")
-        // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
-        // field's text, the reader's edit of a starting one): kyo-ui toggles it there, the static render from the start.
-        b = b.filledClass("p-filled")
-        filledUpV.foreach((cls, closest) => b = b.filledClass(cls, closest))
-        // A two-way ref is kyo-ui's own binding. A one-way signal is shown in place, with no region around the field, so a keystroke renders
-        // nothing: kyo-ui puts back an edit its owner did not take. A constant is the starting text.
-        valueSlot.bound.foreach(v => b = b.value(v))
-        b = b.placeholder(placeholderText)
-        b = disabledFlag.foldFlag(b)(b.disabled(_))
-        b = readonlyFlag.foldFlag(b)(b.readOnly(_))
-        if requiredFlag.getOrElse(false) then b = b.aria("required", "true").jsProp("required", "true")
-        b = nameV.map(v => b.jsProp("name", v)).getOrElse(b)
-        b = maxLengthV.map(n => b.jsProp("maxLength", n.toString)).getOrElse(b)
-        b = access.name match
-            case Present(v) => b.aria("label", v)
-            case _          => b
-        b = access.nameRef.map(v => b.aria("labelledby", v)).getOrElse(b)
-        b = b.aria("description", accDescV)
-        b = valueSlot.hearer.map(f => setOnInput(b, f)).getOrElse(b)
-        b = onChangeF.map(f => setOnChange(b, f)).getOrElse(b)
-        // The blur carries the text the field holds as focus leaves it: what the reader typed, whatever binds the field.
-        b = onBlurF.map(f => b.onBlur((_, text) => f(text))).getOrElse(b)
-        b
-    end buildField
-
-    /** Applies the declarative typing constraints, which kyo puts on `ConstrainedInput`
-      * rather than `TextInput`: `NumberInput` deliberately does not mix the trait in,
-      * because a `number` field reads its value as the empty string while the content is
-      * not a valid number, so a character-level filter cannot see what it is filtering.
-      * Kept out of [[buildField]] so the Number branch still type-checks; it constrains
-      * its content through `type`/`min`/`max`/`step` instead.
-      */
-    private def withConstraints[T <: UI.Ast.ConstrainedInput { type Self <: T }](base: T): T =
-        var b = base
-        b = inputFilterV.map(p => b.inputFilter(Input.asInputFilter(p))).getOrElse(b)
-        b = inputMaskV.map(m => b.inputMask(m)).getOrElse(b)
-        b
-    end withConstraints
+    private[uic] def renderInPlace(using Frame): UI = Input.drawn(new UI.Live(p, Absent))
 end Input
 
 object Input:
+    /** What a text field holds. Each field is a setter of its name (`uic.Input().size(Size.Small)`), which takes a constant or a
+      * signal where the field is a `Prop`, the value itself where it is an `Opt` and the function itself for a callback; `value`
+      * binds and `onInput` (`@eventName`) hears it; `onChange` is written by hand, and the fields marked `@noSetter` by hosts and
+      * the shared traits.
+      */
     final private[uic] case class Props(
-        valueSlot: Controlled[String] = Controlled(),
-        placeholderText: Maybe[Prop[String]] = Absent,
-        disabledFlag: Maybe[BoolValue] = Absent,
-        readonlyFlag: Maybe[BoolValue] = Absent,
-        requiredFlag: Maybe[Boolean] = Absent,
-        nameV: Maybe[String] = Absent,
-        maxLengthV: Maybe[Int] = Absent,
-        typeV: InputType | Signal[UI.TextType] = InputType.Text,
-        sizeV: Size = Size.Normal,
-        variantV: FieldVariant = FieldVariant.Outlined,
-        fluidFlag: Boolean = false,
-        validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
-        access: Accessibility = Accessibility.none,
-        accDescV: Maybe[Prop[String]] = Absent,
-        onChangeF: Maybe[String => UI.Action] = Absent,
-        onBlurF: Maybe[String => UI.Action] = Absent,
-        inputFilterV: Maybe[String] = Absent,
-        inputMaskV: Maybe[String] = Absent,
-        extraClassesV: List[String] = Nil,
-        focusAutoFlag: Boolean = false,
-        unheardAsV: Controlled.Name = Input.valueName("Input", "onInput or onChange"),
-        filledUpV: Maybe[(String, String)] = Absent
-    )
+        /** The value. A `SignalRef` binds TWO-WAY: an edit writes it, and its changes update the field. Any other signal binds
+          * ONE-WAY: the field shows it, and an edit writes nothing and only reports through `onInput` and `onChange`, so the app
+          * writes its own state and the field follows; with neither, a card says the reader cannot change it. A constant is where
+          * the text starts: the reader edits it freely, and the field keeps the edit when a region around it runs again.
+          * `ref.readOnly` opts a ref out. Its event `onInput` fires with the text after every keystroke.
+          */
+        @eventName("onInput") value: Controlled[String] = Controlled(constantStarts = true),
+        @noSetter placeholder: Maybe[Prop[String]] = Absent,
+        /** Native `disabled`. A signal toggles it in place (no re-render, so caret and focus survive), e.g. disabled until another
+          * field is valid.
+          */
+        disabled: Prop[Boolean] = false,
+        /** Native `readonly`: focusable and readable, not editable. A signal toggles it in place. */
+        readonly: Prop[Boolean] = false,
+        /** Marks the field required (the native constraint and `aria-required`). A signal toggles both in place. */
+        required: Prop[Boolean] = false,
+        /** Native `name` for HTML form participation. */
+        name: Opt[String] = Opt.unset,
+        /** Native `maxlength`: caps the number of characters (a negative cap is none at all). */
+        maxLength: Opt[Int] = Opt.unset,
+        /** The native input type, [[InputType.Text]] by default. A [[kyo.UI.TextType]] signal switches the type on the field the
+          * page has, in place (kyo-ui's `textType` channel), so the text the reader typed, the caret and focus stay: a password
+          * field that reveals its text is one. The two forms take different types on purpose: a signal names only a free-text
+          * type, since `number` reads its value differently and the field could not switch to or from it without changing what
+          * it holds.
+          */
+        inputType: InputType | Signal[UI.TextType] = InputType.Text,
+        /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`, a signal swapping the class in place. */
+        size: Prop[Size] = Size.Normal,
+        /** Fill variant: `Filled` renders `.p-variant-filled`, `Outlined` is the default; a signal swaps the class in place. */
+        variant: Prop[FieldVariant] = FieldVariant.Outlined,
+        /** Spans the full width of its container (`.p-inputtext-fluid`), a signal toggling the class in place. */
+        fluid: Prop[Boolean] = false,
+        /** Seeds focus onto this field when a re-render inserts it into the DOM for the first time, kyo-ui's `focusAuto`. A field
+          * that appears in place of something else, a cell that swaps its text for an editor being the case this exists for, is
+          * focusable but not focused: the element is new, so nothing carried focus into it, and a handler that fired before the
+          * insert cannot reach it either. The flag is declarative for that reason, and it is why an imperative `focusId` is the
+          * wrong tool here. At most one focus-auto element is seeded per patch, so several fields appearing together (a row of
+          * editors) hand focus to the first.
+          */
+        focusAuto: Boolean = false,
+        /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also allows one separator, any other string is a
+          * whitelist charset. The client rejects disallowed `beforeinput` keystrokes before they reach the field, so an invalid
+          * character never becomes visible, and the filtered value is what reaches `onInput` and the ref. The string stays this
+          * library's surface; kyo takes a typed [[kyo.UI.InputFilter]], which `Input.asInputFilter` maps onto. Not on a `Number`
+          * field, which constrains its content through its type.
+          */
+        inputFilter: Opt[String] = Opt.unset,
+        /** Client-local input mask, e.g. `"(999) 999-9999"`: `9` = digit, `a` = letter, `*` = alphanumeric; every other character
+          * is a literal. The client formats the field as the reader types and the MASKED value is what reaches `onInput`,
+          * `onChange` and the ref. Prefer the dedicated [[InputMask]] component for phone, date and ssn fields. Not on a `Number`
+          * field.
+          */
+        inputMask: Opt[String] = Opt.unset,
+        onChange: Maybe[String => UI.Action] = Absent,
+        /** Fires on focus loss (native `blur`) with the text the field holds as focus leaves it, which kyo-ui's blur carries: what
+          * the reader typed, also when nothing binds the field or it started from a constant. Unlike `onChange` it fires even when
+          * the value was not edited. The form-validation layer wires its `Blur` trigger here.
+          */
+        onBlur: Maybe[String => UI.Action] = Absent,
+        @noSetter validity: FieldValidity.Slots = FieldValidity.Slots.empty,
+        @noSetter access: Accessibility = Accessibility.none,
+        @noSetter description: Maybe[Prop[String]] = Absent,
+        @noSetter extraClasses: List[String] = Nil,
+        @noSetter unheardAs: Controlled.Name = Input.valueName("Input", "onInput or onChange"),
+        @noSetter filledUp: Maybe[(String, String)] = Absent
+    ) derives CanEqual
 
     def apply(): Input = new Input(Props())
 
     private[uic] def valueName(component: String, events: String) = Controlled.Name(component, "value", "a change", events)
 
-    /** Maps this library's filter string onto kyo's typed [[kyo.UI.InputFilter]]. `"int"` is
-      * `Digits` (digits only; kyo's set carries no sign character), `"decimal"` is `Decimal`,
-      * and anything else is taken as an explicit whitelist charset.
+    /** What of the props builds the field and has no channel of its own, read as one value: no hearer is in it, so a run that
+      * only brings new hearers leaves it equal and draws nothing again.
+      *
+      * @param text
+      *   what the field's `value` binds: the caller's binding, the instance's own ref, or a constant start drawn in place; absent
+      *   where nothing is bound and the browser keeps the text
+      * @param unheard
+      *   a signal bound one way that nobody hears
+      */
+    final private[uic] case class Base(
+        text: Maybe[Prop[String]],
+        inputType: InputType | Signal[UI.TextType],
+        hearsInput: Boolean,
+        hearsChange: Boolean,
+        blurs: Boolean,
+        unheard: Boolean,
+        placeholder: Maybe[Prop[String]],
+        name: Maybe[String],
+        maxLength: Maybe[Int],
+        focusAuto: Boolean,
+        inputFilter: Maybe[String],
+        inputMask: Maybe[String],
+        validity: FieldValidity.Slots,
+        access: Accessibility,
+        description: Maybe[Prop[String]],
+        extraClasses: List[String],
+        unheardAs: Controlled.Name,
+        filledUp: Maybe[(String, String)]
+    ) derives CanEqual
+
+    private object Base:
+        /** The base of `q`, as the engine hands it: a value that starts from a constant is bound to the instance's own ref. */
+        def apply(q: Props): Base =
+            Base(
+                q.value.bound.orElse(q.value.start),
+                q.inputType,
+                q.value.hearer.isDefined,
+                q.onChange.isDefined,
+                q.onBlur.isDefined,
+                q.value.deaf,
+                q.placeholder,
+                q.name,
+                q.maxLength,
+                q.focusAuto,
+                q.inputFilter,
+                q.inputMask,
+                q.validity,
+                q.access,
+                q.description,
+                q.extraClasses,
+                q.unheardAs,
+                q.filledUp
+            )
+    end Base
+
+    /** The field, drawn once over `props`, which hand it `value` bound: to the instance's own ref where a constant starts it, as
+      * the caller bound it otherwise, and not at all where nothing is bound and the browser keeps the text.
+      *
+      * Each place reads the field it shows: the size, the variant, the width, `disabled`, `readonly` and `required` reach the
+      * element through its class, attribute and `aria-*` channels, so a run that changes one of them patches it alone. What builds
+      * the element (the [[Base]], among it which factory backs the field) is one `reactive` block, drawn again only when a run
+      * changes it. An input, a commit and a blur read the run's hearers when they come. The card for a signal nobody hears is a
+      * block of its own over `disabled` and `readonly`, so it shows only while the reader could edit.
+      */
+    private def drawn(props: UI.Live[Props])(using Frame): UI =
+        val base     = props(Base(_))
+        val disabled = props(_.disabled)
+        val readonly = props(_.readonly)
+        val heard    = Heard(
+            s => props.call(_.value.hearer).map(_.fold(Kyo.unit: UI.Action)(_(s))),
+            s => props.call(_.onChange).map(_.fold(Kyo.unit: UI.Action)(_(s))),
+            (_, s) => props.call(_.onBlur).map(_.fold(Kyo.unit: UI.Action)(_(s)))
+        )
+        UI.reactive {
+            val b         = base.read
+            val validity  = FieldValidity(b.validity)
+            val field: UI = b.inputType match
+                case sig: Signal[UI.TextType] @unchecked => shared(constrained(input, b).textType(sig), b, props, validity, heard)
+                case t: InputType                        =>
+                    t match
+                        case InputType.Text     => shared(constrained(input, b), b, props, validity, heard)
+                        case InputType.Email    => shared(constrained(emailInput, b), b, props, validity, heard)
+                        case InputType.Number   => shared(numberInput, b, props, validity, heard)
+                        case InputType.Password => shared(constrained(passwordInput, b), b, props, validity, heard)
+                        case InputType.Tel      => shared(constrained(telInput, b), b, props, validity, heard)
+                        case InputType.URL      => shared(constrained(urlInput, b), b, props, validity, heard)
+            val followed = validity.follow(field)
+            if b.unheard then fragment(followed, unheardCard(b.unheardAs, disabled, readonly)) else followed
+        }
+    end drawn
+
+    /** The run's hearers, read when their event comes. */
+    final private case class Heard(input: String => UI.Action, change: String => UI.Action, blur: (UI.MouseEvent, String) => UI.Action)
+
+    /** What every factory's field carries: the classes, the id, focus seeding, the validity marks, the filled class, the value, the
+      * placeholder, the flags, the native attributes, the accessible name and description, and the hearers.
+      */
+    private def shared[E <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self = E }](
+        el: E,
+        b: Base,
+        props: UI.Live[Props],
+        validity: FieldValidity,
+        heard: Heard
+    )(using Frame): E =
+        val required = props(_.required)
+        validity.mark(
+            b.extraClasses.foldLeft(el.cssClass("p-inputtext").cssClass("p-component"))(_.cssClass(_))
+                .when(b.access.id)(_.id(_))
+                .when(b.focusAuto)(_.focusAuto(true))
+                .classFor(props(_.size))(_.cls("p-inputtext"))
+                .classFor(props(_.variant))(_.cls)
+        )
+            .cssClass("p-inputtext-fluid", props(_.fluid))
+            // Prime's `p-filled` follows the text the field holds, which the client knows and a render does not (an unbound
+            // field's text, the reader's edit): kyo-ui toggles it there, the static render from the start.
+            .filledClass("p-filled")
+            .when(b.filledUp)((e, up) => e.filledClass(up._1, up._2))
+            .when(b.text)(_.value(_))
+            .placeholder(b.placeholder)
+            .disabled(props(_.disabled))
+            .readOnly(props(_.readonly))
+            .required(required)
+            .ariaFlag("required", required)
+            .when(b.name)(_.jsProp("name", _))
+            .when(b.maxLength)((e, n) => e.jsProp("maxLength", math.max(0, n).toString))
+            .aria("label", b.access.name)
+            .aria("labelledby", b.access.nameRef)
+            .aria("description", b.description)
+            .when(b.hearsInput)(_.onInput(heard.input))
+            .when(b.hearsChange)(_.onChange(heard.change))
+            .when(b.blurs)(_.onBlur(heard.blur))
+    end shared
+
+    /** The typing constraints, which kyo puts on `ConstrainedInput` rather than `TextInput`: `NumberInput` does not mix the trait
+      * in, because a `number` field reads its value as the empty string while the content is not a valid number, so a
+      * character-level filter cannot see what it is filtering. It constrains its content through `type`, `min`, `max` and `step`.
+      */
+    private def constrained[E <: UI.Ast.ConstrainedInput { type Self = E }](el: E, b: Base): E =
+        el.when(b.inputFilter)((e, f) => e.inputFilter(asInputFilter(f))).when(b.inputMask)(_.inputMask(_))
+
+    /** Only a signal nobody hears is a mistake worth a card, and only while the reader could edit. Its own block, so the flags it
+      * reads stay channels of the field.
+      */
+    private def unheardCard(name: Controlled.Name, disabled: Prop[Boolean], readonly: Prop[Boolean])(using Frame): UI =
+        UI.reactive(fragment(Diagnostics.cards(name.component)(Diagnostic(!readonly.read && !disabled.read, name.advice))*))
+
+    /** Maps this library's filter string onto kyo's typed [[kyo.UI.InputFilter]]. `"int"` is `Digits` (digits only; kyo's set
+      * carries no sign character), `"decimal"` is `Decimal`, and anything else is taken as an explicit whitelist charset.
       */
     private[uic] def asInputFilter(pattern: String): UI.InputFilter =
         pattern match

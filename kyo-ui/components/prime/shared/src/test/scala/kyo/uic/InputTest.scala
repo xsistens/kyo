@@ -9,6 +9,9 @@ import kyo.*
   */
 class InputTest extends ReactiveValueContract:
 
+    // Freed of every loss in its wave (T19): a region that takes the reader's state again fails the leaf.
+    override private[uic] def armed: Boolean = true
+
     private val valueSlot = nativeText[uic.Input](
         name = "value",
         bare = Present(uic.Input()),
@@ -16,7 +19,9 @@ class InputTest extends ReactiveValueContract:
         hear = (c, f) => c.onInput(f),
         event = "onInput or onChange",
         render = _.render,
-        field = "p-inputtext"
+        field = "p-inputtext",
+        // As an app places it, which keys an instance on the place.
+        placed = Present(_.toUI)
     )
 
     holds(valueSlot)
@@ -74,6 +79,43 @@ class InputTest extends ReactiveValueContract:
             ro     <- errors(uic.Input().value(held.readOnly).readonly(true))
             off    <- errors(uic.Input().value(held.readOnly).disabled(true))
         yield assert(twoWay.isEmpty && ro.isEmpty && off.isEmpty, "somebody hears, or nobody can edit")
+        end for
+    }
+
+    "the card for a signal nobody hears shows only while a signal flag lets the reader edit" in {
+        def cards(ui: UI): Int < Sync = elementsWithClass(ui, "p-uic-diagnostic").map(_.size)
+        for
+            held   <- Signal.initRef("a")
+            off    <- Signal.initRef(true)
+            locked <- Signal.initRef(true)
+            disabled = uic.Input().value(held.readOnly).disabled(off).render
+            readonly = uic.Input().value(held.readOnly).readonly(locked).render
+            whileOff <- cards(disabled)
+            whileRo  <- cards(readonly)
+            _        <- off.set(false)
+            _        <- locked.set(false)
+            onAgain  <- cards(disabled)
+            editable <- cards(readonly)
+        yield assert(
+            (whileOff, whileRo, onAgain, editable) == (0, 0, 1, 1),
+            s"cards while disabled $whileOff, while readonly $whileRo, then $onAgain and $editable"
+        )
+        end for
+    }
+
+    "from a constant, a host region that runs again keeps the reader's text" in {
+        def ran(t: UI): Boolean < Sync = elementsWithClass(t, UicTest.hostRunClass).map(_.exists(e => textOf(e) == "run 1"))
+        for
+            run <- Signal.initRef(0)
+            ui = UI.div(run.map(n =>
+                UI.div(UI.span.cssClass(UicTest.hostRunClass)(s"run $n"), uic.Input().value("start").onInput(_ => Kyo.unit).toUI)
+            ))
+            (every, _, _) <- paintedAround(ui, t => elementsWithClass(t, "p-inputtext").map(_.nonEmpty), ran)(
+                t => field(t).map(f => typeInto(f, "typed")),
+                _ => setSettled(run, 1)
+            )
+            shown <- field(every).map(textIn)
+        yield assert(shown == "typed", s"after the host's run the field shows $shown, the reader had typed typed")
         end for
     }
 

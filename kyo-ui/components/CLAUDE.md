@@ -8,34 +8,34 @@ module's `README.md`.
 
 ## A component is a class over its props
 
-A component the rulebook has reached (`Button`, `ToggleButton`) also `extends Component(Setters[X.Props, X])` and has its setters
+A component the rulebook has reached (`Button`, `ToggleButton`, `Input`) also `extends Component(Setters[X.Props, X])` and has its setters
 generated from its props (`RULEBOOK.md` rule 11). The rest still write each setter as below, until their wave reaches them.
 
 ```scala
-final class Input private[uic] (private[uic] val p: Input.Props) extends Node, TextFormControl, HasProps:
+final class TextArea private[uic] (private[uic] val p: TextArea.Props) extends Node, TextFormControl, HasProps:
     import p.*   // reads in the body stay as they are
-    type Self = Input
+    type Self = TextArea
 
-    def size(v: Size): Input = new Input(p.copy(sizeV = v))
+    def size(v: Size): TextArea = new TextArea(p.copy(sizeV = v))
 
     private[uic] def validitySlots: FieldValidity.Slots         = validityV
-    private[uic] def withValidity(v: FieldValidity.Slots): Self = new Input(p.copy(validityV = v))
+    private[uic] def withValidity(v: FieldValidity.Slots): Self = new TextArea(p.copy(validityV = v))
     private[uic] def accessibility: Accessibility               = access
-    private[uic] def withAccessibility(v: Accessibility): Self  = new Input(p.copy(access = v))
-end Input
+    private[uic] def withAccessibility(v: Accessibility): Self  = new TextArea(p.copy(access = v))
+end TextArea
 
-object Input:
+object TextArea:
     final private[uic] case class Props(
         sizeV: Size = Size.Normal,
         validityV: FieldValidity.Slots = FieldValidity.Slots.empty,
         access: Accessibility = Accessibility.none
     )
 
-    def apply(): Input = new Input(Props())
-end Input
+    def apply(): TextArea = new TextArea(Props())
+end TextArea
 ```
 
-So a reader typing `uic.Input().` outside this package is offered the setters and what every object has: no field, no `copy`,
+So a reader typing `uic.TextArea().` outside this package is offered the setters and what every object has: no field, no `copy`,
 no `_1`, no `product*`. `NodeSurfaceTest` compiles from outside `kyo.uic` and sweeps every component; a new one belongs in it.
 
 - **Every field lives in `Props`**, the configuration the setters build. A setter is `new X(p.copy(...))`. A component reads
@@ -161,12 +161,14 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   `selection(Maybe[A] | Signal[Maybe[A]])` (one `@targetName`, since both erase to `Object`);
   `MultiSelect`/`MultiSelectButton`/`Listbox`/`TreeSelect`/`Tree` followed with the state slots below. The fields'
   own values came last, through the traits: `BooleanFormControl.checked(Boolean | Signal[Boolean])` and
-  `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`Input`, `TextArea`,
-  `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it. A text
+  `TextFormControl.value(String | Signal[String])`, so every field behind either trait (`TextArea`,
+  `Password`, `InputMask`, `InputOtp`, `AutoComplete`, `ColorPicker`, the four boolean fields) widened with it, and `Input`'s generated `value` takes the same `Prop[String]`. A text
   field's CONSTANT is the starting text, the HTML `value` attribute: the reader's edit stays in the field, so it gets
   no card. A boolean field's constant is FIXED, as below. The edit stays only while nothing draws the field again: every
   render gives a field its `value` attribute back (`__kyoMorphAttrs` in kyo-ui's client), and a field drawn with no
-  `value` keeps what was typed. So a plain field leaves an unbound text to the browser, but a field that draws anything
+  `value` keeps what was typed. `Input` is an instance: a constant starts its own ref, which holds the reader's text
+  through a host region that runs again, and a host that states the text itself and draws it in its own region (InputOtp's
+  cells, Paginator's jump field, DataTable's filter fields) calls its `renderInPlace`. So a plain field leaves an unbound text to the browser, but a field that draws anything
   from its text after the page is shown (AutoComplete's suggestions, Password's meter and reveal) or builds its value
   from several controls (InputOtp's cells, ColorPicker's sliders) keeps the text itself, unbound and from a constant
   (`Controlled.owningFrom`), and its handlers read the value live, since a keystroke can land before the render of the one
