@@ -74,7 +74,13 @@ object Setters:
         // One setter: its name, the field it writes, how, and what it takes.
         final case class One(name: String, at: Int, kind: Int, takes: TypeRepr)
 
-        def function(args: List[TypeRepr]): TypeRepr = defn.FunctionClass(args.size).typeRef.appliedTo(args :+ action)
+        // What a member of the field's `UI.Ownable` takes, read from its declaration and never built: `Fields` then names `UI.Prop`
+        // and `UI.Action` as the source does, where a type built with `appliedTo` or a quote is printed expanded (`Signal[A] | A`,
+        // `Any < (Async & Abort[Any])`) in the IDE and in a compile error.
+        def taken(owner: TypeRepr, method: String): TypeRepr =
+            owner.memberType(ownable.methodMember(method).head) match
+                case MethodType(_, List(p), _) => p
+                case other                     => report.errorAndAbort(s"UI.Ownable.$method takes one value, not ${other.show}")
 
         def eventOf(f: Symbol): String =
             f.getAnnotation(named) match
@@ -82,27 +88,28 @@ object Setters:
                 case Some(other) => report.errorAndAbort(s"@eventName on ${f.name} takes the event's name as a literal", other.pos)
                 case None        => s"on${f.name.capitalize}Change"
 
-        // The parameters of a callback field's function, for `Maybe[A => UI.Action]` and `Maybe[(A, B) => UI.Action]`.
-        def callback(t: TypeRepr): Maybe[List[TypeRepr]] =
+        // A callback field's function as the field declares it, and how many values it takes, for `Maybe[A => UI.Action]` and
+        // `Maybe[(A, B) => UI.Action]`.
+        def callback(t: TypeRepr): Maybe[(Int, TypeRepr)] =
             t.dealias match
                 case AppliedType(m, List(fn)) if m.typeSymbol == maybe =>
                     fn.dealias match
                         case AppliedType(_, args)
                             if fn.isFunctionType && (args.sizeIs == 2 || args.sizeIs == 3) && args.last =:= action =>
-                            Present(args.init)
+                            Present((args.size - 1, fn))
                         case _ => Absent
                 case _ => Absent
 
         val made = all.zipWithIndex.filterNot((f, _) => f.hasAnnotation(marked)).flatMap { (f, i) =>
             val t = TypeRepr.of[P].memberType(props.fieldMember(f.name))
             t.baseType(ownable) match
-                case AppliedType(_, List(a)) =>
-                    List(One(f.name, i, KindBind, TypeRepr.of[UI.Prop].appliedTo(a)), One(eventOf(f), i, KindHear, function(List(a))))
+                case owner @ AppliedType(_, List(_)) =>
+                    List(One(f.name, i, KindBind, taken(owner, "bind")), One(eventOf(f), i, KindHear, taken(owner, "withHearer")))
                 case _ =>
                     if f.hasAnnotation(named) then report.errorAndAbort(s"@eventName on ${f.name}, which is no UI.Ownable field")
                     callback(t) match
-                        case Present(args) => List(One(f.name, i, if args.sizeIs == 1 then KindCall1 else KindCall2, function(args)))
-                        case _             => List(One(f.name, i, KindReplace, t))
+                        case Present((arity, fn)) => List(One(f.name, i, if arity == 1 then KindCall1 else KindCall2, fn))
+                        case _                    => List(One(f.name, i, KindReplace, t))
             end match
         }
         made.groupBy(_.name).collectFirst { case (n, ss) if ss.sizeIs > 1 => n }.foreach(n =>
